@@ -1,0 +1,87 @@
+<div id="QQ_chat_${name}" class="QQ_chat_page" style="width: 100%; height: 100%;">
+  <div style="
+      width: 100%;
+      height: 20px;
+      display: grid;
+      top: 0;
+      left: 0;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      margin-top: 20px;
+    ">
+    <svg class="QQ-close-btn" viewBox="0 0 1024 1024" style="height: 18px; width: 18px; margin-left: 8px">
+      <path
+        d="M769.137778 153.372444L444.984889 512l324.152889 358.684444c36.408889 35.043556 36.408889 91.989333 0 126.976a95.744 95.744 0 0 1-131.868445 0l-377.571555-417.678222c-1.536-1.365333-3.584-1.877333-5.063111-3.299555A87.438222 87.438222 0 0 1 227.555556 512c-0.341333-23.324444 8.533333-46.876444 27.079111-64.739556 1.479111-1.422222 3.527111-1.934222 5.063111-3.185777L637.269333 26.339556a95.744 95.744 0 0 1 131.868445 0c36.408889 35.043556 36.408889 91.932444 0 127.032888z"
+        fill="#666666" p-id="1570"></path>
+    </svg>
+
+    <div style="display: flex; align-items: center">
+      <div class="new_tips" style="
+          background-color: gray;
+          color: white;
+          width: 20px;
+          height: 20px;
+          border-radius: 50%;
+          display: none;
+          justify-content: center;
+          align-items: center;
+          font-size: 12px;
+        ">
+        1
+      </div>
+      <span style="margin-left: 8px; color: black; font-size: 16px" id="QQ_chat_username">${name}</span>
+    </div>
+
+    <svg id="QQ_chat_page_setting" viewBox="0 0 1024 1024" style="height: 20px; width: 20px; margin-right: 14px">
+      <path
+        d="M901.632 896H122.368c-30.72 0-55.808-25.088-55.808-55.808v-1.536c0-30.72 25.088-55.808 55.808-55.808h779.776c30.72 0 55.808 25.088 55.808 55.808v1.536c-0.512 30.72-25.6 55.808-56.32 55.808zM901.632 568.32H122.368c-30.72 0-55.808-25.088-55.808-55.808v-1.536c0-30.72 25.088-55.808 55.808-55.808h779.776c30.72 0 55.808 25.088 55.808 55.808v1.536c-0.512 30.72-25.6 55.808-56.32 55.808zM901.632 240.64H122.368c-30.72 0-55.808-25.088-55.808-55.808v-1.536c0-30.72 25.088-55.808 55.808-55.808h779.776c30.72 0 55.808 25.088 55.808 55.808v1.536c-0.512 30.72-25.6 55.808-56.32 55.808z"
+        p-id="4301" fill="#666666"></path>
+    </svg>
+  </div>
+  <div style="
+      width: 100%;
+      height: 0.5px;
+      background-color: rgb(238, 238, 238);
+      margin-top: 10px;
+      border-top: 1px solid rgb(154, 154, 154);
+    "></div>
+  <div class="input-container">
+    <div style="display: flex; align-items: center; width: 100%">
+      <svg viewBox="0 0 1024 1024" width="25" height="25" style="margin-left: 10px">
+        <path
+          d="M512 62a184.09090869 184.09090869 0 0 1 184.09090869 184.09090869v204.54545478a184.09090869 184.09090869 0 1 1-368.18181738 1e-8v-204.54545479A184.09090869 184.09090869 0 0 1 512 62z m0 65.45454521a118.63636348 118.63636348 0 0 0-118.63636348 118.63636348v204.54545479a118.63636348 118.63636348 0 1 0 237.27272695 0v-204.54545479A118.63636348 118.63636348 0 0 0 512 127.45454521z"
+          p-id="6838"></path>
+        <path
+          d="M192.90909131 471.09090869a319.09090869 319.09090869 0 0 0 638.18181738 0 32.72727305 32.72727305 0 1 0-65.45454521 0 253.63636348 253.63636348 0 0 1-507.27272695 0 32.72727305 32.72727305 0 1 0-65.45454522 0z"
+          p-id="6839"></path>
+        <path
+          d="M479.27272695 757.45454521v131.85a32.72727305 32.72727305 0 1 0 65.4545461 0V757.45454521a32.72727305 32.72727305 0 1 0-65.4545461 0z"
+          p-id="6840"></path>
+        <path
+          d="M409.72727305 953.81818174h206.87727216a32.72727305 32.72727305 0 1 0 0-65.45454522H409.72727305a32.72727305 32.72727305 0 1 0 0 65.45454522z"
+          p-id="6841"></path>
+      </svg>
+
+      <div style="flex-grow: 1; margin-left: 5px; margin-right: 2%">
+        <input class="userInput" type="text" name="" style="box-sizing: border-box; background-color: transparent" />
+      </div>
+
+      <div style="margin-right: 7px" id="QQ_chat_send-btn">
+        <button style="
+              background-color: white;
+              border-radius: 30px;
+              height: 31px;
+              display: block;
+              width: 3.5rem;
+              background-color: transparent;
+              border: 1px solid rgb(0, 0, 0, 0.5);
+            ">
+          发送
+        </button>
+      </div>
+    </div>
+
+
+  </div>
+  <div class="msgcontent" style="padding-top: 15px; padding-bottom: 0px"></div>
+</div>

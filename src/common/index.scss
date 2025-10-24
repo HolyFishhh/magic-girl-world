@@ -1,0 +1,1725 @@
+@import url('https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Noto+Sans+SC:wght@300;400;500&display=swap');
+
+/* ------------------------------------------------- */
+/* 魔法少女RPG - 静态版本: 梦幻少女日记风格         */
+/* 设计理念: 手绘、可爱、柔软、沉浸感             */
+/* ------------------------------------------------- */
+
+// --- 1. 主题变量 (Theme Variables) ---
+:root {
+  // 亮色主题 (默认)
+  --notebook-bg: #fffaf7; // 更温暖的纸张颜色
+  --notebook-border: #f2e4d5; // 更柔和的边框色
+  --text-primary: #6d5b5b; // 柔和的深棕色
+  --text-secondary: #b19d9d; // 柔和的浅棕色
+  --bookmark-pink: #ffd9e2; // 少女粉
+  --bookmark-blue: #d4eaff; // 天空蓝
+  --bookmark-green: #d8f5d8; // 薄荷绿
+  --bookmark-purple: #e9e0ff; // 薰衣草紫
+  --bookmark-yellow: #fff9c4; // 奶油黄
+  --bookmark-active-shadow: 0 4px 12px rgba(136, 98, 98, 0.15);
+  --transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+  --body-bg: #f8f3ed;
+  --body-bg-pattern: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23e8e0d4' fill-opacity='0.4'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+  --option-btn-bg: var(--bookmark-blue);
+  --option-btn-hover: var(--bookmark-purple);
+  --card-bg: white;
+  --info-card-bg: rgba(255, 255, 255, 0.6);
+  --reward-card-bg: var(--notebook-bg);
+  --pane-bg: #fff;
+  --pane-change-bg: #fffef6;
+  --pane-exp-bg: #f0f8ff;
+
+  // 文本高亮颜色（亮色主题）- 柔和不突兀
+  --highlight-quote: #5a7fa3; // 引号内容 - 柔和蓝色
+  --highlight-book: #6b8e7d; // 书名号内容 - 柔和绿色
+  --highlight-bracket: #b8934a; // 方括号内容 - 柔和金色
+  --highlight-paren: #9c7ba8; // 圆括号内容 - 柔和紫色
+  --highlight-emphasis: #c27864; // 强调内容 - 柔和橙色
+}
+
+// 暗色主题
+[data-theme='dark'] {
+  --notebook-bg: #2b2b2b;
+  --notebook-border: #444;
+  --text-primary: #e0e0e0;
+  --text-secondary: #a0a0a0;
+  --bookmark-pink: #6b4155;
+  --bookmark-blue: #3d5266;
+  --bookmark-green: #3d5547;
+  --bookmark-purple: #4a4066;
+  --bookmark-yellow: #6b6347;
+  --bookmark-active-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  --body-bg: #1a1a1a;
+  --body-bg-pattern: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23333333' fill-opacity='0.4'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+  --option-btn-bg: #3d5266;
+  --option-btn-hover: #4a4066;
+  --card-bg: #333;
+  --info-card-bg: rgba(50, 50, 50, 0.8);
+  --reward-card-bg: #2b2b2b;
+  --pane-bg: #333;
+  --pane-change-bg: #3a3a2f;
+  --pane-exp-bg: #2d3a4a;
+
+  // 文本高亮颜色（暗色主题）- 柔和明亮但不刺眼
+  --highlight-quote: #8eb4d4; // 引号内容 - 柔和浅蓝色
+  --highlight-book: #9bc4ab; // 书名号内容 - 柔和浅绿色
+  --highlight-bracket: #d4b87a; // 方括号内容 - 柔和浅金色
+  --highlight-paren: #c4a8d4; // 圆括号内容 - 柔和浅紫色
+  --highlight-emphasis: #d4a294; // 强调内容 - 柔和浅橙色
+}
+
+// --- 2. 全局样式 (Global Styles) ---
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Noto Sans SC', sans-serif; // 使用基础字体
+  line-height: 1.7;
+  color: var(--text-primary);
+  background-color: var(--body-bg);
+  background-image: var(--body-bg-pattern);
+  overflow-x: hidden;
+  min-height: 100vh;
+  padding: 20px;
+  transition:
+    background-color 0.3s ease,
+    color 0.3s ease;
+}
+
+// --- 3. 日记本容器 (Notebook Container) ---
+.rpg-container {
+  max-width: 900px;
+  margin: 2rem auto;
+  position: relative;
+  font-family: 'Microsoft YaHei', 'Segoe UI', 'Helvetica Neue', sans-serif;
+
+  // 书签区域和内容区域的包裹器
+  .notebook-body {
+    background: var(--notebook-bg);
+    border: 1px solid var(--notebook-border);
+    border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
+    padding: 2rem;
+    padding-top: 5rem;
+    position: relative;
+  }
+}
+
+// --- 奖励模块样式 ---
+.reward-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 20px;
+}
+
+.reward-card {
+  background: var(--reward-card-bg);
+  border: 2px solid var(--notebook-border);
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+  width: 100%;
+  max-width: 100%;
+}
+
+.reward-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+
+  .title {
+    font:
+      800 18px 'ZCOOL KuaiLe',
+      'Noto Sans SC',
+      system-ui;
+    color: var(--text-primary);
+  }
+
+  .badge {
+    margin-left: auto;
+    padding: 4px 10px;
+    border-radius: 10px;
+    border: 2px solid var(--notebook-border);
+    background: var(--bookmark-yellow);
+    color: var(--text-primary);
+    font:
+      900 12px 'ZCOOL KuaiLe',
+      'Noto Sans SC';
+  }
+}
+
+.reward-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+  width: 100%;
+}
+
+.pane {
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--pane-bg);
+  border: 2px dashed #d9c7aa;
+
+  &.pane-change {
+    background: var(--pane-change-bg);
+    grid-column: 1 / -1;
+  }
+
+  &.pane-exp {
+    background: var(--pane-exp-bg);
+    border-color: skyblue;
+    grid-column: 1 / -1;
+  }
+
+  &.pane-card {
+    border-color: #ffc1d6;
+  }
+
+  &.pane-artifact {
+    border-color: #b9d6ff;
+  }
+
+  &.pane-item {
+    border-color: #bfe7bf;
+  }
+}
+
+.pane-tag {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 8px;
+  border: 2px solid #d9c7aa;
+  background: #fff;
+  color: #6b5b2e;
+  font:
+    800 12px 'ZCOOL KuaiLe',
+    'Noto Sans SC';
+}
+
+.change-list {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: #6b5b2e;
+  font: 500 13px 'Noto Sans SC';
+}
+
+.pill {
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #fffef6;
+  border: 2px dashed #d9c7aa;
+}
+
+.exp-display {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: #2c5aa0;
+  font: 500 13px 'Noto Sans SC';
+}
+
+.exp-item {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #e6f3ff;
+  border: 2px solid skyblue;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.exp-icon {
+  font-size: 16px;
+}
+
+.exp-text {
+  flex: 1;
+  font-weight: 600;
+}
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.pane-title {
+  font:
+    800 14px 'ZCOOL KuaiLe',
+    'Noto Sans SC';
+  color: var(--text-primary);
+}
+
+.pane-sub {
+  margin-left: auto;
+  color: var(--text-secondary);
+  font: 700 12px 'Noto Sans SC';
+}
+
+.option {
+  margin-top: 8px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 8px;
+  border-radius: 8px;
+  background: #fffef6;
+  border: 2px dashed currentColor;
+  cursor: pointer;
+
+  .pane-card & {
+    color: #a66a79;
+    background: #fffef9;
+    border-color: #ffc1d6;
+  }
+
+  .pane-artifact & {
+    color: #5c6b82;
+    background: #f8fbff;
+    border-color: #b9d6ff;
+  }
+
+  .pane-item & {
+    color: #5b7a5b;
+    background: #f7fff7;
+    border-color: #bfe7bf;
+  }
+
+  .icon {
+    font-size: 18px;
+  }
+
+  .text {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .name {
+    font:
+      800 13px 'ZCOOL KuaiLe',
+      'Noto Sans SC';
+    color: var(--text-primary);
+    word-break: break-word;
+  }
+
+  .cost {
+    font: 600 11px 'Noto Sans SC';
+    color: var(--bookmark-blue);
+    margin-bottom: 2px;
+    word-break: break-word;
+  }
+
+  .desc {
+    font: 700 12px 'Noto Sans SC';
+    color: var(--text-secondary);
+    word-break: break-word;
+  }
+}
+
+.reward-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.btn {
+  padding: 8px 12px;
+  border-radius: 8px;
+  font:
+    800 12px 'ZCOOL KuaiLe',
+    'Noto Sans SC';
+  border: 2px solid var(--notebook-border);
+  background: #fff;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: var(--transition);
+
+  &.btn-primary {
+    border: 0;
+    color: #634d4d;
+    background: linear-gradient(180deg, var(--bookmark-yellow), #ffd9e2);
+    box-shadow:
+      0 8px 16px rgba(136, 98, 98, 0.12),
+      inset 0 0 0 2px var(--notebook-border);
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+
+  &:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+  }
+}
+
+// --- 4. 书签导航 (Bookmark Navigation) ---
+.tab-navigation {
+  position: absolute;
+  top: 1.5rem;
+  left: 2rem;
+  right: 2rem;
+  display: flex;
+  justify-content: flex-start;
+  align-items: flex-end; // 对齐到容器底部
+  z-index: 10;
+  height: 50px; // 给一个固定高度
+
+  .tab-button {
+    background: var(--bookmark-pink);
+    border: 1px solid var(--notebook-border);
+    border-bottom: none;
+    border-radius: 12px 12px 4px 4px; // 更圆润的顶部
+    padding: 0.8rem 1.3rem;
+    cursor: pointer;
+    color: var(--text-primary);
+    font-family: 'ZCOOL KuaiLe', cursive; // 使用手写体
+    font-size: 1.1rem;
+    margin-right: 5px; // 使用正边距
+    transition: var(--transition);
+    box-shadow: 0 -1px 4px rgba(0, 0, 0, 0.04) inset;
+    position: relative; // 为了伪元素定位
+    transform-origin: bottom center;
+
+    // 随机的轻微旋转
+    &:nth-child(1) {
+      transform: rotate(-2deg);
+    }
+    &:nth-child(2) {
+      background-color: var(--bookmark-blue);
+      transform: rotate(1.5deg);
+    }
+    &:nth-child(3) {
+      background-color: var(--bookmark-green);
+      transform: rotate(-1deg);
+    }
+    &:nth-child(4) {
+      background-color: var(--bookmark-purple);
+      transform: rotate(2.5deg);
+    }
+    &:nth-child(5) {
+      background-color: var(--bookmark-yellow);
+      transform: rotate(-1.5deg);
+    }
+
+    &:hover {
+      transform: translateY(-5px) rotate(0); // 鼠标悬浮时变正
+    }
+
+    &.active {
+      transform: translateY(-10px) rotate(0); // 活动标签变正并上浮
+      box-shadow: var(--bookmark-active-shadow);
+      z-index: 5;
+
+      // 改为图钉样式
+      &::after {
+        content: '';
+        position: absolute;
+        top: 5px;
+        right: 5px;
+        width: 14px;
+        height: 14px;
+        // 默认图钉颜色 (用于粉色书签)
+        background: radial-gradient(circle, #ff8a8a 0%, #e53935 100%);
+        border: 1px solid rgba(0, 0, 0, 0.2);
+        border-radius: 50%;
+        box-shadow: 1px 1px 3px rgba(0, 0, 0, 0.2); // 增加立体感
+      }
+    }
+
+    .tab-icon {
+      margin-right: 0.5rem;
+    }
+  }
+
+  // 为不同颜色的活动书签设置专属图钉颜色
+  .tab-button:nth-child(2).active::after {
+    background: radial-gradient(circle, #8dc8ff 0%, #3a8ee5 100%); // 蓝色图钉
+  }
+  .tab-button:nth-child(3).active::after {
+    background: radial-gradient(circle, #83e083 0%, #36a536 100%); // 绿色图钉
+  }
+  .tab-button:nth-child(4).active::after {
+    background: radial-gradient(circle, #c0a8ff 0%, #8b6ce5 100%); // 紫色图钉
+  }
+  .tab-button:nth-child(5).active::after {
+    background: radial-gradient(circle, #ffe68a 0%, #e5b839 100%); // 黄色图钉
+  }
+}
+
+// --- 5. 内容区域 (Content Area) ---
+.tab-content {
+  .module-content {
+    display: none;
+    animation: fadeIn 0.5s ease-in-out;
+    &[style*='display: block'] {
+      display: block !important;
+    }
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+// --- 6. 内容通用样式 ---
+.section {
+  margin-bottom: 2.5rem;
+  &:last-child {
+    margin-bottom: 0;
+  }
+}
+
+.section-title {
+  font-size: 2rem; // 加大标题
+  font-weight: normal; // ZCOOL自带粗细
+  font-family: 'ZCOOL KuaiLe', cursive; // 应用手写体
+  color: var(--text-primary);
+  margin-bottom: 1.5rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 3px dotted var(--notebook-border); // 改为虚线
+}
+
+// --- 7. 剧情模块 ---
+.story-text {
+  font-family: 'Noto Sans SC', sans-serif;
+  font-size: 1.15rem;
+  line-height: 1.8;
+  color: var(--text-primary);
+  margin-bottom: 1.5rem;
+  white-space: pre-wrap; // 保留换行符
+
+  p {
+    margin-bottom: 1rem;
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+
+  strong {
+    color: #8b4c98; // 紫色强调
+    font-weight: 500;
+  }
+
+  em {
+    color: var(--text-secondary);
+    font-style: italic;
+  }
+
+  // 特殊格式高亮样式
+  .highlight-quote {
+    color: var(--highlight-quote);
+    font-weight: 500;
+  }
+
+  .highlight-book {
+    color: var(--highlight-book);
+    font-weight: 500;
+  }
+
+  .highlight-bracket {
+    color: var(--highlight-bracket);
+    font-weight: 500;
+  }
+
+  .highlight-paren {
+    color: var(--highlight-paren);
+    font-style: normal;
+  }
+
+  .highlight-emphasis {
+    color: var(--highlight-emphasis);
+    font-weight: 600;
+  }
+}
+
+// 其他内容区域也支持高亮
+.card-description,
+.desc,
+.status-description,
+.info-item .value,
+.item-description {
+  .highlight-quote {
+    color: var(--highlight-quote);
+    font-weight: 500;
+  }
+
+  .highlight-book {
+    color: var(--highlight-book);
+    font-weight: 500;
+  }
+
+  .highlight-bracket {
+    color: var(--highlight-bracket);
+    font-weight: 500;
+  }
+
+  .highlight-paren {
+    color: var(--highlight-paren);
+  }
+
+  .highlight-emphasis {
+    color: var(--highlight-emphasis);
+    font-weight: 600;
+  }
+}
+
+.story-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 1rem;
+
+  p {
+    margin-bottom: 0.5rem;
+    font-family: 'ZCOOL KuaiLe', cursive;
+    font-size: 1.2rem;
+    color: var(--text-primary);
+  }
+
+  ol {
+    padding-left: 0;
+    list-style: none;
+
+    li {
+      background: rgba(255, 255, 255, 0.5);
+      border: 1px solid var(--notebook-border);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 0.5rem;
+      position: relative;
+      font-family: 'ZCOOL KuaiLe', cursive;
+      font-size: 1.1rem;
+      line-height: 1.6;
+      transition: var(--transition);
+
+      &:hover {
+        background: rgba(214, 182, 182, 0.15);
+        transform: translateX(5px);
+      }
+
+      &::before {
+        content: counter(list-item) '️⃣';
+        counter-increment: list-item;
+        position: absolute;
+        left: -2rem;
+        top: 50%;
+        transform: translateY(-50%);
+        font-size: 1.2rem;
+      }
+    }
+  }
+}
+
+// --- 8. 通用信息卡片 ---
+.data-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.info-card {
+  border: none; // 移除边框
+  border-radius: 8px;
+  padding: 1.25rem;
+  background: var(--info-card-bg);
+  box-shadow: 0 4px 15px rgba(136, 98, 98, 0.08); // 更柔和的阴影
+  transition: var(--transition);
+
+  &:hover {
+    box-shadow: 0 6px 20px rgba(136, 98, 98, 0.12);
+    transform: translateY(-2px);
+  }
+
+  .card-title {
+    font-weight: normal;
+    font-family: 'ZCOOL KuaiLe', cursive; // 应用手写体
+    font-size: 1.4rem;
+    margin-bottom: 0.75rem;
+    color: #8b4c98; // 紫色标题
+    border-bottom: 2px dotted var(--notebook-border);
+    padding-bottom: 0.5rem;
+  }
+
+  .info-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 0.6rem 0;
+    border-top: 1px dashed var(--notebook-border);
+    font-family: 'ZCOOL KuaiLe', cursive; // 将字体应用到整个条目
+    font-size: 1rem;
+
+    &:first-of-type {
+      border-top: none;
+    }
+
+    .label {
+      color: var(--text-secondary);
+      font-weight: 400;
+      white-space: nowrap;
+      margin-right: 1rem;
+    }
+
+    .value {
+      font-weight: 500;
+      color: var(--text-primary);
+      text-align: right;
+      word-break: break-word;
+      line-height: 1.4;
+    }
+  }
+}
+
+// --- 9. 战斗卡牌样式 ---
+.battle-deck {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+.card {
+  border: 1px solid var(--notebook-border);
+  padding: 1rem;
+  border-radius: 8px;
+  text-align: center;
+  background: var(--card-bg);
+  font-family: 'ZCOOL KuaiLe', cursive;
+  font-size: 1rem;
+  transition: var(--transition);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+
+  &:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  }
+
+  .card-name {
+    font-weight: 600;
+    font-size: 1.1rem;
+    margin-bottom: 0.5rem;
+    color: #8b4c98;
+
+    .card-quantity {
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      margin-left: 0.5rem;
+    }
+  }
+
+  .card-cost {
+    color: var(--bookmark-blue);
+    margin-bottom: 0.5rem;
+    font-weight: 500;
+  }
+
+  .card-description {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    line-height: 1.4;
+  }
+}
+
+// 兼容旧的类名
+.battle-card-item {
+  @extend .card;
+}
+
+// 删除控制卡片
+.delete-control-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  background: linear-gradient(135deg, #ffebee, #fce4ec);
+  border: 2px dashed #ff4444;
+
+  .delete-mode-btn {
+    background: #ff4444;
+    color: white;
+    border: none;
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    font-size: 1.5rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+    margin-bottom: 0.5rem;
+
+    &:hover {
+      background: #ff6666;
+      transform: scale(1.1);
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+    }
+
+    &.delete-mode-active {
+      background: #cc3333;
+      animation: pulse 1.5s infinite;
+
+      &:hover {
+        background: #dd4444;
+      }
+    }
+  }
+
+  .delete-count {
+    font-size: 0.8rem;
+    color: #666;
+    text-align: center;
+  }
+}
+
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+// 卡牌删除覆盖层
+.card {
+  position: relative;
+
+  .card-delete-overlay {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    width: 30px;
+    height: 30px;
+    background: #ff4444;
+    border: 2px solid white;
+    border-radius: 50%;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 10;
+    transition: all 0.2s ease;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+
+    .delete-icon {
+      font-size: 0.8rem;
+      color: white;
+    }
+
+    &:hover {
+      background: #ff6666;
+      transform: scale(1.1);
+      box-shadow: 0 3px 8px rgba(0, 0, 0, 0.4);
+    }
+  }
+}
+
+// 删除模式激活时显示删除按钮
+.battle-deck.delete-mode {
+  .card .card-delete-overlay {
+    display: flex;
+  }
+
+  .card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(255, 68, 68, 0.3);
+  }
+}
+
+// 道具使用按钮
+.item-use-btn {
+  background: #44aa44;
+  color: white;
+  border: 2px solid #339933;
+  padding: 0.4rem 0.8rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 0.5rem;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+
+  &:hover {
+    background: #66cc66;
+    border-color: #44aa44;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+  }
+
+  &:active {
+    transform: translateY(0);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  }
+}
+
+// NPC追踪按钮
+.tracking-btn {
+  border: 2px solid;
+  padding: 0.3rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  margin-left: 0.5rem;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+
+  &.tracking-on {
+    background: #ff4444;
+    color: white;
+    border-color: #cc3333;
+
+    &:hover {
+      background: #ff6666;
+      border-color: #ff4444;
+      transform: translateY(-1px);
+      box-shadow: 0 3px 6px rgba(0, 0, 0, 0.15);
+    }
+  }
+
+  &.tracking-off {
+    background: #44aa44;
+    color: white;
+    border-color: #339933;
+
+    &:hover {
+      background: #66cc66;
+      border-color: #44aa44;
+      transform: translateY(-1px);
+      box-shadow: 0 3px 6px rgba(0, 0, 0, 0.15);
+    }
+  }
+
+  &:active {
+    transform: translateY(0);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  }
+}
+
+// --- 10. 调试面板 ---
+.debug-panel {
+  margin-top: 2rem;
+  padding: 1.25rem;
+  background: transparent; // 透明背景
+  border: 2px dashed var(--notebook-border); // 虚线边框
+  border-radius: 8px;
+
+  h4 {
+    text-align: center;
+    margin-bottom: 1rem;
+    color: var(--text-secondary);
+    font-size: 1.1rem;
+    font-family: 'ZCOOL KuaiLe', cursive;
+  }
+
+  .debug-buttons {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 0.75rem;
+
+    .debug-btn {
+      background: rgba(0, 0, 0, 0.03);
+      border: 1px solid var(--notebook-border);
+      color: var(--text-secondary);
+      padding: 0.75rem 1rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-family: 'ZCOOL KuaiLe', cursive; // 应用手写体
+      font-size: 1rem;
+      transition: var(--transition);
+
+      &:hover {
+        background: rgba(0, 0, 0, 0.06);
+        color: var(--text-primary);
+        transform: translateY(-1px);
+      }
+
+      &:active {
+        transform: translateY(0);
+      }
+    }
+  }
+}
+
+// --- 11. 主题切换按钮 (Theme Toggle Button) ---
+.theme-toggle {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  border: 2px solid var(--notebook-border);
+  background: var(--notebook-bg);
+  color: var(--text-primary);
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  transition: var(--transition);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+
+  &:hover {
+    transform: scale(1.1) rotate(15deg);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
+  }
+
+  &:active {
+    transform: scale(0.95);
+  }
+
+  .theme-icon {
+    display: block;
+    transition: transform 0.3s ease;
+  }
+}
+
+// --- 12. 响应式设计 (Mobile UI Adaptation) ---
+// 移动端响应式优化 - 状态标签
+@media (max-width: 768px) {
+  .status-tag {
+    font-size: 12px;
+    padding: 5px 10px;
+    margin: 3px 4px 3px 0;
+  }
+
+  .status-detail {
+    font-size: 12px;
+    padding: 10px 12px;
+  }
+
+  .status-label {
+    font-size: 13px;
+  }
+
+  // 主题切换按钮移动端适配
+  .theme-toggle {
+    top: 10px;
+    right: 10px;
+    width: 40px;
+    height: 40px;
+    font-size: 20px;
+  }
+}
+
+@media (max-width: 768px) {
+  body {
+    background-image: none; // 移动端移除背景纹理，更干净
+    padding: 10px;
+    font-size: 16px; // 防止iOS自动缩放
+  }
+
+  .rpg-container {
+    margin: 0;
+    width: 100%;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+
+    .notebook-body {
+      border-radius: 0;
+      box-shadow: none;
+      flex-grow: 1;
+      overflow-y: auto;
+      padding: 1rem;
+      padding-top: 4.5rem;
+      // 启用动量滚动 (iOS)
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .debug-panel {
+      flex-shrink: 0;
+      border-radius: 0;
+      margin-top: 0;
+      border-top: 2px dashed var(--notebook-border);
+    }
+  }
+
+  .tab-navigation {
+    left: 1rem;
+    right: 1rem;
+    height: 40px;
+    // 防止标签被主题切换按钮遮挡
+    padding-right: 50px;
+
+    .tab-button {
+      padding: 0.6rem 0.6rem;
+      font-size: 0.9rem;
+      transform: rotate(0) !important; // 移除所有旋转
+      margin-right: -5px;
+      // 增加触摸目标
+      min-width: 44px;
+      min-height: 44px;
+
+      &.active {
+        transform: translateY(-5px) !important; // 减小上浮距离
+
+        &::after {
+          width: 10px; // 移动端图钉变小
+          height: 10px;
+          top: 4px;
+          right: 4px;
+        }
+      }
+
+      .tab-icon {
+        margin-right: 0.3rem;
+      }
+
+      // 移动端隐藏部分标签文字，只保留图标
+      @media (max-width: 480px) {
+        font-size: 0;
+        padding: 0.5rem;
+
+        .tab-icon {
+          margin-right: 0;
+          font-size: 1.2rem;
+        }
+      }
+    }
+  }
+
+  .section-title {
+    font-size: 1.6rem;
+    margin-bottom: 1rem;
+  }
+
+  .data-grid {
+    grid-template-columns: 1fr; // 移动端单列布局
+    gap: 1rem;
+  }
+
+  .story-text {
+    font-size: 1rem;
+    line-height: 1.6;
+  }
+
+  .story-options ol li {
+    font-size: 0.95rem;
+    padding: 0.8rem;
+
+    &::before {
+      left: -1.5rem;
+      font-size: 1rem;
+    }
+  }
+
+  // 移动端输入框优化
+  input[type='text'],
+  .custom-action input {
+    font-size: 16px !important; // 防止iOS缩放
+  }
+
+  // 移动端卡片网格优化
+  .battle-deck {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 0.75rem;
+  }
+
+  .card {
+    font-size: 0.9rem;
+    padding: 0.75rem;
+  }
+
+  // 移动端信息卡片优化
+  .info-card {
+    padding: 1rem;
+
+    .info-item {
+      padding: 0.5rem 0;
+      flex-direction: column;
+      align-items: flex-start;
+
+      .label {
+        margin-bottom: 0.25rem;
+        margin-right: 0;
+      }
+
+      .value {
+        text-align: left;
+      }
+    }
+  }
+
+  // 移动端奖励卡片优化
+  .reward-card {
+    padding: 12px;
+  }
+
+  .reward-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .option {
+    padding: 10px;
+    font-size: 0.9rem;
+
+    .icon {
+      font-size: 20px;
+    }
+
+    .name {
+      font-size: 12px;
+    }
+
+    .desc {
+      font-size: 11px;
+    }
+  }
+}
+
+// 超小屏幕适配
+@media (max-width: 480px) {
+  body {
+    padding: 5px;
+  }
+
+  .rpg-container .notebook-body {
+    padding: 0.75rem;
+    padding-top: 4rem;
+  }
+
+  .section-title {
+    font-size: 1.4rem;
+  }
+
+  .info-card h3 {
+    font-size: 1.1rem;
+  }
+}
+
+// 横屏模式优化 (移动端)
+@media (max-width: 768px) and (orientation: landscape) {
+  .rpg-container .notebook-body {
+    padding-top: 3.5rem;
+  }
+
+  .tab-navigation {
+    height: 35px;
+
+    .tab-button {
+      padding: 0.4rem 0.5rem;
+      font-size: 0.85rem;
+    }
+  }
+}
+
+// --- 12. 特殊效果 ---
+.rpg-container {
+  // 添加轻微的纸张质感
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 24px, rgba(0, 0, 0, 0.02) 25px);
+    pointer-events: none;
+    border-radius: 8px;
+  }
+}
+
+// 滚动条样式
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--notebook-bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--notebook-border);
+  border-radius: 4px;
+
+  &:hover {
+    background: var(--text-secondary);
+  }
+}
+
+// 选项按钮
+.option-btn {
+  display: inline-block;
+  margin: 0.3rem 0.4rem 0.3rem 0;
+  padding: 0.5rem 1rem;
+
+  &:disabled,
+  &.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+  border: 1px solid var(--notebook-border);
+  border-radius: 6px;
+  background: var(--option-btn-bg);
+  font-family: 'ZCOOL KuaiLe', cursive;
+  cursor: pointer;
+  transition: var(--transition);
+  color: var(--text-primary);
+  // 增加触摸目标大小 (移动端友好)
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.option-btn:hover {
+  background: var(--option-btn-hover);
+  transform: translateY(-2px);
+}
+
+// 移动端触摸优化
+@media (hover: none) and (pointer: coarse) {
+  .option-btn:active {
+    background: var(--option-btn-hover);
+    transform: scale(0.98);
+  }
+}
+
+// 九宫格阵营显示
+.alignment-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-top: 1rem;
+}
+.alignment-cell {
+  border: 1px solid var(--notebook-border);
+  padding: 0.5rem;
+  text-align: center;
+  font-size: 0.9rem;
+  background: #fdf9f2;
+  border-radius: 4px;
+  transition: var(--transition);
+}
+.alignment-cell.active {
+  background: var(--bookmark-green);
+  font-weight: bold;
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.15);
+}
+
+// 势力状态样式
+.faction-status {
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  font-weight: 500;
+
+  &.友好,
+  &.friendly {
+    background: var(--bookmark-green);
+    color: #2e7d32;
+  }
+
+  &.敌对,
+  &.hostile {
+    background: #ffebee;
+    color: #c62828;
+  }
+
+  &.中立,
+  &.neutral {
+    background: var(--bookmark-yellow);
+    color: #f57c00;
+  }
+
+  &.警惕,
+  &.cautious {
+    background: #fff3e0;
+    color: #ef6c00;
+  }
+
+  &.亦敌亦友,
+  &.complicated {
+    background: var(--bookmark-purple);
+    color: #6a1b9a;
+  }
+}
+
+// --- 删除模式样式 ---
+.delete-toggle-btn {
+  background: #ff6b6b;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 4px 8px;
+  margin-left: 10px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: var(--transition);
+
+  &:hover {
+    background: #ff5252;
+    transform: scale(1.05);
+  }
+}
+
+.card {
+  position: relative;
+
+  .card-delete-btn {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    background: #ff6b6b;
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 24px;
+    height: 24px;
+    cursor: pointer;
+    font-size: 12px;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    transition: var(--transition);
+
+    &:hover {
+      background: #ff5252;
+      transform: scale(1.1);
+    }
+  }
+}
+
+.battle-deck.delete-mode {
+  .card {
+    border: 2px dashed #ff6b6b;
+    background: rgba(255, 107, 107, 0.05);
+  }
+}
+
+// --- 经验测试按钮样式 ---
+.exp-test-btn {
+  background: linear-gradient(135deg, #4caf50, #45a049);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: var(--transition);
+  box-shadow: 0 2px 4px rgba(76, 175, 80, 0.3);
+
+  &:hover {
+    background: linear-gradient(135deg, #45a049, #3d8b40);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(76, 175, 80, 0.4);
+  }
+
+  &:active {
+    transform: translateY(0);
+    box-shadow: 0 2px 4px rgba(76, 175, 80, 0.3);
+  }
+}
+
+// --- 战斗选项按钮样式 ---
+.battle-option-btn {
+  // 继承普通选项的所有样式
+  display: inline-block;
+  margin: 0.3rem 0.4rem 0.3rem 0;
+  padding: 0.5rem 1rem;
+
+  &:disabled,
+  &.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+  border: 1px solid var(--notebook-border);
+  border-radius: 6px;
+  font-family: 'ZCOOL KuaiLe', cursive;
+  cursor: pointer;
+  transition: var(--transition);
+
+  // 只改变背景颜色为红色
+  background: #f44336;
+  color: white;
+
+  &:hover {
+    background: #d32f2f;
+    transform: translateY(-2px);
+  }
+}
+
+// --- 状态标签样式 ---
+.status-section {
+  margin-bottom: 16px;
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+}
+
+.status-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  font-family: 'ZCOOL KuaiLe', cursive;
+}
+
+.status-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  min-height: 32px;
+  align-items: flex-start;
+}
+
+.status-tag {
+  display: inline-block;
+  padding: 6px 12px;
+  margin: 4px 6px 4px 0;
+  border-radius: 16px;
+  font-size: 13px;
+  font-weight: 600;
+  transition: var(--transition);
+  border: 2px solid transparent;
+  line-height: 1.4;
+
+  // 永久性状态：紫色主题
+  &.status-permanent {
+    background: linear-gradient(135deg, var(--bookmark-purple), #f3e5ff);
+    color: #6a1b9a;
+    border-color: #d4b3ff;
+    box-shadow: 0 2px 6px rgba(106, 27, 154, 0.15);
+
+    &.clickable {
+      cursor: pointer;
+
+      &:hover {
+        background: linear-gradient(135deg, #dcc4ff, var(--bookmark-purple));
+        transform: translateY(-2px);
+        box-shadow: 0 4px 10px rgba(106, 27, 154, 0.25);
+      }
+
+      &:active {
+        transform: translateY(0);
+      }
+    }
+
+    .expand-icon {
+      font-size: 10px;
+      margin-left: 4px;
+      opacity: 0.7;
+      transition: var(--transition);
+    }
+  }
+
+  // 临时状态：蓝色主题
+  &.status-temporary {
+    background: linear-gradient(135deg, var(--bookmark-blue), #e3f2ff);
+    color: #1565c0;
+    border-color: #a3d5ff;
+    box-shadow: 0 2px 6px rgba(21, 101, 192, 0.15);
+  }
+
+  // 空状态
+  &.status-empty {
+    background: transparent;
+    color: var(--text-secondary);
+    border-color: var(--notebook-border);
+    border-style: dashed;
+    box-shadow: none;
+  }
+}
+
+// 状态标签包装器
+.status-tag-wrapper {
+  display: inline-block;
+  margin: 0;
+}
+
+// 状态详情面板
+.status-detail {
+  margin-top: 8px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 2px solid var(--bookmark-purple);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.6;
+  box-shadow: 0 4px 12px rgba(106, 27, 154, 0.12);
+  animation: slideDown 0.3s ease-out;
+  max-width: 100%;
+  word-wrap: break-word;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+// 战斗之书样式
+.battle-book-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.battle-book-btn {
+  background: linear-gradient(180deg, var(--bookmark-yellow), var(--bookmark-pink));
+  color: var(--text-primary);
+  border: 2px solid var(--notebook-border);
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: var(--transition);
+  box-shadow: 0 6px 14px rgba(136, 98, 98, 0.12);
+
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 18px rgba(136, 98, 98, 0.16);
+  }
+
+  &:active {
+    transform: translateY(0);
+  }
+}
+
+.battle-book-content {
+  background: rgba(255, 255, 255, 0.65);
+  border-radius: 8px;
+  padding: 16px;
+  border: 2px dashed var(--notebook-border);
+  max-height: 400px;
+  overflow-y: auto;
+  color: var(--text-primary);
+}
+
+.battle-book-section {
+  margin-bottom: 20px;
+
+  h4 {
+    color: var(--text-primary);
+    font-size: 16px;
+    font-weight: 800;
+    margin-bottom: 12px;
+    padding-bottom: 6px;
+    border-bottom: 2px dotted var(--notebook-border);
+  }
+}
+
+.status-effect-item {
+  background: #fffef6;
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 8px;
+  border: 2px dashed var(--notebook-border);
+
+  .status-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+
+    .status-icon {
+      font-size: 18px;
+      min-width: 24px;
+      text-align: center;
+    }
+
+    .status-name {
+      font-weight: 800;
+      color: var(--text-primary);
+      font-size: 14px;
+    }
+
+    .status-stacks {
+      background: var(--bookmark-blue);
+      color: var(--text-primary);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 800;
+      border: 1px solid var(--notebook-border);
+    }
+
+    .status-duration {
+      color: var(--text-secondary);
+      font-size: 12px;
+    }
+
+    .status-type {
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 700;
+      border: 1px dashed var(--notebook-border);
+      background: var(--bookmark-yellow);
+      color: var(--text-primary);
+
+      &.buff {
+        background: var(--bookmark-green);
+        color: #2e7d32;
+      }
+
+      &.debuff {
+        background: #ffebee;
+        color: #c62828;
+      }
+    }
+  }
+
+  .status-description {
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.4;
+    margin-bottom: 4px;
+  }
+
+  .status-triggers {
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-family: monospace;
+    background: rgba(0, 0, 0, 0.04);
+    padding: 4px 6px;
+    border-radius: 4px;
+    margin-top: 6px;
+    border: 1px dashed var(--notebook-border);
+  }
+}

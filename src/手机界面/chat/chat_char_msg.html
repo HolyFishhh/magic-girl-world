@@ -1,0 +1,16 @@
+<!-- 群聊消息模板 -->
+<% if (isgroup) { %>
+<div class="QQ_chat_charmsg">
+  <div data-name="${name}" class="QQ_chat_head"></div>
+  <div style="width: auto; height: auto; margin-top: 4px">
+    <span class="name">${name}</span><br />
+    ${content}
+  </div>
+</div>
+<% } else { %>
+<!-- 私聊消息模板 -->
+<div class="QQ_chat_charmsg">
+  <div data-name="${name}" class="QQ_chat_head"></div>
+  <div style="width: auto; height: auto; margin-top: 4px">${content}</div>
+</div>
+<% } %>

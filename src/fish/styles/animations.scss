@@ -1,0 +1,711 @@
+// 动画样式文件
+// 提供流畅的UI动画效果
+
+// 基础动画关键帧
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes slideInUp {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slideInDown {
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes bounce {
+  0%,
+  20%,
+  53%,
+  80%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  40%,
+  43% {
+    transform: translate3d(0, -30px, 0);
+  }
+  70% {
+    transform: translate3d(0, -15px, 0);
+  }
+  90% {
+    transform: translate3d(0, -4px, 0);
+  }
+}
+
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  10%,
+  30%,
+  50%,
+  70%,
+  90% {
+    transform: translateX(-10px);
+  }
+  20%,
+  40%,
+  60%,
+  80% {
+    transform: translateX(10px);
+  }
+}
+
+@keyframes glow {
+  0%,
+  100% {
+    box-shadow: 0 0 5px rgba(255, 255, 255, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(255, 255, 255, 0.8);
+  }
+}
+
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+// 卡牌动画
+.card-casting {
+  animation: glow 0.5s ease-in-out;
+  transform: scale(1.05);
+  z-index: 1000;
+}
+
+.card-hover {
+  transform: translateY(-5px);
+  transition: transform 0.2s ease;
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+}
+
+.card-dragging {
+  transform: rotate(5deg) scale(1.1);
+  opacity: 0.8;
+  z-index: 1000;
+}
+
+.card-drawing {
+  animation: slideInUp 0.6s ease-out;
+}
+
+.card-glow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-radius: inherit;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+
+.enhanced-card:hover .card-glow {
+  opacity: 1;
+  animation: glow 2s ease-in-out infinite;
+}
+
+// 状态效果动画
+.status-pulsing {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.status-apply-effect {
+  animation: bounce 0.8s ease-out;
+}
+
+.status-remove-flash {
+  animation: shake 0.6s ease-in-out;
+}
+
+// 遗物动画
+.relic-activated {
+  animation: glow 1s ease-in-out;
+}
+
+.relic-hover {
+  transform: scale(1.1);
+  transition: transform 0.2s ease;
+}
+
+.relic-shine {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(45deg, transparent 30%, rgba(255, 255, 255, 0.3) 50%, transparent 70%);
+  transform: translateX(-100%);
+  transition: transform 0.6s ease;
+}
+
+.relic-component:hover .relic-shine {
+  transform: translateX(100%);
+}
+
+// 伤害数字动画
+.damage-number {
+  animation: fadeOut 1.5s ease-out forwards;
+  font-weight: bold;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+  pointer-events: none;
+  z-index: 1000;
+}
+
+.damage-damage {
+  color: #ff4444;
+}
+
+.damage-heal {
+  color: #44ff44;
+}
+
+.damage-lust {
+  color: #ff44ff;
+}
+
+// 生命值条动画
+.hp-bar {
+  position: relative;
+  overflow: hidden;
+}
+
+.hp-bar .hp {
+  transition: width 0.8s ease-out;
+  position: relative;
+}
+
+.hp-bar .hp::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+  transform: translateX(-100%);
+  animation: shine 2s ease-in-out infinite;
+}
+
+@keyframes shine {
+  0% {
+    transform: translateX(-100%);
+  }
+  50% {
+    transform: translateX(100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+// 能量动画
+.energy-gain {
+  animation: pulse 0.5s ease-in-out;
+  color: #44ff44;
+}
+
+.energy-loss {
+  animation: shake 0.5s ease-in-out;
+  color: #ff4444;
+}
+
+// 目标命中效果
+.hit-flash {
+  animation: flash 0.2s ease-in-out;
+}
+
+@keyframes flash {
+  0%,
+  100% {
+    background-color: transparent;
+  }
+  50% {
+    background-color: rgba(255, 255, 255, 0.5);
+  }
+}
+
+// 胜利/失败动画
+.victory-overlay,
+.defeat-overlay {
+  animation: fadeIn 0.5s ease-in-out;
+}
+
+.victory-title {
+  animation: bounce 1s ease-out;
+  color: #ffd700;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+  font-size: 3rem;
+  margin-bottom: 1rem;
+}
+
+.defeat-title {
+  animation: shake 1s ease-out;
+  color: #ff4444;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+  font-size: 3rem;
+  margin-bottom: 1rem;
+}
+
+.defeat-subtitle {
+  animation: fadeIn 1s ease-in-out 0.5s both;
+  color: #cccccc;
+  font-size: 1.5rem;
+}
+
+// 粒子效果
+.particle {
+  animation: float 3s ease-in-out infinite;
+  opacity: 0.8;
+}
+
+// 进度条动画
+.progress-bar.animated .progress-fill {
+  transition: width 0.3s ease-out;
+}
+
+.progress-shine {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+  transform: translateX(-100%);
+  animation: shine 2s ease-in-out infinite;
+}
+
+// 工具提示动画
+.tooltip {
+  animation: fadeIn 0.2s ease-in-out;
+  transform-origin: bottom center;
+}
+
+// 战斗日志动画
+.log-entry {
+  animation: slideInUp 0.3s ease-out;
+}
+
+// 设置面板动画
+.settings-panel {
+  animation: slideInDown 0.3s ease-out;
+}
+
+// 响应式动画调整
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+// 性能优化
+.enhanced-card,
+.status-icon,
+.relic-component {
+  will-change: transform;
+  backface-visibility: hidden;
+  perspective: 1000px;
+}
+
+// 3D效果
+.card-3d {
+  transform-style: preserve-3d;
+  transition: transform 0.3s ease;
+}
+
+.card-3d:hover {
+  transform: rotateY(10deg) rotateX(5deg);
+}
+
+// ENS特殊动画
+.ens-effect {
+  animation: pulse 1.5s ease-in-out infinite;
+  filter: hue-rotate(0deg);
+}
+
+.ens-effect.intensity-1 {
+  animation-duration: 3s;
+  filter: hue-rotate(30deg);
+}
+
+.ens-effect.intensity-2 {
+  animation-duration: 2.5s;
+  filter: hue-rotate(60deg);
+}
+
+.ens-effect.intensity-3 {
+  animation-duration: 2s;
+  filter: hue-rotate(90deg);
+}
+
+.ens-effect.intensity-4 {
+  animation-duration: 1.5s;
+  filter: hue-rotate(120deg);
+}
+
+.ens-effect.intensity-5 {
+  animation-duration: 1s;
+  filter: hue-rotate(150deg);
+  animation-name: pulse, shake;
+}
+
+// 加载动画
+.loading-spinner {
+  animation: spin 1s linear infinite;
+}
+
+// 按钮动画
+.btn {
+  transition: all 0.2s ease;
+}
+
+.btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.btn:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+// 模态框动画
+.modal {
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+.modal-content {
+  animation: slideInDown 0.3s ease-out;
+}
+
+// 卡牌播放动画
+@keyframes cardPlay {
+  0% {
+    transform: translateY(-20px) scale(1.1);
+    opacity: 1;
+  }
+  50% {
+    transform: translateY(-50px) scale(1.2) rotate(5deg);
+    opacity: 0.8;
+  }
+  100% {
+    transform: translateY(-100px) scale(0.5) rotate(15deg);
+    opacity: 0;
+  }
+}
+
+// 卡牌抽取动画
+@keyframes cardDraw {
+  0% {
+    transform: translateY(50px) scale(0.8);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+// 能量不足动画
+@keyframes energyInsufficient {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20%,
+  60% {
+    transform: translateX(-5px);
+  }
+  40%,
+  80% {
+    transform: translateX(5px);
+  }
+}
+
+// 卡牌悬停增强动画
+.card-enhanced-hover {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+
+  &:hover {
+    transform: translateY(-25px) scale(1.15);
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.7);
+    filter: brightness(1.1);
+  }
+}
+
+// 震动动画类
+.shake-animation {
+  animation: shake 0.3s ease-in-out;
+}
+
+// 血条颜色动画
+.hp-fill {
+  transition: background-color 0.3s ease, width 0.5s ease;
+
+  &.hp-low {
+    background-color: #ff9500 !important;
+  }
+
+  &.hp-critical {
+    background-color: #ff3333 !important;
+    animation: criticalPulse 1s infinite;
+  }
+}
+
+@keyframes criticalPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+// 欲望溢出动画
+@keyframes lustPulse {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.8);
+  }
+  50% {
+    transform: translate(-50%, -50%) scale(1.05);
+    box-shadow: 0 16px 48px rgba(255, 20, 147, 0.6);
+  }
+}
+
+// 伤害数字动画增强
+.damage-number {
+  animation: damageFloat 1.5s ease-out forwards;
+}
+
+@keyframes damageFloat {
+  0% {
+    transform: translateY(0) scale(0.8);
+    opacity: 1;
+  }
+  20% {
+    transform: translateY(-10px) scale(1.2);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-60px) scale(1);
+    opacity: 0;
+  }
+}
+
+// 按钮悬停效果
+.control-button {
+  transition: all 0.3s ease;
+
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
+
+  &:active {
+    transform: translateY(0);
+  }
+}
+
+// 模态框动画
+.item-modal {
+  animation: modalFadeIn 0.3s ease-out;
+}
+
+@keyframes modalFadeIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+// 战斗日志动画增强
+#battle-log {
+  transition: all 0.2s ease;
+}
+
+.log-entry {
+  animation: logEntrySlide 0.3s ease-out;
+}
+
+@keyframes logEntrySlide {
+  0% {
+    transform: translateX(-20px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+// 欲望值条样式
+.lust-fill {
+  transition: background-color 0.3s ease, width 0.5s ease;
+  background-color: #ff69b4 !important;
+
+  &.lust-high {
+    background-color: #ff1493 !important;
+  }
+
+  &.lust-critical {
+    background-color: #dc143c !important;
+    animation: lustCriticalPulse 1s infinite;
+  }
+}
+
+@keyframes lustCriticalPulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 10px #dc143c;
+  }
+  50% {
+    opacity: 0.8;
+    box-shadow: 0 0 20px #dc143c;
+  }
+}
+
+// 状态效果图标动画
+.status-effect-icon {
+  animation: statusAppear 0.5s ease-out;
+  transition: all 0.3s ease;
+
+  &:hover {
+    transform: scale(1.1);
+    background: rgba(255, 255, 255, 0.3) !important;
+  }
+}
+
+@keyframes statusAppear {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.2);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+// 状态效果容器
+.player-status-effects,
+.enemy-status-effects {
+  min-height: 30px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 5px;
+}
+
+// 性高潮白光闪烁动画
+@keyframes orgasmFlash {
+  0% {
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  20% {
+    opacity: 0.3;
+  }
+  30% {
+    opacity: 0.9;
+  }
+  40% {
+    opacity: 0.1;
+  }
+  50% {
+    opacity: 0.8;
+  }
+  60% {
+    opacity: 0.2;
+  }
+  70% {
+    opacity: 0.7;
+  }
+  80% {
+    opacity: 0.1;
+  }
+  90% {
+    opacity: 0.5;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.orgasm-flash {
+  animation: orgasmFlash 2s ease-out;
+}

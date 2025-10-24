@@ -1,0 +1,21 @@
+{
+  "message": "请帮我查找入学相关信息",
+  "serviceCode": "test",
+  "searchParam": {
+    "searchModel": "rewrite",
+    "limited": 15,
+    "finalLimited": 10,
+    "scene": ["CMS-KB25189"],
+    "filter": { "must": [{ "status": "Y" }] },
+    "score": 0.7,
+    "phaseDecScore": 0.05,
+    "minScore": 0.1,
+    "promptCode": "实际的code",
+    "promptParams": {
+      "替换处1": "替换内容1",
+      "##{message}": "用户的实际输入内容..."
+    },
+    "model": "gpt-4.1",
+    "parameters": null
+  }
+}

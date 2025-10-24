@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>白木市魔法少女角色创建</title>
+  </head>
+  <body>
+    <div class="magical-girl-creator">
+      <!-- 标题区域 -->
+      <div class="header-section">
+        <h1 class="main-title">
+          <span class="sparkle">✨</span>
+          白木市角色创建
+          <span class="sparkle">✨</span>
+        </h1>
+        <p class="subtitle">在怪人与怪谈的现代都市中创建你的角色</p>
+      </div>
+
+      <!-- 角色创建表单 -->
+      <div class="creator-form">
+        <!-- 阵营选择 -->
+        <div class="section faction-section">
+          <h2 class="section-title">
+            <span class="icon">⚔️</span>
+            选择阵营
+          </h2>
+          <div class="faction-grid">
+            <div class="faction-card" data-faction="magical_girl">
+              <div class="faction-icon">🌟</div>
+              <div class="faction-name">魔法少女阵营</div>
+              <div class="faction-desc">守护正义与和平的魔法使用者</div>
+            </div>
+            <div class="faction-card" data-faction="evil_forces">
+              <div class="faction-icon">👿</div>
+              <div class="faction-name">邪恶敌对势力</div>
+              <div class="faction-desc">企图破坏世界秩序的黑暗力量</div>
+            </div>
+            <div class="faction-card" data-faction="ordinary_people">
+              <div class="faction-icon">👥</div>
+              <div class="faction-name">普通人</div>
+              <div class="faction-desc">生活在现代社会中的普通民众</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 职业选择 -->
+        <div class="section job-section">
+          <h2 class="section-title">
+            <span class="icon">👔</span>
+            选择职业
+          </h2>
+          <div class="job-grid">
+            <!-- 职业选项将通过JS动态生成 -->
+          </div>
+        </div>
+
+        <!-- 地点选择 -->
+        <div class="section location-section">
+          <h2 class="section-title">
+            <span class="icon">🏢</span>
+            选择所在地点
+          </h2>
+          <div class="location-container">
+            <div class="city-selector">
+              <label for="city-select">城市：</label>
+              <select id="city-select">
+                <option value="">请选择城市...</option>
+                <option value="shiroki">白木市</option>
+              </select>
+            </div>
+            <div class="location-grid">
+              <!-- 地点选项将通过JS动态生成 -->
+            </div>
+          </div>
+        </div>
+
+        <!-- 基础信息 -->
+        <div class="section basic-info-section">
+          <h2 class="section-title">
+            <span class="icon">📝</span>
+            基础信息
+          </h2>
+          <div class="basic-info-grid">
+            <div class="input-group">
+              <label>性别：</label>
+              <div class="gender-options">
+                <label class="gender-option">
+                  <input type="radio" name="gender" value="male" />
+                  <span class="gender-label">👨 男性</span>
+                </label>
+                <label class="gender-option">
+                  <input type="radio" name="gender" value="female" checked />
+                  <span class="gender-label">👩 女性</span>
+                </label>
+                <label class="gender-option">
+                  <input type="radio" name="gender" value="other" />
+                  <span class="gender-label">🌈 其他</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 额外描述 -->
+        <div class="section description-section">
+          <h2 class="section-title">
+            <span class="icon">💭</span>
+            额外描述（可选）
+          </h2>
+          <div class="description-container">
+            <textarea
+              id="custom-description"
+              placeholder="在这里添加角色的特殊设定、性格特点、背景故事等...&#10;例如：喜欢甜食的温柔女孩，有着不为人知的魔法天赋..."
+              rows="4"
+              maxlength="300"
+            >
+            </textarea>
+            <div class="char-counter"><span id="char-count">0</span>/300</div>
+          </div>
+        </div>
+
+        <!-- 角色预览 -->
+        <div class="section preview-section">
+          <h2 class="section-title">
+            <span class="icon">👁️</span>
+            角色预览
+          </h2>
+          <div class="character-preview">
+            <div class="preview-card">
+              <div class="preview-header">
+                <div class="preview-name">未设置角色</div>
+                <div class="preview-faction">请先选择阵营</div>
+              </div>
+              <div class="preview-details">
+                <div class="preview-item">
+                  <span class="label">职业：</span>
+                  <span class="value" id="preview-job">未选择</span>
+                </div>
+                <div class="preview-item">
+                  <span class="label">地点：</span>
+                  <span class="value" id="preview-location">未选择</span>
+                </div>
+                <div class="preview-item">
+                  <span class="label">性别：</span>
+                  <span class="value" id="preview-gender">女性</span>
+                </div>
+              </div>
+              <div class="preview-description">
+                <div class="desc-label">描述：</div>
+                <div class="desc-content" id="preview-description">AI将根据你的选择生成角色</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 操作按钮 -->
+        <div class="section actions-section">
+          <div class="action-buttons">
+            <button id="create-character-btn" class="create-btn" disabled>
+              <span class="btn-icon">🎭</span>
+              <span class="btn-text">创建角色</span>
+            </button>
+            <button id="reset-form-btn" class="reset-btn">
+              <span class="btn-icon">🔄</span>
+              <span class="btn-text">重置表单</span>
+            </button>
+          </div>
+          <div class="validation-message" id="validation-message">请选择阵营、职业和地点后才能创建角色</div>
+        </div>
+
+        <!-- AI生成结果显示区域 -->
+        <div class="section result-section" id="result-section" style="display: none">
+          <h2 class="section-title">
+            <span class="icon">🌟</span>
+            角色生成结果
+          </h2>
+
+          <!-- 角色基础信息 -->
+          <div class="result-card character-info-card">
+            <h3 class="card-title">
+              <span class="card-icon">👤</span>
+              角色信息
+            </h3>
+            <div class="character-info-content" id="character-info-content">
+              <!-- AI生成的角色基础信息 -->
+            </div>
+          </div>
+
+          <!-- 初始剧情 -->
+          <div class="result-card story-card">
+            <h3 class="card-title">
+              <span class="card-icon">📖</span>
+              初始剧情
+            </h3>
+            <div class="story-content" id="story-content">
+              <!-- AI生成的初始剧情 -->
+            </div>
+          </div>
+
+          <!-- 战斗数据 -->
+          <div class="result-card combat-card">
+            <h3 class="card-title">
+              <span class="card-icon">⚔️</span>
+              战斗数据
+            </h3>
+            <div class="combat-content">
+              <!-- 属性面板 -->
+              <div class="stats-panel" id="stats-panel">
+                <h4 class="panel-title">角色属性</h4>
+                <div class="stats-grid" id="stats-grid">
+                  <!-- AI生成的角色属性 -->
+                </div>
+              </div>
+
+              <!-- 初始卡组 -->
+              <div class="cards-panel" id="cards-panel">
+                <h4 class="panel-title">初始卡组</h4>
+                <div class="cards-grid" id="cards-grid">
+                  <!-- AI生成的初始卡牌 -->
+                </div>
+              </div>
+
+              <!-- 初始遗物 -->
+              <div class="relics-panel" id="relics-panel">
+                <h4 class="panel-title">初始遗物</h4>
+                <div class="relics-grid" id="relics-grid">
+                  <!-- AI生成的初始遗物 -->
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 操作按钮 -->
+          <div class="result-actions">
+            <button id="regenerate-btn" class="regenerate-btn">
+              <span class="btn-icon">🔄</span>
+              <span class="btn-text">重新生成</span>
+            </button>
+            <button id="save-character-btn" class="save-btn">
+              <span class="btn-icon">💾</span>
+              <span class="btn-text">保存角色</span>
+            </button>
+            <button id="start-game-btn" class="start-game-btn">
+              <span class="btn-icon">🎮</span>
+              <span class="btn-text">开始游戏</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 背景装饰 -->
+      <div class="background-effects">
+        <div class="star star-1">⭐</div>
+        <div class="star star-2">✨</div>
+        <div class="star star-3">🌟</div>
+        <div class="star star-4">💫</div>
+        <div class="star star-5">⭐</div>
+        <div class="star star-6">✨</div>
+      </div>
+    </div>
+  </body>
+</html>

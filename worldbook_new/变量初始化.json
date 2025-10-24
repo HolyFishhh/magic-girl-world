@@ -1,0 +1,86 @@
+{
+  "$meta": { "extensible": false },
+  "status": {
+    "$meta": { "extensible": false },
+    "time": "",
+    "location_weather": "",
+    "profession": "",
+    "permanent_status": ["$__META_EXTENSIBLE__$"],
+    "temporary_status": ["$__META_EXTENSIBLE__$"],
+    "clothing": {
+      "$meta": { "extensible": false },
+      "head": "",
+      "neck": "",
+      "hands": "",
+      "upper_body": "",
+      "lower_body": "",
+      "underwear": "",
+      "legs": "",
+      "feet": ""
+    },
+    "inventory": ["$__META_EXTENSIBLE__$"]
+  },
+  "battle": {
+    "$meta": { "extensible": false },
+    "core": {
+      "$meta": { "extensible": false },
+      "hp": 100,
+      "max_hp": 100,
+      "lust": 0,
+      "max_lust": 100,
+      "card_removal_count": 1
+    },
+    "cards": ["$__META_EXTENSIBLE__$"],
+    "artifacts": ["$__META_EXTENSIBLE__$"],
+    "items": ["$__META_EXTENSIBLE__$"],
+    "statuses": ["$__META_EXTENSIBLE__$"],
+    "player_abilities": ["$__META_EXTENSIBLE__$"],
+    "player_status_effects": ["$__META_EXTENSIBLE__$"],
+    "level": 1,
+    "exp": 0,
+    "enemy": {
+      "$meta": { "extensible": false },
+      "name": "",
+      "emoji": "",
+      "max_hp": 0,
+      "hp": 0,
+      "max_lust": 100,
+      "lust": 0,
+      "description": "",
+      "actions": ["$__META_EXTENSIBLE__$"],
+      "abilities": ["$__META_EXTENSIBLE__$"],
+      "status_effects": ["$__META_EXTENSIBLE__$"],
+      "lust_effect": {
+        "$meta": { "extensible": false },
+        "name": "",
+        "description": "",
+        "effect": ""
+      },
+      "action_mode": "",
+      "action_config": {
+        "$meta": { "extensible": true }
+      }
+    },
+    "player_lust_effect": {
+      "$meta": { "extensible": false },
+      "name": "",
+      "description": "",
+      "effect": ""
+    }
+  },
+  "factions": {
+    "$meta": { "extensible": false },
+    "player_alignment": "绝对中立",
+    "relations": ["$__META_EXTENSIBLE__$"]
+  },
+  "npcs": {
+    "$meta": { "extensible": true }
+  },
+  "reward": {
+    "$meta": { "extensible": false },
+    "card": ["$__META_EXTENSIBLE__$"],
+    "artifact": ["$__META_EXTENSIBLE__$"],
+    "item": ["$__META_EXTENSIBLE__$"],
+    "limits": { "$meta": { "extensible": true } }
+  }
+}

@@ -1,0 +1,39 @@
+<div class="chat-setting-popup">
+  <div class="chat-setting-header">
+    <span>聊天设置</span>
+    <svg class="close-setting-btn" viewBox="0 0 1024 1024" width="20" height="20">
+      <path
+        d="M512 421.490332 331.092592 240.582924C307.952518 217.442849 270.568889 217.442849 247.428814 240.582924 224.288739 263.722999 224.288739 301.106628 247.428814 324.246702L428.336222 505.154112 247.428814 686.061521C224.288739 709.201596 224.288739 746.585225 247.428814 769.7253 270.568889 792.865374 307.952518 792.865374 331.092592 769.7253L512 588.817891 692.907408 769.7253C716.047482 792.865374 753.431111 792.865374 776.571186 769.7253 799.711261 746.585225 799.711261 709.201596 776.571186 686.061521L595.663778 505.154112 776.571186 324.246702C799.711261 301.106628 799.711261 263.722999 776.571186 240.582924 753.431111 217.442849 716.047482 217.442849 692.907408 240.582924L512 421.490332Z"
+        fill="#666666"></path>
+    </svg>
+  </div>
+  <div class="chat-setting-content">
+    <div class="setting-item">
+      <span>气泡颜色</span>
+      <div style="flex: 1;">
+        <input style="width: 100%;" type="text" id="bubble-color-input" placeholder="颜色值" />
+      </div>
+      <input type="color" id="bubble-color" class="color-picker" />
+    </div>
+    <div class="setting-item">
+      <span>字体颜色</span>
+      <div style="flex: 1;">
+        <input style="width: 100%;" type="text" id="text-color-input" placeholder="颜色值" />
+      </div>
+      <input type="color" id="text-color" class="color-picker" />
+    </div>
+    <div class="setting-item">
+      <span>聊天壁纸</span>
+      <input type="text" id="chat-bg" placeholder="输入图片URL" />
+    </div>
+    <div class="preview" style="margin: 0 auto;">
+      <div class="QQ_chat_msgdiv" id="chat-setting-preview" data-name="${username}" style="margin: 0 auto;">
+        <span>这是预览文本</span>
+      </div>
+    </div>
+  </div>
+  <div class="chat-setting-footer">
+    <button id="save-setting-btn">保存</button>
+    <button id="cancel-setting-btn">取消</button>
+  </div>
+</div>

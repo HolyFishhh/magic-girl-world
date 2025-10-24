@@ -1,0 +1,10 @@
+port: 6621
+entries:
+  - script: src/start/index.ts
+    html: src/start/index.html
+
+  - script: src/fish/index.ts
+    html: src/fish/index.html
+
+  - script: src/common/index.ts
+    html: src/common/index.html

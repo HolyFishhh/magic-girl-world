@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>遗物显示功能测试</title>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        background: #1a1a1a;
+        color: white;
+        padding: 20px;
+      }
+
+      .test-container {
+        max-width: 800px;
+        margin: 0 auto;
+        background: #2a2a2a;
+        padding: 20px;
+        border-radius: 10px;
+      }
+
+      .relic-section {
+        margin-bottom: 20px;
+      }
+
+      .relic-label {
+        font-size: 1.1em;
+        color: #90ee90;
+        margin-bottom: 10px;
+        font-weight: bold;
+      }
+
+      .relic-grid {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        min-height: 30px;
+        align-items: center;
+      }
+
+      .relic-grid .no-relics {
+        color: rgba(255, 255, 255, 0.5);
+        font-style: italic;
+        font-size: 0.8em;
+        text-align: center;
+        padding: 10px;
+      }
+
+      .relic-grid .relic-item {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px;
+        background: transparent;
+        border: none;
+        border-radius: 50%;
+        cursor: pointer;
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        position: relative;
+        overflow: hidden;
+        min-width: 32px;
+        min-height: 32px;
+      }
+
+      .relic-grid .relic-item .relic-emoji {
+        font-size: 0.9em;
+        transition: all 0.3s ease;
+        z-index: 2;
+        flex-shrink: 0;
+      }
+
+      .relic-grid .relic-item .relic-details {
+        opacity: 0;
+        width: 0;
+        overflow: hidden;
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        white-space: nowrap;
+      }
+
+      .relic-grid .relic-item .relic-details .relic-name {
+        font-size: 0.7em;
+        font-weight: bold;
+        margin-bottom: 1px;
+        color: #ffd700;
+      }
+
+      .relic-grid .relic-item .relic-details .relic-description {
+        font-size: 0.6em;
+        color: rgba(255, 255, 255, 0.8);
+        line-height: 1.2;
+        margin-bottom: 1px;
+      }
+
+      .relic-grid .relic-item .relic-details .relic-effects {
+        margin-top: 1px;
+      }
+
+      .relic-grid .relic-item .relic-details .relic-effects .effect-tag {
+        font-size: 0.5em;
+        padding: 1px 2px;
+        margin-right: 1px;
+        background: rgba(100, 149, 237, 0.3);
+        border: 1px solid rgba(100, 149, 237, 0.5);
+        border-radius: 4px;
+        color: #87ceeb;
+      }
+
+      /* 悬停状态：临时展开 */
+      .relic-grid .relic-item:hover:not(.expanded) {
+        padding: 2px 8px;
+        background: rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 215, 0, 0.3);
+        border-radius: 16px;
+        transform: scale(1.02);
+        z-index: 10;
+      }
+
+      .relic-grid .relic-item:hover:not(.expanded) .relic-details {
+        opacity: 1;
+        width: auto;
+        margin-left: 4px;
+        max-width: 140px;
+      }
+
+      /* 点击激活状态：持续展开 */
+      .relic-grid .relic-item.expanded {
+        padding: 2px 8px;
+        background: rgba(255, 215, 0, 0.15);
+        border: 1px solid rgba(255, 215, 0, 0.6);
+        border-radius: 16px;
+        transform: scale(1.05);
+        box-shadow: 0 2px 8px rgba(255, 215, 0, 0.3);
+        z-index: 15;
+      }
+
+      .relic-grid .relic-item.expanded .relic-details {
+        opacity: 1;
+        width: auto;
+        margin-left: 4px;
+        max-width: 160px;
+      }
+
+      .relic-tooltip {
+        position: absolute;
+        background: linear-gradient(135deg, #2c3e50, #34495e);
+        color: white;
+        padding: 12px 16px;
+        border-radius: 8px;
+        border: 2px solid #3498db;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+        z-index: 5000;
+        max-width: 250px;
+        font-size: 0.9em;
+      }
+
+      .relic-tooltip .relic-tooltip-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+        padding-bottom: 6px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+      }
+
+      .relic-tooltip .relic-tooltip-header .relic-tooltip-emoji {
+        font-size: 1.2em;
+      }
+
+      .relic-tooltip .relic-tooltip-header .relic-tooltip-name {
+        font-weight: bold;
+        color: #3498db;
+      }
+
+      .relic-tooltip .relic-tooltip-description {
+        margin-bottom: 6px;
+        line-height: 1.4;
+        color: #ecf0f1;
+      }
+
+      .relic-tooltip .relic-tooltip-effect {
+        font-size: 0.8em;
+        color: #bdc3c7;
+        font-style: italic;
+      }
+
+      .test-controls {
+        margin-bottom: 20px;
+      }
+
+      .test-controls button {
+        background: #3498db;
+        color: white;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 4px;
+        cursor: pointer;
+        margin-right: 10px;
+      }
+
+      .test-controls button:hover {
+        background: #2980b9;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="test-container">
+      <h1>遗物显示功能测试</h1>
+
+      <div class="test-controls">
+        <button onclick="loadTestRelics()">加载测试遗物</button>
+        <button onclick="clearRelics()">清空遗物</button>
+        <button onclick="addSingleRelic()">添加单个遗物</button>
+      </div>
+
+      <div class="relic-section">
+        <div class="relic-label">🏺 遗物:</div>
+        <div class="relic-grid">
+          <!-- 遗物在此显示 -->
+        </div>
+      </div>
+
+      <div style="margin-top: 30px">
+        <h3>功能说明：</h3>
+        <ul>
+          <li>默认状态：只显示遗物的emoji</li>
+          <li>悬停状态：临时显示遗物的详细信息</li>
+          <li>点击状态：持续显示遗物的详细信息，再次点击收起</li>
+          <li>同时只能有一个遗物处于展开状态</li>
+        </ul>
+      </div>
+    </div>
+
+    <script>
+      // 测试数据
+      const testRelics = [
+        {
+          id: 'starter_charm',
+          name: '初学者护符',
+          emoji: '🔮',
+          description: '战斗开始时获得2点格挡',
+          effect: 'on_battle_start:block:2',
+          rarity: 'Common',
+        },
+        {
+          id: 'power_ring',
+          name: '力量之戒',
+          emoji: '💍',
+          description: '每回合开始时获得1点力量',
+          effect: 'on_turn_start:strength:1',
+          rarity: 'Uncommon',
+        },
+        {
+          id: 'healing_amulet',
+          name: '治疗护符',
+          emoji: '✨',
+          description: '受到伤害时有25%几率恢复3点生命值',
+          effect: 'on_take_damage:heal:3:chance:25',
+          rarity: 'Rare',
+        },
+        {
+          id: 'energy_crystal',
+          name: '能量水晶',
+          emoji: '💎',
+          description: '每回合额外获得1点能量',
+          effect: 'on_turn_start:energy:1',
+          rarity: 'Epic',
+        },
+      ];
+
+      function createEffectTag(effect) {
+        // 简单的效果标签生成
+        if (effect.includes('block')) return '<span class="effect-tag">格挡</span>';
+        if (effect.includes('strength')) return '<span class="effect-tag">力量</span>';
+        if (effect.includes('heal')) return '<span class="effect-tag">治疗</span>';
+        if (effect.includes('energy')) return '<span class="effect-tag">能量</span>';
+        return '<span class="effect-tag">效果</span>';
+      }
+
+      function updateRelicsDisplay(relics) {
+        const relicsContainer = $('.relic-grid');
+
+        if (!relics || relics.length === 0) {
+          relicsContainer.html('<div class="no-relics">暂无遗物</div>');
+          return;
+        }
+
+        const relicsHTML = relics
+          .map(relic => {
+            const effectTagsHTML = createEffectTag(relic.effect || '');
+
+            return `
+                <div class="relic-item"
+                     data-relic-id="${relic.id}"
+                     data-relic-name="${relic.name || '未知遗物'}"
+                     data-relic-description="${relic.description || '无描述'}"
+                     data-relic-effect="${relic.effect || '无效果'}">
+                  <div class="relic-emoji">${relic.emoji || '📿'}</div>
+                  <div class="relic-details">
+                    <div class="relic-name">${relic.name || '未知遗物'}</div>
+                    <div class="relic-description">${relic.description || '无描述'}</div>
+                    <div class="relic-effects">${effectTagsHTML}</div>
+                  </div>
+                </div>
+                `;
+          })
+          .join('');
+
+        relicsContainer.html(relicsHTML);
+
+        // 绑定点击和悬停事件
+        relicsContainer
+          .find('.relic-item')
+          .on('click', function () {
+            const $this = $(this);
+            const isExpanded = $this.hasClass('expanded');
+
+            // 先收缩所有其他遗物
+            relicsContainer.find('.relic-item').removeClass('expanded');
+
+            // 如果当前遗物之前没有展开，则展开它
+            if (!isExpanded) {
+              $this.addClass('expanded');
+            }
+          })
+          .on('mouseenter', function () {
+            // 如果当前遗物没有展开，显示悬停提示
+            const $this = $(this);
+            if (!$this.hasClass('expanded')) {
+              const relicId = $(this).data('relic-id');
+              const relic = relics.find(r => r.id === relicId);
+              if (relic) {
+                showRelicTooltip($(this), relic);
+              }
+            }
+          })
+          .on('mouseleave', function () {
+            // 移除悬停提示
+            $('.relic-tooltip').remove();
+          });
+
+        console.log(`🔮 更新遗物显示: ${relics.length} 个遗物`, relics);
+      }
+
+      function showRelicTooltip(element, relic) {
+        $('.relic-tooltip').remove();
+
+        const tooltip = $(`
+              <div class="relic-tooltip">
+                <div class="relic-tooltip-header">
+                  <span class="relic-tooltip-emoji">${relic.emoji || '📿'}</span>
+                  <span class="relic-tooltip-name">${relic.name}</span>
+                </div>
+                <div class="relic-tooltip-description">${relic.description || '无描述'}</div>
+                <div class="relic-tooltip-effect">效果: ${relic.effect || '无效果'}</div>
+              </div>
+            `);
+
+        $('body').append(tooltip);
+
+        // 定位提示框
+        const elementOffset = element.offset();
+        if (elementOffset) {
+          const tooltipHeight = tooltip.outerHeight() || 0;
+          const tooltipWidth = tooltip.outerWidth() || 0;
+          const elementWidth = element.outerWidth() || 0;
+
+          tooltip.css({
+            top: elementOffset.top - tooltipHeight - 10,
+            left: elementOffset.left + elementWidth / 2 - tooltipWidth / 2,
+          });
+        }
+      }
+
+      function loadTestRelics() {
+        updateRelicsDisplay(testRelics);
+      }
+
+      function clearRelics() {
+        updateRelicsDisplay([]);
+      }
+
+      function addSingleRelic() {
+        const singleRelic = [
+          {
+            id: 'test_single',
+            name: '测试遗物',
+            emoji: '🎯',
+            description: '这是一个用于测试的遗物',
+            effect: 'on_battle_start:test:1',
+            rarity: 'Common',
+          },
+        ];
+        updateRelicsDisplay(singleRelic);
+      }
+
+      // 初始化
+      $(document).ready(function () {
+        console.log('遗物显示测试页面已加载');
+        clearRelics();
+      });
+    </script>
+  </body>
+</html>

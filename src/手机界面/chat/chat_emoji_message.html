@@ -1,0 +1,11 @@
+<div class="QQ_chat_msgdiv" data-name="${username}" <% if (isgroup) { %>
+  style='margin-top:6px;'<% } %>>
+    <div style="width: 100%; background-color: white">
+      <img class="msgimg" loading="lazy" src="<%= emojiUrl %>" alt="加载失败" />
+    </div>
+    <% if (additionalText) { %>
+      <span style="margin-top: 5px; display: block">
+        <%= additionalText %>
+      </span>
+      <% } %>
+</div>

@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FishRPG - 卡牌战斗</title>
+    <!-- 导入与common模块相同的字体 -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Noto+Sans+SC:wght@300;400;500&display=swap"
+      rel="stylesheet"
+    />
+    <!-- 移除所有内联样式，所有样式通过SCSS和JS导入 -->
+  </head>
+  <body>
+    <div class="card-game-container">
+      <!-- 战斗场景 -->
+      <div id="battle-scene" class="scene">
+        <!-- 战斗背景装饰 -->
+        <div class="battle-background">
+          <div class="bg-particles"></div>
+        </div>
+
+        <!-- 敌我上下布局容器（恢复） -->
+        <div>
+          <!-- 上方UI区域 - 敌人 -->
+          <div class="enemy-section">
+            <!-- 敌人信息卡 -->
+            <div class="enemy-card">
+              <div class="enemy-header">
+                <div class="enemy-name-wrapper">
+                  <div class="enemy-emoji">👹</div>
+                  <div class="enemy-name" id="enemy-name">初始化失败，请重roll</div>
+                </div>
+                <div class="enemy-intent">
+                  <div class="intent-icon">❓</div>
+                  <div class="intent-text">准备行动</div>
+                </div>
+              </div>
+
+              <!-- 敌人基础属性 - 统一布局 -->
+              <div class="character-stats">
+                <!-- 生命值 -->
+                <div class="stat-item hp-stat">
+                  <div class="stat-icon">🩸</div>
+                  <div class="stat-bar-container">
+                    <div class="stat-bar-bg hp-bg">
+                      <div class="stat-bar-fill hp-fill"></div>
+                    </div>
+                    <div class="stat-text" id="enemy-hp">50/50</div>
+                  </div>
+                </div>
+
+                <!-- 欲望值 -->
+                <div class="stat-item lust-stat">
+                  <div class="stat-icon">💗</div>
+                  <div class="stat-bar-container">
+                    <div class="stat-bar-bg lust-bg">
+                      <div class="stat-bar-fill lust-fill"></div>
+                    </div>
+                    <div class="stat-text" id="enemy-lust">0/100</div>
+                  </div>
+                </div>
+
+                <!-- 防御 (条件显示) -->
+                <div class="stat-item block-stat" id="enemy-block-container" style="display: none">
+                  <div class="stat-icon">🛡️</div>
+                  <div class="stat-value" id="enemy-block">0</div>
+                </div>
+              </div>
+
+              <!-- 敌人状态效果和欲望效果 - 紧凑布局 -->
+              <div class="effects-row">
+                <!-- 状态效果 -->
+                <div class="effect-section status-section" id="enemy-status-section">
+                  <div class="effect-label">状态:</div>
+                  <div class="status-effects enemy-status" id="enemy-status-effects">
+                    <!-- 敌人状态效果在此显示 -->
+                  </div>
+                </div>
+
+                <!-- 欲望效果 -->
+                <div class="effect-section lust-section" id="enemy-lust-section">
+                  <div class="lust-effect-display" id="enemy-lust-effect">
+                    <!-- 敌人欲望效果在此显示 -->
+                  </div>
+                </div>
+              </div>
+
+              <!-- 敌人能力区域 -->
+              <div class="abilities-section">
+                <div class="abilities-label">⚡ 能力:</div>
+                <div class="abilities-grid" id="enemy-abilities">
+                  <!-- 敌人能力在此显示 -->
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 中央战斗区域 -->
+          <div class="battle-area">
+            <!-- 欲望值满了后的效果区域 -->
+            <div id="lust-overflow-area" class="lust-overflow-area" style="display: none">
+              <div class="lust-overflow-header">
+                <h3>欲望爆发！</h3>
+                <p class="lust-overflow-description">欲望值已满，触发特殊效果...</p>
+              </div>
+              <div class="lust-overflow-effects">
+                <!-- 动态生成的效果列表 -->
+              </div>
+              <button id="confirm-lust-overflow" class="lust-overflow-confirm">确认</button>
+            </div>
+
+            <!-- 道具使用界面 -->
+            <div id="item-use-modal" class="item-modal" style="display: none">
+              <div class="item-modal-content">
+                <div class="item-modal-header">
+                  <h3>使用道具</h3>
+                  <button id="close-item-modal" class="close-modal">&times;</button>
+                </div>
+                <div class="item-list">
+                  <!-- 动态生成的道具列表 -->
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 下方UI区域 - 玩家（并排到同一行容器内） -->
+          <div class="player-section">
+            <!-- 玩家信息卡 -->
+            <div class="player-card">
+              <!-- 玩家基础属性 - 统一布局 -->
+              <div class="character-stats">
+                <!-- 生命值 -->
+                <div class="stat-item hp-stat">
+                  <div class="stat-icon">🩸</div>
+                  <div class="stat-bar-container">
+                    <div class="stat-bar-bg hp-bg">
+                      <div class="stat-bar-fill hp-fill"></div>
+                    </div>
+                    <div class="stat-text" id="player-hp">80/80</div>
+                  </div>
+                </div>
+
+                <!-- 欲望值 -->
+                <div class="stat-item lust-stat">
+                  <div class="stat-icon">💗</div>
+                  <div class="stat-bar-container">
+                    <div class="stat-bar-bg lust-bg">
+                      <div class="stat-bar-fill lust-fill"></div>
+                    </div>
+                    <div class="stat-text" id="player-lust">0/100</div>
+                  </div>
+                </div>
+
+                <!-- 防御 (条件显示) -->
+                <div class="stat-item block-stat" id="block-stat-container" style="display: none">
+                  <div class="stat-icon">🛡️</div>
+                  <div class="stat-value" id="player-block">0</div>
+                </div>
+              </div>
+
+              <!-- 状态效果和欲望效果 - 紧凑布局 -->
+              <div class="effects-row">
+                <!-- 状态效果 -->
+                <div class="effect-section status-section" id="player-status-section">
+                  <div class="effect-label">状态:</div>
+                  <div class="status-effects player-status" id="player-status-effects">
+                    <!-- 玩家状态效果在此显示 -->
+                  </div>
+                </div>
+
+                <!-- 欲望效果 -->
+                <div class="effect-section lust-section" id="player-lust-section">
+                  <div class="lust-effect-display" id="player-lust-effect">
+                    <!-- 玩家欲望效果在此显示 -->
+                  </div>
+                </div>
+              </div>
+
+              <!-- 玩家能力区域 -->
+              <div class="abilities-section">
+                <div class="abilities-label">⚡ 能力:</div>
+                <div class="abilities-grid" id="player-abilities">
+                  <!-- 玩家能力在此显示 -->
+                </div>
+              </div>
+
+              <!-- 遗物区域 -->
+              <div class="relic-section">
+                <div class="relic-label">🏺 遗物:</div>
+                <div class="relic-grid">
+                  <!-- 遗物在此显示 -->
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 手牌区域 -->
+        <div class="hand-section">
+          <div class="hand-header">
+            <div class="hand-label">🃏 手牌</div>
+            <!-- 能量显示移到手牌旁边 -->
+            <div class="energy-display">
+              <div class="stat-icon">⚡</div>
+              <div class="stat-value" id="player-energy">3/3</div>
+            </div>
+          </div>
+          <div class="player-hand" id="hand-cards">
+            <!-- 卡牌在此动态生成 -->
+          </div>
+        </div>
+
+        <!-- 控制区域 -->
+        <div class="control-section">
+          <div class="game-controls">
+            <div class="game-info">
+              <div class="turn-info">
+                <div class="turn-counter">回合: <span class="turn-number" id="turn-number">1</span></div>
+                <div class="phase-indicator" id="phase-indicator">玩家回合</div>
+              </div>
+
+              <div class="deck-info">
+                <div class="deck-stat clickable" id="draw-pile-btn" data-pile="draw" title="查看抽牌堆">
+                  <span class="deck-icon">📚</span>
+                  <span class="draw-pile-count" id="draw-pile-count">0</span>
+                </div>
+                <div class="deck-stat clickable" id="discard-pile-btn" data-pile="discard" title="查看弃牌堆">
+                  <span class="deck-icon">🗂️</span>
+                  <span class="discard-pile-count" id="discard-pile-count">0</span>
+                </div>
+                <div class="deck-stat clickable" id="exhaust-pile-btn" data-pile="exhaust" title="查看消耗堆">
+                  <span class="deck-icon">💀</span>
+                  <span class="exhaust-pile-count" id="exhaust-pile-count">0</span>
+                </div>
+              </div>
+
+              <!-- 高潮惩罚显示 -->
+              <div
+                class="climax-penalty"
+                style="display: none; color: #ff6b6b; font-size: 0.9em; margin-top: 5px"
+                id="climax-penalty"
+              >
+                <!-- 高潮惩罚描述在此显示 -->
+              </div>
+            </div>
+
+            <!-- 战斗控制按钮 -->
+            <div class="battle-controls">
+              <button class="end-turn-button">结束回合</button>
+              <button id="battle-log-btn" class="control-button">战斗日志</button>
+              <button id="modifier-display-btn" class="control-button">修饰符</button>
+              <button id="use-item-btn" class="control-button">使用道具</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 加载覆盖层 -->
+      <div class="loading-overlay" style="display: none">
+        <div class="loading-content">
+          <div class="loading-spinner"></div>
+          <div class="loading-text">AI正在生成独特内容...</div>
+          <div class="loading-sub">这可能需要几秒钟</div>
+        </div>
+      </div>
+
+      <!-- 叙事覆盖层 -->
+      <div class="narrative-overlay" style="display: none">
+        <div class="narrative-content">
+          <div class="narrative-text"></div>
+        </div>
+      </div>
+
+      <!-- 游戏结束对话框 -->
+      <div class="game-over-dialog" style="display: none">
+        <div class="dialog-backdrop"></div>
+        <div class="dialog-content">
+          <h2 class="result-title">战斗结束</h2>
+          <div class="result-message"></div>
+          <div class="dialog-buttons">
+            <button class="restart-btn">重新开始</button>
+            <button class="return-setup-btn">返回设置</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 无敌人/变量未注册对话框 -->
+      <div class="no-enemy-dialog" id="no-enemy-dialog" style="display: none">
+        <div class="dialog-backdrop"></div>
+        <div class="dialog-content">
+          <h2 class="result-title">无法进行战斗</h2>
+          <div class="result-message" id="no-enemy-message">敌人数据未注册或不完整，请先生成/选择敌人。</div>
+          <div class="dialog-buttons">
+            <button class="return-setup-btn" id="no-enemy-refresh">刷新</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 奖励对话框 -->
+      <div class="reward-dialog" style="display: none">
+        <div class="dialog-backdrop"></div>
+        <div class="dialog-content">
+          <h3 class="reward-title">选择奖励</h3>
+          <div class="reward-items">
+            <!-- 奖励项目会在这里显示 -->
+          </div>
+          <div class="dialog-buttons">
+            <button class="skip-reward-btn">跳过</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 工具提示 -->
+      <div id="tooltip" class="tooltip" style="display: none">
+        <div class="tooltip-name"></div>
+        <div class="tooltip-desc"></div>
+      </div>
+    </div>
+
+    <!-- 牌堆查看器 -->
+    <div id="pile-viewer" class="pile-viewer" style="display: none">
+      <div class="pile-viewer-overlay" onclick="closePileViewer()"></div>
+      <div class="pile-viewer-content">
+        <div class="pile-viewer-header">
+          <h3 id="pile-viewer-title">牌堆查看</h3>
+          <button class="close-btn" onclick="closePileViewer()">✕</button>
+        </div>
+        <div class="pile-viewer-body" id="pile-viewer-cards">
+          <!-- 卡牌列表在此显示 -->
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
