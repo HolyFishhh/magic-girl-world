@@ -3,8 +3,12 @@
   "status": {
     "$meta": { "extensible": false },
     "time": "",
-    "location_weather": "",
-    "profession": "",
+    "location": "",
+    "profession": {
+      "$meta": { "extensible": false },
+      "name": "",
+      "ability": ""
+    },
     "permanent_status": ["$__META_EXTENSIBLE__$"],
     "temporary_status": ["$__META_EXTENSIBLE__$"],
     "clothing": {
@@ -71,6 +75,7 @@
   "factions": {
     "$meta": { "extensible": false },
     "player_alignment": "绝对中立",
+    "invasion": 0,
     "relations": ["$__META_EXTENSIBLE__$"]
   },
   "npcs": {

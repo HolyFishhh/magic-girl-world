@@ -7,6 +7,11 @@
   </head>
   <body>
     <div class="rpg-container">
+      <!-- 主题切换按钮 -->
+      <button class="theme-toggle" id="theme-toggle" title="切换主题">
+        <span class="theme-icon">🌙</span>
+      </button>
+
       <!-- 书签式标签导航 -->
       <nav class="tab-navigation">
         <button class="tab-button active" data-module="story">
@@ -142,12 +147,16 @@
                     <span class="value" id="status-time">未知</span>
                   </div>
                   <div class="info-item">
-                    <span class="label">地点天气:</span>
+                    <span class="label">地点:</span>
                     <span class="value" id="status-location">未知</span>
                   </div>
                   <div class="info-item">
                     <span class="label">职业:</span>
-                    <span class="value" id="status-job">未知</span>
+                    <span class="value" id="status-job-name">未知</span>
+                  </div>
+                  <div class="info-item">
+                    <span class="label">职业能力:</span>
+                    <span class="value" id="status-job-ability">未知</span>
                   </div>
                 </div>
 
@@ -297,6 +306,14 @@
               <h2 class="section-title">🏰 势力关系</h2>
               <!-- 九宫格阵营显示 -->
               <div class="alignment-grid" id="alignment-grid"></div>
+              <div class="data-grid">
+                <div class="info-card">
+                  <div class="info-item" id="invasion-intensity-row">
+                    <span class="label">入侵强度:</span>
+                    <span class="value"><span id="invasion-intensity-badge" class="invasion-badge">未知</span></span>
+                  </div>
+                </div>
+              </div>
               <div class="data-grid" id="faction-relations">
                 <!-- 势力关系将通过JS动态填充 -->
               </div>

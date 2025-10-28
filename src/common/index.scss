@@ -42,8 +42,8 @@
 [data-theme='dark'] {
   --notebook-bg: #2b2b2b;
   --notebook-border: #444;
-  --text-primary: #e0e0e0;
-  --text-secondary: #a0a0a0;
+  --text-primary: #ededed; // 提升主文本对比度
+  --text-secondary: #c4c4c4; // 提升次文本对比度
   --bookmark-pink: #6b4155;
   --bookmark-blue: #3d5266;
   --bookmark-green: #3d5547;
@@ -83,7 +83,7 @@ body {
   background-color: var(--body-bg);
   background-image: var(--body-bg-pattern);
   overflow-x: hidden;
-  min-height: 100vh;
+  /* 避免使用vh，使用内边距与内容自适应 */
   padding: 20px;
   transition:
     background-color 0.3s ease,
@@ -96,6 +96,14 @@ body {
   margin: 2rem auto;
   position: relative;
   font-family: 'Microsoft YaHei', 'Segoe UI', 'Helvetica Neue', sans-serif;
+
+  /* 通过宽度与比例约束整体区域高度感（不使用vh） */
+  width: 100%;
+  aspect-ratio: 9 / 14;
+  /* 保证小屏下仍可滚动显示完整内容 */
+  @media (max-width: 768px) {
+    aspect-ratio: auto;
+  }
 
   // 书签区域和内容区域的包裹器
   .notebook-body {
@@ -1045,14 +1053,14 @@ body {
   .rpg-container {
     margin: 0;
     width: 100%;
-    min-height: 100vh;
+    /* 移除vh，交给内容撑开 */
     display: flex;
     flex-direction: column;
 
     .notebook-body {
       border-radius: 0;
       box-shadow: none;
-      flex-grow: 1;
+      /* 由内容决定高度，必要时滚动 */
       overflow-y: auto;
       padding: 1rem;
       padding-top: 4.5rem;
@@ -1324,11 +1332,13 @@ body {
   font-size: 0.9rem;
   background: #fdf9f2;
   border-radius: 4px;
+  color: var(--text-primary);
   transition: var(--transition);
 }
 .alignment-cell.active {
   background: var(--bookmark-green);
   font-weight: bold;
+  color: #1a3b1a;
   box-shadow: 0 0 6px rgba(0, 0, 0, 0.15);
 }
 
@@ -1368,6 +1378,19 @@ body {
     background: var(--bookmark-purple);
     color: #6a1b9a;
   }
+}
+
+// 入侵强度徽章
+.invasion-badge {
+  display: inline-block;
+  min-width: 28px;
+  text-align: center;
+  font-weight: 800;
+}
+
+// 入侵强度整行强调
+#invasion-intensity-row {
+  margin-top: 6px;
 }
 
 // --- 删除模式样式 ---
@@ -1722,4 +1745,16 @@ body {
     margin-top: 6px;
     border: 1px dashed var(--notebook-border);
   }
+}
+
+// 暗色主题下九宫格文本可读性增强
+[data-theme='dark'] .alignment-cell {
+  color: #f0f0f0;
+  background: #2f2f2f;
+  border-color: #555;
+}
+[data-theme='dark'] .alignment-cell.active {
+  background: #356a35; // 深绿色背景
+  color: #ffffff;
+  box-shadow: 0 0 8px rgba(0, 0, 0, 0.4);
 }

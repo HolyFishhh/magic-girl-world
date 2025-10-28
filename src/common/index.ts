@@ -10,56 +10,60 @@ import './index.scss';
 // 高亮配置：定义需要高亮的模式和对应的CSS类
 // 顺序从长标记到短标记，避免短标记抢占匹配
 const HIGHLIGHT_PATTERNS = [
-  // 强调
-  { start: '**', end: '**', className: 'highlight-emphasis' },
-  // 书名号
+  // 先处理最外层常见容器：双引号/单引号
+  { start: '“', end: '”', className: 'highlight-quote' }, // 中文双引号
+  { start: '"', end: '"', className: 'highlight-quote' }, // 英文双引号
+  { start: '‘', end: '’', className: 'highlight-quote' }, // 中文单引号
+  // 再处理内部内容：书名号/括号
   { start: '《', end: '》', className: 'highlight-book' },
-  // 中文引号/单引号
-  { start: '“', end: '”', className: 'highlight-quote' },
-  { start: '‘', end: '’', className: 'highlight-quote' },
-  // 英文双引号
-  { start: '"', end: '"', className: 'highlight-quote' },
-  // 方括号（半角/全角）
   { start: '【', end: '】', className: 'highlight-bracket' },
   { start: '[', end: ']', className: 'highlight-bracket' },
+  // 最后处理强调
+  { start: '**', end: '**', className: 'highlight-emphasis' },
 ];
 
 /**
  * 在一个文本节点内，按单一模式进行就地分割与包裹（可重复与嵌套）
  */
 function processTextNodeWithPattern(textNode: Text, pattern: { start: string; end: string; className: string }): void {
-  let node: Text | null = textNode;
-  while (node) {
-    const text = node.textContent || '';
-    if (!text || text.length < pattern.start.length + pattern.end.length + 1) return;
+  let current: Text | null = textNode;
+  while (current) {
+    const content = current.textContent || '';
+    if (!content || content.length < pattern.start.length + pattern.end.length + 1) return;
 
-    const startIdx = text.indexOf(pattern.start);
+    const startIdx = content.indexOf(pattern.start);
     if (startIdx === -1) return;
-    let endIdx = text.indexOf(pattern.end, startIdx + pattern.start.length);
+    let endIdx = content.indexOf(pattern.end, startIdx + pattern.start.length);
     if (endIdx === -1) return;
 
     // 避免 ** ** 空内容
     if (pattern.start === '**' && endIdx === startIdx + pattern.start.length) {
-      endIdx = text.indexOf(pattern.end, endIdx + pattern.end.length);
+      endIdx = content.indexOf(pattern.end, endIdx + pattern.end.length);
       if (endIdx === -1) return;
     }
 
-    const parent = node.parentNode as Node | null;
+    const parent = current.parentNode as Node | null;
     if (!parent) return;
 
-    const before = document.createTextNode(text.slice(0, startIdx));
-    const span = document.createElement('span');
-    span.className = pattern.className;
-    span.textContent = text.slice(startIdx, endIdx + pattern.end.length);
-    const after = document.createTextNode(text.slice(endIdx + pattern.end.length));
+    const before = document.createTextNode(content.slice(0, startIdx));
+    const innerText = content.slice(startIdx + pattern.start.length, endIdx);
+    const after = document.createTextNode(content.slice(endIdx + pattern.end.length));
 
-    parent.insertBefore(before, node);
-    parent.insertBefore(span, node);
-    parent.insertBefore(after, node);
-    parent.removeChild(node);
+    const wrapper = document.createElement('span');
+    wrapper.className = pattern.className;
+    // 仅包裹内部文本，不包含分隔符，便于嵌套匹配
+    wrapper.textContent = innerText;
 
-    // 继续在 after 节点上查找后续匹配
-    node = after;
+    parent.insertBefore(before, current);
+    parent.insertBefore(document.createTextNode(pattern.start), current);
+    parent.insertBefore(wrapper, current);
+    parent.insertBefore(document.createTextNode(pattern.end), current);
+    parent.insertBefore(after, current);
+    parent.removeChild(current);
+
+    // 继续在 wrapper 内部（允许下一轮模式匹配其内容）以及 after 上匹配
+    // 先在 wrapper 内部应用同一模式（处理同类嵌套情况极少见，通常跳过）
+    current = after;
   }
 }
 
@@ -67,18 +71,13 @@ function processTextNodeWithPattern(textNode: Text, pattern: { start: string; en
  * 递归处理元素的所有文本节点
  */
 function applyHighlightsForPattern(element: Element, pattern: { start: string; end: string; className: string }): void {
-  // 只处理文本节点，跳过脚本、样式、以及已在高亮span内部的节点
+  // 只处理文本节点，跳过脚本、样式；允许在不同类型高亮内部继续处理（仅跳过相同类型）
   const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, {
     acceptNode: node => {
       const parent = (node.parentNode as Element) || null;
       if (!parent) return NodeFilter.FILTER_REJECT;
       if (['SCRIPT', 'STYLE', 'CODE', 'PRE'].includes(parent.tagName)) return NodeFilter.FILTER_REJECT;
-      if (
-        parent.closest &&
-        parent.closest('.highlight-quote, .highlight-book, .highlight-bracket, .highlight-emphasis')
-      ) {
-        return NodeFilter.FILTER_REJECT;
-      }
+      if (parent.closest && parent.closest('.' + pattern.className)) return NodeFilter.FILTER_REJECT;
       const txt = node.textContent || '';
       if (txt.length < pattern.start.length + pattern.end.length + 1) return NodeFilter.FILTER_REJECT;
       return NodeFilter.FILTER_ACCEPT;
@@ -426,6 +425,12 @@ function computeChangePillsByDelta(delta: any, stat: any): string[] {
   // 职业
   const prof = delta?.status?.profession;
   if (typeof prof === 'string' && prof.includes('->')) pills.push('职业：' + prof);
+  else if (prof && typeof prof === 'object') {
+    const nameDelta = prof.name;
+    const abilityDelta = prof.ability;
+    if (typeof nameDelta === 'string' && nameDelta.includes('->')) pills.push('职业名：' + nameDelta);
+    if (typeof abilityDelta === 'string' && abilityDelta.includes('->')) pills.push('职业能力：' + abilityDelta);
+  }
 
   // 服装变更（逐字段）
   const clothingDelta = delta?.status?.clothing;
@@ -1483,8 +1488,7 @@ function renderStatusData(rpgData: any) {
 
   const elements = [
     { id: 'status-time', path: 'time' },
-    { id: 'status-location', path: 'location_weather' },
-    { id: 'status-job', path: 'profession' },
+    { id: 'status-location', path: 'location' },
   ];
 
   elements.forEach(({ id, path }) => {
@@ -1494,6 +1498,17 @@ function renderStatusData(rpgData: any) {
       element.textContent = status?.[path] || '未知';
     }
   });
+
+  // 职业拆分显示
+  const jobNameEl = document.getElementById('status-job-name');
+  const jobAbilityEl = document.getElementById('status-job-ability');
+  if (jobNameEl || jobAbilityEl) {
+    const prof = status?.profession || {};
+    const name = prof && typeof prof === 'object' && 'name' in prof ? (prof as any).name : '';
+    const ability = prof && typeof prof === 'object' && 'ability' in prof ? (prof as any).ability : '';
+    if (jobNameEl) jobNameEl.textContent = name || '未知';
+    if (jobAbilityEl) jobAbilityEl.textContent = ability || '未知';
+  }
 
   // 服装信息 - 适配新的英文字段名
   const clothing = status.clothing || {};
@@ -2296,6 +2311,60 @@ function renderFactionData(gameData: any) {
   // 渲染九宫格阵营
   renderAlignmentGrid(playerAlignment);
 
+  // 渲染入侵强度徽章与颜色
+  const intensityBadge = document.getElementById('invasion-intensity-badge');
+  const intensityRow = document.getElementById('invasion-intensity-row');
+  const intensityValRaw = factions?.invasion;
+  const intensity = Number(intensityValRaw);
+  if (intensityBadge) {
+    if (Number.isFinite(intensity)) {
+      intensityBadge.textContent = String(intensity);
+      // 颜色从白 -> 红 -> 黑，按强度加深
+      // 计算红色分量与亮度：0→白(#fff)、1-5→不同深度红、6-7→接近黑
+      let bg = '#ffffff';
+      let color = '#333333';
+      if (intensity <= 0) {
+        bg = '#ffffff';
+        color = '#333333';
+      } else if (intensity <= 5) {
+        const step = intensity / 5; // 0-1
+        // 从#fff过渡到#ff0000的浅色系
+        const r = 255;
+        const g = Math.round(255 * (1 - step));
+        const b = Math.round(255 * (1 - step));
+        bg = `rgb(${r}, ${g}, ${b})`;
+        color = step > 0.6 ? '#ffffff' : '#662222';
+      } else if (intensity === 6) {
+        bg = '#7a0000';
+        color = '#ffffff';
+      } else {
+        // 7：绝望，接近黑
+        bg = '#111111';
+        color = '#ffffff';
+      }
+      // 行整背景强调
+      if (intensityRow) {
+        (intensityRow as HTMLElement).style.backgroundColor = bg;
+        (intensityRow as HTMLElement).style.color = color;
+        (intensityRow as HTMLElement).style.borderRadius = '6px';
+        (intensityRow as HTMLElement).style.padding = '6px 10px';
+      }
+      (intensityBadge as HTMLElement).style.backgroundColor = 'transparent';
+      (intensityBadge as HTMLElement).style.color = color;
+      (intensityBadge as HTMLElement).style.padding = '2px 8px';
+      (intensityBadge as HTMLElement).style.borderRadius = '6px';
+      (intensityBadge as HTMLElement).style.border = '1px dashed var(--notebook-border)';
+    } else {
+      intensityBadge.textContent = '未知';
+      if (intensityRow) {
+        (intensityRow as HTMLElement).style.backgroundColor = 'transparent';
+        (intensityRow as HTMLElement).style.color = 'var(--text-primary)';
+      }
+      (intensityBadge as HTMLElement).style.backgroundColor = 'transparent';
+      (intensityBadge as HTMLElement).style.color = 'var(--text-secondary)';
+    }
+  }
+
   // 修正容器ID以匹配HTML
   const container = document.getElementById('faction-relations');
 
@@ -2698,27 +2767,24 @@ async function processLevelUp() {
 if (typeof window !== 'undefined') {
   // 尽早初始化主题，避免闪烁
   if (document.readyState === 'loading') {
-    // DOM尚未加载完成，但可以先设置主题
     const theme = getCurrentTheme();
-    if (theme === 'dark') {
-      document.documentElement.setAttribute('data-theme', 'dark');
-    }
+    if (theme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
   }
 
-  document.addEventListener('DOMContentLoaded', async () => {
-    console.log('RPG UI 静态模板已加载 - 使用酒馆变量宏系统');
-
-    // 初始化主题系统
-    initializeTheme();
-
-    // 强制重置发送状态，防止页面刷新后状态残留
-    setSendingState(false);
-    initializeUI();
-    setupTabSwitching();
-    await loadGameData();
-
-    // 移除了战斗数据监听器，现在由用户点击选项触发战斗
-
-    console.log('✅ Common模块完全初始化完成');
-  });
+  const w: any = window as any;
+  const $jq = w.$ || w.jQuery;
+  if ($jq) {
+    $jq(() => {
+      console.log('RPG UI 静态模板已加载 - 使用酒馆变量宏系统');
+      initializeTheme();
+      setSendingState(false);
+      initializeUI();
+      setupTabSwitching();
+      loadGameData().then(() => console.log('✅ Common模块完全初始化完成'));
+    });
+    $jq(w).on('pagehide', () => {
+      console.log('🧹 页面卸载：清理临时状态');
+      // 目前仅记录日志，核心状态由上游管理
+    });
+  }
 }
