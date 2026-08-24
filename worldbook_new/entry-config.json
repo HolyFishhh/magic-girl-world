@@ -1,4 +1,19 @@
 {
+  "额外模型变量更新格式": {
+    "comment": "[mvu_update] 额外模型变量更新格式",
+    "create": true,
+    "constant": true,
+    "selective": false,
+    "keys": [],
+    "use_regex": false,
+    "extensions": {
+      "group": "",
+      "group_override": false,
+      "prevent_recursion": true,
+      "exclude_recursion": true,
+      "depth": 0
+    }
+  },
   "首条消息变量更新": {
     "comment": "[mvu_update] 首条消息变量更新",
     "constant": false,
@@ -7,9 +22,14 @@
   },
   "变量更新规则": {
     "comment": "[mvu_update] 变量更新规则",
-    "constant": false,
+    "constant": true,
+    "selective": false,
     "keys": [],
-    "use_regex": true
+    "use_regex": true,
+    "extensions": {
+      "group": "",
+      "group_override": false
+    }
   },
   "输出格式要求": {
     "comment": "[mvu_plot][mvu_update] 输出格式要求",

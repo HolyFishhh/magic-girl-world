@@ -131,6 +131,9 @@ for (const [entryName, sourceName] of Object.entries(worldbookManifest)) {
   for (const field of ['constant', 'keys', 'secondary_keys', 'enabled', 'selective', 'use_regex']) {
     if (Object.hasOwn(config, field)) entry[field] = structuredClone(config[field]);
   }
+  if (config.extensions && typeof config.extensions === 'object') {
+    entry.extensions = { ...(entry.extensions || {}), ...structuredClone(config.extensions) };
+  }
 }
 
 for (const payload of interfacePayloads) {

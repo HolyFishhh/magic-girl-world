@@ -453,6 +453,15 @@ for (const [entryName, sourceName] of Object.entries(worldbookManifest)) {
       );
     }
   }
+  if (worldbookEntryConfig[entryName]?.extensions) {
+    for (const [field, expected] of Object.entries(worldbookEntryConfig[entryName].extensions)) {
+      assert.deepEqual(
+        matchingEntries[0].extensions?.[field],
+        expected,
+        `${entryName}.extensions.${field} must match worldbook_new/entry-config.json`,
+      );
+    }
+  }
 }
 
 execFileSync(process.execPath, [fileURLToPath(import.meta.url), '--missing-host'], { stdio: 'inherit' });

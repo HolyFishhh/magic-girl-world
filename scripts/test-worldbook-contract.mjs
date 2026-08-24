@@ -6,6 +6,7 @@ const root = resolve('worldbook_new');
 const manifest = JSON.parse(await readFile(resolve(root, 'manifest.json'), 'utf8'));
 const entryConfig = JSON.parse(await readFile(resolve(root, 'entry-config.json'), 'utf8'));
 const requiredEntries = [
+  '额外模型变量更新格式',
   '首条消息变量更新',
   '战斗内容生成要求',
   '变量更新规则',
