@@ -1,0 +1,100 @@
+{
+  "首条消息变量更新": {
+    "comment": "[mvu_update] 首条消息变量更新",
+    "constant": false,
+    "keys": ["[开始游戏]"],
+    "use_regex": true
+  },
+  "变量更新规则": {
+    "comment": "[mvu_update] 变量更新规则",
+    "constant": false,
+    "keys": [],
+    "use_regex": true
+  },
+  "输出格式要求": {
+    "comment": "[mvu_plot][mvu_update] 输出格式要求",
+    "constant": false,
+    "keys": [],
+    "use_regex": true
+  },
+  "变量说明": {
+    "comment": "[mvu_plot][mvu_update] 变量说明",
+    "constant": false,
+    "keys": [],
+    "use_regex": true
+  },
+  "战斗内容生成要求": {
+    "comment": "[mvu_plot][mvu_update] 战斗内容生成要求",
+    "constant": false,
+    "keys": ["[开始游戏]", "[开始战斗]", "[战斗结算]", "[营火升级]", "[商店生成]", "[事件选择]", "[战斗内容修复]"],
+    "use_regex": true
+  },
+  "[initvar]不要启用": {
+    "comment": "[mvu_plot] [initvar]不要启用",
+    "enabled": false
+  },
+  "战斗场景生成": {
+    "comment": "[mvu_plot][mvu_update] 战斗场景生成",
+    "constant": false,
+    "keys": ["[开始战斗]", "[战斗场景修复]"],
+    "use_regex": true
+  },
+  "等级表现形式": {
+    "comment": "[mvu_plot] 等级表现形式",
+    "constant": false,
+    "keys": [],
+    "use_regex": true
+  },
+  "远征节点协议": {
+    "comment": "[mvu_plot][mvu_update] 远征节点协议",
+    "create": true,
+    "constant": false,
+    "keys": ["[路线节点]", "[事件选择]", "[营火升级]", "[商店生成]"],
+    "use_regex": true
+  },
+  "初始战斗内容修复": {
+    "comment": "[mvu_plot][mvu_update] 初始战斗内容修复",
+    "create": true,
+    "constant": false,
+    "keys": ["[战斗内容修复]"],
+    "use_regex": true
+  },
+  "战斗场景修复": {
+    "comment": "[mvu_plot][mvu_update] 战斗场景修复",
+    "create": true,
+    "constant": false,
+    "keys": ["[战斗场景修复]"],
+    "use_regex": true
+  },
+  "世界信息": {
+    "comment": "[mvu_plot] 世界信息",
+    "create": true,
+    "constant": false,
+    "keys": ["[开始游戏]"],
+    "use_regex": true
+  },
+  "地点与NPC线路": {
+    "comment": "[mvu_plot] 地点与NPC线路",
+    "create": true,
+    "constant": false,
+    "keys": ["[开始游戏]"],
+    "use_regex": true
+  },
+  "入侵与遭遇类型": {
+    "comment": "[mvu_plot] 入侵与遭遇类型",
+    "create": true,
+    "constant": false,
+    "keys": ["[开始游戏]"],
+    "use_regex": true
+  },
+  "[config_override]": {
+    "create": true,
+    "comment": "[config_override]",
+    "constant": false,
+    "enabled": false,
+    "selective": false,
+    "keys": [],
+    "secondary_keys": [],
+    "use_regex": false
+  }
+}

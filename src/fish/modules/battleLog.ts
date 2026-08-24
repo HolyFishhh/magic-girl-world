@@ -3,6 +3,7 @@
  */
 
 import { GameStateManager } from '../core/gameStateManager';
+import { escapeHtml, escapeHtmlAttribute } from '../shared/html';
 
 export class BattleLog {
   private static logContainer: JQuery | null = null;
@@ -123,7 +124,7 @@ export class BattleLog {
       };
       sourceDisplay = `<span class="log-source" style="color: #aaa; font-size: 9px; margin-right: 4px;">${
         sourceEmojis[source.type]
-      }${source.name}</span>`;
+      }${escapeHtml(source.name)}</span>`;
     }
 
     const logEntry = $(`
@@ -136,11 +137,11 @@ export class BattleLog {
         padding-left: 5px;
         margin-left: 3px;
         cursor: pointer;
-      " ${source?.details ? `title="${source.details}"` : ''}>
+      " ${source?.details ? `title="${escapeHtmlAttribute(source.details)}"` : ''}>
         <span class="log-time" style="color: #888; font-size: 10px;">${turnDisplay}</span>
         ${sourceDisplay}
         <span class="log-icon">${icon}</span>
-        <span class="log-message">${message}</span>
+        <span class="log-message">${escapeHtml(message)}</span>
       </div>
     `);
 
@@ -160,7 +161,7 @@ export class BattleLog {
               border-radius: 4px;
               font-size: 10px;
               color: #ccc;
-            ">${source.details}</div>
+            ">${escapeHtml(source.details)}</div>
           `);
         } else {
           // 收起详细信息
@@ -225,38 +226,10 @@ export class BattleLog {
   }
 
   /**
-   * 记录状态效果
-   */
-  static logStatusEffect(target: string, statusName: string, value: number, _duration: number): void {
-    this.addLog(`${target} 获得了 ${statusName} ${value}层`, 'info');
-  }
-
-  /**
-   * 记录回合开始
-   */
-  static logTurnStart(turnNumber: number): void {
-    this.addLog(`=== 第 ${turnNumber} 回合开始 ===`, 'system');
-  }
-
-  /**
    * 记录回合结束
    */
   static logTurnEnd(): void {
     this.addLog(`回合结束`, 'system');
-  }
-
-  /**
-   * 记录抽牌
-   */
-  static logDrawCards(count: number): void {
-    this.addLog(`抽取了 ${count} 张卡牌`, 'info');
-  }
-
-  /**
-   * 记录弃牌
-   */
-  static logDiscardCards(count: number): void {
-    this.addLog(`弃置了 ${count} 张手牌`, 'info');
   }
 
   /**
@@ -266,14 +239,6 @@ export class BattleLog {
     const costText = String(cost);
     const details = `名称: ${cardName} | 费用: ${costText}${description ? `\n描述: ${description}` : ''}`;
     this.addLog(`弃置了卡牌：${cardName}`, 'action', { type: 'card', name: cardName, details });
-  }
-
-  /**
-   * 记录战斗结果
-   */
-  static logBattleResult(result: 'victory' | 'defeat'): void {
-    const message = result === 'victory' ? '🎉 战斗胜利！' : '💀 战斗失败...';
-    this.addLog(message, 'system');
   }
 
   /**
@@ -295,13 +260,6 @@ export class BattleLog {
     } else {
       logElement.fadeIn(200);
     }
-  }
-
-  /**
-   * 记录遗物效果
-   */
-  static logRelicEffect(relicName: string, effect: string): void {
-    this.addLog(`遗物 ${relicName} 触发: ${effect}`, 'info');
   }
 
   /**
@@ -344,7 +302,7 @@ export class BattleLog {
   /**
    * 记录回合开始
    */
-  static logTurnStart(turnNumber: number, isPlayerTurn: boolean): void {
+  static logTurnStart(turnNumber: number, isPlayerTurn: boolean = true): void {
     const turnOwner = isPlayerTurn ? '玩家' : '敌人';
     this.addLog(`第 ${turnNumber} 回合开始 - ${turnOwner}回合`, 'system');
   }
@@ -366,7 +324,8 @@ export class BattleLog {
   /**
    * 记录战斗结果
    */
-  static logBattleResult(isVictory: boolean): void {
+  static logBattleResult(result: boolean | 'victory' | 'defeat'): void {
+    const isVictory = result === true || result === 'victory';
     if (isVictory) {
       this.addLog('🎉 战斗胜利！', 'system');
     } else {

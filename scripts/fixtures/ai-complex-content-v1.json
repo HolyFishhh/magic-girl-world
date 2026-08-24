@@ -1,0 +1,122 @@
+{
+  "cards": [
+    {
+      "id": "moon_slash",
+      "name": "月轮斩",
+      "type": "Attack",
+      "rarity": "Common",
+      "cost": 1,
+      "quantity": 5,
+      "effects": { "damage": 8 }
+    },
+    {
+      "id": "moon_guard",
+      "name": "月幕守护",
+      "type": "Skill",
+      "rarity": "Common",
+      "cost": 1,
+      "quantity": 5,
+      "effects": { "block": 7 }
+    },
+    {
+      "id": "last_light",
+      "name": "终末星光",
+      "type": "Attack",
+      "rarity": "Rare",
+      "cost": "energy",
+      "quantity": 1,
+      "effects": {
+        "damage": "spent_energy * 5 + self.status.focus.stacks * 2",
+        "block": "spent_energy * 2",
+        "when": "self.hp < self.max_hp"
+      }
+    },
+    {
+      "id": "echo_cycle",
+      "name": "回声循环",
+      "type": "Skill",
+      "rarity": "Uncommon",
+      "cost": 1,
+      "quantity": 1,
+      "effects": [
+        { "discard": 1, "pick": "choose" },
+        { "recover": 1, "from": "discard", "pick": "choose" },
+        { "reduce_cost": 1, "pick": "choose" },
+        { "draw": 1 }
+      ]
+    },
+    {
+      "id": "prism_oath",
+      "name": "棱镜誓约",
+      "type": "Power",
+      "rarity": "Epic",
+      "cost": 2,
+      "quantity": 1,
+      "trigger": "turn_start",
+      "effects": [
+        { "block": 4, "draw": 1 },
+        { "apply_status": "focus", "to": "self", "on": "card_played" },
+        { "damage": "self.status.focus.stacks * 2", "on": "take_damage", "when": "self.status.focus.stacks > 0" }
+      ]
+    },
+    {
+      "id": "spark_forge",
+      "name": "火花锻造",
+      "type": "Skill",
+      "rarity": "Uncommon",
+      "cost": 1,
+      "quantity": 1,
+      "effects": { "add_card": "spark", "count": 2 },
+      "creates": [
+        {
+          "id": "spark",
+          "name": "火花",
+          "type": "Attack",
+          "rarity": "Common",
+          "cost": 0,
+          "effects": { "damage": 3, "lust": 2 },
+          "exhaust": true
+        }
+      ]
+    }
+  ],
+  "statuses": [
+    {
+      "id": "focus",
+      "name": "星辉专注",
+      "emoji": "✦",
+      "type": "buff",
+      "maxStacks": 9,
+      "stacks_change": -1,
+      "triggers": {
+        "hold": { "modify": "damage", "add": "stacks" },
+        "remove": { "draw": 1 }
+      }
+    }
+  ],
+  "relics": [
+    {
+      "id": "moon_root",
+      "name": "月之根",
+      "rarity": "Common",
+      "trigger": "battle_start",
+      "effects": { "block": 5, "apply_status": "focus", "to": "self" }
+    }
+  ],
+  "items": [
+    {
+      "id": "starlight_tonic",
+      "name": "星光药剂",
+      "count": 1,
+      "effects": { "heal": 12, "lust": -8, "to": "self" }
+    }
+  ],
+  "abilities": [],
+  "activeStatuses": [],
+  "desireEffects": {
+    "player": {
+      "name": "月蚀绽放",
+      "effects": { "damage": 10, "heal": 5 }
+    }
+  }
+}

@@ -2,11 +2,12 @@
  * 状态详情查看器 - 显示玩家状态的详细信息
  */
 
-import { UnifiedEffectDisplay } from './unifiedEffectDisplay';
+import { EffectProgramDisplay } from './effectProgramDisplay';
+import { escapeHtml } from '../shared/html';
 
 export class StatusDetailViewer {
   private static instance: StatusDetailViewer;
-  private static effectDisplay = UnifiedEffectDisplay.getInstance();
+  private static effectDisplay = EffectProgramDisplay.getInstance();
 
   private constructor() {}
 
@@ -55,18 +56,17 @@ export class StatusDetailViewer {
         maxValue = player.maxLust || 100;
 
         // 获取欲望溢出效果
-        const gameState = gameStateManager.getGameState();
         const lustEffect = enemy?.lustEffect;
         let lustEffectHTML = '';
 
         if (lustEffect) {
-          const effectTags = parseEffectToTags(lustEffect.effect || '');
-          const effectTagsHTML = createEffectTagsHTML(effectTags);
+          const effectTags = StatusDetailViewer.effectDisplay.programToTags(lustEffect.effectProgram);
+          const effectTagsHTML = StatusDetailViewer.effectDisplay.createEffectTagsHTML(effectTags);
           lustEffectHTML = `
             <div class="lust-overflow-info">
               <h4>💋 欲望溢出效果</h4>
-              <div class="overflow-effect-name">${lustEffect.name || '欲望爆发'}</div>
-              <div class="overflow-effect-description">${lustEffect.description || '欲望达到上限时触发的效果'}</div>
+              <div class="overflow-effect-name">${escapeHtml(lustEffect.name || '欲望爆发')}</div>
+              <div class="overflow-effect-description">${escapeHtml(lustEffect.description || '欲望达到上限时触发的效果')}</div>
               ${effectTagsHTML}
             </div>
           `;
@@ -148,20 +148,20 @@ export class StatusDetailViewer {
           `;
         } else {
           const relicsHTML = relics
-            .map(relic => {
-              const effectTags = StatusDetailViewer.effectDisplay.parseEffectToTags(relic.effect || '', {
-                isPlayerCard: true,
-                isStatusDisplay: true,
-              });
+            .map((relic: any) => {
+              const effectTags = StatusDetailViewer.effectDisplay.triggeredProgramToTags(
+                relic.trigger,
+                relic.effectProgram,
+              );
               const effectTagsHTML = StatusDetailViewer.effectDisplay.createEffectTagsHTML(effectTags);
 
               return `
               <div class="relic-item">
                 <div class="relic-header">
-                  <span class="relic-emoji">${relic.emoji || '📿'}</span>
-                  <span class="relic-name">${relic.name}</span>
+                  <span class="relic-emoji">${escapeHtml(relic.emoji || '📿')}</span>
+                  <span class="relic-name">${escapeHtml(relic.name)}</span>
                 </div>
-                <div class="relic-description">${relic.description}</div>
+                <div class="relic-description">${escapeHtml(relic.description)}</div>
                 ${effectTagsHTML}
               </div>
             `;
@@ -180,7 +180,7 @@ export class StatusDetailViewer {
         title = '❓ 未知状态';
         content = `
           <div class="stat-detail-description">
-            无法识别的状态类型：${statType}
+            无法识别的状态类型：${escapeHtml(statType)}
           </div>
         `;
     }
@@ -200,7 +200,7 @@ export class StatusDetailViewer {
         <div class="status-detail-overlay"></div>
         <div class="status-detail-content">
           <div class="status-detail-header">
-            <h3>${title}</h3>
+            <h3>${escapeHtml(title)}</h3>
             <button class="close-status-detail-btn">✕</button>
           </div>
           <div class="status-detail-body">
@@ -243,25 +243,25 @@ export class StatusDetailViewer {
    */
   setupStatusClickEvents(): void {
     // 生命值点击事件
-    $(document).on('click', '.player-stats .hp-stat, .health-indicator', e => {
+    $(document).on('click', '.player-card .hp-stat, .player-stats .hp-stat, .health-indicator', e => {
       e.preventDefault();
       this.handleStatusClick('health');
     });
 
     // 欲望值点击事件
-    $(document).on('click', '.player-stats .lust-stat, .lust-indicator', e => {
+    $(document).on('click', '.player-card .lust-stat, .player-stats .lust-stat, .lust-indicator', e => {
       e.preventDefault();
       this.handleStatusClick('lust');
     });
 
     // 能量点击事件
-    $(document).on('click', '.player-stats .energy-stat, .energy-indicator', e => {
+    $(document).on('click', '.energy-display, .player-stats .energy-stat, .energy-indicator', e => {
       e.preventDefault();
       this.handleStatusClick('energy');
     });
 
     // 格挡点击事件
-    $(document).on('click', '.player-stats .block-stat, .block-indicator', e => {
+    $(document).on('click', '.player-card .block-stat, .player-stats .block-stat, .block-indicator', e => {
       e.preventDefault();
       this.handleStatusClick('block');
     });
@@ -273,12 +273,11 @@ export class StatusDetailViewer {
     });
 
     // 遗物点击事件
-    $(document).on('click', '.player-stats .relics-stat, .relics-indicator', e => {
+    $(document).on('click', '.player-card .relic-section, .player-stats .relics-stat, .relics-indicator', e => {
       e.preventDefault();
       this.handleStatusClick('relics');
     });
 
-    console.log('✅ 状态栏点击事件已设置');
   }
 
   /**
@@ -298,7 +297,6 @@ export class StatusDetailViewer {
    */
   showStatusByType(statType: string, gameStateManager: any): void {
     this.showStatusDetail(statType, gameStateManager);
-    console.log(`📊 显示状态详情: ${statType}`);
   }
 
   /**
@@ -308,7 +306,6 @@ export class StatusDetailViewer {
     // 添加样式
     this.addStatusDetailStyles();
 
-    console.log('✅ 状态详情系统初始化完成');
   }
 
   /**

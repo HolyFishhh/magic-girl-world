@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "noEmit": true,
+    "types": [],
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@magic-girl-world/portable-core": ["dist/portable/types/portable/index.d.ts"],
+      "@magic-girl-world/portable-core/card": ["dist/portable/types/portable/cardBackend.d.ts"],
+      "@magic-girl-world/portable-core/battle": ["dist/portable/types/portable/battleBackend.d.ts"]
+    }
+  },
+  "files": ["scripts/fixtures/portable-consumer.ts"]
+}

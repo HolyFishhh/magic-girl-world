@@ -1,0 +1,428 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://magic-girl-world.invalid/schema/mwg-card-effects-v1.schema.json",
+  "title": "Magic Girl World Compact Card Effects v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["effects"],
+  "properties": {
+    "trigger": { "$ref": "#/$defs/trigger" },
+    "creates": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/cardTemplate" }
+    },
+    "effects": {
+      "$ref": "#/$defs/effectList"
+    }
+  },
+  "$defs": {
+    "formula": {
+      "oneOf": [
+        { "type": "number" },
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      ]
+    },
+    "target": {
+      "enum": ["self", "opponent"]
+    },
+    "cardZone": {
+      "enum": ["hand", "draw", "discard", "all"]
+    },
+    "cardPick": {
+      "enum": ["random", "choose", "left", "right", "all"]
+    },
+    "trigger": {
+      "enum": [
+        "ability_gain",
+        "turn_start",
+        "turn_end",
+        "card_played",
+        "attack_played",
+        "skill_played",
+        "power_played",
+        "on_discard",
+        "on_exhaust",
+        "on_draw",
+        "on_shuffle",
+        "take_damage",
+        "take_heal",
+        "deal_damage",
+        "deal_heal",
+        "lust_increase",
+        "lust_decrease",
+        "deal_lust_increase",
+        "deal_lust_decrease",
+        "gain_buff",
+        "gain_debuff",
+        "lose_buff",
+        "lose_debuff",
+        "enemy_gain_buff",
+        "enemy_gain_debuff",
+        "enemy_lose_buff",
+        "enemy_lose_debuff",
+        "gain_block",
+        "lose_block"
+      ]
+    },
+    "amountEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["damage"],
+      "properties": {
+        "damage": { "$ref": "#/$defs/formula" },
+        "hits": { "type": "integer", "minimum": 1, "maximum": 20 },
+        "to": { "$ref": "#/$defs/target" },
+        "on": { "$ref": "#/$defs/trigger" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "healEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["heal"],
+      "properties": {
+        "heal": { "$ref": "#/$defs/formula" },
+        "to": { "$ref": "#/$defs/target" },
+        "on": { "$ref": "#/$defs/trigger" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "blockEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["block"],
+      "properties": {
+        "block": { "$ref": "#/$defs/formula" },
+        "to": { "$ref": "#/$defs/target" },
+        "on": { "$ref": "#/$defs/trigger" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "energyEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["energy"],
+      "properties": {
+        "energy": { "$ref": "#/$defs/formula" },
+        "to": { "$ref": "#/$defs/target" },
+        "on": { "$ref": "#/$defs/trigger" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "lustEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lust"],
+      "properties": {
+        "lust": { "$ref": "#/$defs/formula" },
+        "to": { "$ref": "#/$defs/target" },
+        "on": { "$ref": "#/$defs/trigger" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "setEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "set_hp": { "$ref": "#/$defs/formula" },
+        "set_lust": { "$ref": "#/$defs/formula" },
+        "set_energy": { "$ref": "#/$defs/formula" },
+        "set_block": { "$ref": "#/$defs/formula" },
+        "to": { "$ref": "#/$defs/target" },
+        "on": { "$ref": "#/$defs/trigger" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      },
+      "oneOf": [
+        { "required": ["set_hp"] },
+        { "required": ["set_lust"] },
+        { "required": ["set_energy"] },
+        { "required": ["set_block"] }
+      ]
+    },
+    "narrateEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["narrate"],
+      "properties": {
+        "narrate": { "type": "string", "minLength": 1 },
+        "on": { "$ref": "#/$defs/trigger" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "applyStatusEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apply_status"],
+      "properties": {
+        "apply_status": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "stacks": { "$ref": "#/$defs/formula" },
+        "to": { "$ref": "#/$defs/target" },
+        "on": { "$ref": "#/$defs/trigger" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "removeStatusEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["remove_status"],
+      "properties": {
+        "remove_status": {
+          "anyOf": [
+            { "enum": ["all", "buffs", "debuffs"] },
+            { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }
+          ]
+        },
+        "to": { "$ref": "#/$defs/target" },
+        "on": { "$ref": "#/$defs/trigger" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "drawEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["draw"],
+      "properties": {
+        "draw": { "$ref": "#/$defs/formula" },
+        "on": { "$ref": "#/$defs/trigger" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "scryEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scry"],
+      "properties": {
+        "scry": { "$ref": "#/$defs/formula" },
+        "on": { "$ref": "#/$defs/trigger" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "seekEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seek"],
+      "properties": {
+        "seek": { "$ref": "#/$defs/formula" },
+        "on": { "$ref": "#/$defs/trigger" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "moveCardEffect": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["discard"],
+          "properties": {
+            "discard": { "anyOf": [{ "$ref": "#/$defs/formula" }, { "const": "all" }] },
+            "from": { "$ref": "#/$defs/cardZone" },
+            "pick": { "$ref": "#/$defs/cardPick" },
+            "on": { "$ref": "#/$defs/trigger" },
+            "when": { "$ref": "#/$defs/formulaString" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["exhaust"],
+          "properties": {
+            "exhaust": { "anyOf": [{ "$ref": "#/$defs/formula" }, { "const": "all" }] },
+            "from": { "$ref": "#/$defs/cardZone" },
+            "pick": { "$ref": "#/$defs/cardPick" },
+            "on": { "$ref": "#/$defs/trigger" },
+            "when": { "$ref": "#/$defs/formulaString" }
+          }
+        }
+      ]
+    },
+    "recoverEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recover"],
+      "properties": {
+        "recover": { "anyOf": [{ "$ref": "#/$defs/formula" }, { "const": "all" }] },
+        "from": { "enum": ["discard", "exhaust"] },
+        "pick": { "enum": ["random", "choose", "all"] },
+        "on": { "$ref": "#/$defs/trigger" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "reduceCostEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reduce_cost"],
+      "properties": {
+        "reduce_cost": { "$ref": "#/$defs/formula" },
+        "count": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "from": { "$ref": "#/$defs/cardZone" },
+        "pick": { "$ref": "#/$defs/cardPick" },
+        "on": { "$ref": "#/$defs/trigger" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "selectCardEffect": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["copy"],
+          "properties": {
+            "copy": { "anyOf": [{ "type": "integer", "minimum": 1, "maximum": 100 }, { "const": "all" }] },
+            "from": { "$ref": "#/$defs/cardZone" },
+            "pick": { "$ref": "#/$defs/cardPick" },
+            "on": { "$ref": "#/$defs/trigger" },
+            "when": { "$ref": "#/$defs/formulaString" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["double"],
+          "properties": {
+            "double": { "anyOf": [{ "type": "integer", "minimum": 1, "maximum": 100 }, { "const": "all" }] },
+            "from": { "$ref": "#/$defs/cardZone" },
+            "pick": { "$ref": "#/$defs/cardPick" },
+            "on": { "$ref": "#/$defs/trigger" },
+            "when": { "$ref": "#/$defs/formulaString" }
+          }
+        }
+      ]
+    },
+    "addCardEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["add_card"],
+      "properties": {
+        "add_card": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "to": { "enum": ["hand", "deck"] },
+        "count": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "on": { "$ref": "#/$defs/trigger" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "modifierEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["modify"],
+      "properties": {
+        "modify": { "enum": ["damage", "damage_taken", "lust", "lust_taken", "heal", "block"] },
+        "add": { "$ref": "#/$defs/formula" },
+        "subtract": { "$ref": "#/$defs/formula" },
+        "multiply": { "$ref": "#/$defs/formula" },
+        "divide": { "$ref": "#/$defs/formula" },
+        "set": { "$ref": "#/$defs/formula" },
+        "to": { "$ref": "#/$defs/target" }
+      },
+      "oneOf": [
+        { "required": ["add"] },
+        { "required": ["subtract"] },
+        { "required": ["multiply"] },
+        { "required": ["divide"] },
+        { "required": ["set"] }
+      ]
+    },
+    "cardTemplate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "effects"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "name": { "type": "string", "minLength": 1 },
+        "emoji": { "type": "string" },
+        "type": { "enum": ["Attack", "Skill", "Power", "Event", "Curse"] },
+        "rarity": { "enum": ["Common", "Uncommon", "Rare", "Epic", "Legendary", "Corrupt"] },
+        "cost": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "const": "energy" }] },
+        "description": { "type": "string" },
+        "effects": {
+          "$ref": "#/$defs/effectList"
+        },
+        "discard_effects": {
+          "$ref": "#/$defs/effectList"
+        },
+        "trigger": { "$ref": "#/$defs/trigger" },
+        "retain": { "type": "boolean" },
+        "exhaust": { "type": "boolean" },
+        "ethereal": { "type": "boolean" }
+      }
+    },
+    "formulaString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "effect": {
+      "anyOf": [
+        { "$ref": "#/$defs/amountEffect" },
+        { "$ref": "#/$defs/healEffect" },
+        { "$ref": "#/$defs/blockEffect" },
+        { "$ref": "#/$defs/energyEffect" },
+        { "$ref": "#/$defs/lustEffect" },
+        { "$ref": "#/$defs/setEffect" },
+        { "$ref": "#/$defs/narrateEffect" },
+        { "$ref": "#/$defs/applyStatusEffect" },
+        { "$ref": "#/$defs/removeStatusEffect" },
+        { "$ref": "#/$defs/drawEffect" },
+        { "$ref": "#/$defs/scryEffect" },
+        { "$ref": "#/$defs/seekEffect" },
+        { "$ref": "#/$defs/moveCardEffect" },
+        { "$ref": "#/$defs/recoverEffect" },
+        { "$ref": "#/$defs/reduceCostEffect" },
+        { "$ref": "#/$defs/selectCardEffect" },
+        { "$ref": "#/$defs/addCardEffect" },
+        { "$ref": "#/$defs/modifierEffect" },
+        { "$ref": "#/$defs/bundleEffect" }
+      ]
+    },
+    "bundleEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "damage": { "$ref": "#/$defs/formula" },
+        "heal": { "$ref": "#/$defs/formula" },
+        "block": { "$ref": "#/$defs/formula" },
+        "energy": { "$ref": "#/$defs/formula" },
+        "lust": { "$ref": "#/$defs/formula" },
+        "apply_status": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "remove_status": {
+          "anyOf": [
+            { "enum": ["all", "buffs", "debuffs"] },
+            { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }
+          ]
+        },
+        "draw": { "$ref": "#/$defs/formula" },
+        "stacks": { "$ref": "#/$defs/formula" },
+        "to": { "$ref": "#/$defs/target" },
+        "when": { "$ref": "#/$defs/formulaString" },
+        "on": { "$ref": "#/$defs/trigger" }
+      },
+      "minProperties": 2,
+      "anyOf": [
+        { "required": ["damage"] },
+        { "required": ["heal"] },
+        { "required": ["block"] },
+        { "required": ["energy"] },
+        { "required": ["lust"] },
+        { "required": ["apply_status"] },
+        { "required": ["remove_status"] },
+        { "required": ["draw"] }
+      ]
+    },
+    "effectList": {
+      "anyOf": [
+        {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/effect" }
+        },
+        { "$ref": "#/$defs/effect" },
+        { "$ref": "#/$defs/bundleEffect" }
+      ]
+    }
+  }
+}

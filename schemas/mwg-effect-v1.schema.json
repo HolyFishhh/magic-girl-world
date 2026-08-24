@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://magic-girl-world.invalid/schema/mwg-effect-v1.schema.json",
+  "title": "Magic Girl World Effect Program v1",
+  "$ref": "#/$defs/program",
+  "$defs": {
+    "target": { "enum": ["self", "opponent"] },
+    "numberExpression": {
+      "oneOf": [
+        { "type": "number" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "path"],
+          "properties": {
+            "op": { "const": "var" },
+            "path": {
+              "type": "string",
+              "pattern": "^(context\\.(spent_energy|status_stacks)|battle\\.(turn_number|cards_played_this_turn|attacks_played_this_turn|skills_played_this_turn)|(self|opponent)\\.(hp|max_hp|lust|max_lust|energy|max_energy|block)|self\\.(hand_size|draw_pile_size|discard_pile_size|exhaust_pile_size)|(self|opponent)\\.status\\.[A-Za-z0-9_]+\\.stacks)$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "left", "right"],
+          "properties": {
+            "op": { "enum": ["add", "subtract", "multiply", "divide"] },
+            "left": { "$ref": "#/$defs/numberExpression" },
+            "right": { "$ref": "#/$defs/numberExpression" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "value"],
+          "properties": {
+            "op": { "const": "negate" },
+            "value": { "$ref": "#/$defs/numberExpression" }
+          }
+        }
+      ]
+    },
+    "condition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "relation", "left", "right"],
+          "properties": {
+            "op": { "const": "compare" },
+            "relation": { "enum": ["eq", "neq", "gt", "gte", "lt", "lte"] },
+            "left": { "$ref": "#/$defs/numberExpression" },
+            "right": { "$ref": "#/$defs/numberExpression" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "conditions"],
+          "properties": {
+            "op": { "enum": ["all", "any"] },
+            "conditions": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/condition" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "condition"],
+          "properties": {
+            "op": { "const": "not" },
+            "condition": { "$ref": "#/$defs/condition" }
+          }
+        }
+      ]
+    },
+    "amountEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "target", "amount"],
+      "properties": {
+        "op": { "enum": ["damage", "heal", "gain_block", "gain_energy", "gain_lust"] },
+        "target": { "$ref": "#/$defs/target" },
+        "amount": { "$ref": "#/$defs/numberExpression" }
+      }
+    },
+    "setStatEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "target", "stat", "value"],
+      "properties": {
+        "op": { "const": "set_stat" },
+        "target": { "$ref": "#/$defs/target" },
+        "stat": { "enum": ["hp", "lust", "energy", "block"] },
+        "value": { "$ref": "#/$defs/numberExpression" }
+      }
+    },
+    "ifEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "condition", "then"],
+      "properties": {
+        "op": { "const": "if" },
+        "condition": { "$ref": "#/$defs/condition" },
+        "then": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/effect" } },
+        "else": { "type": "array", "items": { "$ref": "#/$defs/effect" } }
+      }
+    },
+    "narrateEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "text"],
+      "properties": {
+        "op": { "const": "narrate" },
+        "text": { "type": "string", "minLength": 1 }
+      }
+    },
+    "recoverEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "source", "pick", "amount"],
+      "properties": {
+        "op": { "const": "recover_cards" },
+        "source": { "enum": ["draw", "discard", "exhaust"] },
+        "pick": { "enum": ["random", "choose", "all"] },
+        "amount": { "$ref": "#/$defs/numberExpression" }
+      }
+    },
+    "scryEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "amount"],
+      "properties": {
+        "op": { "const": "scry_cards" },
+        "amount": { "$ref": "#/$defs/numberExpression" }
+      }
+    },
+    "modifierEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "target", "stat", "operator", "value"],
+      "properties": {
+        "op": { "const": "modify" },
+        "target": { "$ref": "#/$defs/target" },
+        "stat": { "enum": ["damage", "damage_taken", "lust", "lust_taken", "heal", "block"] },
+        "operator": { "enum": ["add", "subtract", "multiply", "divide", "set"] },
+        "value": { "$ref": "#/$defs/numberExpression" }
+      }
+    },
+    "effect": {
+      "oneOf": [
+        { "$ref": "#/$defs/amountEffect" },
+        { "$ref": "#/$defs/setStatEffect" },
+        { "$ref": "#/$defs/modifierEffect" },
+        { "$ref": "#/$defs/ifEffect" },
+        { "$ref": "#/$defs/scryEffect" },
+        { "$ref": "#/$defs/recoverEffect" },
+        { "$ref": "#/$defs/narrateEffect" }
+      ]
+    },
+    "program": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["spec", "steps"],
+      "properties": {
+        "spec": { "const": "mwg.effect/v1" },
+        "steps": { "type": "array", "minItems": 1, "maxItems": 256, "items": { "$ref": "#/$defs/effect" } }
+      }
+    }
+  }
+}

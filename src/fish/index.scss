@@ -7,6 +7,32 @@
   font-family: 'ZCOOL KuaiLe', 'Noto Sans SC', 'Microsoft YaHei', 'Segoe UI', 'Helvetica Neue', sans-serif !important;
 }
 
+.history-battle-label {
+  color: #ffe7a8;
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+html.is-history {
+  .end-turn-button,
+  #modeToggle,
+  #use-item-btn,
+  .restart-btn,
+  .return-setup-btn,
+  .no-enemy-refresh-btn,
+  .repair-battle-btn,
+  .skip-reward-btn {
+    display: none !important;
+  }
+
+  .card,
+  .enhanced-card {
+    cursor: default !important;
+    pointer-events: none !important;
+  }
+}
+
 /* 标题和重要元素使用特殊字体 */
 h1,
 h2,
@@ -165,10 +191,18 @@ h3,
       text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
     }
 
-    .card-keyword {
+    .card-keywords {
       position: absolute;
       bottom: 2px;
       right: 2px;
+      left: 2px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 2px;
+    }
+
+    .card-keyword {
       background: rgba(0, 0, 0, 0.7);
       color: white;
       padding: 2px 4px;
@@ -186,6 +220,10 @@ h3,
 
       &.ethereal {
         background: #805ad5;
+      }
+
+      &.innate {
+        background: #2b6cb0;
       }
     }
   }
@@ -3230,227 +3268,6 @@ body.screen-shake {
   }
   100% {
     filter: hue-rotate(360deg) brightness(1);
-  }
-}
-
-/* 弃牌选择模态框样式 */
-.discard-selection-modal {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  z-index: 2000;
-  display: none;
-
-  .modal-backdrop {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(0, 0, 0, 0.7);
-  }
-
-  .modal-content {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    background: linear-gradient(135deg, #2a2a3a 0%, #1a1a2e 100%);
-    border-radius: 15px;
-    border: 2px solid #4a4a6a;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-    max-width: 80%;
-    max-height: 80%;
-    overflow: hidden;
-  }
-
-  .modal-header {
-    padding: 20px;
-    border-bottom: 1px solid #4a4a6a;
-    text-align: center;
-
-    h3 {
-      color: #fff;
-      margin: 0 0 10px 0;
-      font-size: 1.5em;
-    }
-
-    p {
-      color: #ccc;
-      margin: 0 0 15px 0;
-    }
-
-    .selection-counter {
-      color: #ffd700;
-      font-weight: bold;
-      font-size: 1.1em;
-
-      .selected-count {
-        color: #ff6b6b;
-      }
-    }
-  }
-
-  .modal-body {
-    padding: 20px;
-    max-height: 400px;
-    overflow-y: auto;
-
-    .discard-cards-container {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-      gap: 15px;
-    }
-
-    .discard-card {
-      background: linear-gradient(135deg, #3a3a4a 0%, #2a2a3a 100%);
-      border: 2px solid #4a4a6a;
-      border-radius: 10px;
-      padding: 15px;
-      text-align: center;
-      cursor: pointer;
-      transition: all 0.3s ease;
-      position: relative;
-
-      &:hover {
-        border-color: #6a6a8a;
-        transform: translateY(-2px);
-        box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
-      }
-
-      &.selected {
-        border-color: #ff6b6b;
-        background: linear-gradient(135deg, #4a3a3a 0%, #3a2a2a 100%);
-        box-shadow: 0 0 15px rgba(255, 107, 107, 0.3);
-
-        &::after {
-          content: '✓';
-          position: absolute;
-          top: 5px;
-          right: 5px;
-          color: #ff6b6b;
-          font-weight: bold;
-          font-size: 1.2em;
-        }
-      }
-
-      .card-emoji {
-        font-size: 2em;
-        margin-bottom: 8px;
-      }
-
-      .card-name {
-        color: #fff;
-        font-size: 0.9em;
-        margin-bottom: 5px;
-        font-weight: bold;
-      }
-
-      .card-cost {
-        color: #ffd700;
-        font-size: 0.8em;
-        font-weight: bold;
-
-        &::before {
-          content: '⚡ ';
-        }
-      }
-    }
-  }
-
-  .modal-footer {
-    padding: 20px;
-    border-top: 1px solid #4a4a6a;
-    text-align: center;
-    display: flex;
-    gap: 15px;
-    justify-content: center;
-
-    .btn {
-      padding: 10px 20px;
-      border: none;
-      border-radius: 8px;
-      font-size: 1em;
-      font-weight: bold;
-      cursor: pointer;
-      transition: all 0.3s ease;
-
-      &.btn-secondary {
-        background: #6a6a8a;
-        color: #fff;
-
-        &:hover {
-          background: #7a7a9a;
-        }
-      }
-
-      &.btn-primary {
-        background: #ff6b6b;
-        color: #fff;
-
-        &:hover:not(:disabled) {
-          background: #ff5252;
-        }
-
-        &:disabled {
-          background: #4a4a6a;
-          color: #8a8a8a;
-          cursor: not-allowed;
-        }
-      }
-    }
-  }
-}
-
-/* 卡牌悬停等待弃牌状态 */
-.card-pending-discard {
-  position: relative;
-  border: 2px solid #ffd700 !important;
-  box-shadow: 0 0 20px rgba(255, 215, 0, 0.5) !important;
-  animation: pendingPulse 2s infinite;
-
-  .pending-indicator {
-    position: absolute;
-    top: -30px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(255, 215, 0, 0.9);
-    color: #000;
-    padding: 5px 10px;
-    border-radius: 15px;
-    font-size: 0.8em;
-    font-weight: bold;
-    white-space: nowrap;
-    z-index: 100;
-    animation: bounce 1s infinite;
-  }
-}
-
-@keyframes pendingPulse {
-  0%,
-  100% {
-    box-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
-  }
-  50% {
-    box-shadow: 0 0 30px rgba(255, 215, 0, 0.8);
-  }
-}
-
-@keyframes bounce {
-  0%,
-  20%,
-  50%,
-  80%,
-  100% {
-    transform: translateX(-50%) translateY(0);
-  }
-  40% {
-    transform: translateX(-50%) translateY(-5px);
-  }
-  60% {
-    transform: translateX(-50%) translateY(-3px);
   }
 }
 

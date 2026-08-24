@@ -19,6 +19,22 @@
 
       <!-- 角色创建表单 -->
       <div class="creator-form">
+        <div class="section mode-section">
+          <h2 class="section-title"><span class="icon">✦</span>选择游戏模式</h2>
+          <div class="mode-grid" role="radiogroup" aria-label="选择游戏模式">
+            <button class="mode-card selected" type="button" data-mode="story" role="radio" aria-checked="true">
+              <span class="mode-icon">📖</span>
+              <span class="mode-name">剧情模式</span>
+              <span class="mode-desc">以角色扮演和城市故事为主，随时做出选择。</span>
+            </button>
+            <button class="mode-card" type="button" data-mode="expedition" role="radio" aria-checked="false">
+              <span class="mode-icon">🗺</span>
+              <span class="mode-name">远征模式</span>
+              <span class="mode-desc">在路线、战斗和营火之间推进一场完整远征。</span>
+            </button>
+          </div>
+        </div>
+
         <!-- 阵营选择 -->
         <div class="section faction-section">
           <h2 class="section-title">
@@ -76,8 +92,6 @@
             <!-- 地点选项将通过JS动态生成 -->
           </div>
         </div>
-
-
 
         <!-- 额外描述 -->
         <div class="section description-section">
@@ -141,99 +155,6 @@
           </div>
           <div class="validation-message" id="validation-message">请选择阵营、职业和地点后才能创建角色</div>
         </div>
-      </div>
-    </div>
-  </body>
-</html>
-
-        <!-- AI生成结果显示区域 -->
-        <div class="section result-section" id="result-section" style="display: none">
-          <h2 class="section-title">
-            <span class="icon">🌟</span>
-            角色生成结果
-          </h2>
-
-          <!-- 角色基础信息 -->
-          <div class="result-card character-info-card">
-            <h3 class="card-title">
-              <span class="card-icon">👤</span>
-              角色信息
-            </h3>
-            <div class="character-info-content" id="character-info-content">
-              <!-- AI生成的角色基础信息 -->
-            </div>
-          </div>
-
-          <!-- 初始剧情 -->
-          <div class="result-card story-card">
-            <h3 class="card-title">
-              <span class="card-icon">📖</span>
-              初始剧情
-            </h3>
-            <div class="story-content" id="story-content">
-              <!-- AI生成的初始剧情 -->
-            </div>
-          </div>
-
-          <!-- 战斗数据 -->
-          <div class="result-card combat-card">
-            <h3 class="card-title">
-              <span class="card-icon">⚔️</span>
-              战斗数据
-            </h3>
-            <div class="combat-content">
-              <!-- 属性面板 -->
-              <div class="stats-panel" id="stats-panel">
-                <h4 class="panel-title">角色属性</h4>
-                <div class="stats-grid" id="stats-grid">
-                  <!-- AI生成的角色属性 -->
-                </div>
-              </div>
-
-              <!-- 初始卡组 -->
-              <div class="cards-panel" id="cards-panel">
-                <h4 class="panel-title">初始卡组</h4>
-                <div class="cards-grid" id="cards-grid">
-                  <!-- AI生成的初始卡牌 -->
-                </div>
-              </div>
-
-              <!-- 初始遗物 -->
-              <div class="relics-panel" id="relics-panel">
-                <h4 class="panel-title">初始遗物</h4>
-                <div class="relics-grid" id="relics-grid">
-                  <!-- AI生成的初始遗物 -->
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- 操作按钮 -->
-          <div class="result-actions">
-            <button id="regenerate-btn" class="regenerate-btn">
-              <span class="btn-icon">🔄</span>
-              <span class="btn-text">重新生成</span>
-            </button>
-            <button id="save-character-btn" class="save-btn">
-              <span class="btn-icon">💾</span>
-              <span class="btn-text">保存角色</span>
-            </button>
-            <button id="start-game-btn" class="start-game-btn">
-              <span class="btn-icon">🎮</span>
-              <span class="btn-text">开始游戏</span>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <!-- 背景装饰 -->
-      <div class="background-effects">
-        <div class="star star-1">⭐</div>
-        <div class="star star-2">✨</div>
-        <div class="star star-3">🌟</div>
-        <div class="star star-4">💫</div>
-        <div class="star star-5">⭐</div>
-        <div class="star star-6">✨</div>
       </div>
     </div>
   </body>

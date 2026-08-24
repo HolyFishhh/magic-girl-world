@@ -157,7 +157,7 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
                 },
                 'sass-loader',
               ],
-              exclude: /node_modules/,
+              exclude: /node_modules[\\/](?!toastr[\\/])/,
             },
           ],
         },
@@ -179,7 +179,12 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
       minimizer: [
         argv.mode === 'production'
           ? new TerserPlugin({
-              terserOptions: { format: { quote_style: 1 }, mangle: { reserved: ['_', 'toastr', 'YAML', '$', 'z'] } },
+              terserOptions: {
+                format: { quote_style: 1 },
+                // Tavern Helper reparses inline scripts through HTML. Names such as
+                // `lt` after `&&` can otherwise become the legacy `&lt` entity.
+                mangle: { reserved: ['_', 'toastr', 'YAML', '$', 'z', 'amp', 'lt', 'gt', 'quot', 'apos'] },
+              },
             })
           : new TerserPlugin({
               extractComments: false,
@@ -230,11 +235,21 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
           return callback();
         }
 
+        // These are bundled so the exported Tavern Helper HTML stays fully
+        // self-contained and does not rely on module imports inside a classic
+        // inline script.
+        if (
+          request === 'jquery' ||
+          request === 'jsep' ||
+          request === 'toastr' ||
+          request.startsWith('toastr/')
+        ) {
+          return callback();
+        }
+
         const builtin = {
           lodash: '_',
-          toastr: 'toastr',
           yaml: 'YAML',
-          jquery: '$',
           zod: 'z',
         };
         if (request in builtin) {

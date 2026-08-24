@@ -33,21 +33,16 @@ export class CardPlayMode {
       return;
     }
 
-    console.log('🎮 初始化卡牌出牌模式');
-
     // 从 localStorage 读取用户设置，如果没有则根据设备类型自动选择
     const savedMode = this.loadModeFromStorage();
     if (savedMode) {
       this.playMode = savedMode;
-      console.log('  ├─ 从本地存储读取模式:', savedMode);
     } else {
       // 根据设备类型自动选择模式
       if (this.isMobileDevice()) {
         this.playMode = 'click';
-        console.log('  ├─ 检测到移动设备，使用点击模式');
       } else {
         this.playMode = 'drag';
-        console.log('  ├─ 检测到PC设备，使用拖动模式');
       }
       // 保存到本地存储
       this.saveModeToStorage(this.playMode);
@@ -71,8 +66,6 @@ export class CardPlayMode {
       playArea.on('drop', e => this.handleDrop(e));
 
       this.initialized = true;
-      console.log('✅ 卡牌出牌模式初始化完成');
-
       // 显示初始提示
       this.showModeHint(`当前模式: ${this.playMode === 'click' ? '点击出牌' : '拖动出牌'}`);
     }, 100);
@@ -235,18 +228,21 @@ export class CardPlayMode {
       return;
     }
 
+    const originalEvent = e.originalEvent;
+    if (!originalEvent) return;
+
     this.draggedCard = card;
     card.addClass('dragging');
 
     // 隐藏默认的拖动图像
     const img = new Image();
     img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-    e.originalEvent.dataTransfer!.setDragImage(img, 0, 0);
-    e.originalEvent.dataTransfer!.effectAllowed = 'move';
+    originalEvent.dataTransfer!.setDragImage(img, 0, 0);
+    originalEvent.dataTransfer!.effectAllowed = 'move';
 
     // 获取初始鼠标位置
-    const x = e.originalEvent.clientX;
-    const y = e.originalEvent.clientY;
+    const x = originalEvent.clientX;
+    const y = originalEvent.clientY;
 
     // 创建跟随鼠标的卡牌副本
     this.cardGhost = this.createCardGhost(card, x, y);
@@ -262,10 +258,11 @@ export class CardPlayMode {
    * 拖动模式：拖动过程中
    */
   private handleDrag(e: JQuery.DragEvent): void {
-    if (this.cardGhost && e.originalEvent.clientX !== 0 && e.originalEvent.clientY !== 0) {
+    const originalEvent = e.originalEvent;
+    if (this.cardGhost && originalEvent && originalEvent.clientX !== 0 && originalEvent.clientY !== 0) {
       this.cardGhost.css({
-        left: e.originalEvent.clientX - 50 + 'px',
-        top: e.originalEvent.clientY - 70 + 'px',
+        left: originalEvent.clientX - 50 + 'px',
+        top: originalEvent.clientY - 70 + 'px',
       });
     }
   }
@@ -322,7 +319,7 @@ export class CardPlayMode {
     if (this.playMode !== 'drag') return;
 
     e.preventDefault();
-    e.originalEvent.dataTransfer!.dropEffect = 'move';
+    if (e.originalEvent?.dataTransfer) e.originalEvent.dataTransfer.dropEffect = 'move';
     $('#playArea').addClass('active');
   }
 
@@ -365,10 +362,13 @@ export class CardPlayMode {
   private handleTouchStart(e: JQuery.TouchStartEvent, card: JQuery): void {
     if (this.playMode !== 'drag') return;
 
+    const touch = e.originalEvent?.touches[0];
+    if (!touch) return;
+
     card.addClass('dragging');
 
     // 创建跟随的卡牌副本
-    this.cardGhost = this.createCardGhost(card);
+    this.cardGhost = this.createCardGhost(card, touch.clientX, touch.clientY);
 
     // 显示出牌区域
     $('#playArea').addClass('show');
@@ -387,7 +387,8 @@ export class CardPlayMode {
   private handleTouchMove(e: JQuery.TouchMoveEvent): void {
     if (this.playMode !== 'drag') return;
 
-    const touch = e.originalEvent.touches[0];
+    const touch = e.originalEvent?.touches[0];
+    if (!touch) return;
 
     // 更新卡牌副本位置
     if (this.cardGhost) {
@@ -420,7 +421,8 @@ export class CardPlayMode {
   private handleTouchEnd(e: JQuery.TouchEndEvent, card: JQuery): void {
     if (this.playMode !== 'drag') return;
 
-    const touch = e.originalEvent.changedTouches[0];
+    const touch = e.originalEvent?.changedTouches[0];
+    if (!touch) return;
     const element = document.elementFromPoint(touch.clientX, touch.clientY);
 
     // 检查是否放在出牌区域

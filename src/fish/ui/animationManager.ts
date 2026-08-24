@@ -1,4 +1,5 @@
-import { Card, StatusEffect } from '../types';
+import type { Card, StatusEffect } from '../../game-core';
+import { escapeHtml } from '../shared/html';
 
 /**
  * 动画管理模块 - 处理战斗中的各种动画效果
@@ -17,7 +18,12 @@ export class AnimationManager {
   }
 
   // 伤害数字队列，防止同时弹出
-  private damageQueue: Array<{ target: string; damage: number; type: string; timestamp: number }> = [];
+  private damageQueue: Array<{
+    target: 'player' | 'enemy';
+    damage: number;
+    type: 'damage' | 'heal' | 'lust' | 'block';
+    timestamp: number;
+  }> = [];
   private lastDamageTime = 0;
   private readonly DAMAGE_INTERVAL = 150; // 最小间隔150ms
 
@@ -436,8 +442,8 @@ export class AnimationManager {
         opacity: 0;
       ">
         <div style="margin-bottom: 8px; font-size: 18px;">🃏 卡牌无法使用</div>
-        <div style="color: #ffd700; margin-bottom: 5px;">${cardName}</div>
-        <div style="color: #ffaa00; font-size: 14px;">${reason}</div>
+        <div style="color: #ffd700; margin-bottom: 5px;">${escapeHtml(cardName)}</div>
+        <div style="color: #ffaa00; font-size: 14px;">${escapeHtml(reason)}</div>
       </div>
     `);
 
@@ -474,7 +480,7 @@ export class AnimationManager {
         box-shadow: 0 8px 16px rgba(0,0,0,0.3);
         text-align: center;
       ">
-        ${text}
+        ${escapeHtml(text)}
       </div>
     `);
 
@@ -512,7 +518,7 @@ export class AnimationManager {
         box-shadow: 0 6px 12px rgba(0,0,0,0.3);
         text-align: center;
       ">
-        ${text}
+        ${escapeHtml(text)}
       </div>
     `);
 
@@ -571,7 +577,7 @@ export class AnimationManager {
         animation: lustPulse 2s infinite;
       ">
         <div style="font-size: 32px; margin-bottom: 10px;">💋</div>
-        <div>${effectName}</div>
+        <div>${escapeHtml(effectName)}</div>
       </div>
     `);
 
@@ -610,8 +616,8 @@ export class AnimationManager {
     const popup = $(`
       <div class="enemy-action-popup">
         <div class="enemy-action-content">
-          <div class="enemy-action-name">${actionName}</div>
-          <div class="enemy-action-description">${description}</div>
+          <div class="enemy-action-name">${escapeHtml(actionName)}</div>
+          <div class="enemy-action-description">${escapeHtml(description)}</div>
         </div>
       </div>
     `);
@@ -635,7 +641,9 @@ export class AnimationManager {
    * 播放卡牌使用动画（根据卡名选取元素，带飞行与命中闪烁）
    */
   public async playCardAnimation(card: Card, targetSelector: string): Promise<void> {
-    const cardElement = $(`.card:contains("${card.name}")`).first();
+    const cardElement = $('.card')
+      .filter((_, element) => $(element).find('.card-name').text() === card.name)
+      .first();
     if (cardElement.length === 0) return;
 
     // 发光效果
@@ -742,7 +750,7 @@ export class AnimationManager {
     if (target.length === 0) return;
 
     if (action === 'apply') {
-      const statusIcon = $(`<div class="status-apply-effect">${status.emoji}</div>`);
+      const statusIcon = $(`<div class="status-apply-effect">${escapeHtml(status.emoji)}</div>`);
       const off = target.offset();
       if (!off) return;
       statusIcon.css({
@@ -800,7 +808,7 @@ export class AnimationManager {
     if (!drawOff || !handOff) return;
 
     for (const card of cards) {
-      const tempCard = $(`<div class="card-drawing">${card.emoji || '🃏'}</div>`);
+      const tempCard = $(`<div class="card-drawing">${escapeHtml(card.emoji || '🃏')}</div>`);
       tempCard.css({
         position: 'absolute',
         left: drawOff.left,

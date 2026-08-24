@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "skipLibCheck": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  "files": [
+    "global.d.ts",
+    "src/start/index.ts",
+    "src/fish/index.ts",
+    "src/common/index.ts",
+    "src/game-core/index.ts",
+    "src/adapters/index.ts"
+  ]
+}

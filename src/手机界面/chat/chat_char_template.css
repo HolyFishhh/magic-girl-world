@@ -1,6 +1,0 @@
-#QQ_chat_${name} {
-  background-image: url(${chatWallpaper});
-}
-#QQ_chat_${name} .QQ_chat_msgdiv {
-  background-color: ${bubbleColors} !important;
-}

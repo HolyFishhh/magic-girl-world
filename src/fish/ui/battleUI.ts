@@ -5,13 +5,15 @@
 import { DynamicStatusManager } from '../combat/dynamicStatusManager';
 import { UnifiedEffectExecutor } from '../combat/unifiedEffectExecutor';
 import { GameStateManager } from '../core/gameStateManager';
-import { Card } from '../types';
+import { escapeHtml, escapeHtmlAttribute } from '../shared/html';
+import type { Card } from '../../game-core';
 import { CardPlayMode } from './cardPlayMode';
+import { EnemyIntentPresenter } from './enemyIntentPresenter';
 import { PileStatsDisplay } from './pileViewer';
-import { UnifiedEffectDisplay } from './unifiedEffectDisplay';
+import { EffectProgramDisplay } from './effectProgramDisplay';
 
 export class BattleUI {
-  private static effectDisplay = UnifiedEffectDisplay.getInstance();
+  private static effectDisplay = EffectProgramDisplay.getInstance();
   /**
    * 翻译卡牌类型
    */
@@ -37,7 +39,6 @@ export class BattleUI {
       Epic: '史诗',
       Legendary: '传说',
       Corrupt: '腐化',
-      Corrupted: '腐化',
     };
     return rarityTranslations[rarity] || rarity;
   }
@@ -60,6 +61,7 @@ export class BattleUI {
       // 更新敌人信息
       if (enemy) {
         this.updateEnemyDisplay(enemy);
+        EnemyIntentPresenter.getInstance().render(enemy);
       }
 
       // 更新玩家信息
@@ -87,7 +89,6 @@ export class BattleUI {
       // 更新能力显示
       this.updateAbilitiesDisplay(gameState.player.abilities || [], gameState.enemy?.abilities || []);
 
-      console.log('✅ 战斗UI刷新完成');
     } catch (error) {
       console.error('❌ 刷新战斗UI失败:', error);
     }
@@ -193,7 +194,14 @@ export class BattleUI {
 
     // 更新游戏阶段显示
     const phaseText = this.getPhaseText(gameState.phase);
-    $('#game-phase').text(phaseText);
+    $('#phase-indicator').text(phaseText);
+
+    const battleEnded = gameState.isGameOver === true || gameState.phase === 'game_over';
+    const playerCanAct = gameState.phase === 'player_turn' && !battleEnded;
+    $('.end-turn-button, #modeToggle, #use-item-btn')
+      .prop('disabled', !playerCanAct)
+      .attr('aria-disabled', String(!playerCanAct));
+    $('#hand-cards').toggleClass('battle-ended', battleEnded);
   }
 
   /**
@@ -223,12 +231,10 @@ export class BattleUI {
       handContainer.empty();
 
       if (!handCards || !Array.isArray(handCards)) {
-        console.log('没有手牌数据或手牌为空');
         return;
       }
 
-      // 过滤掉元数据标记
-      const validCards = this.filterMetadata(handCards);
+      const validCards = handCards;
 
       // 开始创建手牌元素 - 移除日志减少输出
 
@@ -302,7 +308,6 @@ export class BattleUI {
         console.warn('手牌重叠布局计算失败:', e);
       }
 
-      console.log(`✅ 更新手牌显示完成，显示了 ${validCards.length} 张卡牌`);
     } catch (error) {
       console.error('❌ 更新手牌显示失败:', error);
     }
@@ -315,27 +320,20 @@ export class BattleUI {
     // 创建卡牌元素 - 移除日志减少输出
 
     // 确保卡牌有必要的属性
-    // 规范化类型与稀有度：将 Corrupt 作为稀有度处理
-    let normalizedType: any = card.type || 'Skill';
-    let normalizedRarity: any = card.rarity || 'Common';
-    if (normalizedType === 'Corrupt') {
-      normalizedType = 'Skill';
-      normalizedRarity = 'Corrupt';
-    }
-
     const cardData: Card = {
       id: card.id || card.originalId || `card_${index}`,
       name: card.name || '未知卡牌',
       cost: card.cost || 0,
-      type: normalizedType,
-      rarity: normalizedRarity,
+      type: card.type || 'Skill',
+      rarity: card.rarity || 'Common',
       emoji: card.emoji || '🃏',
-      effect: card.effect || '',
+      effectProgram: card.effectProgram,
       description: card.description || '',
-      discard_effect: (card as any).discard_effect, // 透传AI动态卡牌的弃牌效果
+      discardEffectProgram: card.discardEffectProgram,
       retain: card.retain || false,
       exhaust: card.exhaust || false,
       ethereal: card.ethereal || false,
+      innate: card.innate || false,
     };
 
     // 不在卡面显示效果解析，仅在悬停工具提示中显示
@@ -371,24 +369,27 @@ export class BattleUI {
 
     // 创建完整的卡牌元素
     const cardElement = $(`
-      <div class="card enhanced-card rarity-${cardData.rarity} card-type-${cardData.type} ${
+      <div class="card enhanced-card rarity-${escapeHtmlAttribute(cardData.rarity)} card-type-${escapeHtmlAttribute(cardData.type)} ${
         isClickable ? 'clickable' : 'unaffordable'
       }"
-           data-card-id="${cardData.id}">
+           data-card-id="${escapeHtmlAttribute(cardData.id)}">
         <div class="card-header">
-          <div class="card-cost ${canAfford ? '' : 'insufficient-energy'}">${displayCost}</div>
+          <div class="card-cost ${canAfford ? '' : 'insufficient-energy'}">${escapeHtml(displayCost)}</div>
           <div class="card-rarity-gem"></div>
-          <div class="card-type-indicator">${this.translateCardType(cardData.type)}</div>
+          <div class="card-type-indicator">${escapeHtml(this.translateCardType(cardData.type))}</div>
         </div>
         <div class="card-artwork">
-          <div class="card-emoji">${cardData.emoji}</div>
-          ${cardData.retain ? '<div class="card-keyword retain">保留</div>' : ''}
-          ${cardData.exhaust ? '<div class="card-keyword exhaust">消耗</div>' : ''}
-          ${cardData.ethereal ? '<div class="card-keyword ethereal">空灵</div>' : ''}
+          <div class="card-emoji">${escapeHtml(cardData.emoji)}</div>
+          <div class="card-keywords">
+            ${cardData.innate ? '<div class="card-keyword innate">固有</div>' : ''}
+            ${cardData.retain ? '<div class="card-keyword retain">保留</div>' : ''}
+            ${cardData.exhaust ? '<div class="card-keyword exhaust">消耗</div>' : ''}
+            ${cardData.ethereal ? '<div class="card-keyword ethereal">空灵</div>' : ''}
+          </div>
         </div>
         <div class="card-body">
-          <div class="card-name">${cardData.name}</div>
-          <div class="card-description">${cardData.description}</div>
+          <div class="card-name">${escapeHtml(cardData.name)}</div>
+          <div class="card-description">${escapeHtml(cardData.description)}</div>
         </div>
         <div class="card-glow"></div>
       </div>
@@ -437,42 +438,30 @@ export class BattleUI {
    */
   public static showCardTooltip(cardElement: JQuery, card: Card): void {
     // 解析效果标签 - 工具提示内完整换行显示
-    const effectTags = BattleUI.effectDisplay.parseEffectToTags(card.effect || '', { isPlayerCard: true });
+    const effectTags = BattleUI.effectDisplay.programToTags(card.effectProgram);
     const wrappedEffectHTML = BattleUI.effectDisplay.createWrappedEffectTagsHTML(effectTags);
 
-    // 解析弃牌效果标签
-    const discardEffectRaw = (card as any).discard_effect;
-    const discardEffectTags = discardEffectRaw
-      ? BattleUI.effectDisplay.parseEffectToTags(discardEffectRaw, { isPlayerCard: true })
-      : [];
-    let wrappedDiscardHTML = discardEffectTags.length
+    const discardEffectTags = BattleUI.effectDisplay.programToTags(card.discardEffectProgram);
+    const wrappedDiscardHTML = discardEffectTags.length
       ? BattleUI.effectDisplay.createWrappedEffectTagsHTML(discardEffectTags)
       : '';
-    // 解析失败降级为原始文本标签
-    if (!wrappedDiscardHTML && discardEffectRaw) {
-      const fallback = String(discardEffectRaw);
-      const spans = fallback
-        .split(',')
-        .map(t => `<span class=\"effect-tag\">${t.trim()}</span>`) // 粗略降级
-        .join('');
-      wrappedDiscardHTML = `<div class=\"effect-tags-container wrapped\">${spans}</div>`;
-    }
 
     const tooltip = $(`
       <div class="card-tooltip">
-        <div class="tooltip-header">${card.name}</div>
+        <div class="tooltip-header">${escapeHtml(card.name)}</div>
         <div class="tooltip-meta">
-          <span class="tooltip-cost">💎${card.cost}</span>
-          <span class="tooltip-type">${this.translateCardType(card.type)}</span>
-          <span class="tooltip-rarity">${this.translateRarity(card.rarity)}</span>
+          <span class="tooltip-cost">💎${escapeHtml(card.cost)}</span>
+          <span class="tooltip-type">${escapeHtml(this.translateCardType(card.type))}</span>
+          <span class="tooltip-rarity">${escapeHtml(this.translateRarity(card.rarity))}</span>
         </div>
         ${wrappedEffectHTML ? `<div class="tooltip-effects">${wrappedEffectHTML}</div>` : ''}
         ${wrappedDiscardHTML ? `<div class="tooltip-effects"><div class="tooltip-subtitle">被弃掉时：</div>${wrappedDiscardHTML}</div>` : ''}
-        <div class="tooltip-description">${card.description}</div>
+        <div class="tooltip-description">${escapeHtml(card.description)}</div>
         ${
-          card.retain || card.exhaust || card.ethereal
+          card.innate || card.retain || card.exhaust || card.ethereal
             ? `
           <div class="tooltip-keywords">
+            ${card.innate ? '<span class="keyword">固有</span>' : ''}
             ${card.retain ? '<span class="keyword">保留</span>' : ''}
             ${card.exhaust ? '<span class="keyword">消耗</span>' : ''}
             ${card.ethereal ? '<span class="keyword">空灵</span>' : ''}
@@ -564,16 +553,6 @@ export class BattleUI {
   }
 
   /**
-   * 过滤元数据
-   */
-  private static filterMetadata(arr: any[]): any[] {
-    if (!Array.isArray(arr)) return [];
-    return arr.filter(
-      item => item !== '$__META_EXTENSIBLE__$' && item !== '[]' && item !== undefined && item !== null && item !== '',
-    );
-  }
-
-  /**
    * 更新牌堆计数
    */
   static updateDeckCounts(gameState: any): void {
@@ -596,13 +575,6 @@ export class BattleUI {
     const exhaustPileCount = player.exhaustPile?.length || 0;
     $('#exhaust-pile-count').text(exhaustPileCount);
 
-    console.log(`牌堆计数更新 - 抽牌堆: ${drawPileCount}, 弃牌堆: ${discardPileCount}, 消耗堆: ${exhaustPileCount}`);
-    console.log('牌堆状态:', {
-      hand: player.hand?.length || 0,
-      drawPile: player.drawPile?.length || 0,
-      discardPile: player.discardPile?.length || 0,
-      exhaustPile: player.exhaustPile?.length || 0,
-    });
   }
 
   /**
@@ -622,14 +594,14 @@ export class BattleUI {
     }
 
     const relicsHTML = relics
-      .map(relic => {
+      .map((relic, index) => {
         return `
         <div class="relic-container"
-             data-relic-id="${relic.id}"
-             data-relic-name="${relic.name || '未知遗物'}"
-             data-relic-description="${relic.description || '无描述'}"
-             data-relic-effect="${relic.effect || '无效果'}">
-          <button class="relic-toggle">${relic.emoji || '📿'} ${relic.name || '未知遗物'}</button>
+             data-relic-id="${escapeHtmlAttribute(relic.id)}"
+             data-relic-name="${escapeHtmlAttribute(relic.name || '未知遗物')}"
+             data-relic-description="${escapeHtmlAttribute(relic.description || '无描述')}"
+             data-relic-index="${index}">
+          <button class="relic-toggle">${escapeHtml(relic.emoji || '📿')} ${escapeHtml(relic.name || '未知遗物')}</button>
         </div>
       `;
       })
@@ -653,18 +625,14 @@ export class BattleUI {
         // 动态创建详情内容
         const relicName = container.data('relic-name');
         const relicDescription = container.data('relic-description');
-        const relicEffect = container.data('relic-effect');
-
-        const effectTags = BattleUI.effectDisplay.parseEffectToTags(relicEffect || '', {
-          isPlayerCard: true,
-          isStatusDisplay: true,
-        });
+        const relic = relics[Number(container.data('relic-index'))];
+        const effectTags = BattleUI.effectDisplay.triggeredProgramToTags(relic?.trigger || '', relic?.effectProgram);
         const effectTagsHTML = BattleUI.effectDisplay.createEffectTagsHTML(effectTags);
 
         const detailsHTML = `
           <div class="relic-details">
-            <div class="relic-name">${relicName}</div>
-            <div class="relic-description">${relicDescription}</div>
+            <div class="relic-name">${escapeHtml(relicName)}</div>
+            <div class="relic-description">${escapeHtml(relicDescription)}</div>
             <div class="relic-effects">${effectTagsHTML}</div>
           </div>
         `;
@@ -673,7 +641,6 @@ export class BattleUI {
       }
     });
 
-    console.log(`🔮 更新遗物显示: ${relics.length} 个遗物`, relics);
   }
 
   /**
@@ -688,12 +655,8 @@ export class BattleUI {
       return;
     }
 
-    console.log(`🎭 更新${target}状态效果:`, statusEffects);
-
     const statusHTML = statusEffects
       .map(status => {
-        console.log(`🔍 处理状态效果:`, status);
-
         // 获取状态定义
         const statusDef = DynamicStatusManager.getInstance().getStatusDefinition(status.id);
         const emoji = statusDef?.emoji || '⚡';
@@ -722,9 +685,9 @@ export class BattleUI {
 
         return `
           <div class="status-effect-item clickable"
-               data-status-id="${status.id}"
+               data-status-id="${escapeHtmlAttribute(status.id)}"
                data-target="${target}">
-            ${displayText}
+            ${escapeHtml(displayText)}
           </div>
         `;
       })
@@ -745,71 +708,19 @@ export class BattleUI {
         }
       });
 
-    console.log(`🎭 更新${target}状态效果: ${statusEffects.length} 个`);
   }
 
   /**
    * 计算状态效果的实际数值显示
    */
-  private static calculateStatusEffectValue(status: any, statusDef: any): string | null {
-    const triggers = statusDef?.triggers;
-    const tickEffects = triggers?.tick;
-    if (!tickEffects) return null;
-
-    // 根据新的变量结构，tick现在是字符串而不是数组
-    const tickList: string[] = Array.isArray(tickEffects) ? tickEffects : [tickEffects];
-
-    const stacks = status?.stacks || 1;
-
-    // 查找修饰符效果
-    for (const effect of tickList) {
-      // 处理stacks占位符
-      const processedEffect = effect.replace(/stacks/g, stacks.toString());
-
-      // 匹配修饰符模式
-      const modifierPatterns = [
-        { regex: /ME\.damage_modifier\s*\+\s*([\d.]+)/, prefix: '+' },
-        { regex: /ME\.damage_modifier\s*-\s*([\d.]+)/, prefix: '-' },
-        { regex: /ME\.lust_damage_modifier\s*\+\s*([\d.]+)/, prefix: '+' },
-        { regex: /ME\.lust_damage_modifier\s*-\s*([\d.]+)/, prefix: '-' },
-        { regex: /ME\.block_modifier\s*\+\s*([\d.]+)/, prefix: '+' },
-        { regex: /ME\.block_modifier\s*-\s*([\d.]+)/, prefix: '-' },
-        { regex: /ME\.damage_taken_modifier\s*\+\s*([\d.]+)/, prefix: '+' },
-        { regex: /ME\.damage_taken_modifier\s*-\s*([\d.]+)/, prefix: '-' },
-        { regex: /ME\.lust_damage_taken_modifier\s*\+\s*([\d.]+)/, prefix: '+' },
-        { regex: /ME\.lust_damage_taken_modifier\s*-\s*([\d.]+)/, prefix: '-' },
-      ];
-
-      for (const pattern of modifierPatterns) {
-        const match = processedEffect.match(pattern.regex);
-        if (match) {
-          const value = parseFloat(match[1]);
-          return ` ${pattern.prefix}${value}`;
-        }
-      }
-
-      // 匹配乘法和除法
-      const multiplyMatch = processedEffect.match(/ME\.\w+\s*\*\s*([\d.]+)/);
-      if (multiplyMatch) {
-        const multiplier = parseFloat(multiplyMatch[1]);
-        return ` ×${multiplier}`;
-      }
-
-      const divideMatch = processedEffect.match(/ME\.\w+\s*\/\s*([\d.]+)/);
-      if (divideMatch) {
-        const divisor = parseFloat(divideMatch[1]);
-        return ` ÷${divisor}`;
-      }
-
-      // 匹配设置值
-      const setMatch = processedEffect.match(/ME\.\w+\s*=\s*([\d.]+)/);
-      if (setMatch) {
-        const setValue = parseFloat(setMatch[1]);
-        return ` =${setValue}`;
+  private static calculateStatusEffectValue(_status: any, statusDef: any): string | null {
+    for (const program of statusDef?.triggers?.hold || []) {
+      for (const node of program.steps || []) {
+        if (node.op !== 'modify' || typeof node.value !== 'number') continue;
+        const prefixes = { add: '+', subtract: '-', multiply: '×', divide: '÷', set: '=' } as const;
+        return ` ${prefixes[node.operator as keyof typeof prefixes]}${node.value}`;
       }
     }
-
-    // 如果没有找到修饰符效果，不再返回层数（层数已在外层统一显示）
     return null;
   }
 
@@ -842,17 +753,17 @@ export class BattleUI {
    * 创建能力HTML
    */
   private static createAbilityHTML(ability: any): string {
-    // 能力只支持新格式：effect字段包含完整的触发条件（如 "turn_start: ME.lust - 2" 或 "passive: damage + 5"）
-    const effectString = ability.effect || '无效能力';
-
-    const effectTags = BattleUI.effectDisplay.parseEffectToTags(effectString, {
-      isPlayerCard: false,
-      isStatusDisplay: true,
-    });
+    const effectTags = BattleUI.effectDisplay.triggeredProgramToTags(ability.trigger, ability.effectProgram);
     const effectTagsHTML = BattleUI.effectDisplay.createEffectTagsHTML(effectTags);
+    const description = typeof ability.description === 'string' ? ability.description.trim() : '';
+    const name = typeof ability.name === 'string' ? ability.name.trim() : ability.id;
 
     return `
-      <div class="ability-item" data-ability-id="${ability.id}">
+      <div class="ability-item"
+           data-ability-id="${escapeHtmlAttribute(ability.id)}"
+           data-ability-name="${escapeHtmlAttribute(name || ability.id)}"
+           data-ability-description="${escapeHtmlAttribute(description)}"
+           ${description ? `title="${escapeHtmlAttribute(description)}"` : ''}>
         ${effectTagsHTML || '<div class="ability-error">无效能力</div>'}
       </div>
     `;
@@ -862,8 +773,6 @@ export class BattleUI {
    * 显示状态效果详情弹窗
    */
   public static showStatusDetail(statusId: string, target: string): void {
-    console.log(`显示状态详情: ${statusId} (${target})`);
-
     // 获取状态定义和当前状态
     const statusDef = DynamicStatusManager.getInstance().getStatusDefinition(statusId);
     const gameState = GameStateManager.getInstance().getGameState();
@@ -878,49 +787,15 @@ export class BattleUI {
     // 生成效果解析
     let effectsHTML = '';
     if (statusDef.triggers) {
-      const allEffects: string[] = [];
-
       Object.entries(statusDef.triggers).forEach(([trigger, effects]) => {
-        if (effects) {
-          // 根据新的变量结构，effects现在是字符串而不是数组
-          if (Array.isArray(effects)) {
-            // 兼容旧格式（数组）
-            effects.forEach(effect => {
-              const processedEffect = effect.replace(/stacks/g, currentStatus.stacks.toString());
-              allEffects.push(`${trigger}: ${processedEffect}`);
-            });
-          } else {
-            // 新格式（字符串）
-            const processedEffect = (effects as string).replace(/stacks/g, currentStatus.stacks.toString());
-            allEffects.push(`${trigger}: ${processedEffect}`);
-          }
+        if (!effects) return;
+        const triggerTags = effects.flatMap(program =>
+          BattleUI.effectDisplay.triggeredProgramToTags(trigger, program),
+        );
+        if (triggerTags.length > 0) {
+          effectsHTML += BattleUI.effectDisplay.createEffectTagsHTML(triggerTags);
         }
       });
-
-      if (allEffects.length > 0) {
-        const allTags: any[] = [];
-        const effectsByTrigger: { [key: string]: string[] } = {};
-
-        allEffects.forEach(effectStr => {
-          const [trigger, ...effectParts] = effectStr.split(':');
-          const effect = effectParts.join(':').trim();
-          if (!effectsByTrigger[trigger]) {
-            effectsByTrigger[trigger] = [];
-          }
-          effectsByTrigger[trigger].push(effect);
-        });
-
-        Object.entries(effectsByTrigger).forEach(([trigger, effects]) => {
-          const combinedEffect = effects.join(', ');
-          const tags = BattleUI.effectDisplay.parseTriggeredEffectToTags(trigger, combinedEffect, {
-            isPlayerCard: false,
-            isStatusDisplay: true,
-          });
-          allTags.push(...tags);
-        });
-
-        effectsHTML = BattleUI.effectDisplay.createEffectTagsHTML(allTags);
-      }
     }
 
     // 移除已存在的弹窗
@@ -932,14 +807,14 @@ export class BattleUI {
         <div class="status-detail-overlay"></div>
         <div class="status-detail-content">
           <div class="status-detail-header">
-            <div class="status-detail-icon">${statusDef.emoji || '⚡'}</div>
-            <div class="status-detail-name">${statusDef.name}</div>
+            <div class="status-detail-icon">${escapeHtml(statusDef.emoji || '⚡')}</div>
+            <div class="status-detail-name">${escapeHtml(statusDef.name)}</div>
             <button class="close-status-detail">&times;</button>
           </div>
           <div class="status-detail-body">
-            <div class="status-description">${statusDef.description}</div>
+            <div class="status-description">${escapeHtml(statusDef.description)}</div>
               <div class="status-stats">
-              <div>层数: ${currentStatus.stacks || 1}</div>
+              <div>层数: ${escapeHtml(currentStatus.stacks || 1)}</div>
               <div>类型: ${statusDef.type === 'buff' ? '增益' : statusDef.type === 'debuff' ? '减益' : '中性'}</div>
             </div>
             ${effectsHTML ? `<div class="status-effects"><h4>效果:</h4>${effectsHTML}</div>` : ''}
@@ -969,21 +844,16 @@ export class BattleUI {
     const container = $(containerId);
 
     if (lustEffect && lustEffect.name) {
-      // 使用统一的效果解析系统（失败时降级为仅显示描述）
-      let effectTagsHTML = '';
-      try {
-        const effectTags = BattleUI.effectDisplay.parseEffectToTags(lustEffect.effect || '', { isPlayerCard: false });
-        effectTagsHTML = BattleUI.effectDisplay.createEffectTagsHTML(effectTags);
-      } catch (e) {
-        console.warn('欲望效果解析失败，降级为展示描述:', lustEffect.effect, e);
-      }
+      const effectTagsHTML = BattleUI.effectDisplay.createEffectTagsHTML(
+        BattleUI.effectDisplay.programToTags(lustEffect.effectProgram),
+      );
 
       const effectHTML = `
         <div class="lust-effect-container">
           <button class="lust-effect-toggle">欲望效果</button>
           <div class="lust-effect-details">
-            <div class="lust-effect-name">${lustEffect.name}</div>
-            <div class="lust-effect-description">${lustEffect.description || ''}</div>
+            <div class="lust-effect-name">${escapeHtml(lustEffect.name)}</div>
+            <div class="lust-effect-description">${escapeHtml(lustEffect.description || '')}</div>
             ${effectTagsHTML ? `<div class="lust-effect-tags">${effectTagsHTML}</div>` : ''}
           </div>
         </div>

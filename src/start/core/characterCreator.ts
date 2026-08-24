@@ -12,13 +12,23 @@ import {
   SUPERNATURAL_IDENTITIES,
   SupernaturalIdentity,
 } from '../types';
-
-// 移除TavernHelper声明，直接使用全局函数
+import {
+  isCurrentMessageLatest,
+  rerenderHistoricalMessageForDepth,
+  updateCurrentMessageVariablesWith,
+  watchCurrentMessageUntilHistorical,
+} from '../../runtime/messageVariables';
+import { TavernContinuationError, TavernContinuationHost } from '../../runtime/tavernContinuation';
+import { createCharacterStartMessage } from './promptGenerator';
 
 export class CharacterCreator {
   private container: HTMLElement;
   private userName = '{{user}}';
+  private isCreating = false;
+  private isHistorical = false;
+  private readonly continuationHost = TavernContinuationHost.getInstance();
   private currentConfig: Partial<CharacterConfig> = {
+    mode: 'story',
     name: this.userName,
   };
 
@@ -26,17 +36,19 @@ export class CharacterCreator {
     this.container = document.getElementById('character-creator-container') as HTMLElement;
     if (!this.container) {
       console.error('Character creator container not found! Looking for element with id="character-creator-container"');
-      // 输出当前页面的所有元素以供调试
-      console.log('Available elements:', document.querySelectorAll('*'));
-      console.log('Body content:', document.body?.innerHTML?.substring(0, 500));
       return;
     }
 
-    console.log('✅ Character creator container found:', this.container);
     this.initializeEventListeners();
     this.renderDefaultState();
     this.renderCityOptions();
     this.fetchUserName();
+    watchCurrentMessageUntilHistorical(() => {
+      this.lockHistoricalForm();
+      void rerenderHistoricalMessageForDepth().catch(error => {
+        console.warn('[MagicGirlWorld] 历史开始页按楼层卸载失败，保留锁定兜底', error);
+      });
+    });
   }
 
   private async fetchUserName(): Promise<void> {
@@ -49,7 +61,6 @@ export class CharacterCreator {
       }
     } catch (error) {
       console.error('Failed to fetch user name:', error);
-      // Fallback name
       this.userName = '玩家';
       this.currentConfig.name = this.userName;
       this.updatePreview();
@@ -57,58 +68,56 @@ export class CharacterCreator {
   }
 
   private initializeEventListeners(): void {
-    console.log('🔧 开始绑定事件监听器');
+    document.querySelectorAll<HTMLElement>('.mode-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const mode = card.dataset.mode;
+        if (mode === 'story' || mode === 'expedition') this.selectMode(mode);
+      });
+    });
 
     // 阵营选择
     const factionCards = document.querySelectorAll('.faction-card');
-    console.log('找到阵营卡片:', factionCards.length, factionCards);
     factionCards.forEach(card => {
       card.addEventListener('click', () => {
-        console.log('阵营卡片被点击:', card);
         const faction = card.getAttribute('data-faction') as Faction;
-        console.log('选择的阵营:', faction);
         this.selectFaction(faction);
       });
     });
 
-    // 城市选择（现在通过 city-grid 委托）
-    // const citySelect = document.getElementById('city-select');
-    // citySelect?.addEventListener('change', () => this.handleCityChange());
-
     // 自定义描述
     const descInput = document.getElementById('custom-description');
-    console.log('找到描述输入框:', descInput);
     descInput?.addEventListener('input', () => this.updateCharacterCounter());
 
     // 重置按钮
     const resetBtn = document.getElementById('reset-form-btn');
-    console.log('找到重置按钮:', resetBtn);
     resetBtn?.addEventListener('click', () => this.resetForm());
 
     // 创建角色按钮
     const createBtn = document.getElementById('create-character-btn');
-    console.log('找到创建按钮:', createBtn);
     createBtn?.addEventListener('click', () => this.createCharacter());
 
-    console.log('✅ 事件监听器绑定完成');
+  }
+
+  private selectMode(mode: CharacterConfig['mode']): void {
+    this.currentConfig.mode = mode;
+    document.querySelectorAll<HTMLElement>('.mode-card').forEach(card => {
+      const selected = card.dataset.mode === mode;
+      card.classList.toggle('selected', selected);
+      card.setAttribute('aria-checked', String(selected));
+    });
+    this.validateForm();
   }
 
   private selectFaction(faction: Faction): void {
-    console.log('🎯 selectFaction 被调用，选择的阵营:', faction);
-
     // 移除所有已选中状态
     const allFactionCards = document.querySelectorAll('.faction-card');
-    console.log('找到阵营卡片总数:', allFactionCards.length);
     allFactionCards.forEach(card => card.classList.remove('selected'));
 
     // 选中当前阵营
     const targetCard = document.querySelector(`[data-faction="${faction}"]`);
-    console.log('目标阵营卡片:', targetCard);
     targetCard?.classList.add('selected');
 
     this.currentConfig.faction = faction;
-    console.log('当前配置更新为:', this.currentConfig);
-
     // 当选择普通人阵营时，自动选择潜在觉醒者并禁用超自然身份选择
     if (faction === 'ordinary_people') {
       const potentialAwakener = SUPERNATURAL_IDENTITIES.find(id => id.id === 'potential_awakener');
@@ -124,21 +133,14 @@ export class CharacterCreator {
       });
     }
 
-    console.log('开始渲染职业选项...');
     this.renderJobOptions();
-    console.log('开始更新预览...');
     this.updatePreview();
-    console.log('开始验证表单...');
     this.validateForm();
-    console.log('✅ selectFaction 执行完成');
   }
 
   private renderCityOptions(): void {
-    console.log('🏙️ 开始渲染城市选项');
     const cityGrid = document.querySelector('.city-grid');
-    console.log('找到城市网格:', cityGrid);
     if (!cityGrid) {
-      console.log('❌ 城市网格未找到，退出渲染');
       return;
     }
 
@@ -191,11 +193,8 @@ export class CharacterCreator {
   }
 
   private renderJobOptions(): void {
-    console.log('🔨 开始渲染职业选项，当前阵营:', this.currentConfig.faction);
     const jobGrid = document.querySelector('.job-grid');
-    console.log('找到职业网格:', jobGrid);
     if (!jobGrid || !this.currentConfig.faction) {
-      console.log('❌ 职业网格或阵营未找到，退出渲染');
       return;
     }
 
@@ -399,18 +398,21 @@ export class CharacterCreator {
   private validateForm(): void {
     const createBtn = document.getElementById('create-character-btn') as HTMLButtonElement;
     const validationMessage = document.getElementById('validation-message') as HTMLDivElement;
-    if (this.isConfigValid(this.currentConfig)) {
+    if (this.isConfigValid(this.currentConfig) && !this.isCreating && !this.isHistorical) {
       createBtn.disabled = false;
       validationMessage.style.display = 'none';
     } else {
       createBtn.disabled = true;
-      validationMessage.style.display = 'block';
+      validationMessage.style.display = this.isCreating ? 'none' : 'block';
     }
   }
 
   private async createCharacter(): Promise<void> {
-    console.log('🎭 开始创建角色');
-
+    if (this.isCreating) return;
+    if (!isCurrentMessageLatest()) {
+      this.lockHistoricalForm();
+      return;
+    }
     // 收集自定义描述信息
     const customDescInput = document.getElementById('custom-description') as HTMLTextAreaElement;
     if (customDescInput) {
@@ -423,98 +425,73 @@ export class CharacterCreator {
     }
 
     const config = this.currentConfig as CharacterConfig;
-    console.log('✅ 角色配置验证通过:', config);
+    this.setCreatingState(true);
 
     try {
-      // 生成角色描述文本
-      console.log('📝 生成角色描述文本...');
-      const characterDescription = this.buildUserDescription(config);
-      console.log('角色描述生成完成:', characterDescription);
-
-      // 显示成功消息
-      this.showMessage('角色创建成功！正在启动游戏...', 'success');
-
-      // 短暂延迟以显示成功消息
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      // 使用TavernHelper发送角色描述作为用户消息
+      const startMessage = createCharacterStartMessage(config);
       try {
-        console.log('📤 发送角色描述为用户消息...');
-        await triggerSlash(`/send ${characterDescription}`);
-
-        console.log('🚀 触发AI对话...');
-        await triggerSlash('/trigger');
-
-        console.log('✨ 游戏启动成功！');
-
-        // 可选：显示最终消息
-        this.showMessage('游戏已启动！AI正在生成开场剧情...', 'info');
+        await updateCurrentMessageVariablesWith(variables => {
+          if (!variables.stat_data || typeof variables.stat_data !== 'object') variables.stat_data = {};
+          variables.stat_data.game_mode = config.mode;
+          variables.stat_data.run = null;
+          return variables;
+        });
       } catch (error) {
-        console.error('❌ TavernHelper API 调用失败:', error);
-        this.showMessage('TavernHelper API 调用失败，无法启动游戏。', 'error');
+        console.warn('[MagicGirlWorld] 游戏模式暂未写入 MUV，将由首轮标记补充', error);
       }
+      await this.continuationHost.continueWithPrompt({ prompt: startMessage });
+      this.showMessage('角色已提交，正在生成开场剧情。', 'info');
     } catch (error) {
       console.error('❌ 创建角色失败:', error);
-      this.showMessage('创建角色失败，请重试。', 'error');
+      this.showMessage(
+        error instanceof TavernContinuationError && error.messageSent
+          ? '角色已提交，但生成请求失败，请在当前消息重试生成。'
+          : '创建角色失败，请重试。',
+        'error',
+      );
+    } finally {
+      this.setCreatingState(false);
     }
   }
 
-  /**
-   * 构建用户角色描述文本
-   */
-  private buildUserDescription(config: CharacterConfig): string {
-    const parts: string[] = [];
+  private setCreatingState(active: boolean): void {
+    this.isCreating = active;
+    const createBtn = document.getElementById('create-character-btn') as HTMLButtonElement | null;
+    const buttonText = createBtn?.querySelector('.btn-text') as HTMLElement | null;
+    if (buttonText) buttonText.textContent = active ? '正在启动' : this.isHistorical ? '角色已提交' : '创建角色';
+    this.validateForm();
+  }
 
-    // 基本信息
-    parts.push(`我是${config.name}。`);
-
-    // 阵营信息
-    const factionNames: Record<Faction, string> = {
-      magical_girl: '魔法少女',
-      ordinary_people: '普通人',
-      evil_forces: '邪恶势力',
-    };
-    parts.push(`我属于${factionNames[config.faction]}阵营。`);
-
-    // 身份信息 - 玩家同时拥有普通身份和超自然身份
-    if (config.ordinaryIdentity) {
-      parts.push(`我的普通身份是${config.ordinaryIdentity.name}：${config.ordinaryIdentity.description}`);
-    }
-
-    if (config.supernaturalIdentity) {
-      parts.push(`我的超自然身份是${config.supernaturalIdentity.name}：${config.supernaturalIdentity.description}`);
-    }
-
-    // 城市和地点信息
-    if (config.city) {
-      parts.push(`我生活在${config.city.name}。${config.city.description}`);
-    }
-
-    if (config.location) {
-      parts.push(`我目前在${config.location.name}。${config.location.description}`);
-    }
-
-    // 自定义描述
-    if (config.customDescription && config.customDescription.trim()) {
-      parts.push(`\n补充描述：${config.customDescription.trim()}`);
-    }
-
-    // 添加游戏开始提示
-    parts.push(`\n请根据以上信息，初始化变量，确保所有变量都进行初始化，不要遗漏！`);
-
-    return parts.join(' ');
+  private lockHistoricalForm(): void {
+    if (this.isHistorical) return;
+    this.isHistorical = true;
+    this.container
+      .querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLButtonElement>('input, textarea, button')
+      .forEach(control => {
+        control.disabled = true;
+      });
+    this.container
+      .querySelectorAll<HTMLElement>('.faction-card, .job-card, .location-card, .city-card')
+      .forEach(card => {
+        card.style.pointerEvents = 'none';
+        card.setAttribute('aria-disabled', 'true');
+      });
+    const buttonText = document.querySelector('#create-character-btn .btn-text');
+    if (buttonText) buttonText.textContent = '角色已提交';
+    const validationMessage = document.getElementById('validation-message');
+    if (validationMessage) validationMessage.style.display = 'none';
   }
 
   private isConfigValid(config: Partial<CharacterConfig>): config is CharacterConfig {
-    const { faction, supernaturalIdentity, ordinaryIdentity, city, location } = config;
+    const { mode, faction, supernaturalIdentity, ordinaryIdentity, city, location } = config;
 
     // 玩家必须同时选择普通身份和超自然身份（如果不是普通人阵营）
     if (faction === 'ordinary_people') {
       // 普通人阵营只需要普通身份
-      return !!(faction && ordinaryIdentity && city && location);
+      return !!(mode && faction && ordinaryIdentity && city && location);
     } else {
       // 其他阵营需要同时有普通身份和超自然身份
-      return !!(faction && supernaturalIdentity && ordinaryIdentity && city && location);
+      return !!(mode && faction && supernaturalIdentity && ordinaryIdentity && city && location);
     }
   }
 
@@ -528,7 +505,6 @@ export class CharacterCreator {
         positionClass: 'toast-top-center',
       });
     } else {
-      console.log(`[${type}] ${message}`);
       alert(`[${type}] ${message}`);
     }
   }
@@ -536,6 +512,7 @@ export class CharacterCreator {
   private resetForm(): void {
     // 重置配置
     this.currentConfig = {
+      mode: 'story',
       name: this.userName,
     };
 
@@ -543,8 +520,8 @@ export class CharacterCreator {
     document.querySelectorAll('.faction-card, .job-card, .location-card, .city-card').forEach(card => {
       card.classList.remove('selected');
     });
+    this.selectMode('story');
 
-    // (document.getElementById('city-select') as HTMLSelectElement).value = '';
     (document.getElementById('custom-description') as HTMLTextAreaElement).value = '';
 
     // 清空并隐藏地点选择

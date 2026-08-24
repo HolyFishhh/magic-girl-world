@@ -3,22 +3,24 @@
  */
 
 import { AnimationManager } from './animationManager';
-import { UnifiedEffectDisplay } from './unifiedEffectDisplay';
+import { escapeHtml, escapeHtmlAttribute } from '../shared/html';
+import type { EffectProgram } from '../../game-core';
+import { EffectProgramDisplay } from './effectProgramDisplay';
 
 export interface LustOverflowEffect {
   name: string;
   description: string;
-  effect: string;
+  effectProgram: EffectProgram;
 }
 
 export class LustOverflowDisplay {
   private static instance: LustOverflowDisplay;
   private animationManager: AnimationManager;
-  private effectDisplay: UnifiedEffectDisplay;
+  private effectDisplay: EffectProgramDisplay;
 
   private constructor() {
     this.animationManager = AnimationManager.getInstance();
-    this.effectDisplay = UnifiedEffectDisplay.getInstance();
+    this.effectDisplay = EffectProgramDisplay.getInstance();
   }
 
   public static getInstance(): LustOverflowDisplay {
@@ -32,8 +34,6 @@ export class LustOverflowDisplay {
    * 显示玩家欲望溢出效果
    */
   showPlayerLustOverflow(playerLustEffect: LustOverflowEffect): void {
-    console.log('💗 玩家欲望溢出:', playerLustEffect);
-
     // 播放溢出动画
     this.animationManager.showLustOverflowEffect('player', playerLustEffect.name);
 
@@ -45,8 +45,6 @@ export class LustOverflowDisplay {
    * 显示敌人欲望溢出效果
    */
   showEnemyLustOverflow(enemyLustEffect: LustOverflowEffect): void {
-    console.log('💔 敌人欲望溢出:', enemyLustEffect);
-
     // 播放溢出动画
     this.animationManager.showLustOverflowEffect('enemy', enemyLustEffect.name);
 
@@ -61,7 +59,7 @@ export class LustOverflowDisplay {
     // 移除已存在的弹窗
     $('.lust-overflow-modal').remove();
 
-    const effectTags = this.effectDisplay.parseEffectToTags(effect.effect, { isPlayerCard: false });
+    const effectTags = this.effectDisplay.programToTags(effect.effectProgram);
     const effectTagsHTML = this.effectDisplay.createEffectTagsHTML(effectTags);
 
     const targetText = target === 'player' ? '你' : '敌人';
@@ -74,12 +72,12 @@ export class LustOverflowDisplay {
         <div class="lust-overflow-content" style="border-color: ${borderColor};">
           <div class="lust-overflow-header" style="background: ${titleColor};">
             <div class="overflow-icon">💋</div>
-            <h3>${targetText}的欲望溢出！</h3>
+            <h3>${escapeHtml(targetText)}的欲望溢出！</h3>
             <button class="close-overflow-btn">✕</button>
           </div>
           <div class="lust-overflow-body">
-            <div class="overflow-effect-name">${effect.name}</div>
-            <div class="overflow-effect-description">${effect.description}</div>
+            <div class="overflow-effect-name">${escapeHtml(effect.name)}</div>
+            <div class="overflow-effect-description">${escapeHtml(effect.description)}</div>
             ${effectTagsHTML ? `<div class="overflow-effect-tags">${effectTagsHTML}</div>` : ''}
           </div>
           <div class="lust-overflow-footer">
@@ -125,8 +123,8 @@ export class LustOverflowDisplay {
             <div class="auto-lust-icon">💗</div>
             <div class="auto-lust-title">${targetName}欲望溢出！</div>
           </div>
-          <div class="auto-lust-effect-name">${effect.name}</div>
-          <div class="auto-lust-description">${effect.description}</div>
+          <div class="auto-lust-effect-name">${escapeHtml(effect.name)}</div>
+          <div class="auto-lust-description">${escapeHtml(effect.description)}</div>
         </div>
       </div>
     `);
@@ -146,7 +144,6 @@ export class LustOverflowDisplay {
       });
     }, 3000);
 
-    console.log(`💗 显示${targetName}欲望溢出弹窗: ${effect.name}`);
   }
 
   /**
@@ -179,7 +176,7 @@ export class LustOverflowDisplay {
       return;
     }
 
-    const effectTags = this.effectDisplay.parseEffectToTags(lustEffect.effect, { isPlayerCard: false });
+    const effectTags = this.effectDisplay.programToTags(lustEffect.effectProgram);
     const compactTagsHTML = effectTags
       .slice(0, 2)
       .map(
@@ -193,9 +190,9 @@ export class LustOverflowDisplay {
     container
       .html(
         `
-      <div class="lust-overflow-indicator" title="${lustEffect.description}">
+      <div class="lust-overflow-indicator" title="${escapeHtmlAttribute(lustEffect.description)}">
         <div class="overflow-icon">💋</div>
-        <div class="overflow-name">${lustEffect.name}</div>
+        <div class="overflow-name">${escapeHtml(lustEffect.name)}</div>
         <div class="overflow-mini-tags">${compactTagsHTML}</div>
       </div>
     `,
@@ -217,7 +214,6 @@ export class LustOverflowDisplay {
 
     if (targetContainer.length === 0) {
       // 静默处理，不显示警告，因为这是正常的初始化时序问题
-      console.log(`${target}状态容器暂未准备好，跳过欲望溢出容器创建`);
       return;
     }
 
@@ -268,7 +264,6 @@ export class LustOverflowDisplay {
     // 添加样式
     this.addLustOverflowStyles();
 
-    console.log('✅ 欲望溢出显示系统初始化完成');
   }
 
   /**

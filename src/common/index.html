@@ -3,326 +3,207 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>魔法少女RPG</title>
+    <title>魔法少女世界状态栏</title>
   </head>
   <body>
-    <div class="rpg-container">
-      <!-- 主题切换按钮 -->
-      <button class="theme-toggle" id="theme-toggle" title="切换主题">
-        <span class="theme-icon">🌙</span>
-      </button>
-
-      <!-- 书签式标签导航 -->
-      <nav class="tab-navigation">
-        <button class="tab-button active" data-module="story">
-          <span class="tab-icon">📖</span>
-          剧情
-        </button>
-        <button class="tab-button" data-module="status">
-          <span class="tab-icon">✨</span>
-          状态栏
-        </button>
-        <button class="tab-button" data-module="battle">
-          <span class="tab-icon">⚔️</span>
-          战斗
-        </button>
-        <button class="tab-button" data-module="npc">
-          <span class="tab-icon">👭</span>
-          NPC关系
-        </button>
-        <button class="tab-button" data-module="faction">
-          <span class="tab-icon">🏰</span>
-          势力关系
-        </button>
-      </nav>
-
-      <!-- 主内容区域 -->
-      <div class="notebook-body">
-        <div class="tab-content">
-          <!-- 剧情模块 -->
-          <div id="story-content" class="module-content" style="display: block">
-            <div class="section">
-              <h2 class="section-title">📖 当前剧情</h2>
-              <div class="story-text">$1</div>
-            </div>
-
-            <!-- 通知模块：插入在正文和选项之间 -->
-            <div class="section" id="notify-section" style="display: none">
-              <div class="reward-card" id="notify-card">
-                <div class="reward-header">
-                  <strong class="title">状态更新</strong>
-                  <span class="badge" id="level-exp-badge" style="display: none"></span>
-                </div>
-                <div class="reward-grid">
-                  <section class="pane pane-change" id="changes-section" style="display: none">
-                    <span class="pane-tag">本次变化</span>
-                    <div class="change-list" id="changes-list"></div>
-                  </section>
-                  <section class="pane pane-exp" id="exp-section" style="display: none">
-                    <span class="pane-tag">等级与经验</span>
-                    <div class="exp-display" id="exp-display"></div>
-                  </section>
-                </div>
-                <div class="reward-actions">
-                  <button class="btn btn-plain" id="notify-dismiss-btn">知道了</button>
-                </div>
-              </div>
-            </div>
-
-            <div class="section">
-              <h2 class="section-title">🎯 选项</h2>
-              <template id="options-template">$2</template>
-              <div class="options-text" data-source="options-template"></div>
-
-              <!-- 自定义行动：固定输入栏，与选项一致逻辑 -->
-              <div class="custom-action" style="margin-top: 10px; display: flex; gap: 8px; align-items: center">
-                <input
-                  id="custom-action-input"
-                  type="text"
-                  placeholder="输入你的自定义行动..."
-                  style="
-                    flex: 1;
-                    padding: 8px 10px;
-                    border: 1px solid var(--notebook-border);
-                    border-radius: 6px;
-                    background: #fffef6;
-                    color: var(--text-primary);
-                  "
-                />
-                <button id="custom-action-send" class="option-btn" type="button">发送</button>
-              </div>
-
-              <!-- 选择模块：放在选项区最下面（不遮挡剧情） -->
-              <div id="choice-container" style="display: none; margin-top: 12px">
-                <div class="reward-card" id="choice-card">
-                  <div class="reward-header">
-                    <strong class="title">奖励结算</strong>
-                  </div>
-                  <div class="reward-grid">
-                    <!-- 可选：卡牌 -->
-                    <section class="pane pane-card" id="card-rewards-section" style="display: none">
-                      <div class="pane-head">
-                        <div class="pane-title">可选：卡牌 <span id="card-selection-count">3选1</span></div>
-                        <div class="pane-sub">已选 <span id="card-selected">0</span>/<span id="card-max">1</span></div>
-                      </div>
-                      <div class="options" id="card-options"></div>
-                    </section>
-                    <!-- 可选：遗物 -->
-                    <section class="pane pane-artifact" id="artifact-rewards-section" style="display: none">
-                      <div class="pane-head">
-                        <div class="pane-title">可选：遗物 <span id="artifact-selection-count">3选1</span></div>
-                        <div class="pane-sub">
-                          已选 <span id="artifact-selected">0</span>/<span id="artifact-max">1</span>
-                        </div>
-                      </div>
-                      <div class="options" id="artifact-options"></div>
-                    </section>
-                    <!-- 可选：道具 -->
-                    <section class="pane pane-item" id="item-rewards-section" style="display: none">
-                      <div class="pane-head">
-                        <div class="pane-title">可选：道具 <span id="item-selection-count">3选1</span></div>
-                        <div class="pane-sub">已选 <span id="item-selected">0</span>/<span id="item-max">1</span></div>
-                      </div>
-                      <div class="options" id="item-options"></div>
-                    </section>
-                  </div>
-                  <div class="reward-actions">
-                    <button class="btn btn-primary" id="confirm-btn" disabled>确认领取</button>
-                  </div>
-                </div>
-              </div>
-            </div>
+    <main class="rpg-container mwg-statusbar" aria-label="魔法少女世界状态栏">
+      <header class="statusbar-header">
+        <div class="statusbar-title">
+          <span class="statusbar-mark" aria-hidden="true">✦</span>
+          <div>
+            <strong>魔法少女世界</strong>
+            <span>当前状态</span>
           </div>
+        </div>
+        <div class="statusbar-summary" aria-live="polite">
+          <span class="summary-item"><small>时间</small><b id="status-time">未知</b></span>
+          <span class="summary-item"><small>地点</small><b id="status-location">未知</b></span>
+          <span class="summary-item"><small>职业</small><b id="status-job-name">未知</b></span>
+          <span class="summary-item"><small>等级</small><b id="battle-level">LV 1</b></span>
+          <span class="summary-item"><small>经验</small><b id="battle-exp">0/100</b></span>
+        </div>
+      </header>
 
-          <!-- 状态栏模块 -->
-          <div id="status-content" class="module-content">
-            <div class="section">
-              <h2 class="section-title">✨ 角色状态</h2>
-              <div class="data-grid">
-                <div class="info-card">
-                  <h3>基本信息</h3>
-
-                  <div class="info-item">
-                    <span class="label">时间:</span>
-                    <span class="value" id="status-time">未知</span>
-                  </div>
-                  <div class="info-item">
-                    <span class="label">地点:</span>
-                    <span class="value" id="status-location">未知</span>
-                  </div>
-                  <div class="info-item">
-                    <span class="label">职业:</span>
-                    <span class="value" id="status-job-name">未知</span>
-                  </div>
-                  <div class="info-item">
-                    <span class="label">职业能力:</span>
-                    <span class="value" id="status-job-ability">未知</span>
-                  </div>
-                </div>
-
-                <div class="info-card">
-                  <h3>服装信息</h3>
-                  <div class="info-item">
-                    <span class="label">头部:</span>
-                    <span class="value" id="clothing-head">未知</span>
-                  </div>
-                  <div class="info-item">
-                    <span class="label">颈部:</span>
-                    <span class="value" id="clothing-neck">未知</span>
-                  </div>
-                  <div class="info-item">
-                    <span class="label">手:</span>
-                    <span class="value" id="clothing-hands">未知</span>
-                  </div>
-                  <div class="info-item">
-                    <span class="label">上衣:</span>
-                    <span class="value" id="clothing-top">未知</span>
-                  </div>
-                  <div class="info-item">
-                    <span class="label">下衣:</span>
-                    <span class="value" id="clothing-bottom">未知</span>
-                  </div>
-                  <div class="info-item">
-                    <span class="label">内衣:</span>
-                    <span class="value" id="clothing-underwear">未知</span>
-                  </div>
-                  <div class="info-item">
-                    <span class="label">腿:</span>
-                    <span class="value" id="clothing-legs">未知</span>
-                  </div>
-                  <div class="info-item">
-                    <span class="label">脚:</span>
-                    <span class="value" id="clothing-feet">未知</span>
-                  </div>
-                </div>
-
-                <div class="info-card">
-                  <h3>携带物品</h3>
-                  <div class="data-grid" id="carried-items">
-                    <!-- 物品将通过JS动态填充 -->
-                  </div>
-                </div>
-
-                <div class="info-card">
-                  <h3>状态效果</h3>
-                  <div class="status-section">
-                    <div class="status-label">永久性状态:</div>
-                    <div class="status-tags" id="permanent-status">
-                      <span class="status-tag status-empty">无</span>
-                    </div>
-                  </div>
-                  <div class="status-section">
-                    <div class="status-label">临时状态:</div>
-                    <div class="status-tags" id="temporary-status">
-                      <span class="status-tag status-empty">无</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
+      <section class="notice-section" id="notify-section" style="display: none" aria-live="polite">
+        <div class="reward-card" id="notify-card">
+          <div class="reward-header">
+            <strong class="title">状态更新</strong>
+            <span class="badge" id="level-exp-badge" style="display: none"></span>
           </div>
-
-          <!-- 战斗模块 -->
-          <div id="battle-content" class="module-content">
-            <div class="section">
-              <h2 class="section-title">⚔️ 战斗信息</h2>
-              <div class="data-grid">
-                <div class="info-card">
-                  <h3>核心属性</h3>
-                  <div class="info-item">
-                    <span class="label">生命值:</span>
-                    <span class="value" id="battle-hp">未知</span>
-                  </div>
-                  <div class="info-item">
-                    <span class="label">欲望值:</span>
-                    <span class="value" id="battle-desire">未知</span>
-                  </div>
-                  <div class="info-item">
-                    <span class="label">等级:</span>
-                    <span class="value" id="battle-level">未知</span>
-                  </div>
-                  <div class="info-item">
-                    <span class="label">经验值:</span>
-                    <span class="value" id="battle-exp">未知</span>
-                  </div>
-                  <div class="info-item">
-                    <span class="label">卡牌删除次数:</span>
-                    <span class="value" id="battle-card-remove">未知</span>
-                  </div>
-                </div>
-
-                <div class="info-card">
-                  <h3>战斗之书</h3>
-                  <div class="battle-book-container">
-                    <button class="battle-book-btn" onclick="toggleBattleBook()">📖 查看状态效果</button>
-                    <div class="battle-book-content" id="battle-book-content" style="display: none">
-                      <!-- 状态效果详情将通过JS动态填充 -->
-                    </div>
-                  </div>
-                </div>
-
-                <div class="info-card">
-                  <h3>遗物</h3>
-                  <div class="data-grid" id="battle-artifacts">
-                    <!-- 遗物将通过JS动态填充 -->
-                  </div>
-                </div>
-
-                <div class="info-card">
-                  <h3>消耗品</h3>
-                  <div class="data-grid" id="battle-items">
-                    <!-- 消耗品将通过JS动态填充 -->
-                  </div>
-                </div>
-
-                <div class="info-card">
-                  <h3>
-                    卡牌组合
-                    <button id="delete-mode-toggle" class="delete-toggle-btn" onclick="toggleDeleteMode()">
-                      🗑️<span id="delete-count">0</span>
-                    </button>
-                  </h3>
-                  <div class="battle-deck" id="battle-deck">
-                    <!-- 卡牌将通过JS动态填充 -->
-                  </div>
-                </div>
-              </div>
-            </div>
+          <div class="reward-grid">
+            <section class="pane pane-change" id="changes-section" style="display: none">
+              <span class="pane-tag">本次变化</span>
+              <div class="change-list" id="changes-list"></div>
+            </section>
+            <section class="pane pane-exp" id="exp-section" style="display: none">
+              <span class="pane-tag">等级与经验</span>
+              <div class="exp-display" id="exp-display"></div>
+            </section>
           </div>
-
-          <!-- NPC关系模块 -->
-          <div id="npc-content" class="module-content">
-            <div class="section">
-              <h2 class="section-title">👭 NPC关系</h2>
-              <div class="data-grid" id="npc-relations">
-                <!-- NPC关系将通过JS动态填充 -->
-              </div>
-            </div>
+          <div class="reward-actions">
+            <button class="btn btn-plain" id="notify-dismiss-btn" type="button">知道了</button>
           </div>
+        </div>
+      </section>
 
-          <!-- 势力关系模块 -->
-          <div id="faction-content" class="module-content">
-            <div class="section">
-              <h2 class="section-title">🏰 势力关系</h2>
-              <!-- 九宫格阵营显示 -->
-              <div class="alignment-grid" id="alignment-grid"></div>
-              <div class="data-grid">
-                <div class="info-card">
-                  <div class="info-item" id="invasion-intensity-row">
-                    <span class="label">入侵强度:</span>
-                    <span class="value"><span id="invasion-intensity-badge" class="invasion-badge">未知</span></span>
+      <section class="section run-section" id="run-section" style="display: none" aria-label="远征路线">
+        <div class="run-heading">
+          <div>
+            <small>远征</small>
+            <strong id="run-current">准备中</strong>
+          </div>
+          <div class="run-metrics" aria-live="polite">
+            <span><small>Act</small><b id="run-act">1/3</b></span>
+            <span><small>层数</small><b id="run-floor">0/10</b></span>
+            <span><small>金币</small><b id="run-gold">99</b></span>
+          </div>
+        </div>
+        <div class="run-actions" id="run-actions"></div>
+        <div class="run-error" id="run-error" role="alert" style="display: none"></div>
+      </section>
+
+      <section class="section action-section" aria-label="本轮行动">
+        <div class="options-text"></div>
+
+        <div class="custom-action">
+          <input id="custom-action-input" type="text" placeholder="输入自定义行动" aria-label="自定义行动" />
+          <button id="custom-action-send" class="option-btn" type="button">发送</button>
+        </div>
+
+        <div id="choice-container" style="display: none">
+          <div class="reward-card" id="choice-card">
+            <div class="reward-header">
+              <strong class="title" id="choice-title">奖励结算</strong>
+            </div>
+            <div class="reward-grid">
+              <section class="pane pane-card" id="card-rewards-section" style="display: none">
+                <div class="pane-head">
+                  <div class="pane-title">卡牌 <span id="card-selection-count">3选1</span></div>
+                  <div class="pane-sub">已选 <span id="card-selected">0</span>/<span id="card-max">1</span></div>
+                </div>
+                <div class="options" id="card-options"></div>
+              </section>
+              <section class="pane pane-artifact" id="artifact-rewards-section" style="display: none">
+                <div class="pane-head">
+                  <div class="pane-title">遗物 <span id="artifact-selection-count">3选1</span></div>
+                  <div class="pane-sub">
+                    已选 <span id="artifact-selected">0</span>/<span id="artifact-max">1</span>
                   </div>
                 </div>
-              </div>
-              <div class="data-grid" id="faction-relations">
-                <!-- 势力关系将通过JS动态填充 -->
-              </div>
+                <div class="options" id="artifact-options"></div>
+              </section>
+              <section class="pane pane-item" id="item-rewards-section" style="display: none">
+                <div class="pane-head">
+                  <div class="pane-title">道具 <span id="item-selection-count">3选1</span></div>
+                  <div class="pane-sub">已选 <span id="item-selected">0</span>/<span id="item-max">1</span></div>
+                </div>
+                <div class="options" id="item-options"></div>
+              </section>
+            </div>
+            <div class="reward-actions">
+              <button class="btn btn-primary" id="confirm-btn" type="button" disabled>确认领取</button>
             </div>
           </div>
         </div>
-      </div>
-    </div>
+      </section>
 
-    <!-- JavaScript逻辑现在由TypeScript文件处理 -->
+      <div class="statusbar-panels">
+        <details class="status-panel">
+          <summary><span aria-hidden="true">✨</span>角色状态</summary>
+          <div class="panel-content">
+            <section class="status-group">
+              <h3>基本信息</h3>
+              <div class="info-grid">
+                <div class="info-item"><span class="label">职业能力</span><span class="value" id="status-job-ability">未知</span></div>
+              </div>
+            </section>
+            <section class="status-group">
+              <h3>服装</h3>
+              <div class="info-grid clothing-grid">
+                <div class="info-item"><span class="label">头部</span><span class="value" id="clothing-head">未知</span></div>
+                <div class="info-item"><span class="label">颈部</span><span class="value" id="clothing-neck">未知</span></div>
+                <div class="info-item"><span class="label">手部</span><span class="value" id="clothing-hands">未知</span></div>
+                <div class="info-item"><span class="label">上衣</span><span class="value" id="clothing-top">未知</span></div>
+                <div class="info-item"><span class="label">下装</span><span class="value" id="clothing-bottom">未知</span></div>
+                <div class="info-item"><span class="label">内衣</span><span class="value" id="clothing-underwear">未知</span></div>
+                <div class="info-item"><span class="label">腿部</span><span class="value" id="clothing-legs">未知</span></div>
+                <div class="info-item"><span class="label">足部</span><span class="value" id="clothing-feet">未知</span></div>
+              </div>
+            </section>
+            <section class="status-group">
+              <h3>携带物品</h3>
+              <div class="data-grid" id="carried-items"></div>
+            </section>
+            <section class="status-group">
+              <h3>状态效果</h3>
+              <div class="status-section">
+                <div class="status-label">永久状态</div>
+                <div class="status-tags" id="permanent-status"><span class="status-tag status-empty">无</span></div>
+              </div>
+              <div class="status-section">
+                <div class="status-label">临时状态</div>
+                <div class="status-tags" id="temporary-status"><span class="status-tag status-empty">无</span></div>
+              </div>
+            </section>
+          </div>
+        </details>
+
+        <details class="status-panel">
+          <summary><span aria-hidden="true">🃏</span>卡牌与资源</summary>
+          <div class="panel-content">
+            <section class="status-group run-opt-in" id="run-opt-in" style="display: none">
+              <div class="group-heading">
+                <h3>远征模式</h3>
+                <div class="run-opt-in-actions">
+                  <button class="btn btn-plain" id="run-repair-btn" type="button" style="display: none">修复起始内容</button>
+                </div>
+              </div>
+              <div class="run-error" id="run-opt-in-error" role="alert" style="display: none"></div>
+            </section>
+            <section class="status-group compact-metrics">
+              <div class="info-item"><span class="label">生命</span><span class="value" id="battle-hp">未知</span></div>
+              <div class="info-item"><span class="label">欲望</span><span class="value" id="battle-desire">未知</span></div>
+              <div class="info-item"><span class="label">删卡次数</span><span class="value" id="battle-card-remove">0</span></div>
+            </section>
+            <section class="status-group">
+              <div class="group-heading">
+                <h3>牌组</h3>
+                <button id="delete-mode-toggle" class="icon-button delete-toggle-btn" type="button" title="切换删卡模式">
+                  🗑️ <span id="delete-count">0</span>
+                </button>
+              </div>
+              <div class="battle-deck" id="battle-deck"></div>
+            </section>
+            <section class="status-group split-resource">
+              <div><h3>遗物</h3><div class="data-grid" id="battle-artifacts"></div></div>
+              <div><h3>道具</h3><div class="data-grid" id="battle-items"></div></div>
+            </section>
+            <section class="status-group">
+              <div class="battle-book-container">
+                <button class="battle-book-btn" type="button">查看状态效果</button>
+                <div class="battle-book-content" id="battle-book-content" style="display: none"></div>
+              </div>
+            </section>
+          </div>
+        </details>
+
+        <details class="status-panel">
+          <summary><span aria-hidden="true">👥</span>人物关系</summary>
+          <div class="panel-content"><div class="data-grid" id="npc-relations"></div></div>
+        </details>
+
+        <details class="status-panel">
+          <summary><span aria-hidden="true">🏰</span>势力关系</summary>
+          <div class="panel-content">
+            <div class="alignment-grid" id="alignment-grid"></div>
+            <div class="info-item" id="invasion-intensity-row">
+              <span class="label">入侵强度</span>
+              <span class="value"><span id="invasion-intensity-badge" class="invasion-badge">未知</span></span>
+            </div>
+            <div class="data-grid" id="faction-relations"></div>
+          </div>
+        </details>
+      </div>
+    </main>
   </body>
 </html>

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>Tavern Helper iframe fixture</title>
+    <style>
+      body { margin: 0; background: #1b1b24; color: #eee; font-family: sans-serif; }
+      #status { position: fixed; z-index: 5; top: 8px; right: 8px; padding: 6px 9px; background: #1118; border: 1px solid #8888; }
+      iframe { display: block; width: 100%; min-height: 900px; border: 0; }
+    </style>
+  </head>
+  <body>
+    <div id="status">loading fixture...</div>
+    <script>
+      const initialVariables = {
+        stat_data: {
+          battle: {
+            core: { hp: 80, max_hp: 80, lust: 0, max_lust: 100 },
+            cards: [
+              { id: 'fixture_strike', name: '测试斩击', type: 'Attack', rarity: 'Common', cost: 1, emoji: '⚔️', description: '造成 8 点伤害。', effect: 'damage:8', quantity: 4 },
+              { id: 'fixture_guard', name: '测试防御', type: 'Skill', rarity: 'Common', cost: 1, emoji: '🛡️', description: '获得 6 点格挡。', effect: 'block:6', quantity: 3 },
+              { id: 'fixture_draw', name: '测试呼吸', type: 'Skill', rarity: 'Uncommon', cost: 0, emoji: '✨', description: '抽 1 张牌并获得 1 点能量。', effect: 'draw:1,energy:1', quantity: 2 }
+            ],
+            artifacts: [], statuses: [], player_status_effects: [], player_abilities: [], items: [],
+            enemy: { name: 'MUV测试傀儡', emoji: '👹', max_hp: 60, hp: 60, max_lust: 100, lust: 0, description: 'iframe 桥接冒烟目标。', actions: [{ name: '木槌攻击', effect: 'damage:6', description: '准备进行 6 点攻击', weight: 1 }], abilities: [], status_effects: [], lust_effect: { name: '测试反馈', description: '测试', effect: 'damage:1' } }
+          }
+        },
+        schema: { type: 'object', properties: {} }
+      };
+      const state = structuredClone(initialVariables);
+      const calls = [];
+      const clone = value => structuredClone(value);
+      const api = {
+        getVariables: option => { calls.push(['get', option]); return clone(state); },
+        replaceVariables: (value, option) => { calls.push(['replace', option]); Object.assign(state, clone(value)); },
+        updateVariablesWith: (updater, option) => { calls.push(['update', option]); const next = updater(clone(state)); Object.assign(state, clone(next)); return next; },
+        insertOrAssignVariables: (value, option) => { calls.push(['insertOrAssign', option, value]); state.stat_data.battle.statuses = value?.stat_data?.battle?.statuses || state.stat_data.battle.statuses; return value; },
+        getTavernHelperVersion: async () => '3.4.17',
+        waitGlobalInitialized: async () => undefined,
+        getCurrentMessageId: () => 42,
+        Mvu: { getMvuData: option => api.getVariables(option), replaceMvuData: (value, option) => api.replaceVariables(value, option) }
+      };
+      window.__fixtureCalls = calls;
+      window.__fixtureState = state;
+      fetch('./fish-interface.json')
+        .then(response => response.json())
+        .then(payload => {
+          const frame = document.createElement('iframe');
+          frame.name = 'TH-message--42--0';
+          const bridge = Object.keys(api).map(key => `window.${key}=window.parent.__tavernApi[${JSON.stringify(key)}];`).join('');
+          frame.srcdoc = '<script>' + bridge + '</scr' + 'ipt>' + payload.replaceString.slice(4, -4);
+          document.body.append(frame);
+          window.__fixtureFrame = frame;
+          document.querySelector('#status').textContent = 'fixture loaded';
+        })
+        .catch(error => { document.querySelector('#status').textContent = String(error); });
+      window.__tavernApi = api;
+    </script>
+  </body>
+</html>

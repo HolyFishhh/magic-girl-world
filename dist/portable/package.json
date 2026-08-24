@@ -1,0 +1,20 @@
+{
+  "name": "@magic-girl-world/portable-core",
+  "version": "0.5.87",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./types/portable/index.d.ts",
+      "import": "./magic-girl-core.mjs"
+    },
+    "./card": {
+      "types": "./types/portable/cardBackend.d.ts",
+      "import": "./card-backend.mjs"
+    },
+    "./battle": {
+      "types": "./types/portable/battleBackend.d.ts",
+      "import": "./battle-backend.mjs"
+    }
+  }
+}

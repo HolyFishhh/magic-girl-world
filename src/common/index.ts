@@ -1,204 +1,83 @@
 // RPG UI - 动态版本入口文件
+import '../runtime/bootstrap';
+import {
+  getCurrentChatMessageText,
+  getCurrentMessageVariables,
+  getRelativeChatMessageText,
+  isCurrentMessageLatest,
+  isCurrentMessageWithinDepth,
+  rerenderHistoricalMessageForDepth,
+  watchCurrentMessageDepth,
+} from '../runtime/messageVariables';
+import { readRunState } from '../runtime/runStateAdapter';
+import { createContentPackFromMvuBattle } from '../runtime/contentPackAdapter';
+import { flattenMvuArray } from '../runtime/mvuArrays';
+import {
+  canGenerateCompactStatusDescription,
+  assessInitialPlayerContent,
+  describeCompactCard,
+  describeCompactContent,
+  describeCompactStatus,
+  formatBuildGuidance,
+  formatShopBudget,
+  formatEnemyBudget,
+  formatBuildBudget,
+  formatRoutePrompt,
+  formatWorldContinuityHint,
+  formatOptionPrompt,
+  formatPlayerContentReadiness,
+  formatPlayerContentRepairPrompt,
+  createRunPacingContext,
+  recommendBuildGuidance,
+  recommendEnemyBudget,
+  recommendShopPrice,
+  recommendShopBudget,
+  summarizeBuildBudget,
+  type RunNodeChoice,
+  type RunNodeKind,
+  type PlayerContentReadiness,
+} from '../game-core';
+import { readStatusLocation, readStatusProfession } from './statusAdapter';
+import { TavernCommonActionHost } from './commonActionHost';
+import {
+  needsProgressionSettlement,
+  progressionFromTotalExperience,
+  requiredExperienceForLevel,
+  settleBattleProgression,
+  totalExperienceAt,
+  type ProgressionSettlement,
+} from './progression';
+import {
+  hasSelectableRewards,
+  inspectRewardCandidates,
+  normalizeMvuList,
+  readRewardRoot,
+  readRewardLimits,
+  type RewardSelections,
+} from './rewardTransactions';
+import { hasOptionTagMarkup, parseOptionTags } from './optionTags';
+import { TavernRunActionHost } from './runActionHost';
 import './index.scss';
 
-// ============== 文本高亮功能 ==============
-/**
- * 轻量级文本高亮实现
- * 只处理文本节点，不修改HTML结构
- */
-
-// 高亮配置：定义需要高亮的模式和对应的CSS类
-// 顺序从长标记到短标记，避免短标记抢占匹配
-const HIGHLIGHT_PATTERNS = [
-  // 先处理最外层常见容器：双引号/单引号
-  { start: '“', end: '”', className: 'highlight-quote' }, // 中文双引号
-  { start: '"', end: '"', className: 'highlight-quote' }, // 英文双引号
-  { start: '‘', end: '’', className: 'highlight-quote' }, // 中文单引号
-  // 再处理内部内容：书名号/括号
-  { start: '《', end: '》', className: 'highlight-book' },
-  { start: '【', end: '】', className: 'highlight-bracket' },
-  { start: '[', end: ']', className: 'highlight-bracket' },
-  // 最后处理强调
-  { start: '**', end: '**', className: 'highlight-emphasis' },
-];
-
-/**
- * 在一个文本节点内，按单一模式进行就地分割与包裹（可重复与嵌套）
- */
-function processTextNodeWithPattern(textNode: Text, pattern: { start: string; end: string; className: string }): void {
-  let current: Text | null = textNode;
-  while (current) {
-    const content = current.textContent || '';
-    if (!content || content.length < pattern.start.length + pattern.end.length + 1) return;
-
-    const startIdx = content.indexOf(pattern.start);
-    if (startIdx === -1) return;
-    let endIdx = content.indexOf(pattern.end, startIdx + pattern.start.length);
-    if (endIdx === -1) return;
-
-    // 避免 ** ** 空内容
-    if (pattern.start === '**' && endIdx === startIdx + pattern.start.length) {
-      endIdx = content.indexOf(pattern.end, endIdx + pattern.end.length);
-      if (endIdx === -1) return;
-    }
-
-    const parent = current.parentNode as Node | null;
-    if (!parent) return;
-
-    const before = document.createTextNode(content.slice(0, startIdx));
-    const innerText = content.slice(startIdx + pattern.start.length, endIdx);
-    const after = document.createTextNode(content.slice(endIdx + pattern.end.length));
-
-    const wrapper = document.createElement('span');
-    wrapper.className = pattern.className;
-    // 仅包裹内部文本，不包含分隔符，便于嵌套匹配
-    wrapper.textContent = innerText;
-
-    parent.insertBefore(before, current);
-    parent.insertBefore(document.createTextNode(pattern.start), current);
-    parent.insertBefore(wrapper, current);
-    parent.insertBefore(document.createTextNode(pattern.end), current);
-    parent.insertBefore(after, current);
-    parent.removeChild(current);
-
-    // 继续在 wrapper 内部（允许下一轮模式匹配其内容）以及 after 上匹配
-    // 先在 wrapper 内部应用同一模式（处理同类嵌套情况极少见，通常跳过）
-    current = after;
-  }
-}
-
-/**
- * 递归处理元素的所有文本节点
- */
-function applyHighlightsForPattern(element: Element, pattern: { start: string; end: string; className: string }): void {
-  // 只处理文本节点，跳过脚本、样式；允许在不同类型高亮内部继续处理（仅跳过相同类型）
-  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, {
-    acceptNode: node => {
-      const parent = (node.parentNode as Element) || null;
-      if (!parent) return NodeFilter.FILTER_REJECT;
-      if (['SCRIPT', 'STYLE', 'CODE', 'PRE'].includes(parent.tagName)) return NodeFilter.FILTER_REJECT;
-      if (parent.closest && parent.closest('.' + pattern.className)) return NodeFilter.FILTER_REJECT;
-      const txt = node.textContent || '';
-      if (txt.length < pattern.start.length + pattern.end.length + 1) return NodeFilter.FILTER_REJECT;
-      return NodeFilter.FILTER_ACCEPT;
-    },
-  });
-
-  const nodes: Text[] = [];
-  let n: Node | null;
-  while ((n = walker.nextNode())) nodes.push(n as Text);
-  nodes.forEach(tn => {
-    try {
-      processTextNodeWithPattern(tn, pattern);
-    } catch {}
-  });
-}
-
-/**
- * 应用文本高亮
- */
-function applyTextHighlight() {
-  try {
-    // 只在剧情文本区域应用高亮
-    const storyElements = document.querySelectorAll('.story-text');
-
-    storyElements.forEach(element => {
-      if (element.getAttribute('data-highlighted') === 'true') return;
-      try {
-        // 按模式顺序逐一处理，允许不同模式在不同轮次包裹，避免互斥
-        HIGHLIGHT_PATTERNS.forEach(p => applyHighlightsForPattern(element as Element, p));
-        element.setAttribute('data-highlighted', 'true');
-      } catch (err) {
-        console.warn('处理元素失败:', err);
-      }
-    });
-
-    console.log('✅ 文本高亮已应用');
-  } catch (error) {
-    console.error('文本高亮失败:', error);
-  }
-}
-
-// ============== 主题切换功能 ==============
-const THEME_STORAGE_KEY = 'rpg-ui-theme';
-
-// 获取当前主题
-function getCurrentTheme(): 'light' | 'dark' {
-  const stored = localStorage.getItem(THEME_STORAGE_KEY);
-  if (stored === 'dark' || stored === 'light') return stored;
-
-  // 检测系统主题偏好
-  if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-    return 'dark';
-  }
-  return 'light';
-}
-
-// 应用主题
-function applyTheme(theme: 'light' | 'dark') {
-  const root = document.documentElement;
-  const themeToggle = document.getElementById('theme-toggle');
-  const themeIcon = themeToggle?.querySelector('.theme-icon');
-
-  if (theme === 'dark') {
-    root.setAttribute('data-theme', 'dark');
-    if (themeIcon) themeIcon.textContent = '☀️';
-  } else {
-    root.removeAttribute('data-theme');
-    if (themeIcon) themeIcon.textContent = '🌙';
-  }
-
-  localStorage.setItem(THEME_STORAGE_KEY, theme);
-}
-
-// 切换主题
-function toggleTheme() {
-  const current = getCurrentTheme();
-  const next = current === 'light' ? 'dark' : 'light';
-  applyTheme(next);
-}
-
-// 初始化主题
-function initializeTheme() {
-  const theme = getCurrentTheme();
-  applyTheme(theme);
-
-  // 绑定主题切换按钮
-  const themeToggle = document.getElementById('theme-toggle');
-  if (themeToggle) {
-    themeToggle.addEventListener('click', toggleTheme);
-  }
-
-  console.log('✅ 主题系统已初始化，当前主题:', theme);
-}
-
-// 监听系统主题变化
-if (window.matchMedia) {
-  const darkModeQuery = window.matchMedia('(prefers-color-scheme: dark)');
-  darkModeQuery.addEventListener('change', e => {
-    // 只有在用户没有手动设置主题时才自动切换
-    if (!localStorage.getItem(THEME_STORAGE_KEY)) {
-      applyTheme(e.matches ? 'dark' : 'light');
-    }
-  });
-}
+const commonActionHost = TavernCommonActionHost.getInstance();
+const runActionHost = TavernRunActionHost.getInstance();
 
 // ---------------- 奖励内联渲染：状态与工具 ----------------
 let __STAT__: any = null;
 let __DELTA__: any = null;
 // 记录本轮玩家领取奖励的汇总文本，供下一次选项发送时拼接
 let __PENDING_REWARD_SUMMARY: string | null = null;
-// 结算前的战斗等级/经验快照（用于通知显示前后对比）
-let __PRE_SETTLE_BATTLE: { level: number; exp: number } | null = null;
+let __PENDING_RUN_SUMMARY: string | null = null;
+let __RUN_ERROR: string | null = null;
+let __stopLatestMessageGuard: (() => void) | null = null;
+let __BATTLE_BOOK_DATA: { playerStatusEffects: any[]; statuses: any[] } = {
+  playerStatusEffects: [],
+  statuses: [],
+};
 
 // 防重复发送标志已移至下方统一定义
-// 兼容两种变量根：有些环境将数据放在 variables.stat_data，有些直接放在 variables 顶层
 function getStatRootRef(variables: any): any {
-  if (variables && typeof variables === 'object') {
-    if (variables.stat_data && typeof variables.stat_data === 'object') return variables.stat_data;
-    return variables;
-  }
-  return {};
+  return variables?.stat_data && typeof variables.stat_data === 'object' ? variables.stat_data : {};
 }
 let __isMutating = false; // 防抖标记
 let __USER_MUTATION_PILLS: string[] = [];
@@ -240,48 +119,10 @@ function bindCustomActionControls() {
   inputEl.addEventListener('keydown', e => {
     if ((e as KeyboardEvent).key === 'Enter') doSend();
   });
-  console.log('[自定义行动] 已绑定');
 }
 
 const __PERSIST_PILLS: string[] = [];
 // 取消基于上一轮快照的对比，改为直接读取 delta_data
-
-// ---- 注入辅助：将文本注入到下一次 generate()/generateRaw() 调用 ----
-const __PENDING_INJECTS: any[] = [];
-function enqueueInject(
-  text: string,
-  opts?: {
-    position?: 'before_prompt' | 'in_chat' | 'after_prompt' | 'none';
-    depth?: number;
-    should_scan?: boolean;
-    role?: 'system' | 'assistant' | 'user';
-  },
-) {
-  __PENDING_INJECTS.push({
-    role: opts?.role ?? 'system',
-    content: text,
-    position: opts?.position ?? 'after_prompt',
-    depth: typeof opts?.depth === 'number' ? opts.depth : 0,
-    should_scan: !!opts?.should_scan,
-  });
-}
-(function wrapGenerateOnce() {
-  const w: any = window as any;
-  if (w.__AUGMENT_INJECT_WRAPPED) return;
-  const wrapOne = (fname: 'generate' | 'generateRaw') => {
-    const orig = w[fname];
-    if (typeof orig !== 'function') return;
-    w[fname] = async (config?: any) => {
-      const injects = Array.isArray(config?.injects) ? [...config.injects] : [];
-      if (__PENDING_INJECTS.length) injects.push(...__PENDING_INJECTS.splice(0));
-      const merged = config && typeof config === 'object' ? { ...config, injects } : { injects };
-      return await orig.call(w, merged);
-    };
-  };
-  wrapOne('generate');
-  wrapOne('generateRaw');
-  w.__AUGMENT_INJECT_WRAPPED = true;
-})();
 
 // 中文标签映射
 const CN_LABELS: Record<string, string> = {
@@ -300,41 +141,106 @@ const CN_LABELS: Record<string, string> = {
 
 function normalizeOptionsList<T = any>(value: any): T[] {
   if (!value) return [];
-  if (Array.isArray(value)) {
-    // 统一扁平化：支持 [值]、[[值]]、[值, 描述]、混合形态 [[值], 单个对象, ...]
-    const out: any[] = [];
-    value.forEach((el: any, idx: number) => {
-      if (Array.isArray(el)) out.push(...filterMetadata(el));
-      else if (el !== '$__META_EXTENSIBLE__$' && el != null && el !== '') out.push(el);
-    });
-    return filterMetadata(out);
-  }
-  if (typeof value === 'object') return [value as T];
+  if (Array.isArray(value) || typeof value === 'object') return normalizeMvuList<T>(value);
   return [];
 }
 
-function resolveRewardRoot(stat: any): any {
-  const r = stat?.reward;
-  if (!r) return null;
-  return Array.isArray(r) ? r[0] : r;
+function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
-function hasSelectableRewards(stat: any): boolean {
-  const r = resolveRewardRoot(stat);
-  if (!r) return false;
-  const cards = normalizeOptionsList(r.card);
-  const arts = normalizeOptionsList(r.artifact);
-  const items = normalizeOptionsList(r.item);
-  return cards.length > 0 || arts.length > 0 || items.length > 0;
+const RUN_NODE_LABELS: Record<RunNodeKind, { icon: string; name: string; prompt: string }> = {
+  battle: { icon: '⚔', name: '战斗', prompt: '生成一场与当前章节和构筑相符的普通战斗。' },
+  elite: { icon: '◆', name: '精英', prompt: '生成一场更危险、机制更鲜明的精英战斗。' },
+  event: { icon: '?', name: '事件', prompt: '生成一个有明确取舍的短事件。' },
+  rest: { icon: '♨', name: '营火', prompt: '生成简短的营火休整场景，不代替玩家选择恢复或升级。' },
+  shop: { icon: '¤', name: '商店', prompt: '生成本次商店的简短场景和商品候选；价格由程序决定。' },
+  boss: { icon: '♛', name: 'Boss', prompt: '生成本章节 Boss 战，机制应检验当前构筑。' },
+};
+
+function isBattleRunNode(kind: RunNodeKind): boolean {
+  return kind === 'battle' || kind === 'elite' || kind === 'boss';
+}
+
+function runNodeSummary(node: RunNodeChoice): string {
+  const label = RUN_NODE_LABELS[node.kind];
+  return `${label.name} · Act ${node.act} 第${node.floor}层`;
+}
+
+function currentContentPack(): ReturnType<typeof createContentPackFromMvuBattle> | null {
+  const battle = __STAT__?.battle;
+  if (!battle || typeof battle !== 'object') return null;
+  return createContentPackFromMvuBattle(battle);
+}
+
+function currentBuildContext(): {
+  pack: ReturnType<typeof createContentPackFromMvuBattle>;
+  budget: ReturnType<typeof summarizeBuildBudget>;
+} | null {
+  const battle = __STAT__?.battle;
+  if (!battle || typeof battle !== 'object') return null;
+  const core = battle.core && typeof battle.core === 'object' ? battle.core : {};
+  const pack = currentContentPack();
+  if (!pack) return null;
+  if (pack.cards.length === 0) return null;
+  const budget = summarizeBuildBudget(pack, {
+    hp: Number(core.hp),
+    maxHp: Number(core.max_hp),
+  });
+  return { pack, budget };
+}
+
+function currentInitialContentReadiness(): PlayerContentReadiness | null {
+  const pack = currentContentPack();
+  const battle = __STAT__?.battle;
+  const core = battle?.core;
+  return pack
+    ? assessInitialPlayerContent(pack, {
+        hp: core?.hp,
+        maxHp: core?.max_hp,
+        lust: core?.lust,
+        maxLust: core?.max_lust,
+        level: battle?.level,
+        exp: battle?.exp,
+      })
+    : null;
+}
+
+function buildBudgetPrompt(context: ReturnType<typeof currentBuildContext>): string | null {
+  return context ? `[构筑摘要] ${formatBuildBudget(context.budget)}` : null;
+}
+
+function buildEnemyBudgetPrompt(node: RunNodeChoice, context: ReturnType<typeof currentBuildContext>): string | null {
+  return context
+    ? `[敌人预算] ${formatEnemyBudget(recommendEnemyBudget(context.budget, node.danger, node.act))}`
+    : null;
+}
+
+function buildGuidancePrompt(context: ReturnType<typeof currentBuildContext>): string | null {
+  return context ? `[构筑建议] ${formatBuildGuidance(recommendBuildGuidance(context.pack, context.budget))}` : null;
+}
+
+async function ensureAndConsumeRunState(): Promise<void> {
+  try {
+    const result = await runActionHost.syncPendingRunState();
+    if (result.consumedRunResult) __RUN_ERROR = null;
+    if (result.restUpgrade) {
+      __USER_MUTATION_PILLS.push(`卡牌升级：${result.restUpgrade.cardName}`);
+      __PENDING_RUN_SUMMARY = `{{user}}在营火升级了${result.restUpgrade.cardName}`;
+      __RUN_ERROR = null;
+    }
+  } catch (error) {
+    __RUN_ERROR = error instanceof Error ? error.message : '路线状态结算失败';
+  }
 }
 
 function getRewardLimits(stat: any): { cards: number; artifacts: number; items: number } {
-  const r = resolveRewardRoot(stat) || {};
-  return {
-    cards: r?.limits?.cards || 1,
-    artifacts: r?.limits?.artifacts || 1,
-    items: r?.limits?.items || 1,
-  };
+  return readRewardLimits(stat);
 }
 
 function computeChangePillsByDelta(delta: any, stat: any): string[] {
@@ -350,21 +256,14 @@ function computeChangePillsByDelta(delta: any, stat: any): string[] {
     if (typeof text !== 'string') return null;
     if (!text.includes('->')) return null;
 
-    console.log('🔍 解析箭头对:', text);
-
     const parts = text.split('->');
     if (parts.length < 2) return null;
 
     const left = parts[0].trim();
     const right = parts.slice(1).join('->').trim();
 
-    console.log('🔍 左侧:', left);
-    console.log('🔍 右侧:', right);
-
     const oldVal = tryParseJson(left);
     const newVal = tryParseJson(right);
-
-    console.log('🔍 解析结果:', { oldVal, newVal });
 
     return { oldVal, newVal };
   };
@@ -424,7 +323,21 @@ function computeChangePillsByDelta(delta: any, stat: any): string[] {
 
   // 职业
   const prof = delta?.status?.profession;
-  if (typeof prof === 'string' && prof.includes('->')) pills.push('职业：' + prof);
+  if (typeof prof === 'string' && prof.includes('->')) {
+    const pair = parseArrowJsonPair(prof);
+    const oldObj = pair?.oldVal && typeof pair.oldVal === 'object' ? pair.oldVal : null;
+    const newObj = pair?.newVal && typeof pair.newVal === 'object' ? pair.newVal : null;
+    if (oldObj && newObj && ('name' in oldObj || 'name' in newObj)) {
+      if (String(oldObj.name ?? '') !== String(newObj.name ?? '')) {
+        pills.push(`职业名：${oldObj.name || '无'}->${newObj.name || '无'}`);
+      }
+      if (String(oldObj.ability ?? '') !== String(newObj.ability ?? '')) {
+        pills.push(`职业能力：${oldObj.ability || '无'}->${newObj.ability || '无'}`);
+      }
+    } else {
+      pills.push('职业：' + prof);
+    }
+  }
   else if (prof && typeof prof === 'object') {
     const nameDelta = prof.name;
     const abilityDelta = prof.ability;
@@ -436,11 +349,8 @@ function computeChangePillsByDelta(delta: any, stat: any): string[] {
   const clothingDelta = delta?.status?.clothing;
   const clothingKeys = ['head', 'neck', 'hands', 'upper_body', 'lower_body', 'underwear', 'legs', 'feet'];
 
-  console.log('🔍 服装 delta:', clothingDelta);
-
   if (typeof clothingDelta === 'string' && clothingDelta.includes('->') && clothingDelta.includes('{')) {
     const pair = parseArrowJsonPair(clothingDelta);
-    console.log('🔍 解析的服装对:', pair);
     if (pair && pair.newVal && typeof pair.newVal === 'object') {
       const oldObj = pair.oldVal && typeof pair.oldVal === 'object' ? pair.oldVal : {};
       const newObj = pair.newVal;
@@ -463,7 +373,7 @@ function computeChangePillsByDelta(delta: any, stat: any): string[] {
   }
 
   // 永久状态、持有物：只显示“新增”类文本
-  // 永久状态、持有物：只显示“新增”类文本；兼容字符串或数组
+  // MUV delta may report one assignment or a list of assignments.
   const handleSimpleAssign = (val: any, label: string) => {
     const arr = Array.isArray(val) ? val : typeof val === 'string' ? [val] : [];
     arr.forEach((txt: any) => {
@@ -480,18 +390,12 @@ function computeChangePillsByDelta(delta: any, stat: any): string[] {
   const handleListAdd = (root: any, label: string) => {
     if (!root) return;
 
-    console.log(`🔍 ${label} delta:`, root);
-
     const arr = Array.isArray(root) ? root : typeof root === 'string' ? [root] : [];
     arr.forEach((entry: any) => {
       const s = String(entry);
-      console.log(`🔍 ${label} 条目:`, s);
-
       if (s.includes('[') || s.includes('{')) {
         // 可扩展变量：解析包含 JSON 数组片段的变化文本（ASSIGNED/ADDED/等）
         const parsed = parseAssignedArrayFromText(s);
-        console.log(`🔍 ${label} 解析结果:`, parsed);
-
         if (parsed && parsed.length) {
           parsed.forEach((x: any) => {
             const name = x?.name || x?.id || '未知';
@@ -550,192 +454,27 @@ function computeChangePillsByDelta(delta: any, stat: any): string[] {
   return pills;
 }
 
-async function applyRewardSelectionsInline(selections: { cards: number[]; artifacts: number[]; items: number[] }) {
-  await updateVariablesWith(
-    (variables: any) => {
-      if (!variables.stat_data) throw new Error('stat_data不存在');
-      const rewardRoot = variables.stat_data.reward;
-      if (!rewardRoot) throw new Error('reward数据不存在');
+async function applyRewardSelectionsInline(selections: RewardSelections) {
+  const settlement = await runActionHost.settleRewardSelections(selections);
+  const settledSummary = settlement.summary;
+  settledSummary.cards.forEach(name => __USER_MUTATION_PILLS.push(`新增卡牌：${name}`));
+  settledSummary.artifacts.forEach(name => __USER_MUTATION_PILLS.push(`新增遗物：${name}`));
+  settledSummary.items.forEach(name => __USER_MUTATION_PILLS.push(`新增道具：${name}`));
 
-      // 兼容MVU数组格式与直接对象格式
-      const r = Array.isArray(rewardRoot) ? rewardRoot[0] || {} : rewardRoot;
-
-      const pickCards = normalizeOptionsList<any>(r.card);
-      const pickArtifacts = normalizeOptionsList<any>(r.artifact);
-      const pickItems = normalizeOptionsList<any>(r.item);
-
-      const battle = variables.stat_data.battle;
-      const getAppendTarget = (key: 'cards' | 'artifacts' | 'items'): any[] | null => {
-        // 仅在目标已经存在且为数组的情况下返回可写入的“值数组”；否则返回 null，避免破坏可扩展模式
-        const cur = battle[key];
-        if (Array.isArray(cur)) {
-          if (cur.length >= 2 && Array.isArray(cur[0]) && typeof cur[1] === 'string') return cur[0];
-          if (cur.length >= 1 && Array.isArray(cur[0])) return cur[0];
-          return cur;
-        }
-        console.warn(`[MVU] 目标 ${key} 不存在或非数组，跳过写入以避免破坏可扩展结构`);
-        return null;
-      };
-      const mergeCardInto = (listRef: any[], card: any): void => {
-        if (!card || typeof card !== 'object') {
-          listRef.push(card);
-          return;
-        }
-        const id = card.id || card.name;
-        if (!id) {
-          listRef.push(card);
-          return;
-        }
-        // 在现有列表中查找同id的卡，跳过元数据标记
-        const existing = listRef.find((x: any) => x && typeof x === 'object' && (x.id || x.name) === id);
-        if (existing) {
-          const addQty = Math.max(1, Number(card.quantity || 1));
-          existing.quantity = Math.max(0, Number(existing.quantity || 1)) + addQty;
-        } else {
-          // 确保至少有数量1
-          if (card.quantity == null) card.quantity = 1;
-          listRef.push(card);
-        }
-      };
-      const pushList = (key: 'cards' | 'artifacts' | 'items', dataList: any[], idxList: number[]) => {
-        const listRef = getAppendTarget(key);
-        if (!Array.isArray(listRef)) {
-          console.warn(`[MVU] 追加 ${key} 失败：目标不可写（不存在或非数组）`);
-          return;
-        }
-        idxList.forEach(i => {
-          const data = dataList[i];
-          if (data == null) return;
-          if (Array.isArray(data)) {
-            data.forEach(entry => {
-              if (entry == null) return;
-              if (key === 'cards') mergeCardInto(listRef, entry);
-              else listRef.push(entry);
-            });
-          } else if (key === 'cards') mergeCardInto(listRef, data);
-          else listRef.push(data);
-        });
-      };
-
-      // 收集选择的物品名称，用于注入上下文
-      const selectedNames: { cards: string[]; artifacts: string[]; items: string[] } = {
-        cards: [],
-        artifacts: [],
-        items: [],
-      };
-
-      if (selections.cards.length) {
-        pushList('cards', pickCards, selections.cards);
-        selections.cards.forEach(i => {
-          const c = pickCards[i];
-          if (c) {
-            const name = c.name || c.id || '未知';
-            const qty = c.quantity ? ` x${c.quantity}` : '';
-            __USER_MUTATION_PILLS.push(`新增卡牌：${name}${qty}`);
-            selectedNames.cards.push(name + qty);
-          }
-        });
-      }
-      if (selections.artifacts.length) {
-        pushList('artifacts', pickArtifacts, selections.artifacts);
-        selections.artifacts.forEach(i => {
-          const a = pickArtifacts[i];
-          if (a) {
-            const name = a.name || a.id || '未知';
-            const qty = (a as any).quantity ? ` x${(a as any).quantity}` : '';
-            __USER_MUTATION_PILLS.push(`新增遗物：${name}${qty}`);
-            selectedNames.artifacts.push(name + qty);
-          }
-        });
-      }
-      if (selections.items.length) {
-        pushList('items', pickItems, selections.items);
-        selections.items.forEach(i => {
-          const it = pickItems[i];
-          if (it) {
-            const name = it.name || it.id || '未知';
-            const qty = (it as any).count
-              ? ` x${(it as any).count}`
-              : (it as any).quantity
-                ? ` x${(it as any).quantity}`
-                : '';
-            __USER_MUTATION_PILLS.push(`新增道具：${name}${qty}`);
-            selectedNames.items.push(name + qty);
-          }
-        });
-      }
-
-      // 不再注入到 generate；领取摘要将绑定到下一次选项发送的消息中
-      try {
-        const hasSelections =
-          selectedNames.cards.length + selectedNames.artifacts.length + selectedNames.items.length > 0;
-        if (hasSelections) {
-          const parts: string[] = [];
-          if (selectedNames.cards.length) parts.push(`卡牌[${selectedNames.cards.join('，')}]`);
-          if (selectedNames.artifacts.length) parts.push(`遗物[${selectedNames.artifacts.join('，')}]`);
-          if (selectedNames.items.length) parts.push(`道具[${selectedNames.items.join('，')}]`);
-          __PENDING_REWARD_SUMMARY = `本轮玩家领取奖励：${parts.join(' ')}`;
-          console.log('🎯 已生成领取摘要（待绑定至选项发送）：', __PENDING_REWARD_SUMMARY);
-        }
-      } catch (e) {
-        console.warn('生成领取摘要失败:', e);
-      }
-
-      // 清空临时 reward
-      r.card = [];
-      r.artifact = [];
-      r.item = [];
-      r.limits = {};
-      if (Array.isArray(rewardRoot)) variables.stat_data.reward[0] = r;
-
-      return variables;
-    },
-    { type: 'message' },
-  );
-}
-
-// 每升两级发放一次删卡次数（基于本次level的delta，且带去重标记）
-async function grantCardRemovalOnLevelUp(oldLevel: number, newLevel: number) {
-  if (!Number.isFinite(oldLevel) || !Number.isFinite(newLevel) || newLevel <= oldLevel) return;
-  try {
-    await updateVariablesWith(
-      (variables: any) => {
-        const battle = (variables?.stat_data?.battle || variables?.battle) as any;
-        if (!battle) return variables;
-        if (!battle.core) battle.core = {};
-        const lastProcessed = Number(battle.core.last_level_award) || 0;
-        const start = Math.max(lastProcessed, oldLevel);
-        // 1) 计算步数
-        let steps = 0;
-        for (let L = start + 1; L <= newLevel; L++) steps++;
-
-        // 2) 每到偶数等级 +1 删卡
-        let addRemoval = 0;
-        for (let L = start + 1; L <= newLevel; L++) {
-          if (L % 2 === 0) addRemoval++;
-        }
-        if (addRemoval > 0) {
-          const prev = Number(battle.core.card_removal_count) || 0;
-          battle.core.card_removal_count = prev + addRemoval;
-        }
-
-        // 3) 每升一级，下次升级所需经验 +50
-        if (steps > 0) {
-          const nextExpPrev = Number(battle.next_exp) || 100;
-          battle.next_exp = nextExpPrev + steps * 50;
-        }
-
-        // 记录已处理到的新等级，避免重复发放
-        battle.core.last_level_award = newLevel;
-        return variables;
-      },
-      { type: 'message' },
-    );
-    console.log(
-      `🎯 处理等级奖励：从 Lv.${oldLevel} 到 Lv.${newLevel}，发放删卡次数 +${Math.floor((newLevel - Math.max(oldLevel, 0)) / 2)}（按去重计算）`,
-    );
-  } catch (e) {
-    console.warn('处理等级奖励失败：', e);
+  const parts: string[] = [];
+  if (settledSummary.cards.length) parts.push(`卡牌[${settledSummary.cards.join('，')}]`);
+  if (settledSummary.artifacts.length) parts.push(`遗物[${settledSummary.artifacts.join('，')}]`);
+  if (settledSummary.items.length) parts.push(`道具[${settledSummary.items.join('，')}]`);
+  if (settlement.kind === 'shop') {
+    __PENDING_REWARD_SUMMARY = parts.length
+      ? `{{user}}在商店花费${settlement.spentGold}金币，购得：${parts.join(' ')}`
+      : '{{user}}离开了商店，没有购买商品';
+  } else if (settlement.kind === 'event') {
+    __PENDING_REWARD_SUMMARY = parts.length
+      ? `{{user}}在事件中获得：${parts.join(' ')}`
+      : '{{user}}结束了事件，没有领取奖励';
+  } else {
+    __PENDING_REWARD_SUMMARY = parts.length ? `{{user}}已获得：${parts.join(' ')}` : '{{user}}没有领取奖励';
   }
 }
 
@@ -743,10 +482,6 @@ async function grantCardRemovalOnLevelUp(oldLevel: number, newLevel: number) {
 function renderNotifyModule() {
   const stat = __STAT__ || {};
   const delta = __DELTA__ || {};
-
-  console.log('📢 渲染通知模块 - stat:', stat);
-  console.log('📢 渲染通知模块 - delta:', delta);
-  console.log('📢 渲染通知模块 - 用户操作 pills:', __USER_MUTATION_PILLS);
 
   const pills = computeChangePillsByDelta(delta, stat);
   // 持久化：将本轮解析出的变化和用户选择追加到持久列表（去重）
@@ -759,8 +494,6 @@ function renderNotifyModule() {
   if (__USER_MUTATION_PILLS.length) addPersist(__USER_MUTATION_PILLS);
   // 清空一次性用户操作 pills，避免重复追加
   __USER_MUTATION_PILLS = [];
-
-  console.log('📢 渲染通知模块 - 最终 pills:', __PERSIST_PILLS);
 
   // 检查经验/等级变化
   const expDisp = __DELTA__?.battle?.exp;
@@ -788,7 +521,7 @@ function renderNotifyModule() {
   // 渲染变化提示（使用持久列表）
   if (__PERSIST_PILLS.length > 0) {
     changesSection.style.display = 'block';
-    changesList.innerHTML = __PERSIST_PILLS.map((p: string) => `<span class="pill">${p}</span>`).join('');
+    changesList.innerHTML = __PERSIST_PILLS.map((p: string) => `<span class="pill">${escapeHtml(p)}</span>`).join('');
   } else {
     changesSection.style.display = 'none';
   }
@@ -804,42 +537,17 @@ function renderNotifyModule() {
       const oldExp = parseInt(parts[0].trim(), 10) || 0;
       const newExpFromDelta = parseInt(parts.slice(1).join('->').trim(), 10) || 0;
 
-      // 升级前状态：从当前结算后的状态反推
+      // 从结算后的累计经验减去本轮增量，稳定反推出结算前状态。
       const currentLevel = Number(stat?.battle?.level ?? 1);
       const currentExp = Number(stat?.battle?.exp ?? 0);
-
-      // 计算升级前的等级和经验（基于delta的变化量反推）
       const expGain = newExpFromDelta - oldExp;
-      let beforeLevel = currentLevel;
-      let beforeExp = currentExp;
+      const afterTotal = totalExperienceAt(currentLevel, currentExp);
+      const before = progressionFromTotalExperience(Math.max(0, afterTotal - Math.max(0, expGain)));
+      const beforeLevel = before.level;
+      const beforeExp = before.exp;
 
-      // 反向计算：从当前状态减去获得的经验，得到升级前状态
-      let remainingToSubtract = expGain;
-      while (remainingToSubtract > 0 && beforeLevel > 1) {
-        if (beforeExp >= remainingToSubtract) {
-          beforeExp -= remainingToSubtract;
-          remainingToSubtract = 0;
-        } else {
-          remainingToSubtract -= beforeExp;
-          beforeLevel--;
-          beforeExp = Math.max(50 * beforeLevel, 50) - 1; // 上一级的最大经验
-        }
-      }
-
-      // 如果还有剩余，说明是从更低等级开始的
-      if (remainingToSubtract > 0) {
-        beforeExp = oldExp;
-        beforeLevel = 1;
-        let tempExp = beforeExp;
-        while (tempExp >= 50 * beforeLevel) {
-          tempExp -= 50 * beforeLevel;
-          beforeLevel++;
-        }
-        beforeExp = tempExp;
-      }
-
-      const beforeNeed = Math.max(50 * beforeLevel, 50);
-      const afterNeed = Math.max(50 * currentLevel, 50);
+      const beforeNeed = requiredExperienceForLevel(beforeLevel);
+      const afterNeed = requiredExperienceForLevel(currentLevel);
 
       // 只有等级真正变化时才显示等级变化
       if (beforeLevel !== currentLevel) {
@@ -850,14 +558,17 @@ function renderNotifyModule() {
       // 如果没有exp变化，只显示当前状态
       const levelNow = Number(stat?.battle?.level ?? 1);
       const expNow = Number(stat?.battle?.exp ?? 0);
-      const needNow = Math.max(50 * levelNow, 50);
+      const needNow = requiredExperienceForLevel(levelNow);
 
       lines.push(`等级：LV ${levelNow}`);
       lines.push(`经验值：${expNow}/${needNow}`);
     }
 
     expDisplay.innerHTML = lines
-      .map(t => `<div class="exp-item"><span class="exp-icon">✨</span><span class="exp-text">${t}</span></div>`)
+      .map(
+        t =>
+          `<div class="exp-item"><span class="exp-icon">✨</span><span class="exp-text">${escapeHtml(t)}</span></div>`,
+      )
       .join('');
 
     // 显示等级徽章
@@ -880,20 +591,32 @@ function renderNotifyModule() {
 // 渲染选择模块（浮动在选项之上）
 function renderChoiceModule() {
   const stat = __STAT__ || {};
-  const reward = resolveRewardRoot(stat) || {};
+  const reward = readRewardRoot(stat) || {};
   const limits = getRewardLimits(stat);
 
   const cards = normalizeOptionsList<any>(reward.card);
   const artifacts = normalizeOptionsList<any>(reward.artifact);
   const items = normalizeOptionsList<any>(reward.item);
+  const inspections = inspectRewardCandidates(stat);
+  const usableLimits = {
+    cards: Math.min(limits.cards, inspections.cards.filter(result => result.ok).length),
+    artifacts: Math.min(limits.artifacts, inspections.artifacts.filter(result => result.ok).length),
+    items: Math.min(limits.items, inspections.items.filter(result => result.ok).length),
+  };
 
   const choiceOverlay = document.getElementById('choice-container');
+  const choiceTitle = document.getElementById('choice-title');
   const cardSection = document.getElementById('card-rewards-section');
   const artifactSection = document.getElementById('artifact-rewards-section');
   const itemSection = document.getElementById('item-rewards-section');
 
   if (!choiceOverlay || !cardSection || !artifactSection || !itemSection) return;
-
+  const run = readRunState(stat);
+  const isShop = run?.phase === 'in_node' && run.currentNode?.kind === 'shop';
+  const isEventReward = run?.phase === 'in_node' && run.currentNode?.kind === 'event' && stat?.run_result != null;
+  if (choiceTitle) {
+    choiceTitle.textContent = isShop ? `商店 · ${run.gold} 金币` : isEventReward ? '事件奖励' : '奖励结算';
+  }
   // 渲染卡牌选项
   if (cards.length > 0) {
     cardSection.style.display = 'block';
@@ -903,14 +626,16 @@ function renderChoiceModule() {
     const cardMax = document.getElementById('card-max');
 
     if (cardOptions && cardCount && cardSelected && cardMax) {
-      cardCount.textContent = `${cards.length}选${limits.cards}`;
-      cardMax.textContent = String(limits.cards);
+      cardCount.textContent = `${cards.length}选${usableLimits.cards}`;
+      cardMax.textContent = String(usableLimits.cards);
 
       const inputType = 'checkbox';
       const inputName = '';
 
       cardOptions.innerHTML = cards
         .map((card, idx) => {
+          const inspection = inspections.cards[idx];
+          const invalid = !inspection?.ok;
           // 处理费用显示
           const cost = card.cost;
           let costDisplay = '';
@@ -921,15 +646,22 @@ function renderChoiceModule() {
           } else if (cost !== undefined && cost !== null) {
             costDisplay = `消耗: ${cost}`;
           }
+          const priceDisplay = isShop ? `价格: ${recommendShopPrice('cards', card, run.act)} 金币` : '';
+          const cardDescription =
+            card.description ||
+            describeCompactCard(card, { statusNames: contentDescriptionStatusNames(card) }) ||
+            '效果见卡牌规则';
 
           return `
-        <label class="option">
-          <input type="${inputType}" ${inputName ? `name="${inputName}"` : ''} value="${idx}" />
-          <span class="icon">${card.emoji || '🃏'}</span>
+        <label class="option${invalid ? ' option-invalid' : ''}">
+          <input type="${inputType}" ${inputName ? `name="${inputName}"` : ''} value="${idx}" ${invalid ? 'disabled' : ''} />
+          <span class="icon">${escapeHtml(card.emoji || '🃏')}</span>
           <span class="text">
-            <div class="name">${card.name || '未知'}</div>
-            ${costDisplay ? `<div class="cost">${costDisplay}</div>` : ''}
-            <div class="desc">${card.description || '无描述'}</div>
+            <div class="name">${escapeHtml(card.name || '未知')}</div>
+            ${costDisplay ? `<div class="cost">${escapeHtml(costDisplay)}</div>` : ''}
+            ${priceDisplay ? `<div class="cost">${escapeHtml(priceDisplay)}</div>` : ''}
+            <div class="desc">${escapeHtml(cardDescription)}</div>
+            ${invalid ? `<div class="reward-validation">不可领取：${escapeHtml(inspection.message)}</div>` : ''}
           </span>
         </label>
       `;
@@ -949,25 +681,29 @@ function renderChoiceModule() {
     const artifactMax = document.getElementById('artifact-max');
 
     if (artifactOptions && artifactCount && artifactSelected && artifactMax) {
-      artifactCount.textContent = `${artifacts.length}选${limits.artifacts}`;
-      artifactMax.textContent = String(limits.artifacts);
+      artifactCount.textContent = `${artifacts.length}选${usableLimits.artifacts}`;
+      artifactMax.textContent = String(usableLimits.artifacts);
 
       const inputType = 'checkbox';
       const inputName = '';
 
       artifactOptions.innerHTML = artifacts
-        .map(
-          (artifact, idx) => `
-        <label class="option">
-          <input type="${inputType}" ${inputName ? `name="${inputName}"` : ''} value="${idx}" />
-          <span class="icon">${artifact.emoji || '💎'}</span>
+        .map((artifact, idx) => {
+          const inspection = inspections.artifacts[idx];
+          const invalid = !inspection?.ok;
+          return `
+        <label class="option${invalid ? ' option-invalid' : ''}">
+          <input type="${inputType}" ${inputName ? `name="${inputName}"` : ''} value="${idx}" ${invalid ? 'disabled' : ''} />
+          <span class="icon">${escapeHtml(artifact.emoji || '💎')}</span>
           <span class="text">
-            <div class="name">${artifact.name || '未知'}</div>
-            <div class="desc">${artifact.description || '无描述'}</div>
+            <div class="name">${escapeHtml(artifact.name || '未知')}</div>
+            ${isShop ? `<div class="cost">价格: ${escapeHtml(recommendShopPrice('artifacts', artifact, run.act))} 金币</div>` : ''}
+            <div class="desc">${escapeHtml(contentRuleDescription(artifact, '效果见规则'))}</div>
+            ${invalid ? `<div class="reward-validation">不可领取：${escapeHtml(inspection.message)}</div>` : ''}
           </span>
         </label>
-      `,
-        )
+      `;
+        })
         .join('');
     }
   } else {
@@ -983,25 +719,29 @@ function renderChoiceModule() {
     const itemMax = document.getElementById('item-max');
 
     if (itemOptions && itemCount && itemSelected && itemMax) {
-      itemCount.textContent = `${items.length}选${limits.items}`;
-      itemMax.textContent = String(limits.items);
+      itemCount.textContent = `${items.length}选${usableLimits.items}`;
+      itemMax.textContent = String(usableLimits.items);
 
       const inputType = 'checkbox';
       const inputName = '';
 
       itemOptions.innerHTML = items
-        .map(
-          (item, idx) => `
-        <label class="option">
-          <input type="${inputType}" ${inputName ? `name="${inputName}"` : ''} value="${idx}" />
-          <span class="icon">${item.emoji || '🧪'}</span>
+        .map((item, idx) => {
+          const inspection = inspections.items[idx];
+          const invalid = !inspection?.ok;
+          return `
+        <label class="option${invalid ? ' option-invalid' : ''}">
+          <input type="${inputType}" ${inputName ? `name="${inputName}"` : ''} value="${idx}" ${invalid ? 'disabled' : ''} />
+          <span class="icon">${escapeHtml(item.emoji || '🧪')}</span>
           <span class="text">
-            <div class="name">${item.name || '未知'}</div>
-            <div class="desc">${item.description || '无描述'}</div>
+            <div class="name">${escapeHtml(item.name || '未知')}</div>
+            ${isShop ? `<div class="cost">价格: ${escapeHtml(recommendShopPrice('items', item, run.act))} 金币</div>` : ''}
+            <div class="desc">${escapeHtml(contentRuleDescription(item, '效果见规则'))}</div>
+            ${invalid ? `<div class="reward-validation">不可领取：${escapeHtml(inspection.message)}</div>` : ''}
           </span>
         </label>
-      `,
-        )
+      `;
+        })
         .join('');
     }
   } else {
@@ -1014,13 +754,15 @@ function renderChoiceModule() {
 
   // 设置选择事件
   if (hasChoices) {
-    setupChoiceEvents(cards, artifacts, items, limits);
+    setupChoiceEvents(cards, artifacts, items, usableLimits);
   }
 }
 
 // 设置选择事件
 function setupChoiceEvents(cards: any[], artifacts: any[], items: any[], limits: any) {
   const selections = { cards: [] as number[], artifacts: [] as number[], items: [] as number[] };
+  const activeRun = readRunState(__STAT__);
+  const isShop = activeRun?.phase === 'in_node' && activeRun.currentNode?.kind === 'shop';
 
   const idFor = (type: 'cards' | 'artifacts' | 'items', part: 'options' | 'selected') => {
     if (type === 'cards') return `card-${part}`;
@@ -1079,6 +821,7 @@ function setupChoiceEvents(cards: any[], artifacts: any[], items: any[], limits:
   if (oldBtn) {
     const confirmBtn = oldBtn.cloneNode(true) as HTMLButtonElement;
     oldBtn.parentNode?.replaceChild(confirmBtn, oldBtn);
+    confirmBtn.textContent = isShop ? '结算并离开' : '确认领取';
 
     confirmBtn.addEventListener('click', async () => {
       if (__isMutating) return;
@@ -1136,6 +879,8 @@ function setupChoiceEvents(cards: any[], artifacts: any[], items: any[], limits:
         try {
           __isMutating = true;
           confirmBtn.disabled = true;
+          document.getElementById('reward-error')?.remove();
+          const selectedRewardCount = selections.cards.length + selections.artifacts.length + selections.items.length;
 
           // 先隐藏选择模块
           const choiceOverlay = document.getElementById('choice-container');
@@ -1143,56 +888,35 @@ function setupChoiceEvents(cards: any[], artifacts: any[], items: any[], limits:
 
           await applyRewardSelectionsInline(selections);
 
-          // 向聊天末尾插入一条用户消息，告知本轮领取的奖励（当前阶段不隐藏，便于测试观察）
-          try {
-            const parts: string[] = [];
-            // 从当前可选项中按索引取名称，构造汇总文本
-            if (selections.cards.length) {
-              const names = selections.cards
-                .map(
-                  i =>
-                    (cards[i]?.name || cards[i]?.id || '未知') + (cards[i]?.quantity ? ` x${cards[i]?.quantity}` : ''),
-                )
-                .filter(Boolean);
-              if (names.length) parts.push(`卡牌[${names.join('，')}]`);
-            }
-            if (selections.artifacts.length) {
-              const names = selections.artifacts
-                .map(
-                  i =>
-                    (artifacts[i]?.name || artifacts[i]?.id || '未知') +
-                    (artifacts[i]?.quantity ? ` x${artifacts[i]?.quantity}` : ''),
-                )
-                .filter(Boolean);
-              if (names.length) parts.push(`遗物[${names.join('，')}]`);
-            }
-            if (selections.items.length) {
-              const names = selections.items
-                .map(
-                  i =>
-                    (items[i]?.name || items[i]?.id || '未知') +
-                    (items[i]?.count ? ` x${items[i]?.count}` : items[i]?.quantity ? ` x${items[i]?.quantity}` : ''),
-                )
-                .filter(Boolean);
-              if (names.length) parts.push(`道具[${names.join('，')}]`);
-            }
-
-            // 不再插入对话：改为缓存汇总文本，待用户下一次发送选项时一并附带
-            __PENDING_REWARD_SUMMARY = parts.length ? `{{user}}已获得：${parts.join(' ')}` : '{{user}}没有领取奖励';
-            console.log('✅ 已缓存本轮奖励选择摘要（将附带到下一次选项发送中）:', __PENDING_REWARD_SUMMARY);
-          } catch (err) {
-            console.warn('插入玩家奖励选择消息失败:', err);
-          }
-
           // 立即重新渲染通知模块以显示用户操作（不要立刻刷新，避免闪烁）
           renderNotifyModule();
 
-          if (typeof toastr !== 'undefined') toastr.success('奖励已成功领取！', '恭喜！');
+          if (typeof toastr !== 'undefined') {
+            if (isShop) {
+              if (selectedRewardCount > 0) toastr.success('交易已完成！', '商店结算');
+              else toastr.info('未购买任何商品。', '已离开商店');
+            } else if (selectedRewardCount > 0) {
+              toastr.success('奖励已成功领取！', '恭喜！');
+            } else {
+              toastr.info('已跳过本次奖励。', '继续远征');
+            }
+          }
           // 领取奖励后需要刷新页面数据
-          setTimeout(() => (window as any).refreshData(), 200);
+          setTimeout(() => void loadGameData(), 200);
         } catch (e) {
           console.error('确认领取失败', e);
-          if (typeof toastr !== 'undefined') toastr.error('领取奖励失败，请重试', '错误');
+          const message = e instanceof Error ? e.message : '领取奖励失败，请重试';
+          const choiceOverlay = document.getElementById('choice-container');
+          if (choiceOverlay) choiceOverlay.style.display = 'flex';
+          confirmBtn.disabled = false;
+
+          const error = document.createElement('div');
+          error.id = 'reward-error';
+          error.className = 'reward-error';
+          error.setAttribute('role', 'alert');
+          error.textContent = message;
+          confirmBtn.parentElement?.appendChild(error);
+          if (typeof toastr !== 'undefined') toastr.error(message, '奖励领取失败');
         } finally {
           __isMutating = false;
         }
@@ -1214,9 +938,6 @@ function updateConfirmButtonState(selections: any, cards: any[], artifacts: any[
 function renderRewardInline(optionsContainer: HTMLElement) {
   if (__isMutating) return; // 防抖
 
-  console.log('🎁 渲染奖励内联 - 开始');
-  console.log('🎁 渲染奖励内联 - 可选奖励:', hasSelectableRewards(__STAT__));
-
   // 可选奖励存在时，隐藏选项文本和自定义行动，但保留奖励选择界面
   const selectable = hasSelectableRewards(__STAT__);
 
@@ -1226,7 +947,6 @@ function renderRewardInline(optionsContainer: HTMLElement) {
     // 隐藏自定义行动
     const customAction = document.querySelector('.custom-action') as HTMLElement;
     if (customAction) customAction.style.display = 'none';
-    console.log('🎁 有可选奖励，隐藏选项文本和自定义行动');
   } else {
     // 显示选项文本容器和自定义行动
     optionsContainer.style.display = '';
@@ -1257,19 +977,72 @@ function renderRewardInline(optionsContainer: HTMLElement) {
   bindCustomActionControls();
 }
 
-// 过滤掉数组中的元数据标记
-function filterMetadata(arr: any[]): any[] {
-  if (!Array.isArray(arr)) return [];
-  return arr.filter(
-    item => item !== '$__META_EXTENSIBLE__$' && item !== '[]' && item !== undefined && item !== null && item !== '',
+function applyHistoricalReadOnlyMode(): boolean {
+  const isLatest = isCurrentMessageLatest();
+  const root = document.querySelector('.mwg-statusbar');
+  root?.classList.toggle('is-history', !isLatest);
+  if (isLatest) return false;
+
+  const actionSection = document.querySelector('.action-section') as HTMLElement | null;
+  if (actionSection) actionSection.style.display = 'none';
+  const runActions = document.getElementById('run-actions');
+  if (runActions) runActions.replaceChildren();
+  const runCurrent = document.getElementById('run-current');
+  if (runCurrent && !runCurrent.textContent?.startsWith('历史记录')) {
+    runCurrent.textContent = `历史记录 · ${runCurrent.textContent || '远征状态'}`;
+  }
+  const deleteToggle = document.getElementById('delete-mode-toggle') as HTMLButtonElement | null;
+  if (deleteToggle) {
+    deleteToggle.disabled = true;
+    deleteToggle.title = '历史记录只读';
+  }
+  document.querySelectorAll<HTMLButtonElement>('.card-delete-btn').forEach(button => {
+    button.disabled = true;
+    button.style.display = 'none';
+  });
+  return true;
+}
+
+function startLatestMessageGuard(): void {
+  if (__stopLatestMessageGuard !== null || !isCurrentMessageWithinDepth(2)) return;
+  __stopLatestMessageGuard = watchCurrentMessageDepth(
+    {
+      onHistorical: () => applyHistoricalReadOnlyMode(),
+      onOutOfRange: () => {
+        void rerenderHistoricalMessageForDepth().catch(error => {
+          console.warn('[MagicGirlWorld] 超出最近三层后卸载状态栏失败，保留只读兜底', error);
+        });
+        __stopLatestMessageGuard = null;
+      },
+    },
+    2,
   );
 }
 
-// 清除临时奖励变量
-async function clearRewardTemps() {
-  // 遵循只读策略：不再主动清理 reward 变量，由上游脚本或AI决定何时移除
-  console.group('[奖励系统] 跳过清理临时奖励变量（只读策略）');
-  console.groupEnd();
+function contentDescriptionStatusNames(content?: Record<string, any>): Record<string, string> {
+  const names: Record<string, string> = {};
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (!value || typeof value !== 'object') return;
+    const status = value as Record<string, unknown>;
+    if (typeof status.id === 'string' && typeof status.name === 'string' && status.name.trim()) {
+      names[status.id] = status.name.trim();
+    }
+  };
+  visit(__STAT__?.battle?.statuses);
+  visit(content?.status);
+  return names;
+}
+
+function contentRuleDescription(content: Record<string, any>, fallback = ''): string {
+  return (
+    (typeof content?.description === 'string' ? content.description.trim() : '') ||
+    describeCompactContent(content, { statusNames: contentDescriptionStatusNames(content) }) ||
+    fallback
+  );
 }
 
 // 翻译卡牌类型
@@ -1279,135 +1052,345 @@ function translateCardType(type: string): string {
     Skill: '技能',
     Power: '能力',
     Event: '事件',
-    Corrupt: '腐化',
+    Curse: '诅咒',
   };
   return typeMap[type] || type;
 }
 
-// 安全获取变量值的函数
-function safeGetValue(obj: any, path: string, defaultValue: any = '未知'): any {
-  try {
-    const keys = path.split('.');
-    let current = obj;
-    for (const key of keys) {
-      if (current && typeof current === 'object' && key in current) {
-        current = current[key];
-      } else {
-        return defaultValue;
-      }
-    }
-
-    // 如果是数组格式 [value, description]，取第一个元素（忽略元数据占位）
-    if (Array.isArray(current) && current.length > 0) {
-      let value = current[0];
-      if (value === '$__META_EXTENSIBLE__$' || value === '[]') {
-        for (let i = 1; i < current.length; i++) {
-          if (current[i] !== '$__META_EXTENSIBLE__$' && current[i] !== '[]') {
-            value = current[i];
-            break;
-          }
-        }
-        if (value === '$__META_EXTENSIBLE__$' || value === '[]') return defaultValue;
-      }
-      return value;
-    }
-
-    return current === null || current === undefined ? defaultValue : current;
-  } catch (error) {
-    console.warn('获取变量值失败:', path, error);
-    return defaultValue;
-  }
-}
-
-// 安全获取完整数组的函数（用于持有物、状态等直接的字符串数组）
-function safeGetArray(obj: any, path: string, defaultValue: any[] = []): any[] {
-  try {
-    const keys = path.split('.');
-    let current = obj;
-    for (const key of keys) {
-      if (current && typeof current === 'object' && key in current) {
-        current = current[key];
-      } else {
-        return defaultValue;
-      }
-    }
-    if (Array.isArray(current))
-      return current.filter(
-        (item: any) =>
-          item !== '$__META_EXTENSIBLE__$' && item !== '[]' && item !== undefined && item !== null && item !== '',
-      );
-    return defaultValue;
-  } catch (error) {
-    console.warn('获取数组失败:', path, error);
-    return defaultValue;
-  }
-}
-
 // 初始化UI
 function initializeUI() {
-  console.log('初始化RPG UI界面');
-  // renderOptions() 将在 loadGameData() 中调用，避免重复渲染
-}
-
-// 设置标签切换功能
-function setupTabSwitching() {
-  const tabButtons = document.querySelectorAll('.tab-button');
-  const moduleContents = document.querySelectorAll('.module-content');
-
-  tabButtons.forEach(button => {
-    button.addEventListener('click', function (this: HTMLElement) {
-      const targetModule = this.getAttribute('data-module');
-
-      // 移除所有活动状态
-      tabButtons.forEach(btn => btn.classList.remove('active'));
-      moduleContents.forEach(content => ((content as HTMLElement).style.display = 'none'));
-
-      // 设置当前活动状态
-      this.classList.add('active');
-      const targetContent = document.getElementById(targetModule + '-content');
-      if (targetContent) {
-        targetContent.style.display = 'block';
-      }
-    });
+  document.getElementById('delete-mode-toggle')?.addEventListener('click', toggleDeleteMode);
+  document.querySelector('.battle-book-btn')?.addEventListener('click', toggleBattleBook);
+  document.addEventListener('click', event => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    if (!target.closest('#run-repair-btn')) return;
+    event.preventDefault();
+    const readiness = currentInitialContentReadiness();
+    if (readiness && !readiness.ok) void requestInitialContentRepair(readiness);
   });
 }
 
-// 基于经验的升级结算：按 50×当前等级 结算多级升级，并在每个偶数级发放一次删卡次数
-async function settleLevelByExp(): Promise<void> {
+function pendingRunText(): string {
+  return [__PENDING_REWARD_SUMMARY, __PENDING_RUN_SUMMARY].filter(Boolean).join('\n\n');
+}
+
+function routePrompt(node: RunNodeChoice): string {
+  const activeRun = readRunState(__STAT__);
+  // Events and rest nodes already have their creative direction in the route
+  // marker; avoid rebuilding the full content pack unless budgets are needed.
+  const needsBuildContext = isBattleRunNode(node.kind) || node.kind === 'shop';
+  const buildContext = needsBuildContext ? currentBuildContext() : null;
+  return formatRoutePrompt({
+    node,
+    runSeed: activeRun?.seed ?? 0,
+    run: activeRun,
+    // Existing status variables are already injected on ordinary turns. The
+    // bounded continuity line is most useful when an event needs story facts.
+    worldContinuity: node.kind === 'event' ? formatWorldContinuityHint(__STAT__) : null,
+    buildBudget: buildBudgetPrompt(buildContext),
+    enemyBudget:
+      node.kind === 'battle' || node.kind === 'elite' || node.kind === 'boss'
+        ? buildEnemyBudgetPrompt(node, buildContext)
+        : null,
+    pending: pendingRunText(),
+    shopBudget:
+      node.kind === 'shop'
+        ? `[商店预算] ${formatShopBudget(recommendShopBudget(createRunPacingContext(node, activeRun)))}`
+        : null,
+    buildGuidance: node.kind === 'shop' ? buildGuidancePrompt(buildContext) : null,
+  });
+}
+
+function setRunButtonsDisabled(disabled: boolean): void {
+  document.querySelectorAll<HTMLButtonElement>('[data-run-action]').forEach(button => {
+    button.disabled = disabled;
+  });
+}
+
+function showRunError(error: unknown, fallback: string): void {
+  __RUN_ERROR = error instanceof Error ? error.message : fallback;
+  for (const id of ['run-error', 'run-opt-in-error']) {
+    const errorEl = document.getElementById(id);
+    if (!errorEl) continue;
+    errorEl.textContent = __RUN_ERROR;
+    errorEl.style.display = '';
+  }
+  if (typeof toastr !== 'undefined') toastr.error(__RUN_ERROR);
+}
+
+async function sendEnteredRunNode(node: RunNodeChoice): Promise<void> {
+  if (__IS_SENDING_OPTION) return;
+  setSendingState(true);
+  setRunButtonsDisabled(true);
   try {
-    await updateVariablesWith(
-      async (variables: any) => {
-        const statRoot = getStatRootRef(variables) || {};
-        const battle = statRoot?.battle || variables?.battle;
-        if (!battle) return variables;
-        if (!battle.core) battle.core = {};
+    await runActionHost.enterRunNode(node, routePrompt(node));
+    __PENDING_REWARD_SUMMARY = null;
+    __PENDING_RUN_SUMMARY = null;
+  } catch (error) {
+    showRunError(error, '路线进入失败');
+    setRunButtonsDisabled(false);
+  } finally {
+    setSendingState(false);
+  }
+}
 
-        let level = Number(battle.level) || 1;
-        let exp = Number(battle.exp) || 0;
-        let promotions = 0;
+async function retryActiveRunNode(node: RunNodeChoice): Promise<void> {
+  if (__IS_SENDING_OPTION) return;
+  setSendingState(true);
+  setRunButtonsDisabled(true);
+  try {
+    await runActionHost.retryRunNode(node, routePrompt(node));
+    __RUN_ERROR = null;
+  } catch (error) {
+    showRunError(error, '节点重试失败');
+    setRunButtonsDisabled(false);
+  } finally {
+    setSendingState(false);
+  }
+}
 
-        const required = (lv: number) => Math.max(50 * lv, 50);
-        while (exp >= required(level)) {
-          exp -= required(level);
-          level += 1;
-          promotions += 1;
-          if (level % 2 === 0) {
-            const prev = Number(battle.core.card_removal_count) || 0;
-            battle.core.card_removal_count = prev + 1;
-          }
-        }
+async function requestInitialContentRepair(readiness: PlayerContentReadiness): Promise<void> {
+  if (__IS_SENDING_OPTION || readiness.ok) return;
+  const prompt = formatPlayerContentRepairPrompt(readiness);
+  if (!prompt) return;
+  setSendingState(true);
+  setRunButtonsDisabled(true);
+  try {
+    await commonActionHost.continueWithPrompt({ prompt });
+    __RUN_ERROR = null;
+  } catch (error) {
+    showRunError(error, '请求修复初始战斗内容失败');
+    setRunButtonsDisabled(false);
+  } finally {
+    setSendingState(false);
+  }
+}
 
-        if (promotions > 0) {
-          battle.level = level;
-          battle.exp = exp;
-        }
-        return variables;
-      },
-      { type: 'message' },
+async function requestRestUpgrade(node: RunNodeChoice, card: Record<string, any>): Promise<void> {
+  if (__IS_SENDING_OPTION) return;
+  setSendingState(true);
+  setRunButtonsDisabled(true);
+  try {
+    await runActionHost.requestRestUpgrade(node, card);
+    __RUN_ERROR = null;
+  } catch (error) {
+    showRunError(error, '升级请求失败');
+    setRunButtonsDisabled(false);
+  } finally {
+    setSendingState(false);
+  }
+}
+
+async function healAtRest(): Promise<void> {
+  try {
+    const result = await runActionHost.healAtRest();
+    __USER_MUTATION_PILLS.push(`营火恢复：${result.healed}生命`);
+    __PENDING_RUN_SUMMARY = `{{user}}在营火恢复了${result.healed}点生命`;
+    __RUN_ERROR = null;
+    await loadGameData();
+  } catch (error) {
+    showRunError(error, '营火恢复失败');
+  }
+}
+
+async function leaveCurrentShop(): Promise<void> {
+  try {
+    await runActionHost.leaveShop();
+    __PENDING_RUN_SUMMARY = '{{user}}离开了商店';
+    __RUN_ERROR = null;
+    await loadGameData();
+  } catch (error) {
+    showRunError(error, '离开商店失败');
+  }
+}
+
+async function restartCurrentRun(): Promise<void> {
+  try {
+    await runActionHost.restartRun();
+    __PENDING_RUN_SUMMARY = '{{user}}开始了一次新的远征';
+    __RUN_ERROR = null;
+    await loadGameData();
+  } catch (error) {
+    showRunError(error, '新远征初始化失败');
+  }
+}
+
+function renderRunData(stat: any): void {
+  const section = document.getElementById('run-section');
+  const currentEl = document.getElementById('run-current');
+  const actions = document.getElementById('run-actions');
+  const errorEl = document.getElementById('run-error');
+  const optIn = document.getElementById('run-opt-in');
+  const repairButton = document.getElementById('run-repair-btn') as HTMLButtonElement | null;
+  const optInError = document.getElementById('run-opt-in-error');
+  const actionSection = document.querySelector('.action-section') as HTMLElement | null;
+  const run = readRunState(stat);
+  if (!section || !currentEl || !actions || !errorEl) {
+    if (section) section.style.display = 'none';
+    return;
+  }
+
+  if (!run) {
+    section.style.display = 'none';
+    const isLatest = isCurrentMessageLatest();
+    const expeditionMode = selectedGameMode(stat) === 'expedition';
+    if (optIn) optIn.style.display = isLatest && expeditionMode ? '' : 'none';
+    if (!isLatest) return;
+    const readiness = currentInitialContentReadiness();
+    if (repairButton) repairButton.style.display = readiness && !readiness.ok ? '' : 'none';
+    if (optInError) {
+      optInError.textContent = readiness && !readiness.ok ? formatPlayerContentReadiness(readiness) : '';
+      optInError.style.display = readiness && !readiness.ok ? '' : 'none';
+    }
+    return;
+  }
+
+  if (optIn) optIn.style.display = 'none';
+  section.style.display = '';
+  const isLatest = isCurrentMessageLatest();
+  const actEl = document.getElementById('run-act');
+  const floorEl = document.getElementById('run-floor');
+  const goldEl = document.getElementById('run-gold');
+  if (actEl) actEl.textContent = `${run.act}/${run.actCount}`;
+  if (floorEl) floorEl.textContent = `${run.floor}/${run.floorsPerAct}`;
+  if (goldEl) goldEl.textContent = String(run.gold);
+
+  errorEl.textContent = __RUN_ERROR || '';
+  errorEl.style.display = __RUN_ERROR ? '' : 'none';
+  actions.innerHTML = '';
+  const hasRewards = hasSelectableRewards(stat);
+  const needsStoryChoice = run.phase === 'in_node' && run.currentNode?.kind === 'event';
+  if (actionSection) actionSection.style.display = isLatest && (hasRewards || needsStoryChoice) ? '' : 'none';
+
+  const addButton = (text: string, className: string, handler: () => void) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = className;
+    button.dataset.runAction = '1';
+    button.textContent = text;
+    button.addEventListener('click', handler);
+    actions.appendChild(button);
+  };
+
+  if (!isLatest) {
+    currentEl.textContent =
+      run.phase === 'awaiting_choice'
+        ? `历史记录 · Act ${run.act} 第 ${run.floor + 1} 层前`
+        : run.currentNode
+          ? `历史记录 · ${runNodeSummary(run.currentNode)}`
+          : `历史记录 · ${run.phase === 'won' ? '远征完成' : '远征失败'}`;
+    return;
+  }
+
+  // Validate the complete first-response content before exposing any route.
+  // Later deck-building choices stay creative; reward and upgrade transactions
+  // already validate every new persistent definition before committing it.
+  const needsInitialContentGate = run.floor === 0 && run.phase === 'awaiting_choice' && !hasRewards;
+  const readiness = needsInitialContentGate ? currentInitialContentReadiness() : null;
+  if (readiness && !readiness.ok && !needsStoryChoice) {
+    currentEl.textContent = readiness.deck.deckQuantity === 0 ? '等待有效起始牌组' : '起始战斗内容需要修复';
+    errorEl.textContent = formatPlayerContentReadiness(readiness);
+    errorEl.style.display = '';
+    addButton('请求 AI 修复', 'run-choice run-repair', () => void requestInitialContentRepair(readiness));
+    return;
+  }
+
+  if (hasRewards) {
+    currentEl.textContent = run.currentNode?.kind === 'shop' ? '商店结算' : '先完成本次奖励结算';
+    return;
+  }
+  if (run.phase === 'awaiting_choice') {
+    currentEl.textContent = `Act ${run.act} · 选择第 ${run.floor + 1} 层路线`;
+    run.choices.forEach(choice => {
+      const label = RUN_NODE_LABELS[choice.kind];
+      addButton(
+        `${label.icon} ${label.name}${choice.danger ? ` · 危险${choice.danger}` : ''}`,
+        `run-choice run-${choice.kind}`,
+        () => void sendEnteredRunNode(choice),
+      );
+    });
+    return;
+  }
+  if (run.phase === 'won' || run.phase === 'lost') {
+    currentEl.textContent = run.phase === 'won' ? '远征完成' : '远征失败';
+    addButton('开始新远征', 'run-choice', () => void restartCurrentRun());
+    return;
+  }
+
+  const node = run.currentNode!;
+  currentEl.textContent = runNodeSummary(node);
+  if (node.kind === 'rest') {
+    addButton('恢复 30% 最大生命', 'run-choice run-rest', () => void healAtRest());
+    const cards = normalizeOptionsList<Record<string, any>>(stat?.battle?.cards).filter(
+      card => Number(card.upgrade_level || 0) < 1,
     );
+    cards.forEach(card =>
+      addButton(
+        `升级 · ${String(card.name || card.id)}`,
+        'run-choice run-upgrade',
+        () => void requestRestUpgrade(node, card),
+      ),
+    );
+    if (cards.length === 0) currentEl.textContent += ' · 没有可升级卡牌';
+    return;
+  }
+  if (node.kind === 'shop') {
+    currentEl.textContent += ' · 未生成商品';
+    addButton('重新生成商店', 'run-choice', () => void retryActiveRunNode(node));
+    addButton('离开商店', 'run-choice', () => void leaveCurrentShop());
+    return;
+  }
+  if (node.kind === 'event') {
+    currentEl.textContent += __RUN_ERROR ? ' · 结果未结算' : ' · 等待事件结果';
+    addButton('重新生成事件', 'run-choice', () => void retryActiveRunNode(node));
+    return;
+  }
+  currentEl.textContent += ' · 等待战斗结束';
+  addButton('重新进入战斗', 'run-choice', () => void retryActiveRunNode(node));
+}
+
+// 基于经验的升级结算：经验阈值为 100 + 50×(当前等级-1)，每到偶数级发放一次删卡次数。
+async function settleLevelByExp(): Promise<ProgressionSettlement | null> {
+  if (!isCurrentMessageLatest()) return null;
+  if (!needsProgressionSettlement(__STAT__?.battle)) return null;
+  let settlement: ProgressionSettlement | null = null;
+  try {
+    await commonActionHost.updateVariablesWith((variables: any) => {
+      const statRoot = getStatRootRef(variables) || {};
+      const battle = statRoot?.battle;
+      if (!battle || typeof battle !== 'object') return variables;
+      settlement = settleBattleProgression(battle);
+      return variables;
+    });
   } catch (e) {
     console.warn('结算升级失败：', e);
   }
+  return settlement;
+}
+
+function selectedGameMode(stat: any): 'story' | 'expedition' {
+  const context = [getRelativeChatMessageText(-1), getRelativeChatMessageText(-2), getCurrentChatMessageText()].join('\n');
+  if (context.includes('[远征模式]')) return 'expedition';
+  return stat?.game_mode === 'expedition' ? 'expedition' : 'story';
+}
+
+async function synchronizeSelectedGameMode(): Promise<void> {
+  if (!isCurrentMessageLatest()) return;
+  const mode = selectedGameMode(__STAT__);
+  if (__STAT__?.game_mode !== mode) {
+    await commonActionHost.updateVariablesWith((variables: any) => {
+      const stat = getStatRootRef(variables) || {};
+      stat.game_mode = mode;
+      return variables;
+    });
+    __STAT__.game_mode = mode;
+  }
+  if (mode !== 'expedition' || readRunState(__STAT__)) return;
+  const readiness = currentInitialContentReadiness();
+  if (!readiness?.ok) return;
+  await runActionHost.startRun();
+  __PENDING_RUN_SUMMARY = '{{user}}选择了远征模式';
 }
 
 // 加载游戏数据
@@ -1418,23 +1401,40 @@ async function loadGameData() {
     let rpgData = {};
 
     try {
-      variables = getVariables({ type: 'message' });
+      variables = getCurrentMessageVariables();
       __STAT__ = getStatRootRef(variables) || {};
       __DELTA__ = variables?.delta_data || variables?.delta || {};
       rpgData = __STAT__;
 
-      console.log('🔄 加载游戏数据 - 变量:', variables);
-      console.log('🔄 加载游戏数据 - stat_data:', __STAT__);
-      console.log('🔄 加载游戏数据 - delta_data:', __DELTA__);
-
-      // 第一次加载时，__PREV_ROUND_STAT 为空，这样第一轮不会显示任何变化
-      // 在渲染完成后会更新为当前状态，供下一轮使用
     } catch (msgError) {
       console.warn('获取变量失败：', msgError);
       return;
     }
 
-    // 先结算基于经验的升级（AI只会增加exp）
+    try {
+      await synchronizeSelectedGameMode();
+      variables = getCurrentMessageVariables();
+      __STAT__ = getStatRootRef(variables) || {};
+      __DELTA__ = variables?.delta_data || variables?.delta || {};
+      rpgData = __STAT__;
+    } catch (error) {
+      console.warn('同步游戏模式失败：', error);
+    }
+
+    // 剧情模式不触发远征事务；远征模式仅在开始页选择后由程序初始化。
+    if (readRunState(__STAT__)) {
+      await ensureAndConsumeRunState();
+      try {
+        variables = getCurrentMessageVariables();
+        __STAT__ = getStatRootRef(variables) || {};
+        __DELTA__ = variables?.delta_data || variables?.delta || {};
+        rpgData = __STAT__;
+      } catch (e) {
+        console.warn('远征结算后重新获取变量失败：', e);
+      }
+    }
+
+    // 先结算基于经验的升级（AI只会增加 exp）
     try {
       await settleLevelByExp();
     } catch (e) {
@@ -1443,15 +1443,10 @@ async function loadGameData() {
 
     // 结算后重新获取最新变量快照
     try {
-      variables = getVariables({ type: 'message' });
+      variables = getCurrentMessageVariables();
       __STAT__ = getStatRootRef(variables) || {};
       __DELTA__ = variables?.delta_data || variables?.delta || {};
       rpgData = __STAT__;
-      // 保存本轮结算前的快照（用于通知显示前后对比）
-      __PRE_SETTLE_BATTLE = {
-        level: Number(__STAT__?.battle?.level ?? 1),
-        exp: Number(__STAT__?.battle?.exp ?? 0),
-      };
     } catch (e) {
       console.warn('结算后重新获取变量失败：', e);
     }
@@ -1463,18 +1458,9 @@ async function loadGameData() {
     renderFactionData(rpgData);
 
     // 渲染选项/通知
-    console.log('🔄 加载游戏数据 - 开始渲染选项');
-    renderOptions();
-    console.log('🔄 加载游戏数据 - 渲染选项完成');
-
-    // 应用文本高亮（新的轻量级实现）
-    if (typeof requestAnimationFrame !== 'undefined') {
-      requestAnimationFrame(() => {
-        setTimeout(() => applyTextHighlight(), 50);
-      });
-    } else {
-      setTimeout(() => applyTextHighlight(), 100);
-    }
+    if (!applyHistoricalReadOnlyMode()) renderOptions();
+    renderRunData(rpgData);
+    startLatestMessageGuard();
   } catch (error) {
     console.error('加载游戏数据失败:', error);
   }
@@ -1487,15 +1473,14 @@ function renderStatusData(rpgData: any) {
   // HP和欲望值已移至战斗页面显示，状态栏不再显示这些战斗属性
 
   const elements = [
-    { id: 'status-time', path: 'time' },
-    { id: 'status-location', path: 'location' },
+    { id: 'status-time', value: status?.time },
+    { id: 'status-location', value: readStatusLocation(status) },
   ];
 
-  elements.forEach(({ id, path }) => {
+  elements.forEach(({ id, value }) => {
     const element = document.getElementById(id);
     if (element) {
-      // 新的数据结构直接存储字符串值，不再是[值, 描述]格式
-      element.textContent = status?.[path] || '未知';
+      element.textContent = value || '未知';
     }
   });
 
@@ -1503,9 +1488,7 @@ function renderStatusData(rpgData: any) {
   const jobNameEl = document.getElementById('status-job-name');
   const jobAbilityEl = document.getElementById('status-job-ability');
   if (jobNameEl || jobAbilityEl) {
-    const prof = status?.profession || {};
-    const name = prof && typeof prof === 'object' && 'name' in prof ? (prof as any).name : '';
-    const ability = prof && typeof prof === 'object' && 'ability' in prof ? (prof as any).ability : '';
+    const { name, ability } = readStatusProfession(status);
     if (jobNameEl) jobNameEl.textContent = name || '未知';
     if (jobAbilityEl) jobAbilityEl.textContent = ability || '未知';
   }
@@ -1539,7 +1522,7 @@ function renderStatusData(rpgData: any) {
   if (itemsContainer) {
     if (items.length > 0) {
       itemsContainer.innerHTML = items
-        .map(item => `<div class="info-item"><span class="value">${item}</span></div>`)
+        .map(item => `<div class="info-item"><span class="value">${escapeHtml(item)}</span></div>`)
         .join('');
     } else {
       itemsContainer.innerHTML = '<div class="info-item"><span class="value">无</span></div>';
@@ -1562,7 +1545,7 @@ function renderStatusData(rpgData: any) {
         .map((item: any, index: number) => {
           if (typeof item === 'string') {
             // 字符串格式：只显示标签，无详情
-            return `<span class="status-tag status-permanent">${item}</span>`;
+            return `<span class="status-tag status-permanent">${escapeHtml(item)}</span>`;
           } else if (item && typeof item === 'object') {
             const name = item.name || '未知状态';
             const desc = item.description || '';
@@ -1572,22 +1555,25 @@ function renderStatusData(rpgData: any) {
               // 有详情：可点击展开
               return `
                 <div class="status-tag-wrapper">
-                  <span class="status-tag status-permanent clickable" onclick="toggleStatusDetail('${uniqueId}')">
-                    ${name} <span class="expand-icon">▼</span>
-                  </span>
+                  <button type="button" class="status-tag status-permanent clickable" data-status-detail-id="${uniqueId}">
+                    ${escapeHtml(name)} <span class="expand-icon">▼</span>
+                  </button>
                   <div class="status-detail" id="${uniqueId}" style="display: none;">
-                    ${desc}
+                    ${escapeHtml(desc)}
                   </div>
                 </div>
               `;
             } else {
               // 无详情：只显示标签
-              return `<span class="status-tag status-permanent">${name}</span>`;
+              return `<span class="status-tag status-permanent">${escapeHtml(name)}</span>`;
             }
           }
-          return `<span class="status-tag status-permanent">${String(item)}</span>`;
+          return `<span class="status-tag status-permanent">${escapeHtml(String(item))}</span>`;
         })
         .join('');
+      permanentElement.querySelectorAll<HTMLButtonElement>('[data-status-detail-id]').forEach(button => {
+        button.addEventListener('click', () => toggleStatusDetail(button.dataset.statusDetailId || ''));
+      });
     } else {
       permanentElement.innerHTML = '<span class="status-tag status-empty">无</span>';
     }
@@ -1600,12 +1586,12 @@ function renderStatusData(rpgData: any) {
       temporaryElement.innerHTML = temporaryStatus
         .map((item: any) => {
           if (typeof item === 'string') {
-            return `<span class="status-tag status-temporary">${item}</span>`;
+            return `<span class="status-tag status-temporary">${escapeHtml(item)}</span>`;
           } else if (item && typeof item === 'object') {
             const name = item.name || '未知状态';
-            return `<span class="status-tag status-temporary">${name}</span>`;
+            return `<span class="status-tag status-temporary">${escapeHtml(name)}</span>`;
           }
-          return `<span class="status-tag status-temporary">${String(item)}</span>`;
+          return `<span class="status-tag status-temporary">${escapeHtml(String(item))}</span>`;
         })
         .join('');
     } else {
@@ -1649,7 +1635,7 @@ function renderBattleData(rpgData: any) {
     // 新的数据结构中经验值直接存储在battle中
     const exp = Number(battle?.exp) || 0;
     const level = Number(battle?.level) || 1;
-    const need = Math.max(50 * level, 50);
+    const need = requiredExperienceForLevel(level);
     battleExpElement.textContent = `${exp}/${need}`;
   }
 
@@ -1660,7 +1646,7 @@ function renderBattleData(rpgData: any) {
     deleteCountElement.textContent = cardRemove.toString();
   }
 
-  // 更新旧的删除次数显示元素
+  // 同步资源概览中的删卡次数。
   const battleCardRemoveElement = document.getElementById('battle-card-remove');
   if (battleCardRemoveElement) {
     const cardRemove = core?.card_removal_count || 0;
@@ -1674,26 +1660,29 @@ function renderBattleData(rpgData: any) {
 
   // 渲染牌库 - 简化显示，不显示详细效果
   if (deckContainer) {
-    const deck = filterMetadata(cards || []);
+    const deck = flattenMvuArray(cards, { objectsOnly: true });
 
     if (deck.length > 0) {
       // 创建简化的卡牌内容
       const cardsHtml = deck
         .map(
           (card: any) => `
-          <div class="card" data-card-id="${card.id}">
-            <div class="card-delete-btn" onclick="removeCard('${card.id}')" style="display: none;">
+          <div class="card" data-card-id="${escapeHtml(card.id || '')}">
+            <button type="button" class="card-delete-btn" data-card-id="${escapeHtml(card.id || '')}" title="删除一张" style="display: none;">
               🗑️
-            </div>
-            <div class="card-name">${card.emoji || '🃏'} ${card.name}</div>
-            <div class="card-cost">消耗: ${card.cost || 0}</div>
-            <div class="card-type">${translateCardType(card.type || 'Skill')}</div>
-            <div class="card-quantity">数量: ${card.quantity || 1}</div>
+            </button>
+            <div class="card-name">${escapeHtml(card.emoji || '🃏')} ${escapeHtml(card.name || '未知')}</div>
+            <div class="card-cost">消耗: ${escapeHtml(card.cost ?? 0)}</div>
+            <div class="card-type">${escapeHtml(translateCardType(card.type || 'Skill'))}</div>
+            <div class="card-quantity">数量: ${escapeHtml(card.quantity || 1)}</div>
           </div>`,
         )
         .join('');
 
       deckContainer.innerHTML = cardsHtml;
+      deckContainer.querySelectorAll<HTMLButtonElement>('.card-delete-btn').forEach(button => {
+        button.addEventListener('click', () => void removeCard(button.dataset.cardId || ''));
+      });
     } else {
       deckContainer.innerHTML = '<div class="value">牌库为空</div>';
     }
@@ -1701,13 +1690,13 @@ function renderBattleData(rpgData: any) {
 
   // 渲染遗物
   if (artifactsContainer) {
-    const filteredArtifacts = filterMetadata(artifacts);
+    const filteredArtifacts = flattenMvuArray(artifacts, { objectsOnly: true });
     if (filteredArtifacts.length > 0) {
       artifactsContainer.innerHTML = filteredArtifacts
         .map(
           (artifact: any) => `
           <div class="info-item">
-            <span class="value">${artifact.emoji || '💎'} ${artifact.name}: ${artifact.description}</span>
+            <span class="value">${escapeHtml(artifact.emoji || '💎')} ${escapeHtml(artifact.name || '未知')}: ${escapeHtml(contentRuleDescription(artifact, '效果见规则'))}</span>
           </div>`,
         )
         .join('');
@@ -1718,14 +1707,14 @@ function renderBattleData(rpgData: any) {
 
   // 渲染道具 - 简化显示，不提供使用功能
   if (itemsContainer) {
-    const filteredItems = filterMetadata(items);
+    const filteredItems = flattenMvuArray(items, { objectsOnly: true });
     if (filteredItems.length > 0) {
       itemsContainer.innerHTML = filteredItems
         .map(
           (item: any) => `
           <div class="info-item">
-            <span class="value">${item.emoji || '🧪'} ${item.name} x${item.count || 1}</span>
-            <div class="item-description">${item.description || '无描述'}</div>
+            <span class="value">${escapeHtml(item.emoji || '🧪')} ${escapeHtml(item.name || '未知')} x${escapeHtml(item.count || 1)}</span>
+            <div class="item-description">${escapeHtml(contentRuleDescription(item, '效果见规则'))}</div>
           </div>`,
         )
         .join('');
@@ -1735,7 +1724,7 @@ function renderBattleData(rpgData: any) {
   }
 
   // 战斗之书数据准备（不立即渲染，等用户点击时再渲染）
-  (window as any).battleBookData = {
+  __BATTLE_BOOK_DATA = {
     playerStatusEffects: battle.player_status_effects || [],
     statuses: battle.statuses || [],
   };
@@ -1755,76 +1744,64 @@ function renderNPCData(rpgData: any) {
     if (npcEntries.length > 0) {
       relationsContainer.innerHTML = npcEntries
         .map(([npcId, npc]: [string, any]) => {
-          // 兼容MVU格式 [值, 描述] 和直接值格式
-          const getValue = (field: any, defaultVal: any = '未知') => {
-            if (Array.isArray(field) && field.length > 0) {
-              return field[0]; // MVU格式取第一个元素
-            }
-            return field || defaultVal;
-          };
-
-          const name = getValue(npc?.name, npcId);
-          const tracking = getValue(npc?.tracking, false);
-          const currentAction = getValue(npc?.current_action, '无动作');
-          const affection = getValue(npc?.affection, 0);
-          const affectionLevel = getValue(npc?.affection_level, '未知');
-          const alignment = getValue(npc?.alignment, '未知阵营');
-          const relationship = getValue(npc?.relationship, '未知关系');
-          const otherNpcRelations = getValue(npc?.other_npc_relations, '无');
-          const level = getValue(npc?.level, 1);
-          const appearance = getValue(npc?.appearance, '无描述');
-          const abilities = getValue(npc?.abilities, '无');
-          const battleStyle = getValue(npc?.battle_style, '无');
+          const name = npc?.name ?? npcId;
+          const tracking = npc?.tracking ?? false;
+          const currentAction = npc?.current_action ?? '无动作';
+          const affection = npc?.affection ?? 0;
+          const affectionLevel = npc?.affection_level ?? '未知';
+          const alignment = npc?.alignment ?? '未知阵营';
+          const relationship = npc?.relationship ?? '未知关系';
+          const otherNpcRelations = npc?.other_npc_relations ?? '无';
+          const level = npc?.level ?? 1;
+          const appearance = npc?.appearance ?? '无描述';
+          const abilities = npc?.abilities ?? '无';
+          const battleStyle = npc?.battle_style ?? '无';
 
           return `<div class="info-card">
-            <h3 class="card-title">${name}</h3>
+            <h3 class="card-title">${escapeHtml(name)}</h3>
             <div class="info-item">
               <span class="label">追踪状态:</span>
               <span class="value">${tracking ? '追踪中' : '未追踪'}</span>
-              <button class="tracking-btn ${tracking ? 'tracking-on' : 'tracking-off'}"
-                      onclick="toggleNPCTracking('${npcId}', ${!tracking})">
-                ${tracking ? '🔴 停止追踪' : '🟢 开始追踪'}
-              </button>
             </div>
             ${
               tracking
                 ? `<div class="info-item">
               <span class="label">当前行动:</span>
-              <span class="value">${currentAction}</span>
+              <span class="value">${escapeHtml(currentAction)}</span>
             </div>`
                 : ''
             }
             <div class="info-item">
               <span class="label">好感度:</span>
-              <span class="value">${affection} ${affectionLevel ? `(${affectionLevel})` : ''}</span>
+              <span class="value">${escapeHtml(affection)} ${affectionLevel ? `(${escapeHtml(affectionLevel)})` : ''}</span>
             </div>
             <div class="info-item">
               <span class="label">阵营:</span>
-              <span class="value">${alignment}</span>
+              <span class="value">${escapeHtml(alignment)}</span>
             </div>
             <div class="info-item">
               <span class="label">对主角的看法/关系:</span>
-              <span class="value">${relationship}</span>
+              <span class="value">${escapeHtml(relationship)}</span>
             </div>
             <div class="info-item">
               <span class="label">与其他NPC关系:</span>
-              <span class="value">${otherNpcRelations}</span>
+              <span class="value">${escapeHtml(otherNpcRelations)}</span>
             </div>
             <div class="info-item">
               <span class="label">等级:</span>
-              <span class="value">LV ${level}</span>
+              <span class="value">LV ${escapeHtml(level)}</span>
             </div>
             <div class="info-item">
               <span class="label">外貌描述:</span>
-              <span class="value">${appearance}</span>
+              <span class="value">${escapeHtml(appearance)}</span>
             </div>
             <div class="info-item">
               <span class="label">能力描述:</span>
-              <span class="value">${abilities}</span>
+              <span class="value">${escapeHtml(abilities)}</span>
             </div>
             <div class="info-item">
               <span class="label">战斗风格描述:</span>
-              <span class="value">${battleStyle}</span>
+              <span class="value">${escapeHtml(battleStyle)}</span>
             </div>
           </div>`;
         })
@@ -1834,20 +1811,14 @@ function renderNPCData(rpgData: any) {
     }
   }
 
-  // 移除互动记录功能
 }
 
 // 解析并渲染选项按钮（统一处理普通选项和战斗选项）
 function renderOptions() {
-  console.log('🚀 renderOptions() 被调用，当前发送状态:', __IS_SENDING_OPTION);
   const optionsContainer = document.querySelector('.options-text') as HTMLElement | null;
-  if (!optionsContainer) {
-    console.log('❌ 找不到 .options-text 容器');
-    return;
-  }
+  if (!optionsContainer) return;
 
   // 每次渲染新选项时，重置发送锁，并确保自定义行动控件已绑定
-  console.log('🔄 重置发送状态从', __IS_SENDING_OPTION, '到 false');
   setSendingState(false);
   bindCustomActionControls();
 
@@ -1862,74 +1833,31 @@ function renderOptions() {
   // 重置选项渲染标记
   optionsContainer.removeAttribute('data-options-rendered');
 
-  // 优先从template标签获取原始内容（防止XML标签被浏览器过滤）
-  let raw = '';
-  const templateId = optionsContainer.getAttribute('data-source');
-  if (templateId) {
-    const templateEl = document.getElementById(templateId) as HTMLTemplateElement | null;
-    if (templateEl && templateEl.content) {
-      // 从template中提取文本内容
-      const tempDiv = document.createElement('div');
-      tempDiv.appendChild(templateEl.content.cloneNode(true));
-      raw = tempDiv.innerHTML.trim();
-      console.log('📋 从template获取内容:', raw);
-    }
-  }
-
-  // 如果template为空或不存在，回退到直接读取
-  if (!raw) {
-    raw = optionsContainer.innerHTML.trim();
-    console.log('📋 从innerHTML获取内容:', raw);
-  }
-
-  console.log('🔍 Options调试信息:', {
-    原始长度: raw.length,
-    前100字符: raw.substring(0, 100),
-    包含Option标签: raw.includes('<Option'),
-    包含BattleOption标签: raw.includes('<BattleOption'),
-    包含Options外层标签: raw.includes('<Options'),
-  });
-
+  // The regex only inserts this shell. Read the owning floor directly so the
+  // regex does not capture or transport the full AI response through HTML.
+  const messageText = getCurrentChatMessageText();
+  const optionsBlock = messageText.match(/<Options\b[^>]*>[\s\S]*?<\/Options>/i)?.[0] || '';
+  const rewardMarkers = messageText.match(/<REWARD\b[^>]*>/gi)?.join('\n') || '';
+  let raw = [optionsBlock, rewardMarkers].filter(Boolean).join('\n').trim();
+  if (!raw) raw = optionsContainer.innerHTML.trim();
   // 如果HTML内容中没有标签，则获取文本内容
-  if (!raw.includes('<Option') && !raw.includes('<BattleOption') && !raw.includes('<Options')) {
-    // 尝试从template获取纯文本
-    if (templateId) {
-      const templateEl = document.getElementById(templateId) as HTMLTemplateElement | null;
-      if (templateEl) {
-        const tempDiv = document.createElement('div');
-        tempDiv.appendChild(templateEl.content.cloneNode(true));
-        raw = tempDiv.textContent || tempDiv.innerText || '';
-      }
-    }
-    // 如果还是空的，从容器获取
-    if (!raw) {
-      raw = optionsContainer.textContent || optionsContainer.innerText || '';
-    }
-    console.log('🔄 使用文本内容:', raw);
+  if (!hasOptionTagMarkup(raw)) {
+    raw = optionsContainer.textContent || optionsContainer.innerText || raw;
   }
 
   // 预处理：奖励内联
-  const hasRewardTag = raw.includes('<REWARD>');
-  const _optionsRawWithoutReward = raw.replace(/<REWARD>/g, '').trim();
+  const hasRewardTag = /<REWARD\b[^>]*>/i.test(raw);
+  const _optionsRawWithoutReward = raw.replace(/<REWARD\b[^>]*>/gi, '').trim();
 
   // 获取最新变量，用于"无标签但有 reward.*"的情况
   try {
     if (!__STAT__) {
-      const v = getVariables({ type: 'message' });
+      const v = getCurrentMessageVariables();
       __STAT__ = getStatRootRef(v) || {};
       __DELTA__ = v?.delta_data || v?.delta || {};
     }
   } catch (e) {
     console.warn('获取变量失败（奖励预处理）', e);
-  }
-
-  // 调试：打印当前 delta 和 stat 状态
-  console.log('🔍 当前 delta_data:', __DELTA__);
-  console.log(' 当前 stat_data:', __STAT__);
-  try {
-    console.log('📦 完整 stat_data JSON:', JSON.stringify(__STAT__, null, 2));
-  } catch (e) {
-    console.warn('stat_data 序列化失败:', e);
   }
 
   // 奖励处理：
@@ -1949,23 +1877,11 @@ function renderOptions() {
     (typeof expDispCheck === 'string' && expDispCheck.includes('->')) ||
     (typeof levelDispCheck === 'string' && levelDispCheck.includes('->'));
 
-  // 调试：打印通知状态
-  console.log('🔍 通知 pills:', tmpPills);
-  console.log('🔍 经验变化:', expDispCheck);
-  console.log('🔍 等级变化:', levelDispCheck);
-  console.log('🔍 有通知:', hasNotify);
-
-  console.log('🎯 渲染选项 - 有可选奖励:', hasSelectable);
-  console.log('🎯 渲染选项 - 有奖励标签:', hasRewardTag);
-  console.log('🎯 渲染选项 - 有通知:', hasNotify);
-
   if (hasSelectable) {
-    console.log('🎯 渲染选项 - 渲染奖励内联（有可选奖励）');
     renderRewardInline(optionsContainer);
     return;
   }
   if (hasRewardTag || hasNotify) {
-    console.log('🎯 渲染选项 - 渲染奖励内联（有奖励标签或通知）');
     renderRewardInline(optionsContainer);
     // 继续渲染选项（不return）
   }
@@ -1978,83 +1894,51 @@ function renderOptions() {
   // 如果没有内容，隐藏选项区域并返回
   if (!raw.trim()) {
     const optionsSectionForHiding = optionsContainer.closest('.section') as HTMLElement;
-    if (optionsSectionForHiding) {
-      optionsSectionForHiding.style.display = 'none';
-      console.log('❌ 无原始内容，隐藏整个选项区域');
-    }
+    if (optionsSectionForHiding) optionsSectionForHiding.style.display = 'none';
     return;
   }
 
   // 如果内容仍然包含外层Options标签，提取其内容
 
   let processedRaw = raw;
-  if (raw.includes('<Options')) {
-    const optionsMatch = raw.match(/<Options[^>]*>([\s\S]*?)<\/Options>/i);
-    if (optionsMatch) {
-      processedRaw = optionsMatch[1].trim();
-      console.log('🔧 提取Options内层内容:', processedRaw);
-    }
-  }
+  const optionsMatch = raw.match(/<Options[^>]*>([\s\S]*?)<\/Options>/i);
+  if (optionsMatch) processedRaw = optionsMatch[1].trim();
 
-  // 使用正则表达式匹配Option和BattleOption标签
-  const optionRegex = /<(Option|BattleOption)[^>]*>([\s\S]*?)<\/\1>/g;
-  let match;
+  // <template> 会按 HTML 规范把 Option/BattleOption 标签转为小写。
+  // 统一解析规范化前后的大小写，避免多个选项被拼成一个按钮。
+  const taggedOptions = parseOptionTags(processedRaw);
   let hasMatches = false;
 
-  console.log('🎯 开始匹配选项标签:', {
-    原始内容: raw,
-    处理后内容: processedRaw,
-    正则表达式: optionRegex.toString(),
-  });
-
-  while ((match = optionRegex.exec(processedRaw)) !== null) {
+  for (const taggedOption of taggedOptions) {
     hasMatches = true;
-    const optionType = match[1]; // 'Option' 或 'BattleOption'
-    const optionText = match[2].trim();
-
-    console.log('匹配到选项:', optionType, optionText); // 调试日志
+    const optionType = taggedOption.kind;
+    const optionText = taggedOption.text;
 
     if (optionText) {
       const btn = document.createElement('button');
 
       // 根据选项类型设置不同的样式和处理函数
-      if (optionType === 'BattleOption') {
+      if (optionType === 'battle-option') {
         btn.className = 'battle-option-btn';
-        btn.addEventListener('click', () => {
-          console.log('🎯 标准战斗选项被点击:', optionText);
-          handleBattleOption(optionText);
-        });
-        console.log('创建战斗选项按钮:', optionText, 'className:', btn.className);
+        btn.addEventListener('click', () => handleBattleOption(optionText));
       } else {
         btn.className = 'option-btn';
-        btn.addEventListener('click', () => {
-          console.log('🎯 标准普通选项被点击:', optionText);
-          handleOption(optionText);
-        });
-        console.log('创建普通选项按钮:', optionText, 'className:', btn.className);
+        btn.addEventListener('click', () => handleOption(optionText));
       }
 
       btn.textContent = optionText;
       optionsContainer.appendChild(btn);
 
-      // 验证按钮是否正确添加到DOM
-      console.log('按钮已添加到DOM，最终className:', btn.className);
     }
   }
   optionsContainer.setAttribute('data-options-rendered', '1');
 
-  // 不再维护上一轮快照
-
   if (!hasMatches) {
-    console.log('没有匹配到任何选项，尝试智能解析'); // 调试日志
-
     // 优先使用按行解析（最通用的方法）
     const lines = processedRaw
       .split(/\r?\n/)
       .map(l => l.trim())
       .filter(l => l && !l.startsWith('<') && !l.endsWith('>'));
-
-    console.log('🔍 检测到的行数:', lines.length, '内容:', lines);
 
     if (lines.length > 0) {
       // 按行解析选项
@@ -2067,7 +1951,6 @@ function renderOptions() {
           const isBattleOption = /[\u2694\u26A1]|战斗|攻击|迎击|冲击/u.test(cleaned);
 
           const clickOnce = async () => {
-            console.log('🎯 按行解析按钮被点击:', cleaned);
             if (isBattleOption) {
               await handleBattleOption(cleaned);
             } else {
@@ -2078,11 +1961,9 @@ function renderOptions() {
           if (isBattleOption) {
             btn.className = 'battle-option-btn';
             btn.addEventListener('click', clickOnce);
-            console.log('✅ 创建战斗选项按钮:', cleaned);
           } else {
             btn.className = 'option-btn';
             btn.addEventListener('click', clickOnce);
-            console.log('✅ 创建普通选项按钮:', cleaned);
           }
 
           btn.textContent = cleaned;
@@ -2093,10 +1974,9 @@ function renderOptions() {
     } else {
       // 如果按行解析失败，尝试按引号分割（用于特殊格式）
       // 支持中英文引号
-      const quotedOptions = processedRaw.match(/[""][^""]+[""]|"[^"]+"/g);
+      const quotedOptions = processedRaw.match(/["”][^"”]+["”]|"[^"]+"/g);
 
       if (quotedOptions && quotedOptions.length > 1) {
-        console.log('🔍 检测到引号分割的选项:', quotedOptions);
         quotedOptions.forEach(quotedOption => {
           const optionText = quotedOption
             .replace(/^[""]|[""]$/g, '')
@@ -2110,18 +1990,10 @@ function renderOptions() {
 
             if (isBattleOption) {
               btn.className = 'battle-option-btn';
-              btn.addEventListener('click', () => {
-                console.log('🎯 智能解析战斗选项被点击:', optionText);
-                handleBattleOption(optionText);
-              });
-              console.log('✅ 创建智能解析战斗选项:', optionText);
+              btn.addEventListener('click', () => handleBattleOption(optionText));
             } else {
               btn.className = 'option-btn';
-              btn.addEventListener('click', () => {
-                console.log('🎯 智能解析普通选项被点击:', optionText);
-                handleOption(optionText);
-              });
-              console.log('✅ 创建智能解析普通选项:', optionText);
+              btn.addEventListener('click', () => handleOption(optionText));
             }
 
             btn.textContent = optionText;
@@ -2138,11 +2010,9 @@ function renderOptions() {
   if (optionsSectionForHiding) {
     if (hasMatches) {
       optionsSectionForHiding.style.display = '';
-      console.log('✅ 有选项，显示整个选项区域');
     } else {
       // 无论有没有奖励或通知，没有选项就隐藏整个区域
       optionsSectionForHiding.style.display = 'none';
-      console.log('❌ 无选项，隐藏整个选项区域');
     }
   }
 }
@@ -2150,31 +2020,14 @@ function renderOptions() {
 // 添加全局标记防止重复发送
 let __IS_SENDING_OPTION = false;
 
-// 创建一个代理来监听状态变化
-const sendingStateProxy = {
-  _value: false,
-  get value() {
-    return this._value;
-  },
-  set value(newValue) {
-    console.log('📊 发送状态变化:', this._value, '->', newValue, '调用栈:', new Error().stack?.split('\n')[2]?.trim());
-    this._value = newValue;
-    __IS_SENDING_OPTION = newValue;
-  },
-};
-
-// 重写所有设置 __IS_SENDING_OPTION 的地方使用代理
 function setSendingState(value: boolean) {
-  sendingStateProxy.value = value;
+  __IS_SENDING_OPTION = value;
 }
 
 // 处理战斗选项点击
 async function handleBattleOption(optionText: string) {
   // 防止重复点击
-  if (__IS_SENDING_OPTION) {
-    console.log('⏳ 正在处理中，请稍候...');
-    return;
-  }
+  if (__IS_SENDING_OPTION) return;
 
   setSendingState(true);
 
@@ -2184,18 +2037,20 @@ async function handleBattleOption(optionText: string) {
     (btn as HTMLButtonElement).disabled = true;
     btn.classList.add('disabled');
   });
-  console.log('🔥 战斗选项被点击:', optionText);
 
   try {
     // 构造战斗触发消息 - 激活战斗系统世界书，并附加奖励摘要
-    const extra = __PENDING_REWARD_SUMMARY ? `\n\n${__PENDING_REWARD_SUMMARY}` : '';
-    const battleTriggerMessage = `用户选择了战斗选项：${optionText}${extra}\n\n[开始战斗]`;
+    const activeRun = readRunState(__STAT__);
+    const battleTriggerMessage = formatOptionPrompt({
+      optionText,
+      battle: true,
+      node: activeRun?.phase === 'in_node' ? activeRun.currentNode : null,
+      pending: pendingRunText(),
+      buildBudget: buildBudgetPrompt(currentBuildContext()),
+    });
 
-    // 发送消息并触发AI生成
-    await triggerSlash(`/send ${battleTriggerMessage}`);
-    await triggerSlash('/trigger');
+    await commonActionHost.continueWithPrompt({ prompt: battleTriggerMessage });
 
-    console.log('✅ 战斗触发消息已发送，等待AI生成战斗内容');
   } catch (error) {
     console.error('❌ 触发战斗失败:', error);
     alert('触发战斗失败，请重试');
@@ -2209,6 +2064,7 @@ async function handleBattleOption(optionText: string) {
   } finally {
     // 清空已使用的奖励摘要
     __PENDING_REWARD_SUMMARY = null;
+    __PENDING_RUN_SUMMARY = null;
     // 无论成功还是失败，都重置发送状态（成功后由页面刷新处理按钮状态）
     setSendingState(false);
   }
@@ -2216,14 +2072,9 @@ async function handleBattleOption(optionText: string) {
 
 // 处理选项点击
 async function handleOption(optionText: string) {
-  console.log('🎯 handleOption 被调用，选项:', optionText, '当前发送状态:', __IS_SENDING_OPTION);
   // 防止重复点击
-  if (__IS_SENDING_OPTION) {
-    console.log('⏳ 正在处理中，请稍候...（状态已被设置为true）');
-    return;
-  }
+  if (__IS_SENDING_OPTION) return;
 
-  console.log('🔄 设置发送状态为 true');
   setSendingState(true);
 
   // 禁用所有选项按钮和自定义输入
@@ -2239,14 +2090,16 @@ async function handleOption(optionText: string) {
   if (customInput) customInput.disabled = true;
   if (customSendBtn) customSendBtn.disabled = true;
 
-  console.log('🎯 普通选项被点击:', optionText);
   try {
     // 将奖励摘要绑定到本次发送（若有）
-    const extra = __PENDING_REWARD_SUMMARY ? `\n\n${__PENDING_REWARD_SUMMARY}` : '';
-    const message = `用户的选择是：${optionText}${extra}`;
-    // 发送并触发
-    await triggerSlash(`/send ${message}`);
-    await triggerSlash('/trigger');
+    const activeRun = readRunState(__STAT__);
+    const message = formatOptionPrompt({
+      optionText,
+      battle: false,
+      node: activeRun?.phase === 'in_node' ? activeRun.currentNode : null,
+      pending: pendingRunText(),
+    });
+    await commonActionHost.continueWithPrompt({ prompt: message });
   } catch (error) {
     console.error('发送选项失败', error);
     alert('发送选项失败，请重试');
@@ -2262,6 +2115,7 @@ async function handleOption(optionText: string) {
   } finally {
     // 清空已使用的奖励摘要
     __PENDING_REWARD_SUMMARY = null;
+    __PENDING_RUN_SUMMARY = null;
     // 无论成功还是失败，都重置发送状态（成功后由页面刷新处理按钮状态）
     setSendingState(false);
   }
@@ -2295,18 +2149,9 @@ function renderAlignmentGrid(currentAlignment: string) {
 // 渲染势力数据
 function renderFactionData(gameData: any) {
   const factions = gameData.factions || {};
-  // 兼容MVU格式的getValue函数
-  const getValue = (field: any, defaultVal: any = '未知') => {
-    if (Array.isArray(field) && field.length > 0) {
-      return field[0]; // MVU格式取第一个元素
-    }
-    return field || defaultVal;
-  };
-
-  // 兼容MVU格式和直接值格式
-  const playerAlignment = getValue(factions?.player_alignment, '绝对中立');
+  const playerAlignment = factions?.player_alignment ?? '绝对中立';
   const relationsRaw = factions.relations || [];
-  const relations = Array.isArray(relationsRaw) ? filterMetadata(relationsRaw) : [];
+  const relations = flattenMvuArray<Record<string, any>>(relationsRaw, { objectsOnly: true });
 
   // 渲染九宫格阵营
   renderAlignmentGrid(playerAlignment);
@@ -2372,26 +2217,25 @@ function renderFactionData(gameData: any) {
     if (relations.length > 0) {
       container.innerHTML = relations
         .map((faction: any) => {
-          // 兼容MVU格式处理每个势力对象的字段
-          const name = getValue(faction.name, '未知势力');
-          const status = getValue(faction.status, '中立');
-          const reputation = getValue(faction.reputation, 0);
-          const note = getValue(faction.note, '无');
+          const name = faction.name ?? '未知势力';
+          const status = faction.status ?? '中立';
+          const reputation = faction.reputation ?? 0;
+          const note = faction.note ?? '无';
 
           return `
         <div class="info-card">
-          <h3>${name}</h3>
+          <h3>${escapeHtml(name)}</h3>
           <div class="info-item">
             <span class="label">状态:</span>
-            <span class="value faction-status ${status.toLowerCase() || 'neutral'}">${status}</span>
+            <span class="value faction-status">${escapeHtml(status)}</span>
           </div>
           <div class="info-item">
             <span class="label">声望:</span>
-            <span class="value">${reputation}</span>
+            <span class="value">${escapeHtml(reputation)}</span>
           </div>
           <div class="info-item">
             <span class="label">备注:</span>
-            <span class="value">${note}</span>
+            <span class="value">${escapeHtml(note)}</span>
           </div>
         </div>
       `;
@@ -2403,120 +2247,10 @@ function renderFactionData(gameData: any) {
   }
 }
 
-// 调试函数 - 暴露到全局作用域
-(window as any).refreshData = async function () {
-  console.log('刷新游戏数据');
-  await loadGameData();
-  // 应用文本高亮（新的轻量级实现）
-  if (typeof requestAnimationFrame !== 'undefined') {
-    requestAnimationFrame(() => {
-      setTimeout(() => applyTextHighlight(), 50);
-    });
-  } else {
-    setTimeout(() => applyTextHighlight(), 100);
-  }
-};
-
-// 调试函数 - 检查发送状态
-(window as any).checkSendingState = function () {
-  console.log('当前发送状态:', __IS_SENDING_OPTION);
-  const allButtons = document.querySelectorAll('.option-btn, .battle-option-btn');
-  console.log('找到的按钮数量:', allButtons.length);
-  allButtons.forEach((btn, index) => {
-    console.log(`按钮 ${index}:`, {
-      text: btn.textContent,
-      disabled: (btn as HTMLButtonElement).disabled,
-      className: btn.className,
-    });
-  });
-  return __IS_SENDING_OPTION;
-};
-
-// 调试函数 - 重置发送状态
-(window as any).resetSendingState = function () {
-  console.log('重置发送状态，当前状态:', __IS_SENDING_OPTION);
-  __IS_SENDING_OPTION = false;
-
-  // 重新启用所有按钮
-  const allButtons = document.querySelectorAll('.option-btn, .battle-option-btn');
-  const customInput = document.getElementById('custom-action-input') as HTMLInputElement;
-  const customSendBtn = document.getElementById('custom-action-send') as HTMLButtonElement;
-
-  allButtons.forEach(btn => {
-    (btn as HTMLButtonElement).disabled = false;
-    btn.classList.remove('disabled');
-  });
-
-  if (customInput) customInput.disabled = false;
-  if (customSendBtn) {
-    customSendBtn.disabled = false;
-    customSendBtn.classList.remove('disabled');
-  }
-
-  console.log('发送状态已重置，所有按钮已重新启用');
-};
-
 // 删除卡牌函数
-(window as any).removeCard = async function (cardId: string) {
+async function removeCard(cardId: string): Promise<void> {
   try {
-    if (!cardId) {
-      console.warn('无效的卡牌ID');
-      return;
-    }
-    await updateVariablesWith(
-      (variables: any) => {
-        const battle = (variables?.stat_data?.battle || variables?.battle) as any;
-        if (!battle) throw new Error('未找到 battle 变量');
-
-        const processCardArray = (arr: any[]) => {
-          let removed = 0;
-          const processed = (arr || [])
-            .map((c: any) => {
-              if (c && c.id === cardId) {
-                const currentQuantity = Number(c.quantity) || 1;
-                if (currentQuantity > 1) {
-                  // 数量>1时减1
-                  removed++;
-                  return { ...c, quantity: currentQuantity - 1 };
-                } else {
-                  // 数量=1时删除整张卡
-                  removed++;
-                  return null;
-                }
-              }
-              return c;
-            })
-            .filter(c => c !== null);
-          return { processed, removed };
-        };
-
-        let removed = 0;
-        if (Array.isArray(battle.cards)) {
-          // 兼容MVU可扩展数组结构：[valueArray, description] 或 [[...]] 或 直接数组
-          if (battle.cards.length >= 2 && Array.isArray(battle.cards[0]) && typeof battle.cards[1] === 'string') {
-            const res = processCardArray(battle.cards[0]);
-            battle.cards[0] = res.processed;
-            removed += res.removed;
-          } else if (battle.cards.length >= 1 && Array.isArray(battle.cards[0])) {
-            const res = processCardArray(battle.cards[0]);
-            battle.cards[0] = res.processed;
-            removed += res.removed;
-          } else {
-            const res = processCardArray(battle.cards);
-            battle.cards = res.processed;
-            removed += res.removed;
-          }
-        }
-
-        // 更新删卡次数（删除成功时-1）
-        if (!battle.core) battle.core = {};
-        const prev = Number(battle.core.card_removal_count) || 0;
-        if (removed > 0) battle.core.card_removal_count = Math.max(0, prev - 1);
-
-        return variables; // 提交更新
-      },
-      { type: 'message' },
-    );
+    await runActionHost.removeCard(cardId);
     if (typeof toastr !== 'undefined') toastr.success('已删除所选卡牌');
     // 刷新显示，但不影响奖励区域
     try {
@@ -2526,14 +2260,12 @@ function renderFactionData(gameData: any) {
     }
   } catch (e) {
     console.error('删除卡牌失败:', e);
-    if (typeof toastr !== 'undefined') toastr.error('删除卡牌失败，请重试');
+    if (typeof toastr !== 'undefined') toastr.error(e instanceof Error ? e.message : '删除卡牌失败，请重试');
   }
-};
-
-// 注意：道具使用功能已移除，应在fish战斗模块中处理
+}
 
 // 战斗之书切换函数
-(window as any).toggleBattleBook = function () {
+function toggleBattleBook(): void {
   const content = document.getElementById('battle-book-content');
   const btn = document.querySelector('.battle-book-btn') as HTMLButtonElement;
 
@@ -2549,21 +2281,42 @@ function renderFactionData(gameData: any) {
     content.style.display = 'none';
     btn.textContent = '📖 查看状态效果';
   }
-};
+}
 
 // 渲染战斗之书内容
 function renderBattleBookContent() {
   const content = document.getElementById('battle-book-content');
   if (!content) return;
 
-  const data = (window as any).battleBookData;
+  const data = __BATTLE_BOOK_DATA;
   if (!data) {
     content.innerHTML = '<div class="value">无战斗数据</div>';
     return;
   }
 
-  const playerStatusEffects = filterMetadata(data.playerStatusEffects);
-  const allStatuses = filterMetadata(data.statuses);
+  const playerStatusEffects = flattenMvuArray<Record<string, any>>(data.playerStatusEffects, { objectsOnly: true });
+  const allStatuses = flattenMvuArray<Record<string, any>>(data.statuses, { objectsOnly: true });
+  const statusNames: Record<string, string> = Object.fromEntries(
+    allStatuses
+      .filter((status: any) => typeof status?.id === 'string' && typeof status?.name === 'string' && status.name.trim())
+      .map((status: any) => [status.id, status.name.trim()]),
+  );
+  const statusDefinitions = new Map(
+    allStatuses
+      .filter((status: any) => typeof status?.id === 'string')
+      .map((status: any) => {
+        const generated = canGenerateCompactStatusDescription(status)
+          ? describeCompactStatus(status, { statusNames })
+          : '';
+        return [
+          status.id,
+          {
+            ...status,
+            description: (typeof status.description === 'string' && status.description.trim()) || generated,
+          },
+        ];
+      }),
+  );
 
   let html = '';
 
@@ -2571,15 +2324,18 @@ function renderBattleBookContent() {
   if (playerStatusEffects.length > 0) {
     html += '<div class="battle-book-section"><h4>🔥 当前状态效果</h4>';
     playerStatusEffects.forEach((status: any) => {
+      const definition = statusDefinitions.get(status.id) as Record<string, any> | undefined;
+      const name = status.name || definition?.name || status.id || '未知状态';
+      const description = status.description || definition?.description || '无描述';
       html += `
         <div class="status-effect-item">
           <div class="status-header">
-            <span class="status-icon">${status.emoji || '✨'}</span>
-            <span class="status-name">${status.name}</span>
-            <span class="status-stacks">${status.stacks || 1}</span>
-            ${status.duration ? `<span class="status-duration">(${status.duration}回合)</span>` : ''}
+            <span class="status-icon">${escapeHtml(status.emoji || definition?.emoji || '✨')}</span>
+            <span class="status-name">${escapeHtml(name)}</span>
+            <span class="status-stacks">${escapeHtml(status.stacks || 1)}</span>
+            ${status.duration ? `<span class="status-duration">(${escapeHtml(status.duration)}回合)</span>` : ''}
           </div>
-          <div class="status-description">${status.description || '无描述'}</div>
+          <div class="status-description">${escapeHtml(description)}</div>
         </div>
       `;
     });
@@ -2590,15 +2346,19 @@ function renderBattleBookContent() {
   if (allStatuses.length > 0) {
     html += '<div class="battle-book-section"><h4>📚 状态效果图鉴</h4>';
     allStatuses.forEach((status: any) => {
+      const statusType = status.type === 'buff' || status.type === 'debuff' ? status.type : 'neutral';
+      const description =
+        (typeof status.description === 'string' && status.description.trim()) ||
+        (canGenerateCompactStatusDescription(status) ? describeCompactStatus(status, { statusNames }) : '') ||
+        '无描述';
       html += `
         <div class="status-effect-item">
           <div class="status-header">
-            <span class="status-icon">${status.emoji || '✨'}</span>
-            <span class="status-name">${status.name}</span>
-            <span class="status-type ${status.type}">${status.type === 'buff' ? 'BUFF' : 'DEBUFF'}</span>
+            <span class="status-icon">${escapeHtml(status.emoji || '✨')}</span>
+            <span class="status-name">${escapeHtml(status.name || '未知状态')}</span>
+            <span class="status-type ${statusType}">${statusType === 'buff' ? 'BUFF' : statusType === 'debuff' ? 'DEBUFF' : 'NEUTRAL'}</span>
           </div>
-          <div class="status-description">${status.description || '无描述'}</div>
-          ${status.triggers ? `<div class="status-triggers">触发: ${JSON.stringify(status.triggers)}</div>` : ''}
+          <div class="status-description">${escapeHtml(description)}</div>
         </div>
       `;
     });
@@ -2612,34 +2372,17 @@ function renderBattleBookContent() {
   content.innerHTML = html;
 }
 
-// NPC追踪切换函数
-(window as any).toggleNPCTracking = async function (npcId: string, newTrackingState: boolean) {
-  console.warn('[只读模式] common 页面不修改 NPC 追踪状态。');
-  return;
-};
-
-// 获得经验的测试函数
-(window as any).gainExperience = async function (expAmount: number = 160) {
-  console.warn('[只读模式] common 页面不在此处直接写入经验。');
-  return;
-};
-
-// 经验升级处理函数
-async function processLevelUp() {
-  console.warn('[只读模式] common 页面不在此处直接处理升级。');
-  return;
-}
-
 // 切换删除模式函数
-(window as any).toggleDeleteMode = function () {
+function toggleDeleteMode(): void {
+  if (!isCurrentMessageLatest()) return;
   const deckContainer = document.getElementById('battle-deck');
   const toggleBtn = document.getElementById('delete-mode-toggle');
 
   if (!deckContainer || !toggleBtn) return;
 
   // 检查删卡次数，如果为0则禁用删除模式
-  const variables = (window as any).getVariables?.({ type: 'message' }) || {};
-  const battle = variables?.stat_data?.battle || variables?.battle;
+  const variables = getCurrentMessageVariables();
+  const battle = variables?.stat_data?.battle;
   const cardRemovalCount = Number(battle?.core?.card_removal_count) || 0;
 
   if (cardRemovalCount <= 0) {
@@ -2670,83 +2413,10 @@ async function processLevelUp() {
       (btn as HTMLElement).style.display = 'block';
     });
   }
-};
-
-// 调试函数 - 检查数据结构
-(window as any).debugData = function () {
-  try {
-    const data = getVariables({ type: 'message' });
-    console.log('=== 完整数据结构 ===');
-    console.log(data);
-
-    if (data?.stat_data) {
-      console.log('=== stat_data 结构 ===');
-      console.log(data.stat_data);
-
-      if (data.stat_data.status) {
-        console.log('=== 状态数据详细分析 ===');
-        const status = data.stat_data.status;
-
-        // 检查每个字段的类型和内容
-        Object.keys(status).forEach(key => {
-          const value = status[key];
-          console.log(`${key}:`, {
-            type: typeof value,
-            isArray: Array.isArray(value),
-            value: value,
-            length: Array.isArray(value) ? value.length : 'N/A',
-          });
-        });
-
-        console.log('=== 重点检查数组字段 ===');
-        console.log('持有物:', status['inventory']);
-        console.log('永久性状态:', status['permanent_status']);
-        console.log('临时状态:', status['temporary_status']);
-      }
-
-      if (data.stat_data.battle) {
-        console.log('=== 战斗数据 ===');
-        console.log('battle.items:', data.stat_data.battle.items);
-        console.log('battle.artifacts:', data.stat_data.battle.artifacts);
-      }
-
-      if (data.stat_data.npcs) {
-        console.log('=== NPC数据 ===');
-        console.log('npcs:', data.stat_data.npcs);
-      }
-    }
-
-    alert('数据结构已输出到控制台，请查看');
-  } catch (error: any) {
-    console.error('调试失败:', error);
-    alert('调试失败: ' + (error?.message || '未知错误'));
-  }
-};
-
-// 测试变量操作函数
-(window as any).testVariableOperations = async function () {
-  console.warn('[只读模式] 已禁用本页面的测试变量写入操作。');
-  return;
-};
-
-(window as any).switchToStory = function () {
-  const storyButton = document.querySelector('.tab-button[data-module="story"]') as HTMLElement;
-  if (storyButton) {
-    storyButton.click();
-  }
-};
-
-// 移除了战斗开始标签检测功能
-// 战斗触发现在完全由用户点击选项按钮和世界书处理
-
-// 移除了loadBattleFromVariables函数
-// 战斗触发现在完全由用户点击选项按钮和世界书处理
-
-// 移除了validateBattleData和replaceToBattlePage函数
-// 这些功能现在由用户点击选项按钮和世界书处理
+}
 
 // 切换状态详情显示
-(window as any).toggleStatusDetail = function (detailId: string) {
+function toggleStatusDetail(detailId: string): void {
   const detailEl = document.getElementById(detailId);
   if (!detailEl) return;
 
@@ -2761,30 +2431,34 @@ async function processLevelUp() {
       icon.textContent = isVisible ? '▼' : '▲';
     }
   }
-};
+}
 
-// 页面加载完成后的初始化
+let __commonViewInitialized = false;
+
+function initializeCommonView(): void {
+  if (__commonViewInitialized) return;
+  __commonViewInitialized = true;
+  setSendingState(false);
+  initializeUI();
+  void loadGameData();
+}
+
+// The runtime injects this script after the complete view body. Native DOM
+// readiness keeps initialization deterministic in Tavern Helper and also
+// supports direct builds without relying on a particular jQuery instance.
 if (typeof window !== 'undefined') {
-  // 尽早初始化主题，避免闪烁
   if (document.readyState === 'loading') {
-    const theme = getCurrentTheme();
-    if (theme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+    document.addEventListener('DOMContentLoaded', initializeCommonView, { once: true });
+  } else {
+    initializeCommonView();
   }
 
-  const w: any = window as any;
-  const $jq = w.$ || w.jQuery;
-  if ($jq) {
-    $jq(() => {
-      console.log('RPG UI 静态模板已加载 - 使用酒馆变量宏系统');
-      initializeTheme();
-      setSendingState(false);
-      initializeUI();
-      setupTabSwitching();
-      loadGameData().then(() => console.log('✅ Common模块完全初始化完成'));
-    });
-    $jq(w).on('pagehide', () => {
-      console.log('🧹 页面卸载：清理临时状态');
-      // 目前仅记录日志，核心状态由上游管理
-    });
-  }
+  window.addEventListener(
+    'pagehide',
+    () => {
+      __stopLatestMessageGuard?.();
+      __stopLatestMessageGuard = null;
+    },
+    { once: true },
+  );
 }

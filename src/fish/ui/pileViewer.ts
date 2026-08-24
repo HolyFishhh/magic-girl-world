@@ -2,12 +2,13 @@
  * 牌堆查看器 - 显示抽牌堆、弃牌堆等内容
  */
 
-import { Card } from '../types';
-import { UnifiedEffectDisplay } from './unifiedEffectDisplay';
+import type { Card } from '../../game-core';
+import { escapeHtml, escapeHtmlAttribute } from '../shared/html';
+import { EffectProgramDisplay } from './effectProgramDisplay';
 
 export class PileViewer {
   private static instance: PileViewer;
-  private static effectDisplay = UnifiedEffectDisplay.getInstance();
+  private static effectDisplay = EffectProgramDisplay.getInstance();
 
   private constructor() {}
 
@@ -57,7 +58,7 @@ export class PileViewer {
         <div class="pile-viewer-overlay"></div>
         <div class="pile-viewer-content">
           <div class="pile-viewer-header">
-            <h3>${title} (${cards.length}张)</h3>
+            <h3>${escapeHtml(title)} (${cards.length}张)</h3>
             <button class="close-btn" type="button">✕</button>
           </div>
           <div class="pile-viewer-body">
@@ -84,28 +85,30 @@ export class PileViewer {
    * 创建卡牌HTML
    */
   private createCardHTML(card: Card): string {
-    const effectTags = PileViewer.effectDisplay.parseEffectToTags(card.effect, { isPlayerCard: true });
+    const effectTags = PileViewer.effectDisplay.programToTags(card.effectProgram);
     const compactTagsHTML = PileViewer.effectDisplay.createCompactEffectTagsHTML(effectTags);
 
-    // 规范化：旧数据中可能将 Corrupt 作为 type，这里归并为 rarity
-    const normalizedType: any = (card as any).type === 'Corrupt' ? 'Skill' : card.type;
-    const normalizedRarity: any = (card as any).type === 'Corrupt' ? 'Corrupt' : card.rarity;
+    const displayCost =
+      card.type === 'Curse' || card.cost === undefined ? '—' : card.cost === 'energy' ? 'X' : card.cost;
 
     return `
-      <div class="card enhanced-card rarity-${normalizedRarity} card-type-${normalizedType}" data-card-id="${card.id}">
+      <div class="card enhanced-card rarity-${escapeHtmlAttribute(card.rarity)} card-type-${escapeHtmlAttribute(card.type)}" data-card-id="${escapeHtmlAttribute(card.id)}">
         <div class="card-header">
-          <div class="card-cost">${card.cost}</div>
+          <div class="card-cost">${escapeHtml(displayCost)}</div>
           <div class="card-rarity-gem"></div>
         </div>
         <div class="card-artwork">
-          <div class="card-emoji">${card.emoji}</div>
-          ${card.retain ? '<div class="card-keyword retain">保留</div>' : ''}
-          ${card.exhaust ? '<div class="card-keyword exhaust">消耗</div>' : ''}
-          ${card.ethereal ? '<div class="card-keyword ethereal">空灵</div>' : ''}
+          <div class="card-emoji">${escapeHtml(card.emoji)}</div>
+          <div class="card-keywords">
+            ${card.innate ? '<div class="card-keyword innate">固有</div>' : ''}
+            ${card.retain ? '<div class="card-keyword retain">保留</div>' : ''}
+            ${card.exhaust ? '<div class="card-keyword exhaust">消耗</div>' : ''}
+            ${card.ethereal ? '<div class="card-keyword ethereal">空灵</div>' : ''}
+          </div>
         </div>
         <div class="card-body">
-          <div class="card-name">${card.name}</div>
-          <div class="card-description">${card.description}</div>
+          <div class="card-name">${escapeHtml(card.name)}</div>
+          <div class="card-description">${escapeHtml(card.description)}</div>
           ${compactTagsHTML}
         </div>
       </div>
@@ -150,7 +153,6 @@ export class PileViewer {
       this.handlePileClick('exhaust');
     });
 
-    console.log('✅ 牌堆点击事件已设置');
   }
 
   /**
@@ -195,7 +197,6 @@ export class PileViewer {
     }
 
     this.showPile(pileType, cards, title);
-    console.log(`📚 显示${title}: ${cards.length}张卡牌`);
   }
 }
 
@@ -221,7 +222,6 @@ export class PileStatsDisplay {
     $('.deck-stat[data-pile="discard"]').toggleClass('clickable', discardCount > 0);
     $('.deck-stat[data-pile="exhaust"]').toggleClass('clickable', exhaustCount > 0);
 
-    console.log(`📊 更新牌堆统计: 抽牌堆${drawCount}, 弃牌堆${discardCount}, 消耗堆${exhaustCount}`);
   }
 
   /**

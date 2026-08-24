@@ -55,10 +55,9 @@
       "abilities": ["$__META_EXTENSIBLE__$"],
       "status_effects": ["$__META_EXTENSIBLE__$"],
       "lust_effect": {
-        "$meta": { "extensible": false },
+        "$meta": { "extensible": true },
         "name": "",
-        "description": "",
-        "effect": ""
+        "description": ""
       },
       "action_mode": "",
       "action_config": {
@@ -66,10 +65,9 @@
       }
     },
     "player_lust_effect": {
-      "$meta": { "extensible": false },
+      "$meta": { "extensible": true },
       "name": "",
-      "description": "",
-      "effect": ""
+      "description": ""
     }
   },
   "factions": {
@@ -87,5 +85,9 @@
     "artifact": ["$__META_EXTENSIBLE__$"],
     "item": ["$__META_EXTENSIBLE__$"],
     "limits": { "$meta": { "extensible": true } }
-  }
+  },
+  "run": null,
+  "run_result": null,
+  "run_upgrade": null,
+  "game_mode": "story"
 }

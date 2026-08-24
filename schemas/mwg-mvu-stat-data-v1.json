@@ -1,0 +1,294 @@
+{
+  "spec": "mwg.mvu-stat-data/v1",
+  "root": "stat_data",
+  "initialization": "worldbook_new/变量初始化.json",
+  "description": "魔法少女世界在 MagVarUpdate 中唯一受支持的持久数据契约。AI 不得输出本契约之外的路径。",
+  "groups": [
+    {
+      "id": "narrative_scalar",
+      "paths": ["status.time", "status.location", "status.profession.name", "status.profession.ability"],
+      "shape": "string",
+      "owner": "ai",
+      "lifecycle": "persistent",
+      "writers": ["ai:init", "ai:narrative"],
+      "ai_operations": ["set"]
+    },
+    {
+      "id": "clothing",
+      "paths": [
+        "status.clothing.head",
+        "status.clothing.neck",
+        "status.clothing.hands",
+        "status.clothing.upper_body",
+        "status.clothing.lower_body",
+        "status.clothing.underwear",
+        "status.clothing.legs",
+        "status.clothing.feet"
+      ],
+      "shape": "string",
+      "owner": "ai",
+      "lifecycle": "persistent",
+      "writers": ["ai:init", "ai:narrative"],
+      "ai_operations": ["set"]
+    },
+    {
+      "id": "narrative_collections",
+      "paths": ["status.permanent_status", "status.temporary_status", "status.inventory"],
+      "shape": "array",
+      "owner": "ai",
+      "lifecycle": "persistent",
+      "writers": ["ai:init", "ai:narrative"],
+      "ai_operations": ["set", "assign", "remove"]
+    },
+    {
+      "id": "battle_vitals",
+      "paths": ["battle.core.hp", "battle.core.max_hp", "battle.core.lust", "battle.core.max_lust"],
+      "shape": "number",
+      "owner": "shared",
+      "lifecycle": "persistent",
+      "writers": ["ai:init", "ai:narrative", "program:battle-settlement", "program:run-settlement"],
+      "ai_operations": ["set", "add"]
+    },
+    {
+      "id": "card_removal_count",
+      "paths": ["battle.core.card_removal_count"],
+      "shape": "number",
+      "owner": "program",
+      "lifecycle": "persistent",
+      "writers": ["ai:init", "program:progression", "program:card-removal"],
+      "ai_operations": ["set"]
+    },
+    {
+      "id": "persistent_battle_content",
+      "paths": ["battle.cards", "battle.artifacts", "battle.items", "battle.statuses"],
+      "shape": "array",
+      "owner": "shared",
+      "lifecycle": "persistent",
+      "writers": ["ai:init", "ai:reward", "program:reward", "program:upgrade", "program:card-removal"],
+      "ai_operations": ["set", "assign", "remove"]
+    },
+    {
+      "id": "temporary_player_battle_content",
+      "paths": ["battle.player_abilities", "battle.player_status_effects"],
+      "shape": "array",
+      "owner": "shared",
+      "lifecycle": "battle-temporary",
+      "writers": ["ai:battle-scene", "program:battle-settlement"],
+      "ai_operations": ["set", "assign"]
+    },
+    {
+      "id": "battle_level",
+      "paths": ["battle.level"],
+      "shape": "number",
+      "owner": "program",
+      "lifecycle": "persistent",
+      "writers": ["ai:init", "program:progression"],
+      "ai_operations": ["set"]
+    },
+    {
+      "id": "battle_exp",
+      "paths": ["battle.exp"],
+      "shape": "number",
+      "owner": "shared",
+      "lifecycle": "persistent",
+      "writers": ["ai:init", "ai:battle-settlement", "program:progression"],
+      "ai_operations": ["set", "add"]
+    },
+    {
+      "id": "enemy_scalar",
+      "paths": [
+        "battle.enemy.name",
+        "battle.enemy.emoji",
+        "battle.enemy.description",
+        "battle.enemy.action_mode"
+      ],
+      "shape": "string",
+      "owner": "ai",
+      "lifecycle": "battle-temporary",
+      "writers": ["ai:battle-scene", "program:battle-settlement"],
+      "ai_operations": ["set"]
+    },
+    {
+      "id": "enemy_vitals",
+      "paths": [
+        "battle.enemy.max_hp",
+        "battle.enemy.hp",
+        "battle.enemy.max_lust",
+        "battle.enemy.lust"
+      ],
+      "shape": "number",
+      "owner": "ai",
+      "lifecycle": "battle-temporary",
+      "writers": ["ai:battle-scene", "program:battle-settlement"],
+      "ai_operations": ["set"]
+    },
+    {
+      "id": "enemy_collections",
+      "paths": ["battle.enemy.actions", "battle.enemy.abilities", "battle.enemy.status_effects"],
+      "shape": "array",
+      "owner": "ai",
+      "lifecycle": "battle-temporary",
+      "writers": ["ai:battle-scene", "program:battle-settlement"],
+      "ai_operations": ["set", "assign"]
+    },
+    {
+      "id": "enemy_action_config",
+      "paths": ["battle.enemy.action_config"],
+      "shape": "object",
+      "extensible": true,
+      "owner": "ai",
+      "lifecycle": "battle-temporary",
+      "writers": ["ai:battle-scene", "program:battle-settlement"],
+      "ai_operations": ["set"]
+    },
+    {
+      "id": "enemy_lust_effect_object",
+      "paths": ["battle.enemy.lust_effect"],
+      "shape": "object",
+      "extensible": true,
+      "owner": "ai",
+      "lifecycle": "battle-temporary",
+      "writers": ["ai:battle-scene", "program:battle-settlement"],
+      "ai_operations": ["set"]
+    },
+    {
+      "id": "enemy_lust_effect_identity",
+      "paths": ["battle.enemy.lust_effect.name", "battle.enemy.lust_effect.description"],
+      "shape": "string",
+      "owner": "ai",
+      "lifecycle": "battle-temporary",
+      "writers": ["ai:battle-scene", "program:battle-settlement"],
+      "ai_operations": ["set"]
+    },
+    {
+      "id": "player_lust_effect_object",
+      "paths": ["battle.player_lust_effect"],
+      "shape": "object",
+      "extensible": true,
+      "owner": "ai",
+      "lifecycle": "persistent",
+      "writers": ["ai:init", "ai:reward"],
+      "ai_operations": ["set"]
+    },
+    {
+      "id": "player_lust_effect_identity",
+      "paths": ["battle.player_lust_effect.name", "battle.player_lust_effect.description"],
+      "shape": "string",
+      "owner": "ai",
+      "lifecycle": "persistent",
+      "writers": ["ai:init", "ai:reward"],
+      "ai_operations": ["set"]
+    },
+    {
+      "id": "factions",
+      "paths": ["factions.player_alignment"],
+      "shape": "string",
+      "owner": "ai",
+      "lifecycle": "persistent",
+      "writers": ["ai:init", "ai:narrative"],
+      "ai_operations": ["set"]
+    },
+    {
+      "id": "invasion",
+      "paths": ["factions.invasion"],
+      "shape": "number",
+      "owner": "ai",
+      "lifecycle": "persistent",
+      "writers": ["ai:init", "ai:narrative"],
+      "ai_operations": ["set", "add"]
+    },
+    {
+      "id": "faction_relations",
+      "paths": ["factions.relations"],
+      "shape": "array",
+      "owner": "ai",
+      "lifecycle": "persistent",
+      "writers": ["ai:init", "ai:narrative"],
+      "ai_operations": ["set", "assign", "remove"]
+    },
+    {
+      "id": "npcs",
+      "paths": ["npcs"],
+      "shape": "object",
+      "extensible": true,
+      "owner": "ai",
+      "lifecycle": "persistent",
+      "writers": ["ai:init", "ai:narrative"],
+      "ai_operations": ["set", "assign", "remove", "add"]
+    },
+    {
+      "id": "reward_candidates",
+      "paths": ["reward.card", "reward.artifact", "reward.item"],
+      "shape": "array",
+      "owner": "shared",
+      "lifecycle": "candidate",
+      "writers": ["ai:reward", "program:reward"],
+      "ai_operations": ["set", "assign"]
+    },
+    {
+      "id": "reward_limits",
+      "paths": ["reward.limits"],
+      "shape": "object",
+      "extensible": true,
+      "owner": "shared",
+      "lifecycle": "candidate",
+      "writers": ["ai:reward", "program:reward"],
+      "ai_operations": ["set", "assign"]
+    },
+    {
+      "id": "run",
+      "paths": ["run"],
+      "shape": "nullable-object",
+      "owner": "program",
+      "lifecycle": "optional-run",
+      "writers": ["program:run"],
+      "ai_operations": []
+    },
+    {
+      "id": "run_result",
+      "paths": ["run_result"],
+      "shape": "nullable-object",
+      "owner": "shared",
+      "lifecycle": "optional-run",
+      "writers": ["ai:run-event", "program:run"],
+      "ai_operations": ["set"]
+    },
+    {
+      "id": "run_upgrade",
+      "paths": ["run_upgrade"],
+      "shape": "nullable-object",
+      "owner": "shared",
+      "lifecycle": "optional-run",
+      "writers": ["ai:run-rest", "program:run"],
+      "ai_operations": ["set"]
+    },
+    {
+      "id": "game_mode",
+      "paths": ["game_mode"],
+      "shape": "string",
+      "owner": "program",
+      "lifecycle": "persistent",
+      "writers": ["program:start"],
+      "ai_operations": []
+    }
+  ],
+  "legacy": [
+    { "source": "status.location_weather", "replacement": "status.location", "policy": "removed" },
+    { "source": "status.title", "replacement": null, "policy": "removed" },
+    { "source": "status.profession:string", "replacement": "status.profession.{name,ability}", "policy": "removed" },
+    { "source": "status.clothing.undergarments", "replacement": "status.clothing.underwear", "policy": "removed" },
+    { "source": "battle.core.energy", "replacement": "BattleState.player.energy", "policy": "runtime-only" },
+    { "source": "battle.core.draw_count", "replacement": "BattleState draw rules", "policy": "runtime-only" },
+    { "source": "battle.core.block", "replacement": "BattleState.player.block", "policy": "runtime-only" },
+    { "source": "battle.core.level", "replacement": "battle.level", "policy": "removed" },
+    { "source": "battle.enemy.maxHp", "replacement": "battle.enemy.max_hp", "policy": "removed" },
+    { "source": "battle.enemy.maxLust", "replacement": "battle.enemy.max_lust", "policy": "removed" },
+    { "source": "battle.enemy.lustEffect", "replacement": "battle.enemy.lust_effect", "policy": "removed" },
+    { "source": "battle.enemy.actionMode", "replacement": "battle.enemy.action_mode", "policy": "removed" },
+    { "source": "battle.enemy.actionConfig", "replacement": "battle.enemy.action_config", "policy": "removed" },
+    { "source": "content.effect", "replacement": "content.effects", "policy": "removed" },
+    { "source": "content.discard_effect", "replacement": "content.discard_effects", "policy": "removed" },
+    { "source": "battle.items[].quantity", "replacement": "battle.items[].count", "policy": "removed" },
+    { "source": "battle (flat variables root)", "replacement": "stat_data.battle", "policy": "removed" }
+  ]
+}

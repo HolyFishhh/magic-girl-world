@@ -1,13 +1,10 @@
-// 白木市魔法少女角色创建系统主程序
+// 白木市魔法少女角色创建系统主程序。此入口直接使用酒馆助手全局 API，
+// 不加载 common/fish 的 jQuery 运行时，避免角色创建 HTML 无谓膨胀。
 import { CharacterCreator } from './core/characterCreator';
 import './index.scss';
 
-console.log('🌟 白木市魔法少女角色创建系统启动');
-
 // 启动系统
 const initializeCharacterCreator = () => {
-  console.log('🚀 开始初始化角色创建系统');
-
   try {
     // 检查基础环境
     if (typeof document === 'undefined') {
@@ -18,7 +15,6 @@ const initializeCharacterCreator = () => {
     // 创建角色创建器实例
     new CharacterCreator();
 
-    console.log('✨ 角色创建系统初始化完成');
   } catch (error) {
     console.error('❌ 角色创建系统初始化失败:', error);
   }

@@ -53,7 +53,7 @@
             <!-- 敌人标题 - 始终显示 -->
             <div class="enemy-title-bar">
               <div class="enemy-emoji">👹</div>
-              <div class="enemy-name" id="enemy-name">初始化失败，请重roll</div>
+              <div class="enemy-name" id="enemy-name">正在恢复战斗...</div>
             </div>
 
             <!-- 敌人信息卡 - 可滚动部分 -->
@@ -301,7 +301,8 @@
           <h2 class="result-title">无法进行战斗</h2>
           <div class="result-message" id="no-enemy-message">敌人数据未注册或不完整，请先生成/选择敌人。</div>
           <div class="dialog-buttons">
-            <button class="return-setup-btn" id="no-enemy-refresh">刷新</button>
+            <button class="repair-battle-btn" id="battle-content-repair" style="display: none">请求 AI 修复</button>
+            <button class="no-enemy-refresh-btn" id="no-enemy-refresh">刷新</button>
           </div>
         </div>
       </div>
@@ -343,20 +344,6 @@
 
       <!-- 模式提示 -->
       <div class="mode-hint" id="modeHint">切换模式</div>
-    </div>
-
-    <!-- 牌堆查看器 -->
-    <div id="pile-viewer" class="pile-viewer" style="display: none">
-      <div class="pile-viewer-overlay" onclick="closePileViewer()"></div>
-      <div class="pile-viewer-content">
-        <div class="pile-viewer-header">
-          <h3 id="pile-viewer-title">牌堆查看</h3>
-          <button class="close-btn" onclick="closePileViewer()">✕</button>
-        </div>
-        <div class="pile-viewer-body" id="pile-viewer-cards">
-          <!-- 卡牌列表在此显示 -->
-        </div>
-      </div>
     </div>
   </body>
 </html>

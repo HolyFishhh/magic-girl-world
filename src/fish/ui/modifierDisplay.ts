@@ -3,7 +3,18 @@
  */
 
 import { UnifiedEffectExecutor } from '../combat/unifiedEffectExecutor';
+import { getAttributeDefinition } from '../combat/effectDefinitions';
 import { GameStateManager } from '../core/gameStateManager';
+
+export function getModifierDisplayName(modifierType: string): string {
+  const detailMatch = modifierType.match(/^(.*)__(add|mul)$/);
+  const attribute = detailMatch?.[1] ?? modifierType;
+  const detail = detailMatch?.[2];
+  const baseName = getAttributeDefinition(attribute)?.displayName ?? attribute;
+  if (detail === 'add') return `${baseName}（加减）`;
+  if (detail === 'mul') return `${baseName}（乘除）`;
+  return baseName;
+}
 
 export class ModifierDisplay {
   private isVisible: boolean = false;
@@ -122,7 +133,7 @@ export class ModifierDisplay {
         for (const [modifierType, value] of Object.entries(playerModifiers)) {
           if (value === 0) continue;
           const isDetail = modifierType.endsWith('__add') || modifierType.endsWith('__mul');
-          const displayName = this.getModifierDisplayName(modifierType);
+          const displayName = getModifierDisplayName(modifierType);
           const valueText = this.formatModifierValue(value, modifierType.endsWith('__mul'));
           const colorClass = value > 0 ? 'positive' : 'negative';
 
@@ -147,7 +158,7 @@ export class ModifierDisplay {
         for (const [modifierType, value] of Object.entries(enemyModifiers)) {
           if (value === 0) continue;
           const isDetail = modifierType.endsWith('__add') || modifierType.endsWith('__mul');
-          const displayName = this.getModifierDisplayName(modifierType);
+          const displayName = getModifierDisplayName(modifierType);
           const valueText = this.formatModifierValue(value, modifierType.endsWith('__mul'));
           const colorClass = value > 0 ? 'positive' : 'negative';
 
@@ -196,34 +207,6 @@ export class ModifierDisplay {
     }
 
     return modifiers;
-  }
-
-  /**
-   * 获取修饰符显示名称
-   */
-  private getModifierDisplayName(modifierType: string): string {
-    const nameMap: { [key: string]: string } = {
-      damage_modifier__add: '伤害修饰（加减）',
-      damage_modifier__mul: '伤害修饰（乘除）',
-
-      damage_taken_modifier__add: '受伤修饰（加减）',
-      damage_taken_modifier__mul: '受伤修饰（乘除）',
-
-      lust_damage_modifier__add: '欲望伤害修饰（加减）',
-      lust_damage_modifier__mul: '欲望伤害修饰（乘除）',
-
-      lust_damage_taken_modifier__add: '受欲望伤害修饰（加减）',
-      lust_damage_taken_modifier__mul: '受欲望伤害修饰（乘除）',
-
-      block_modifier: '格挡修饰',
-      heal_modifier: '治疗修饰',
-      draw: '抽牌修饰',
-      discard: '弃牌修饰',
-      energy_gain: '能量获得修饰',
-      card_play_limit: '卡牌使用限制修饰',
-    };
-
-    return nameMap[modifierType] || modifierType;
   }
 
   /**
