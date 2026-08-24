@@ -371,6 +371,11 @@ const patchedExtensions = patchedCard.data.extensions;
 assert.equal(patchedCard.name, releaseConfig.characterName);
 assert.equal(patchedCard.data.name, releaseConfig.characterName);
 assert.equal(patchedCard.data.character_version, releaseConfig.cardVersion);
+assert.equal(
+  patchedCard.data.first_mes,
+  '[开始游戏]',
+  'patched card first_mes must contain the bare start marker without a Markdown fence',
+);
 for (const payload of [startExported, commonExported, exported]) {
   const matchingRegexes = patchedExtensions.regex_scripts.filter(script => script.scriptName === payload.scriptName);
   assert.equal(matchingRegexes.length, 1, `patched card must contain exactly one ${payload.scriptName} regex`);

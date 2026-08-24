@@ -17,6 +17,7 @@ const api = await createTavernApi(tavernUrl);
 const character = await getCharacter(api, avatarUrl);
 const characterName = character?.name || character?.data?.name;
 if (!characterName) throw new Error(`Character ${avatarUrl} has no name`);
+const firstMessage = character?.data?.first_mes || character?.first_mes || '[开始游戏]';
 
 const now = new Date();
 const timestamp = now
@@ -35,7 +36,7 @@ const chat = [
     is_user: false,
     is_system: false,
     send_date: now.toISOString(),
-    mes: '[开始游戏]',
+    mes: firstMessage,
     extra: {},
   },
 ];

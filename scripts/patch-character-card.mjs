@@ -220,6 +220,10 @@ delete extensions.tavern_helper.variables.battle_result;
 card.data.character_version = CARD_VERSION;
 card.name = CHARACTER_NAME;
 card.data.name = CHARACTER_NAME;
+// The start regex targets the marker itself. A Markdown fence here is parsed
+// as a second code block by SillyTavern and can turn the replacement HTML into
+// JavaScript, producing `Unexpected token '<'` in the message iframe.
+card.data.first_mes = '[开始游戏]';
 card.spec = 'chara_card_v3';
 card.spec_version = '3.0';
 
