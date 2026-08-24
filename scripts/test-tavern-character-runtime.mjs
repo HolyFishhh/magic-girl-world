@@ -28,10 +28,15 @@ let sharedName = '';
 let sharedRuntime;
 let readinessOptions;
 let chatMessageOptions;
+let beforeMessageUpdateListener;
 const context = {
   console: { info() {}, error() {} },
   window: {},
-  Mvu: { getMvuData() {}, replaceMvuData() {} },
+  Mvu: {
+    events: { BEFORE_MESSAGE_UPDATE: 'mag_before_message_update' },
+    getMvuData() {},
+    replaceMvuData() {},
+  },
   getVariables(options) {
     readinessOptions = options;
     return { stat_data: { battle: {} } };
@@ -50,7 +55,10 @@ const context = {
   },
   getChatMessages(messageId) {
     chatMessageOptions = messageId;
-    return [{ message: '<Options><Option>continue</Option></Options>' }];
+    return [{ message: '纯剧情正文' }];
+  },
+  eventOn(eventName, listener) {
+    if (eventName === 'mag_before_message_update') beforeMessageUpdateListener = listener;
   },
   initializeGlobal(name, value) {
     sharedName = name;
@@ -71,8 +79,33 @@ assert.deepEqual(Array.from(sharedRuntime.getDiagnostics().views), ['start', 'co
 await sharedRuntime.waitForMessageReady(7);
 assert.equal(readinessOptions.type, 'message');
 assert.equal(readinessOptions.message_id, 7);
-assert.equal(sharedRuntime.getMessageText(7), '<Options><Option>continue</Option></Options>');
+assert.equal(sharedRuntime.getMessageText(7), '纯剧情正文');
 assert.equal(chatMessageOptions, 7);
+assert.equal(typeof beforeMessageUpdateListener, 'function');
+
+const pendingWithoutEnemy = {
+  message_content: '敌人逼近。\n<BATTLE_PENDING>',
+  variables: { stat_data: { battle: { enemy: { name: '雾影魔', actions: [] } } } },
+};
+beforeMessageUpdateListener(pendingWithoutEnemy);
+assert.equal(
+  pendingWithoutEnemy.message_content,
+  '敌人逼近。\n<BATTLE_PENDING>',
+  'battle marker must stay pending until the extra model registers playable enemy data',
+);
+
+const pendingWithEnemy = {
+  message_content: '雾影魔从喷泉中成形。\n<BATTLE_PENDING>',
+  variables: {
+    stat_data: { battle: { enemy: { name: '雾影魔', actions: [{ name: '撕扯', effects: { damage: 8 } }] } } },
+  },
+};
+beforeMessageUpdateListener(pendingWithEnemy);
+assert.equal(
+  pendingWithEnemy.message_content,
+  '雾影魔从喷泉中成形。\n\n<BATTLE_START>',
+  'battle UI must activate only after the MVU update event exposes valid enemy data',
+);
 
 function collectNodes(node, output = []) {
   output.push(node);
@@ -87,6 +120,7 @@ for (const [view, rootClass] of Object.entries(expectedRoots)) {
   assert.ok(asset.title);
   assert.ok(asset.bodyHtml.length > 1000);
   assert.ok(asset.styles.length > 1000);
+  assert.equal(asset.styles.includes('\uFEFF'), false, `${view} styles must not contain an embedded BOM`);
   assert.ok(asset.script.length > 10000);
   assert.doesNotThrow(() => new vm.Script(asset.script), `${view} asset must remain valid classic JavaScript`);
   const nodes = collectNodes(parseFragment(asset.bodyHtml));

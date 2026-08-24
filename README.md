@@ -1,29 +1,66 @@
 # 魔法少女世界
 
-面向 `SillyTavern + 酒馆助手 + MagVarUpdate` 的 AI 角色扮演卡牌战斗角色卡。项目以真实酒馆消息楼层为唯一发布环境，不以独立网页可玩为目标。
+面向 `SillyTavern + 酒馆助手 + MagVarUpdate` 的 AI 角色扮演卡牌战斗角色卡。发布目标是真实酒馆消息楼层，不提供独立网页玩法。
 
-## 当前版本
+## 当前发布
 
-- 当前候选：`0.5.89`
-- SillyTavern 实机基线：`1.18.0`
-- 酒馆助手最低版本：`3.4.17`，实机版本：`4.9.3`
-- MagVarUpdate：`0a730cd4`（固定 commit，支持额外模型解析）
-- 最终角色卡：仓库根目录 `魔法少女世界.png`（唯一可导入交付物）。`dist/tavern` 仅保存正则 JSON 与运行时调试产物。
-- 角色显示名：`魔法少女世界 0.5.89`
+- 版本：`0.5.92`
+- 角色显示名：`魔法少女世界 0.5.92`
+- 唯一交付卡：根目录 `魔法少女世界.png`
+- SillyTavern 实测基线：`1.18.0`
+- 酒馆助手最低版本：`3.4.17`，实测版本：`4.9.3`
+- MagVarUpdate：固定 commit `0a730cd4a9b99689d1135a49b542c780b977c24c`
 
-发布器会把世界书、角色脚本、正则和 MVU 配置直接写入这张根目录卡；导入旧角色目录中的同名副本不会更新本项目。
+角色卡内嵌世界书、7 条正则、MVU 脚本和角色运行时。`dist/tavern/` 仅保存调试 JSON/JS，不再输出第二张 PNG。
 
-版本和默认酒馆地址统一维护在 `release.config.json`。
+## 导入与启用
 
-## 内容协议
+1. 在 SillyTavern 导入根目录 `魔法少女世界.png`。
+2. 在角色管理中明确选择显示名为 `魔法少女世界 0.5.92` 的新卡，不要继续使用旧同名角色。
+3. 首次出现“包含内嵌世界书”提示时选择“是”。若未出现，在角色“更多...”中执行“导入角色卡的世界书”。
+4. 在酒馆助手的“脚本 -> 角色脚本”中启用当前角色。应能看到“MVU变量框架”和“魔法少女世界运行时”。全局脚本或预设脚本列表为空不代表角色脚本丢失。
+5. 看到 MVU 初始化成功后开始新对话。
 
-AI 只输出浅层 JSON 和简易公式。外部输入只接受 `effects`，卡牌的弃牌效果使用 `discard_effects`。以下入口已删除并会被拒绝：
+SillyTavern 会缓存同名角色、世界书和脚本状态。每次正式发布都会更换角色显示名与世界书名；测试时必须导入并选择新版本。
 
-- `effect`、`discard_effect`、`effect_program`、`effectProgram`
-- `ME/OP/ALL`
-- `target.trigger(...)`
-- 字符串条件、字符串选牌器和字符串动态插牌
-- 平铺 `battle` MUV 根；当前根固定为 `stat_data.battle`
+本地验证默认使用 `http://127.0.0.1:8012/`：
+
+```bash
+npm run import:tavern-card
+```
+
+该脚本通过 SillyTavern 官方导入接口上传 PNG，并为本地测试环境启用角色正则和角色脚本权限。其他酒馆仍需完成上述首次授权。
+
+## 游戏流程
+
+开始页只在首条 AI 消息渲染一次。剧情模式是主线；远征入口保留为可选实验功能，本版本不继续扩展远征、营火、商店或 Boss。
+
+普通回合：
+
+```text
+玩家输入
+  -> 主模型输出原生剧情正文
+  -> MVU 额外模型更新当前楼层变量
+  -> 正文末尾追加状态栏
+```
+
+战斗回合：
+
+```text
+主模型完整描写敌人和遭遇，末尾输出 <BATTLE_PENDING>
+  -> MVU 额外模型按这段描述注册敌人数据
+  -> 角色运行时校验 enemy.name 与 actions
+  -> 成功后转换为 <BATTLE_START>
+  -> 引导正文后显示单屏战斗页
+```
+
+主模型不输出变量、JSON、公式、敌人数值或 AI 选项。它能读取玩家卡牌的自然语言效果、遗物、道具、状态、NPC 和势力，以剧情方式帮助玩家围绕现有机制建立构筑。第二阶段额外模型只负责把已完成剧情转换为变量更新，避免叙事与数值互相带偏。
+
+MVU 卡级默认配置为：额外模型解析、自动请求、兼容假流式、模型来源“与插头相同”，并只向额外模型发送 `[mvu_update]` 世界书。角色卡不保存 API Key；后续可在 MVU 面板切换独立模型。
+
+## AI 内容格式
+
+AI 只生成浅层 JSON + 简易公式。外部内容使用 `effects`，卡牌弃牌效果使用 `discard_effects`。程序内部会编译为类型化 `EffectProgram`；AI 不需要输出内部 AST。
 
 简单卡牌：
 
@@ -31,146 +68,73 @@ AI 只输出浅层 JSON 和简易公式。外部输入只接受 `effects`，卡�
 {"id":"moon_slash","name":"月轮斩","type":"Attack","rarity":"Common","cost":1,"quantity":5,"effects":{"damage":8}}
 ```
 
-公式和条件：
+X 费与条件：
 
 ```json
 {"id":"last_light","name":"终末星光","type":"Attack","rarity":"Rare","cost":"energy","quantity":1,"effects":{"damage":"spent_energy * 5 + self.block","when":"self.hp < self.max_hp / 2"}}
 ```
 
-生成卡牌：
+生成牌：
 
 ```json
 {"id":"spark_forge","name":"火花锻造","type":"Skill","rarity":"Uncommon","cost":1,"quantity":1,"effects":{"add_card":"spark","count":2},"creates":[{"id":"spark","name":"火花","type":"Attack","rarity":"Common","cost":0,"effects":{"damage":3},"exhaust":true}]}
 ```
 
-AI 不输出内部 `mwg.effect/v1`。运行时在内容边界将浅层 JSON 编译为 `EffectProgram`，之后校验、执行、展示、预算和快照都只消费这一份类型化程序。
+已删除并拒绝旧 `effect/discard_effect` 字符串、`ME/OP/ALL`、`target.trigger(...)`、字符串条件/选择器和深层 `spec/op/steps` AST。完整协议见 `docs/ai-card-format-v1.md` 与 `worldbook_new/2战斗内容生成要求.md`。
 
-完整格式见 `docs/ai-card-format-v1.md` 和 `worldbook_new/2战斗内容生成要求.md`。
+## UI 规则
 
-## 运行链路
+- 正文始终由 SillyTavern 原生渲染，不包进 iframe。
+- common 状态栏只追加在正文末尾，使用初版暖白少女日记和彩色书签风格。
+- 状态栏默认保留最新三条 AI 楼层；历史楼层只读，超出窗口后卸载。
+- 战斗页只出现在最新战斗引导正文之后，固定为“敌人 / 手牌 / 我方”三层横屏卡牌结构。
+- 战斗页在桌面和手机 iframe 内都禁止页面横纵滚动；手牌按可用宽度重叠并在尺寸变化时重排。
+- 桌面鼠标与触屏共用 Pointer Events 拖牌链路；点击出牌模式仍可切换。
+- AI 生成选项已删除；玩家使用酒馆输入框或状态栏自定义行动。奖励候选仍由程序界面选择。
+- 战斗结束将最终数值、牌区计数和最多 36 条战斗事件传给剧情模型，帮助续写战后剧情。
 
-```text
-AI 回复
-  -> MUV 写入当前消息 stat_data
-  -> 酒馆助手按楼层挂载轻量 iframe 壳
-  -> 角色卡内 MagicGirlWorld 运行时提供版本化 start/common/fish 资源
-  -> 内容契约预检并编译 effects
-  -> BattleStateStore + EffectProgram 运行战斗
-  -> 私有消息快照保存进行中的战斗
-  -> 结算适配器原子写回 MUV
-```
+## 架构
 
-生产代码的主要边界：
+- `src/game-core/`：无 Tavern、DOM、MUV 依赖的内容契约、公式、状态、牌区、回合、事务和战斗终态。
+- `src/portable/`：供网站、服务或 Mod 使用的 card/battle/combined ESM 出口。
+- `src/fish/core/`：SillyTavern/MVU 宿主适配、楼层快照和副作用端口。
+- `src/fish/ui/`：战斗 iframe 呈现与交互，不解析 AI 文本。
+- `src/common/`：正文末尾状态栏、奖励事务和可选远征入口。
+- `src/runtime/`：角色级共享运行时、楼层变量、MVU readiness 和战斗交接。
+- `worldbook_new/`：当前唯一 AI 协议。
 
-- `src/game-core/`：无 Tavern、DOM 和 MUV 依赖的内容契约、效果程序、状态、事务、牌区、回合和后端规则。
-- `src/fish/core/`：SillyTavern/MUV 宿主适配、消息快照和运行时副作用端口。
-- `src/fish/ui/`：fish iframe 的显示和交互，不解析 AI 字符串。
-- `src/runtime/`：酒馆助手等待、共享角色运行时、MUV 读取与战后结算。
-- `src/common/`：状态栏与远征/奖励事务。
-- `worldbook_new/`：AI 当前唯一生成协议。
-- `src/portable/`：可独立发布的 card/battle/combined ESM 公共入口；不依赖酒馆、MUV 或 DOM。
+卡牌处理和战斗后端可从 `dist/portable/` 独立导入，不依赖酒馆助手、MUV 或 DOM。外部网站或 Mod 只需实现自己的状态、选择、事件和展示端口。
 
-卡牌处理和战斗后端可以从 `src/game-core` 独立组合；网站、服务或 Mod 只需实现状态、选择、事务和呈现端口，不需要引入 Tavern Helper。
-
-可选的后端包构建产物位于 `dist/portable/`：
-
-```bash
-npm run build:portable
-npm run test:portable-package
-```
-
-其中 `card-backend.mjs` 只导出卡牌/内容契约，`battle-backend.mjs` 额外导出战斗状态、事务、快照和参考宿主，`magic-girl-core.mjs` 以命名空间同时提供两者。三者均带 `0.5.86` 版本清单、SHA-256 和 `.d.ts` 声明；外部消费者夹具会实际通过声明编译。
-
-## UI 楼层规则
-
-- start 只允许 AI 消息 0。
-- common/fish 只允许最新 AI 楼层，且互斥挂载。
-- 正文保持 SillyTavern 原生内容，不进入 iframe。
-- common 仅在正文末尾追加可交互状态栏。
-- 战斗页继续出现在原生战斗引导正文之后。
-- 普通 AI 剧情是默认模式；`run` 初始为 `null`，不会自动生成路线、营火、商店或 Boss。
-- 玩家在“卡牌与资源”中显式点击“开始远征”后，才创建并显示远征路线。
-- 状态更新只刷新内部视图，不重新挂载消息外层页面。
-- 历史楼层不得保留可运行的完整前端或重复 iframe。
-
-## 构建发布
+## 构建与验证
 
 ```bash
 npm install
 npm run release:tavern
 ```
 
-`release:tavern` 依次执行类型检查、现代核心/事务/MUV/楼层测试、生产构建、酒馆正则导出、角色卡补丁和 PNG 契约验证。
+`release:tavern` 会执行类型检查、现代语法/事务/战斗/MVU/楼层/HTML 安全测试、portable 构建、生产 UI 构建、角色运行时导出、PNG 补丁和卡内契约验证。
 
-导入本机酒馆：
-
-```bash
-npm run import:tavern-card
-```
-
-默认连接 `http://127.0.0.1:8012/`。导入新文件名后，仍需在 SillyTavern 中确认角色卡内嵌世界书；导入脚本会同步允许该角色的局部正则。
-
-### 导入后首次启用
-
-角色卡的世界书和酒馆助手脚本属于 SillyTavern 的角色卡扩展数据，不会在独立图片查看器中显示。导入后请：
-
-1. 在角色管理中选择显示名为 `魔法少女世界 0.5.86` 的最新文件（通常是酒馆自动重命名后的 `魔法少女世界*.png`），不要继续使用根目录旧卡。
-2. 首次出现“此角色包含内嵌世界书”提示时选择“是”。如果没有弹窗，在角色面板的“更多...”中选择“导入角色卡的世界书”。
-3. 打开酒馆助手 `4.9.3` 的“脚本”页，确认切换到当前角色脚本库；应能看到“MVU变量框架”和“魔法少女世界运行时”。“全局脚本”或“预设脚本”为空不代表角色脚本丢失。
-4. 状态栏出现 `[MVU]变量初始化成功` 且显示 `魔法少女世界0.5.86` 后，再开始聊天。
-
-只导入 PNG 但不选择当前卡，或只打开全局/预设脚本库，会看到空列表；这是酒馆的选择和导入流程，不是卡内字段缺失。官方“导出并下载 -> PNG”往返测试会保留 14 条世界书、7 条正则和 2 个角色脚本。
-
-开发模式只用于检查资源加载，不替代实机验收：
+常用实机夹具：
 
 ```bash
-npm run dev:tavern
+npm run tavern:readiness-chat -- valid "魔法少女世界 0.5.92.png"
+npm run tavern:battle-repair-chat -- status "魔法少女世界 0.5.92.png" ordinary
 ```
 
-## 实机验收
-
-`0.5.86` 已在 SillyTavern `1.18.0`、酒馆助手 `4.9.3`、MagVarUpdate `v0.181.0` 中通过最终 PNG 的普通剧情、普通战斗、AI 战后结算、奖励领取、剧情续写和刷新恢复回归。角色卡导入为 `魔法少女世界14.png`，并确认链接内嵌世界书 `魔法少女世界0.5.86`。
-
-普通模式夹具 `readiness-valid-2026-08-23T16-07-44Z` 保持 `run=null`：原生正文位于 iframe 外，目标楼层只有一个状态栏 iframe；“继续调查/进入战斗”各一个，路线区不存在，展开“卡牌与资源”后只有一个“开始远征”。
-
-普通战斗夹具 `battle-repair-status-2026-08-23T16-24-04Z` 同样保持 `run=null`。打出“星痕叠印”后手牌 `5 -> 4`、弃牌 `0 -> 1`，获得 1 层星痕与 3 格挡；结束回合后状态执行 tick、衰减和移除，进入回合 2，玩家 `41/80 HP`、无状态、手牌 5、抽牌堆 0、弃牌堆 5。官方消息快照和整页刷新后从最近聊天重开均恢复相同状态，原生引导正文仍在战斗 iframe 外且位于其前。
-
-完整闭环夹具 `battle-repair-loop-2026-08-23T18-28-06Z` 从 `run=null` 开始。零费“闭环终击”结束战斗后，真实 `deepseek-v4-flash` 在同一回复生成 3 个领奖后的剧情 Option、3 张卡牌候选、1 个道具候选和 25 EXP。MUV 将 `LV1/90` 结算为 `LV2/15`；一张非法卡在 UI 中显示精确原因并禁用，其他候选仍可领取。领取“回声观测”和“镜光药水”后候选清空、永久内容各增加一次、Option 自动恢复；点击 Option 后奖励摘要进入结构化用户消息，模型返回普通剧情、下一组选项和最新状态栏。整页刷新并从最近聊天重开后只保留最新 AI 楼层的一个 iframe，等级、经验、牌组、道具、`run=null` 和空敌人均恢复。可用以下只读命令复核聊天文件：
+世界书 token 测量：
 
 ```bash
-npm run tavern:audit-battle-loop -- 魔法少女世界14.png battle-repair-loop-2026-08-23T18-28-06Z
+npm run measure:worldbook-roles
 ```
 
-`0.5.83` 的可选远征入口实机基线继续有效：只有玩家点击“开始远征”才创建 `run`。本批没有修改远征生产逻辑，也没有把 Boss、营火等内容加入普通流程。
+`0.5.92` 的静态测量为：主模型全部剧情条目约 `2828` token；额外模型常驻约 `2860`；首轮完整内容约 `7702`；敌人注册约 `7558`。选择性生成协议只在对应控制标记出现时加入。
 
-发布批次至少验证：
+## 维护原则
 
-1. 角色卡和版本化世界书可导入。
-2. 原生正文不被 iframe 包裹，目标楼层只有一个 iframe。
-3. 现代卡牌、能力、遗物、状态和敌人行动能执行。
-4. 结束回合后的生命、格挡、状态、手牌和回合号正确。
-5. 整页刷新及重开聊天后从当前消息私有快照恢复相同状态。
-6. 战斗结束确认后只清理当前 `stat_data.battle` 的临时数据。
-7. 普通剧情不会自动创建 `run`；手动开始后路线和 MUV 存档可刷新恢复。
-8. 战后坏候选只能禁用自身，领取有效奖励后剧情 Option 必须恢复并能回到普通 AI 回复。
+- 不恢复旧 AI 字符串语法或第二套兼容执行器。
+- 不为程序方便增加 AI 包装字段和嵌套层级。
+- 同一规则只在 `game-core` 维护一次，fish 只做宿主适配和呈现。
+- 远征保持可选，主体剧情与普通战斗不依赖 `run`。
+- 发布后必须用全新版本名的最终 PNG 在真实 SillyTavern 回归。
 
-可创建隔离回归聊天：
-
-```bash
-npm run tavern:battle-repair-chat -- valid <导入后的角色文件名>
-npm run tavern:battle-repair-chat -- status <导入后的角色文件名>
-npm run tavern:battle-repair-chat -- triggers <导入后的角色文件名>
-```
-
-以上命令默认创建 `run=null` 的普通战斗。只有联调可选远征结算时才在末尾显式追加 `run`，例如 `npm run tavern:battle-repair-chat -- status <角色文件名> run`。
-
-## 维护规则
-
-- 不恢复旧字符串 parser、host、adapter 或反向编译展示链。
-- 不为方便程序而增加 AI 包装字段；优先减少模型记忆、嵌套和 token。
-- 一个规则只在核心维护一次，fish 只做宿主适配和呈现。
-- 不在 UI 中用正则推断效果，展示直接读取 `EffectProgram` 或权威 `description`。
-- 修改酒馆助手、MUV、快照、终态或发布器后，必须用最终 PNG 做真实 SillyTavern 回归。
-- 当前主线固定使用 MUV `v0.181.0` 的随 AI 输出模式；上游“额外模型解析”升级记录在 `docs/future-mvu-extra-model.md`，不属于本版本运行契约。
-
-重构过程、决策和踩坑记录见 `docs/refactor-log.md`、`docs/legacy-syntax-audit.md` 与 `docs/tavern-helper-pitfalls.md`。
+重构过程见 `docs/refactor-log.md`，MVU 分工见 `docs/mvu-worldbook-boundary.md`，酒馆链路踩坑见 `docs/tavern-helper-pitfalls.md`。

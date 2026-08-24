@@ -21,6 +21,7 @@ const requiredEntries = [
   '世界信息',
   '地点与NPC线路',
   '入侵与遭遇类型',
+  '变量数据结构',
   '[config_override]',
 ];
 assert.deepEqual(Object.keys(manifest).sort(), requiredEntries.sort());
@@ -37,13 +38,14 @@ const expectedMvuRoles = {
   '额外模型变量更新格式': 'update',
   '首条消息变量更新': 'update',
   '变量更新规则': 'update',
-  '输出格式要求': 'mixed',
-  '变量说明': 'mixed',
-  '战斗内容生成要求': 'mixed',
-  '战斗场景生成': 'mixed',
-  '远征节点协议': 'mixed',
-  '初始战斗内容修复': 'mixed',
-  '战斗场景修复': 'mixed',
+  '输出格式要求': 'plot',
+  '变量说明': 'plot',
+  '变量数据结构': 'update',
+  '战斗内容生成要求': 'update',
+  '战斗场景生成': 'update',
+  '远征节点协议': 'update',
+  '初始战斗内容修复': 'update',
+  '战斗场景修复': 'update',
   '等级表现形式': 'plot',
   世界信息: 'plot',
   地点与NPC线路: 'plot',
@@ -93,7 +95,7 @@ assert.match(firstMessageGuide, /`\[角色创建\]` 后的一行浅层 JSON/);
 assert.match(firstMessageGuide, /`mode\/name\/faction\/ordinary\/supernatural\/city\/location\/note`/);
 assert.match(firstMessageGuide, /剧情模式的 `run` 保持 null/);
 assert.match(firstMessageGuide, /远征模式在起始战斗内容通过门禁后由程序创建/);
-assert.match(firstMessageGuide, /剧情模式开场生成符合剧情的 Option/);
+assert.match(firstMessageGuide, /不输出选项或战斗启动标记/);
 assert.doesNotMatch(firstMessageGuide, /首轮路线由状态栏提供|状态栏会立即给出第一层路线/);
 assert.match(battleGuide, /`\{"lust":4\}`/);
 assert.match(battleGuide, /`effect` 字符串和内部 `spec\/op\/steps` AST 都会被拒绝/);
@@ -127,28 +129,33 @@ assert.doesNotMatch(sceneGuide, /"id":"mirror_rage"[^\n]*"description"/);
 assert.doesNotMatch(sceneGuide, /"name":"裂光"[^\n]*"description"/);
 assert.doesNotMatch(sceneGuide, /"name":"镜面反噬"[^\n]*"description"/);
 assert.match(sceneGuide, /"status_effects":\[\]/);
-assert.match(sceneGuide, /普通剧情响应禁止输出 `<BATTLE_START>`/);
+assert.match(sceneGuide, /不要续写剧情，不要输出 `<BATTLE_PENDING>`、`<BATTLE_START>` 或选项/);
 assert.match(sceneGuide, /写错会在启动前按路径报错/);
 assert.match(sceneGuide, /\[构筑摘要\]/);
 assert.match(sceneGuide, /不要复制、解释或写回/);
 assert.match(sceneGuide, /\[敌人预算\]/);
 assert.match(sceneGuide, /不要自行重算预算/);
 assert.match(sceneGuide, /名称各自唯一/);
-assert.match(sceneGuide, /未被标签包裹的原生引导正文/);
+assert.match(sceneGuide, /主模型的敌人描述为唯一叙事依据/);
 assert.match(sceneGuide, /"effects"/);
 assert.match(sceneGuide, /"effects":\{"damage":8\}/);
 assert.doesNotMatch(sceneGuide, /<Story>|"effect"\s*:/);
 
 const variableGuide = sources.get('变量说明');
-assert.match(variableGuide, /"player_abilities":/);
-assert.match(variableGuide, /"player_status_effects":/);
-assert.match(variableGuide, /Common, Uncommon, Rare, Boss, ENS/);
-assert.match(variableGuide, /100\+50\*\(n-1\)/);
-assert.match(variableGuide, /`stat_data\.battle` 必须保持为对象/);
-assert.match(variableGuide, /平铺 `battle` 不属于当前协议/);
-assert.match(variableGuide, /新内容只生成浅层 `effects`/);
-assert.match(variableGuide, /可选远征模式的程序存档，默认 null/);
-assert.doesNotMatch(variableGuide, /"effect"\s*:/);
+assert.match(variableGuide, /不负责修改它，也不需要解释内部公式/);
+assert.match(variableGuide, /get_message_variable::stat_data\.battle\.cards/);
+assert.match(variableGuide, /name\/description.*浅层 `effects`/);
+assert.match(variableGuide, /`battle\.cards`/);
+assert.match(variableGuide, /构筑友好叙事/);
+assert.doesNotMatch(variableGuide, /_\.set|_\.assign|"player_abilities"/);
+
+const variableDataGuide = sources.get('变量数据结构');
+assert.match(variableDataGuide, /"player_abilities":/);
+assert.match(variableDataGuide, /"player_status_effects":/);
+assert.match(variableDataGuide, /`stat_data`/);
+assert.match(variableDataGuide, /`run` 由远征程序独占/);
+assert.match(variableDataGuide, /战后奖励/);
+assert.doesNotMatch(variableDataGuide, /"effect"\s*:/);
 
 const initializationGuide = sources.get('首条消息变量更新');
 assert.doesNotMatch(initializationGuide, /\{ 卡牌效果字段 \}/);
@@ -185,22 +192,17 @@ const outputGuide = sources.get('输出格式要求');
 const mvuOverride = JSON.parse(sources.get('[config_override]'));
 assert.equal(mvuOverride.更新方式, '额外模型解析');
 assert.equal(mvuOverride.额外模型解析配置.启用自动请求, true);
-assert.match(outputGuide, /剧情正文直接输出为普通 Markdown/);
-assert.match(outputGuide, /不要用 HTML、代码块或卡片包裹正文/);
-assert.doesNotMatch(outputGuide, /<Story>/);
-assert.match(outputGuide, /\[路线节点\]/);
-assert.match(outputGuide, /\[事件选择\]/);
-assert.match(outputGuide, /\[营火升级\]/);
-assert.match(outputGuide, /\[奖励预算\]/);
-assert.match(outputGuide, /artifacts=候选\/可选/);
-assert.match(outputGuide, /不要重算、解释或写回这行文本/);
-assert.match(outputGuide, /`\[战斗后续\] ordinary\/run`/);
-assert.match(outputGuide, /`ordinary`：这是普通角色扮演战斗/);
-assert.match(outputGuide, /领奖完成后接下来做什么/);
-assert.match(outputGuide, /领取、查看、选择或放弃奖励均不是 Option/);
-assert.match(outputGuide, /本次回复的 `<UpdateVariable>` 中立即写入全部候选和经验/);
-assert.match(outputGuide, /`run`：这是可选远征战斗/);
-assert.doesNotMatch(outputGuide, /奖励后不再生成探索 Option/);
+assert.equal(mvuOverride.额外模型解析配置.兼容假流式, true);
+assert.equal(mvuOverride.额外模型解析配置.模型来源, '与插头相同');
+assert.equal(mvuOverride.额外模型解析配置.世界书条目白名单正则, '^\\[mvu_update\\]');
+assert.match(outputGuide, /直接输出自然、连贯的 Markdown 剧情正文/);
+assert.match(outputGuide, /不使用 `<Story>`、HTML、代码块或页面容器/);
+assert.match(outputGuide, /不使用 `<Story>`/);
+assert.match(outputGuide, /不输出 `<Options>`、`<Option>`、`<BattleOption>`/);
+assert.match(outputGuide, /不输出 `<UpdateVariable>`/);
+assert.match(outputGuide, /<BATTLE_PENDING>/);
+assert.match(outputGuide, /不输出 `<BATTLE_START>`/);
+assert.match(outputGuide, /只输出战后剧情正文/);
 const runGuide = sources.get('远征节点协议');
 assert.match(runGuide, /程序会按 Act、层数、节点类型和已完成的同类节点/);
 assert.match(runGuide, /机制相同但叙事身份不同/);
@@ -248,7 +250,8 @@ assert.match(battleRepairGuide, /完整替换 `battle\.enemy`/);
 assert.match(battleRepairGuide, /不得清空整份状态定义表/);
 assert.match(battleRepairGuide, /保持 `battle\.core\/cards\/artifacts\/items\/player_lust_effect\/level\/exp`/);
 assert.match(battleRepairGuide, /`status\/factions\/npcs\/run\/run_result\/run_upgrade\/reward` 不变/);
-assert.match(battleRepairGuide, /`<UpdateVariable>` 和 `<BATTLE_START>`/);
+assert.match(battleRepairGuide, /只输出一个 `<UpdateVariable>`/);
+assert.match(battleRepairGuide, /不输出 `<BATTLE_START>`/);
 assert.doesNotMatch(battleRepairGuide, /"effect"\s*:/);
 assert.match(sceneGuide, /当前战斗不得改写永久 `battle\.cards\/artifacts\/items\/player_lust_effect`/);
 
@@ -273,7 +276,10 @@ assert.match(contentGuide, /可选择 0 到该数量张置入弃牌堆/);
 assert.match(contentGuide, /不触发 `on_draw\/on_discard`/);
 
 const updateGuide = sources.get('变量更新规则');
+assert.match(updateGuide, /第二阶段的 MVU 额外模型/);
+assert.match(updateGuide, /不要续写剧情、复述正文、生成选项/);
 assert.doesNotMatch(updateGuide, /setLocalVar|initialized_lorebooks|SnowYuki/);
+assert.doesNotMatch(updateGuide, /剧情与选项之后/);
 assert.ok(!updateGuide.trimStart().startsWith('```'), 'variable rules must not be wrapped in a prompt-wide code fence');
 assert.doesNotMatch(updateGuide, /\$\{(?:path|old|new|reason)|format:\s*\|-|^rule:/m);
 assert.match(updateGuide, /变量路径均相对于 `stat_data`/);
@@ -281,7 +287,8 @@ assert.match(updateGuide, /_\.set\('path', oldValue, newValue\)/);
 assert.match(updateGuide, /_\.assign\('array\.path', value\)/);
 assert.match(updateGuide, /_\.remove\('path', keyOrIndexOrValue\)/);
 assert.match(updateGuide, /_\.add\('numeric\.path', delta\)/);
-assert.match(updateGuide, /没有变量变化时仍输出空更新块/);
+assert.match(sources.get('额外模型变量更新格式'), /也必须给出一条合法的无变化命令/);
+assert.match(updateGuide, /_\.set\('status\.time', T, T\);/);
 assert.match(updateGuide, /_\.add\('battle\.exp', 正整数\)/);
 assert.match(updateGuide, /100 \+ 50\*\(n-1\)/);
 assert.match(updateGuide, /禁止直接修改 `battle\.level`/);

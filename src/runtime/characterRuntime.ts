@@ -20,6 +20,7 @@ type HostReadinessOptions = Readonly<{
 declare const __MWG_VIEW_ASSETS__: Record<RuntimeViewName, RuntimeViewAsset>;
 declare const __MWG_BUILD_INFO__: RuntimeBuildInfo;
 declare function initializeGlobal(global: string, value: unknown): void;
+declare function eventOn(eventType: string, listener: (...args: any[]) => void): unknown;
 
 (() => {
   const stateKey = '__MAGIC_GIRL_WORLD_CHARACTER_RUNTIME__';
@@ -36,6 +37,7 @@ declare function initializeGlobal(global: string, value: unknown): void;
     status: 'loading',
     publishedAt: 0,
     lastError: '',
+    battleHandoffReady: false,
   };
 
   const wait = (milliseconds: number): Promise<void> =>
@@ -120,6 +122,29 @@ declare function initializeGlobal(global: string, value: unknown): void;
     return typeof message?.message === 'string' ? message.message : '';
   };
 
+  const installBattleHandoff = async (): Promise<void> => {
+    const deadline = Date.now() + 120000;
+    while (!hasMvuApi() && Date.now() < deadline) await wait(100);
+    const beforeMessageUpdate = host.Mvu?.events?.BEFORE_MESSAGE_UPDATE;
+    if (!beforeMessageUpdate || typeof eventOn !== 'function') return;
+
+    eventOn(beforeMessageUpdate, (context: { variables?: Record<string, any>; message_content?: string }) => {
+      const message = String(context?.message_content || '');
+      if (!message.includes('<BATTLE_PENDING>') || message.includes('<BATTLE_START>')) return;
+
+      const enemy = context?.variables?.stat_data?.battle?.enemy;
+      const actions = Array.isArray(enemy?.actions) ? enemy.actions.filter(Boolean) : [];
+      if (!enemy || typeof enemy.name !== 'string' || !enemy.name.trim() || actions.length === 0) {
+        console.error('[MagicGirlWorld] 敌人数据未注册完成，已阻止战斗页面提前启动');
+        return;
+      }
+
+      context.message_content =
+        message.replace(/\s*<BATTLE_PENDING>\s*/g, '\n').trimEnd() + '\n\n<BATTLE_START>';
+    });
+    state.battleHandoffReady = true;
+  };
+
   const api = Object.freeze({
     spec: 'mwg.tavern-runtime/v1',
     version: build.cardVersion,
@@ -155,6 +180,7 @@ declare function initializeGlobal(global: string, value: unknown): void;
       state.publishedAt = Date.now();
       state.lastError = '';
       console.info(`[MagicGirlWorld] 角色运行时 ${build.cardVersion} 已就绪`);
+      void installBattleHandoff();
     } catch (error) {
       state.status = 'error';
       state.lastError = error instanceof Error ? error.message : String(error);

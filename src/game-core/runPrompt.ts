@@ -60,8 +60,8 @@ export function formatRoutePrompt(input: RoutePromptInput): string {
   return lines.join('\n');
 }
 
-export interface OptionPromptInput {
-  optionText: string;
+export interface ActionPromptInput {
+  actionText: string;
   battle: boolean;
   node?: Pick<RunNodeChoice, 'id' | 'kind'> | null;
   pending?: string | null;
@@ -69,13 +69,13 @@ export interface OptionPromptInput {
 }
 
 /** Compose normal and battle option messages while sharing event context and pending summaries. */
-export function formatOptionPrompt(input: OptionPromptInput): string {
+export function formatActionPrompt(input: ActionPromptInput): string {
   const eventContext = formatEventSelectionContext(input.node);
   const pending = input.pending ? `\n\n${input.pending}` : '';
   const budget = input.battle && input.buildBudget ? `\n${input.buildBudget}` : '';
-  const prefix = input.battle ? '用户选择了战斗选项：' : '用户的选择是：';
+  const prefix = input.battle ? '用户发起战斗行动：' : '用户行动：';
   const suffix = input.battle ? '\n\n[开始战斗]' : '';
-  return `${prefix}${input.optionText}${eventContext}${pending}${budget}${suffix}`;
+  return `${prefix}${input.actionText}${eventContext}${pending}${budget}${suffix}`;
 }
 
 /** Keep AI-authored campfire patches small without exposing host-only card fields. */

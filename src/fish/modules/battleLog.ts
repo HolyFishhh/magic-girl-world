@@ -8,6 +8,12 @@ import { escapeHtml, escapeHtmlAttribute } from '../shared/html';
 export class BattleLog {
   private static logContainer: JQuery | null = null;
   private static maxLogs = 50; // 最大日志条数
+  private static entries: Array<{
+    turn: number;
+    type: 'info' | 'damage' | 'heal' | 'action' | 'system';
+    message: string;
+    source?: { type: 'card' | 'relic' | 'ability' | 'status'; name: string; details?: string };
+  }> = [];
 
   /**
    * 初始化战斗日志
@@ -15,44 +21,11 @@ export class BattleLog {
   static init(): void {
     // 检查是否已存在日志容器
     if ($('#battle-log').length === 0) {
-      // 创建日志容器
       const logHtml = `
-        <div id="battle-log" style="
-          position: fixed;
-          top: 20px;
-          left: 20px;
-          width: 300px;
-          max-height: 200px;
-          background: rgba(0, 0, 0, 0.9);
-          border: 2px solid #444;
-          border-radius: 8px;
-          padding: 10px;
-          overflow-y: auto;
-          z-index: 1000;
-          font-size: 12px;
-          color: white;
-          display: none;
-        ">
-          <div class="log-header" style="
-            font-weight: bold;
-            margin-bottom: 5px;
-            padding-bottom: 5px;
-            border-bottom: 1px solid #666;
-            color: #aaa;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-          ">
+        <div id="battle-log">
+          <div class="log-header">
             <span>战斗日志</span>
-            <button id="close-battle-log" style="
-              background: none;
-              border: none;
-              color: #aaa;
-              cursor: pointer;
-              font-size: 14px;
-              padding: 0;
-              margin: 0;
-            ">✕</button>
+            <button id="close-battle-log" type="button" aria-label="关闭战斗日志">✕</button>
           </div>
           <div class="log-content"></div>
         </div>
@@ -85,30 +58,31 @@ export class BattleLog {
     const gameState = gameStateManager.getGameState();
     const currentTurn = gameState?.currentTurn || 1;
     const turnDisplay = `[第${currentTurn}回合]`;
+    this.entries.push({
+      turn: currentTurn,
+      type,
+      message: String(message).replace(/\s+/g, ' ').trim(),
+      source: source ? { ...source } : undefined,
+    });
+    if (this.entries.length > this.maxLogs) this.entries.splice(0, this.entries.length - this.maxLogs);
 
-    let color = '#ffffff';
     let icon = '';
 
     switch (type) {
       case 'damage':
-        color = '#ff6666';
         icon = '⚔️';
         break;
       case 'heal':
-        color = '#66ff66';
         icon = '💚';
         break;
       case 'action':
-        color = '#66aaff';
         icon = '🎯';
         break;
       case 'system':
-        color = '#ffaa66';
         icon = '⚙️';
         break;
       case 'info':
       default:
-        color = '#ffffff';
         icon = 'ℹ️';
         break;
     }
@@ -122,23 +96,12 @@ export class BattleLog {
         ability: '⚡',
         status: '✨',
       };
-      sourceDisplay = `<span class="log-source" style="color: #aaa; font-size: 9px; margin-right: 4px;">${
-        sourceEmojis[source.type]
-      }${escapeHtml(source.name)}</span>`;
+      sourceDisplay = `<span class="log-source">${sourceEmojis[source.type]}${escapeHtml(source.name)}</span>`;
     }
 
     const logEntry = $(`
-      <div class="log-entry" style="
-        margin-bottom: 3px;
-        padding: 2px 0;
-        color: ${color};
-        line-height: 1.3;
-        border-left: 2px solid ${color};
-        padding-left: 5px;
-        margin-left: 3px;
-        cursor: pointer;
-      " ${source?.details ? `title="${escapeHtmlAttribute(source.details)}"` : ''}>
-        <span class="log-time" style="color: #888; font-size: 10px;">${turnDisplay}</span>
+      <div class="log-entry log-${type}" ${source?.details ? `title="${escapeHtmlAttribute(source.details)}"` : ''}>
+        <span class="log-time">${turnDisplay}</span>
         ${sourceDisplay}
         <span class="log-icon">${icon}</span>
         <span class="log-message">${escapeHtml(message)}</span>
@@ -153,16 +116,7 @@ export class BattleLog {
 
         if ($this.find(detailsSelector).length === 0) {
           // 展开详细信息
-          $this.append(`
-            <div class="log-details" style="
-              margin-top: 5px;
-              padding: 5px;
-              background: rgba(255,255,255,0.1);
-              border-radius: 4px;
-              font-size: 10px;
-              color: #ccc;
-            ">${escapeHtml(source.details)}</div>
-          `);
+          $this.append(`<div class="log-details">${escapeHtml(source.details)}</div>`);
         } else {
           // 收起详细信息
           $this.find(detailsSelector).remove();
@@ -245,9 +199,23 @@ export class BattleLog {
    * 清空日志
    */
   static clear(): void {
+    this.entries = [];
     if (this.logContainer) {
       this.logContainer.empty();
     }
+  }
+
+  /** Reuse the same bounded event stream for post-battle narrative context. */
+  static buildNarrativeReport(maxEntries = 36): string {
+    const selected = this.entries.slice(-Math.max(1, Math.floor(maxEntries)));
+    if (selected.length === 0) return '- 无可用战斗事件记录';
+    return selected
+      .map(entry => {
+        const source = entry.source?.name ? `〔${entry.source.name}〕` : '';
+        const details = entry.source?.details ? `（${entry.source.details.replace(/\s+/g, ' ').trim()}）` : '';
+        return `- 第${entry.turn}回合 ${source}${entry.message}${details}`;
+      })
+      .join('\n');
   }
 
   /**

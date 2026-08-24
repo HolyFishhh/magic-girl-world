@@ -32,21 +32,23 @@
     }
   },
   "输出格式要求": {
-    "comment": "[mvu_plot][mvu_update] 输出格式要求",
-    "constant": false,
+    "comment": "[mvu_plot] 剧情模型职责与输出",
+    "constant": true,
+    "selective": false,
     "keys": [],
     "use_regex": true
   },
   "变量说明": {
-    "comment": "[mvu_plot][mvu_update] 变量说明",
-    "constant": false,
+    "comment": "[mvu_plot] 剧情可见状态与构筑",
+    "constant": true,
+    "selective": false,
     "keys": [],
     "use_regex": true
   },
   "战斗内容生成要求": {
-    "comment": "[mvu_plot][mvu_update] 战斗内容生成要求",
+    "comment": "[mvu_update] 战斗内容生成要求",
     "constant": false,
-    "keys": ["[开始游戏]", "[开始战斗]", "[战斗结算]", "[营火升级]", "[商店生成]", "[事件选择]", "[战斗内容修复]"],
+    "keys": ["[开始游戏]", "[开始战斗]", "<BATTLE_PENDING>", "[战斗结算]", "[营火升级]", "[商店生成]", "[事件选择]", "[战斗内容修复]"],
     "use_regex": true
   },
   "[initvar]不要启用": {
@@ -54,9 +56,9 @@
     "enabled": false
   },
   "战斗场景生成": {
-    "comment": "[mvu_plot][mvu_update] 战斗场景生成",
+    "comment": "[mvu_update] 战斗场景生成",
     "constant": false,
-    "keys": ["[开始战斗]", "[战斗场景修复]"],
+    "keys": ["[开始战斗]", "<BATTLE_PENDING>", "[战斗场景修复]"],
     "use_regex": true
   },
   "等级表现形式": {
@@ -66,21 +68,21 @@
     "use_regex": true
   },
   "远征节点协议": {
-    "comment": "[mvu_plot][mvu_update] 远征节点协议",
+    "comment": "[mvu_update] 远征节点协议",
     "create": true,
     "constant": false,
     "keys": ["[路线节点]", "[事件选择]", "[营火升级]", "[商店生成]"],
     "use_regex": true
   },
   "初始战斗内容修复": {
-    "comment": "[mvu_plot][mvu_update] 初始战斗内容修复",
+    "comment": "[mvu_update] 初始战斗内容修复",
     "create": true,
     "constant": false,
     "keys": ["[战斗内容修复]"],
     "use_regex": true
   },
   "战斗场景修复": {
-    "comment": "[mvu_plot][mvu_update] 战斗场景修复",
+    "comment": "[mvu_update] 战斗场景修复",
     "create": true,
     "constant": false,
     "keys": ["[战斗场景修复]"],
@@ -106,6 +108,21 @@
     "constant": false,
     "keys": ["[开始游戏]"],
     "use_regex": true
+  },
+  "变量数据结构": {
+    "comment": "[mvu_update] 变量数据结构",
+    "create": true,
+    "constant": true,
+    "selective": false,
+    "keys": [],
+    "use_regex": false,
+    "extensions": {
+      "group": "",
+      "group_override": false,
+      "prevent_recursion": true,
+      "exclude_recursion": true,
+      "depth": 0
+    }
   },
   "[config_override]": {
     "create": true,

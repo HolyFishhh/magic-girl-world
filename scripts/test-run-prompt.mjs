@@ -8,7 +8,7 @@ require('ts-node/register/transpile-only');
 const {
   compactCardForUpgrade,
   formatEventSelectionContext,
-  formatOptionPrompt,
+  formatActionPrompt,
   formatRestUpgradePrompt,
   formatRoutePrompt,
 } = require(resolve('src/game-core/index.ts'));
@@ -52,18 +52,18 @@ const eventRoute = formatRoutePrompt({
 assert.match(eventRoute, /\n\[世界连续性\] 地点“白木市”；承接人物 艾拉\[elara\]：调查月纹$/);
 
 assert.equal(
-  formatOptionPrompt({ optionText: '继续调查', battle: false, node: { id: 'a1_f3_event_1_0', kind: 'event' } }),
-  '用户的选择是：继续调查\n[事件选择] node_id=a1_f3_event_1_0\n非战斗结局写 run_result；node_id 保持不变，outcome 只用 cleared/failed/escaped，gold/hp 用实际 JSON 整数变化量且无变化时省略。',
+  formatActionPrompt({ actionText: '继续调查', battle: false, node: { id: 'a1_f3_event_1_0', kind: 'event' } }),
+  '用户行动：继续调查\n[事件选择] node_id=a1_f3_event_1_0\n非战斗结局写 run_result；node_id 保持不变，outcome 只用 cleared/failed/escaped，gold/hp 用实际 JSON 整数变化量且无变化时省略。',
 );
 assert.equal(
-  formatOptionPrompt({
-    optionText: '拔剑迎战',
+  formatActionPrompt({
+    actionText: '拔剑迎战',
     battle: true,
     node: { id: 'a1_f3_event_1_0', kind: 'event' },
     pending: '[已获得] 星尘',
     buildBudget: '[构筑摘要] deck=10 atk=20',
   }),
-  '用户选择了战斗选项：拔剑迎战\n[事件选择] node_id=a1_f3_event_1_0\n非战斗结局写 run_result；node_id 保持不变，outcome 只用 cleared/failed/escaped，gold/hp 用实际 JSON 整数变化量且无变化时省略。\n\n[已获得] 星尘\n[构筑摘要] deck=10 atk=20\n\n[开始战斗]',
+  '用户发起战斗行动：拔剑迎战\n[事件选择] node_id=a1_f3_event_1_0\n非战斗结局写 run_result；node_id 保持不变，outcome 只用 cleared/failed/escaped，gold/hp 用实际 JSON 整数变化量且无变化时省略。\n\n[已获得] 星尘\n[构筑摘要] deck=10 atk=20\n\n[开始战斗]',
 );
 
 const upgradePrompt = formatRestUpgradePrompt({

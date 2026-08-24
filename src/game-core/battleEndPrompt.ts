@@ -22,10 +22,12 @@ export interface BattleEndPromptInput {
     lust: number;
     maxLust: number;
     energy: number;
+    block?: number;
     statuses: readonly BattleEndPromptStatus[];
     handCount: number;
     drawPileCount: number;
     discardPileCount: number;
+    exhaustPileCount?: number;
   };
   enemy?: {
     name: string;
@@ -33,9 +35,11 @@ export interface BattleEndPromptInput {
     maxHp: number;
     lust: number;
     maxLust: number;
+    block?: number;
     statuses: readonly BattleEndPromptStatus[];
   } | null;
   turns: number;
+  battleLog?: string;
   narrativeCards?: readonly BattleEndPromptCard[];
   rewardBudget?: string;
   buildGuidance?: string;
@@ -52,23 +56,9 @@ function formatStatuses(statuses: readonly BattleEndPromptStatus[]): string {
 }
 
 function formatResponseRequirement(input: Pick<BattleEndPromptInput, 'result' | 'continuation'>): string {
-  if (input.continuation === 'run') {
-    if (input.result === 'victory') {
-      return '[回复要求] 同一回复内：立即将预算中的奖励候选和经验写入 <UpdateVariable>；不要生成 <Options>，奖励后由路线界面继续。';
-    }
-    if (input.result === 'defeat') {
-      return '[回复要求] 输出剧情和 <UpdateVariable>；不得生成胜利奖励或 <Options>。';
-    }
-    return '[回复要求] 输出剧情和 <UpdateVariable>；只按事件叙事处理奖励或代价，不要生成 <Options>。';
-  }
-
-  if (input.result === 'victory') {
-    return '[回复要求] 同一回复内：立即将预算中的奖励候选和经验写入 <UpdateVariable>；另生成2-5个领奖后的剧情行动 <Option>。奖励领取、查看、选择、放弃均不是 <Option>。';
-  }
-  if (input.result === 'defeat') {
-    return '[回复要求] 同一回复内：生成2-5个后续剧情行动 <Option> 和 <UpdateVariable>；不得生成胜利奖励。';
-  }
-  return '[回复要求] 同一回复内：生成2-5个后续剧情行动 <Option> 和 <UpdateVariable>；只按事件叙事处理奖励或代价。';
+  const rewardBoundary = input.result === 'victory' ? '奖励和经验由随后运行的 MVU 额外模型按预算登记。' : '不得叙述尚未发生的胜利奖励。';
+  const continuation = input.continuation === 'run' ? '远征路线由程序继续。' : '玩家会通过自定义行动继续剧情。';
+  return `[剧情模型要求] 只输出战后剧情正文，不输出选项、JSON、<UpdateVariable> 或更新命令。${rewardBoundary}${continuation}`;
 }
 
 /** Format the post-battle model prompt without reading UI, MUV or Tavern globals. */
@@ -82,7 +72,12 @@ export function formatBattleEndPrompt(input: BattleEndPromptInput): BattleEndPro
     `- 生命值：${input.player.hp}/${input.player.maxHp}\n`,
     `- 欲望值：${input.player.lust}/${input.player.maxLust}\n`,
     `- 剩余能量：${input.player.energy}\n`,
+    `- 最终格挡：${input.player.block ?? 0}\n`,
   );
+
+  if (input.battleLog?.trim()) {
+    summary.push('\n【战斗过程】\n', input.battleLog.trim(), '\n');
+  }
   if (input.player.statuses.length > 0) {
     summary.push(`- 状态效果：${formatStatuses(input.player.statuses)}\n`);
   }
@@ -90,7 +85,7 @@ export function formatBattleEndPrompt(input: BattleEndPromptInput): BattleEndPro
   if (input.enemy) {
     summary.push(
       '\n【敌人状态】\n',
-      `- ${input.enemy.name}：生命值${input.enemy.hp}/${input.enemy.maxHp}，欲望值${input.enemy.lust}/${input.enemy.maxLust}\n`,
+      `- ${input.enemy.name}：生命值${input.enemy.hp}/${input.enemy.maxHp}，欲望值${input.enemy.lust}/${input.enemy.maxLust}，格挡${input.enemy.block ?? 0}\n`,
     );
     if (input.enemy.statuses.length > 0) {
       summary.push(`- 状态效果：${formatStatuses(input.enemy.statuses)}\n`);
@@ -103,6 +98,7 @@ export function formatBattleEndPrompt(input: BattleEndPromptInput): BattleEndPro
     `- 手牌剩余：${input.player.handCount}张\n`,
     `- 抽牌堆：${input.player.drawPileCount}张\n`,
     `- 弃牌堆：${input.player.discardPileCount}张\n`,
+    `- 消耗堆：${input.player.exhaustPileCount ?? 0}张\n`,
   );
 
   const narrativeCards = input.narrativeCards || [];

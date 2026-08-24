@@ -2,6 +2,32 @@
 
 更新时间：2026-08-24。
 
+## P57：合并后的 CSS 内嵌 BOM 会让真实酒馆丢失主题变量
+
+- 症状：源码和 `dist/src/common/index.html` 都包含完整少女日记配色，但角色卡在深色酒馆里显示为透明黑底、默认黑字和彩色区域全部消失。
+- 原因：Webpack 把第三方 CSS 和项目 SCSS 合并为多个 `<style>` 文本，第二段项目 CSS 以 `U+FEFF` 开头。角色运行时再次拼接后，BOM 位于样式表中间并紧贴 `:root`，真实 iframe 不再识别该选择器，所有 `var(--surface)` 等声明失效。
+- 处理：`export-tavern-runtime.mjs` 在提取脚本和样式资产时删除全部 `U+FEFF`；`test-tavern-character-runtime.mjs` 拒绝任何视图资产包含 BOM。
+- 回归：全新 `0.5.91` 卡在真实 SillyTavern 中读取到 `--surface=#fffaf7`，状态栏根背景为 `rgb(255,250,247)`，彩色摘要和四条书签面板恢复。
+
+## P58：HTML5 drag/drop 在 Tavern Helper srcdoc iframe 中不可靠
+
+- 症状：卡牌带 `draggable=true`、模式按钮也显示拖动，但电脑端拖到出牌区不会执行；同一代码在普通独立页面可能正常。
+- 原因：浏览器原生 drag/drop 依赖 iframe、DataTransfer 和目标区域命中。Tavern Helper 使用 `srcdoc` iframe，酒馆外层还有消息层和抽屉层，原生事件链在不同环境下会丢失。旧实现同时维护 drag、touch 和 click 三套状态，清理顺序也容易互相覆盖。
+- 处理：统一改为 Pointer Events。超过 6px 才进入拖动态，通过坐标与 `playArea.getBoundingClientRect()` 判断投放，成功后触发内部 `mwg:play-card`；鼠标、触屏和触控笔共用一套状态机。
+- 回归：真实酒馆拖动“星痕净化”后手牌 `5 -> 4`、弃牌 `0 -> 1`，日志记录具体牌名。
+
+## P59：绝对定位手牌必须监听 iframe 自身尺寸变化
+
+- 症状：桌面加载时卡牌排列正常，切手机宽度或横竖屏后页面没有滚动条，但右侧卡牌仍按旧桌面坐标摆放并被 `overflow:hidden` 裁切。
+- 原因：手牌布局只在状态刷新时计算；响应式 CSS 改变容器宽度不会触发战斗状态更新。
+- 处理：`BattleUI` 在 resize 时通过单个 requestAnimationFrame 重新计算卡宽、重叠步长和起点，不重建 DOM 或修改战斗状态。
+
+## P60：主模型与额外模型不能共享生成协议
+
+- 症状：第一次遇敌时主模型同时规划敌人数值与 MVU 命令，剧情被公式打断；额外模型又重新生成一次，敌人描述和战斗数据容易偏移。
+- 原因：世界书条目同时带 `[mvu_plot][mvu_update]`，两个模型都收到输出格式、变量路径和战斗 JSON 规则。
+- 处理：正式世界书只有单一标签。主模型只看到可读状态和构筑效果，输出剧情与 `<BATTLE_PENDING>`；额外模型独占 schema 和更新协议，并以刚完成的敌人描述为唯一叙事依据。运行时校验成功才启动战斗。
+
 本文件只记录已经在文档、构建产物或真实酒馆中观察到的问题。新问题应记录“症状、原因、处理、回归”，避免上下文压缩后重复排查。
 
 ## P57：iframe 不继承 SillyTavern 宿主暗色主题

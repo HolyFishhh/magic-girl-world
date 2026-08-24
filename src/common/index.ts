@@ -24,7 +24,7 @@ import {
   formatBuildBudget,
   formatRoutePrompt,
   formatWorldContinuityHint,
-  formatOptionPrompt,
+  formatActionPrompt,
   formatPlayerContentReadiness,
   formatPlayerContentRepairPrompt,
   createRunPacingContext,
@@ -55,7 +55,6 @@ import {
   readRewardLimits,
   type RewardSelections,
 } from './rewardTransactions';
-import { hasOptionTagMarkup, parseOptionTags } from './optionTags';
 import { TavernRunActionHost } from './runActionHost';
 import './index.scss';
 
@@ -65,7 +64,7 @@ const runActionHost = TavernRunActionHost.getInstance();
 // ---------------- 奖励内联渲染：状态与工具 ----------------
 let __STAT__: any = null;
 let __DELTA__: any = null;
-// 记录本轮玩家领取奖励的汇总文本，供下一次选项发送时拼接
+// 记录本轮玩家领取奖励的汇总文本，供下一次行动发送时拼接
 let __PENDING_REWARD_SUMMARY: string | null = null;
 let __PENDING_RUN_SUMMARY: string | null = null;
 let __RUN_ERROR: string | null = null;
@@ -88,9 +87,10 @@ function bindCustomActionControls() {
   if (__customActionBound) return;
   const inputEl = document.getElementById('custom-action-input') as HTMLInputElement | null;
   const sendBtn = document.getElementById('custom-action-send') as HTMLButtonElement | null;
-  if (!inputEl || !sendBtn) return; // 元素尚未渲染
+  const battleBtn = document.getElementById('custom-battle-send') as HTMLButtonElement | null;
+  if (!inputEl || !sendBtn || !battleBtn) return;
   __customActionBound = true;
-  const doSend = async () => {
+  const doSend = async (battle: boolean) => {
     const text = (inputEl.value || '').trim();
     if (!text) {
       if (typeof toastr !== 'undefined') toastr.info('请输入要发送的内容');
@@ -103,10 +103,11 @@ function bindCustomActionControls() {
       return;
     }
 
-    if (__IS_SENDING_OPTION) return;
+    if (__IS_SENDING_ACTION) return;
 
     try {
-      await handleOption(text);
+      if (battle) await handleBattleAction(text);
+      else await handleCustomAction(text);
     } catch (e) {
       console.error('自定义行动发送失败:', e);
       if (typeof toastr !== 'undefined') toastr.error('发送失败，请重试');
@@ -115,9 +116,10 @@ function bindCustomActionControls() {
       inputEl.focus();
     }
   };
-  sendBtn.onclick = doSend;
+  sendBtn.onclick = () => void doSend(false);
+  battleBtn.onclick = () => void doSend(true);
   inputEl.addEventListener('keydown', e => {
-    if ((e as KeyboardEvent).key === 'Enter') doSend();
+    if ((e as KeyboardEvent).key === 'Enter') void doSend(false);
   });
 }
 
@@ -478,7 +480,7 @@ async function applyRewardSelectionsInline(selections: RewardSelections) {
   }
 }
 
-// 渲染通知模块（插入在正文和选项之间）
+// 渲染通知模块
 function renderNotifyModule() {
   const stat = __STAT__ || {};
   const delta = __DELTA__ || {};
@@ -935,25 +937,19 @@ function updateConfirmButtonState(selections: any, cards: any[], artifacts: any[
 }
 
 // 主渲染函数
-function renderRewardInline(optionsContainer: HTMLElement) {
+function renderRewardInline() {
   if (__isMutating) return; // 防抖
 
-  // 可选奖励存在时，隐藏选项文本和自定义行动，但保留奖励选择界面
+  // 可选奖励存在时，隐藏自定义行动并保留奖励选择界面
   const selectable = hasSelectableRewards(__STAT__);
 
   if (selectable) {
-    // 隐藏选项文本容器
-    optionsContainer.style.display = 'none';
-    // 隐藏自定义行动
     const customAction = document.querySelector('.custom-action') as HTMLElement;
     if (customAction) customAction.style.display = 'none';
   } else {
-    // 显示选项文本容器和自定义行动
-    optionsContainer.style.display = '';
     const customAction = document.querySelector('.custom-action') as HTMLElement;
-    if (customAction) customAction.style.display = '';
+    if (customAction) customAction.style.display = 'grid';
   }
-  // 注意：不隐藏整个选项区域，保留奖励选择界面的显示
 
   // 渲染通知模块
   renderNotifyModule();
@@ -1120,7 +1116,7 @@ function showRunError(error: unknown, fallback: string): void {
 }
 
 async function sendEnteredRunNode(node: RunNodeChoice): Promise<void> {
-  if (__IS_SENDING_OPTION) return;
+  if (__IS_SENDING_ACTION) return;
   setSendingState(true);
   setRunButtonsDisabled(true);
   try {
@@ -1136,7 +1132,7 @@ async function sendEnteredRunNode(node: RunNodeChoice): Promise<void> {
 }
 
 async function retryActiveRunNode(node: RunNodeChoice): Promise<void> {
-  if (__IS_SENDING_OPTION) return;
+  if (__IS_SENDING_ACTION) return;
   setSendingState(true);
   setRunButtonsDisabled(true);
   try {
@@ -1151,7 +1147,7 @@ async function retryActiveRunNode(node: RunNodeChoice): Promise<void> {
 }
 
 async function requestInitialContentRepair(readiness: PlayerContentReadiness): Promise<void> {
-  if (__IS_SENDING_OPTION || readiness.ok) return;
+  if (__IS_SENDING_ACTION || readiness.ok) return;
   const prompt = formatPlayerContentRepairPrompt(readiness);
   if (!prompt) return;
   setSendingState(true);
@@ -1168,7 +1164,7 @@ async function requestInitialContentRepair(readiness: PlayerContentReadiness): P
 }
 
 async function requestRestUpgrade(node: RunNodeChoice, card: Record<string, any>): Promise<void> {
-  if (__IS_SENDING_OPTION) return;
+  if (__IS_SENDING_ACTION) return;
   setSendingState(true);
   setRunButtonsDisabled(true);
   try {
@@ -1457,8 +1453,8 @@ async function loadGameData() {
     renderNPCData(rpgData);
     renderFactionData(rpgData);
 
-    // 渲染选项/通知
-    if (!applyHistoricalReadOnlyMode()) renderOptions();
+    // 渲染行动与通知
+    if (!applyHistoricalReadOnlyMode()) renderActionArea();
     renderRunData(rpgData);
     startLatestMessageGuard();
   } catch (error) {
@@ -1813,226 +1809,31 @@ function renderNPCData(rpgData: any) {
 
 }
 
-// 解析并渲染选项按钮（统一处理普通选项和战斗选项）
-function renderOptions() {
-  const optionsContainer = document.querySelector('.options-text') as HTMLElement | null;
-  if (!optionsContainer) return;
-
-  // 每次渲染新选项时，重置发送锁，并确保自定义行动控件已绑定
+function renderActionArea() {
+  const actionSection = document.querySelector('.action-section') as HTMLElement | null;
+  if (!actionSection) return;
   setSendingState(false);
   bindCustomActionControls();
-
-  // 重置整个选项区域的显示状态（确保领取奖励后能正确显示）
-  const optionsSection = optionsContainer.closest('.section') as HTMLElement;
-
-  // 先显示整个选项区域，后续根据实际情况调整
-  if (optionsSection) {
-    optionsSection.style.display = '';
-  }
-
-  // 重置选项渲染标记
-  optionsContainer.removeAttribute('data-options-rendered');
-
-  // The regex only inserts this shell. Read the owning floor directly so the
-  // regex does not capture or transport the full AI response through HTML.
-  const messageText = getCurrentChatMessageText();
-  const optionsBlock = messageText.match(/<Options\b[^>]*>[\s\S]*?<\/Options>/i)?.[0] || '';
-  const rewardMarkers = messageText.match(/<REWARD\b[^>]*>/gi)?.join('\n') || '';
-  let raw = [optionsBlock, rewardMarkers].filter(Boolean).join('\n').trim();
-  if (!raw) raw = optionsContainer.innerHTML.trim();
-  // 如果HTML内容中没有标签，则获取文本内容
-  if (!hasOptionTagMarkup(raw)) {
-    raw = optionsContainer.textContent || optionsContainer.innerText || raw;
-  }
-
-  // 预处理：奖励内联
-  const hasRewardTag = /<REWARD\b[^>]*>/i.test(raw);
-  const _optionsRawWithoutReward = raw.replace(/<REWARD\b[^>]*>/gi, '').trim();
-
-  // 获取最新变量，用于"无标签但有 reward.*"的情况
-  try {
-    if (!__STAT__) {
-      const v = getCurrentMessageVariables();
-      __STAT__ = getStatRootRef(v) || {};
-      __DELTA__ = v?.delta_data || v?.delta || {};
-    }
-  } catch (e) {
-    console.warn('获取变量失败（奖励预处理）', e);
-  }
-
-  // 奖励处理：
-  // - 如果有可选奖励：先渲染奖励并返回（领取或跳过后刷新再渲染选项）
-  // - 如果仅有通知标签：渲染通知但不阻塞选项
-  // 每次进来先确保选项容器可见，后续如有奖励会临时隐藏
-  (optionsContainer as HTMLElement).style.display = '';
-
-  const hasSelectable = hasSelectableRewards(__STAT__);
-
-  // 计算是否存在通知（本次变化/经验等级变化）
-  const tmpPills = computeChangePillsByDelta(__DELTA__ || {}, __STAT__ || {});
-  const expDispCheck = __DELTA__?.battle?.exp;
-  const levelDispCheck = __DELTA__?.battle?.level;
-  const hasNotify =
-    tmpPills.length > 0 ||
-    (typeof expDispCheck === 'string' && expDispCheck.includes('->')) ||
-    (typeof levelDispCheck === 'string' && levelDispCheck.includes('->'));
-
-  if (hasSelectable) {
-    renderRewardInline(optionsContainer);
-    return;
-  }
-  if (hasRewardTag || hasNotify) {
-    renderRewardInline(optionsContainer);
-    // 继续渲染选项（不return）
-  }
-
-  // 注意：已在函数开头重置了渲染标记，所以这里不需要检查
-
-  // 清空原内容
-  optionsContainer.innerHTML = '';
-
-  // 如果没有内容，隐藏选项区域并返回
-  if (!raw.trim()) {
-    const optionsSectionForHiding = optionsContainer.closest('.section') as HTMLElement;
-    if (optionsSectionForHiding) optionsSectionForHiding.style.display = 'none';
-    return;
-  }
-
-  // 如果内容仍然包含外层Options标签，提取其内容
-
-  let processedRaw = raw;
-  const optionsMatch = raw.match(/<Options[^>]*>([\s\S]*?)<\/Options>/i);
-  if (optionsMatch) processedRaw = optionsMatch[1].trim();
-
-  // <template> 会按 HTML 规范把 Option/BattleOption 标签转为小写。
-  // 统一解析规范化前后的大小写，避免多个选项被拼成一个按钮。
-  const taggedOptions = parseOptionTags(processedRaw);
-  let hasMatches = false;
-
-  for (const taggedOption of taggedOptions) {
-    hasMatches = true;
-    const optionType = taggedOption.kind;
-    const optionText = taggedOption.text;
-
-    if (optionText) {
-      const btn = document.createElement('button');
-
-      // 根据选项类型设置不同的样式和处理函数
-      if (optionType === 'battle-option') {
-        btn.className = 'battle-option-btn';
-        btn.addEventListener('click', () => handleBattleOption(optionText));
-      } else {
-        btn.className = 'option-btn';
-        btn.addEventListener('click', () => handleOption(optionText));
-      }
-
-      btn.textContent = optionText;
-      optionsContainer.appendChild(btn);
-
-    }
-  }
-  optionsContainer.setAttribute('data-options-rendered', '1');
-
-  if (!hasMatches) {
-    // 优先使用按行解析（最通用的方法）
-    const lines = processedRaw
-      .split(/\r?\n/)
-      .map(l => l.trim())
-      .filter(l => l && !l.startsWith('<') && !l.endsWith('>'));
-
-    if (lines.length > 0) {
-      // 按行解析选项
-      lines.forEach(line => {
-        const cleaned = line.replace(/^\d+[.、)]?\s*/, '').trim();
-        if (cleaned) {
-          const btn = document.createElement('button');
-
-          // 检查是否是战斗选项（包含战斗相关emoji或关键词）
-          const isBattleOption = /[\u2694\u26A1]|战斗|攻击|迎击|冲击/u.test(cleaned);
-
-          const clickOnce = async () => {
-            if (isBattleOption) {
-              await handleBattleOption(cleaned);
-            } else {
-              await handleOption(cleaned);
-            }
-          };
-
-          if (isBattleOption) {
-            btn.className = 'battle-option-btn';
-            btn.addEventListener('click', clickOnce);
-          } else {
-            btn.className = 'option-btn';
-            btn.addEventListener('click', clickOnce);
-          }
-
-          btn.textContent = cleaned;
-          optionsContainer.appendChild(btn);
-          hasMatches = true;
-        }
-      });
-    } else {
-      // 如果按行解析失败，尝试按引号分割（用于特殊格式）
-      // 支持中英文引号
-      const quotedOptions = processedRaw.match(/["”][^"”]+["”]|"[^"]+"/g);
-
-      if (quotedOptions && quotedOptions.length > 1) {
-        quotedOptions.forEach(quotedOption => {
-          const optionText = quotedOption
-            .replace(/^[""]|[""]$/g, '')
-            .replace(/^"|"$/g, '')
-            .trim();
-          if (optionText) {
-            const btn = document.createElement('button');
-
-            // 检查是否是战斗选项
-            const isBattleOption = /[\u2694\u26A1]|战斗|攻击|迎击|冲击|来陪|玩玩|碾碎/u.test(optionText);
-
-            if (isBattleOption) {
-              btn.className = 'battle-option-btn';
-              btn.addEventListener('click', () => handleBattleOption(optionText));
-            } else {
-              btn.className = 'option-btn';
-              btn.addEventListener('click', () => handleOption(optionText));
-            }
-
-            btn.textContent = optionText;
-            optionsContainer.appendChild(btn);
-            hasMatches = true;
-          }
-        });
-      }
-    }
-  }
-
-  // 统一管理整个选项区域的显示/隐藏：只有在有选项时才显示整个区域
-  const optionsSectionForHiding = optionsContainer.closest('.section') as HTMLElement;
-  if (optionsSectionForHiding) {
-    if (hasMatches) {
-      optionsSectionForHiding.style.display = '';
-    } else {
-      // 无论有没有奖励或通知，没有选项就隐藏整个区域
-      optionsSectionForHiding.style.display = 'none';
-    }
-  }
+  actionSection.style.display = '';
+  renderRewardInline();
 }
 
 // 添加全局标记防止重复发送
-let __IS_SENDING_OPTION = false;
+let __IS_SENDING_ACTION = false;
 
 function setSendingState(value: boolean) {
-  __IS_SENDING_OPTION = value;
+  __IS_SENDING_ACTION = value;
 }
 
-// 处理战斗选项点击
-async function handleBattleOption(optionText: string) {
+// 处理用户明确发起的战斗行动
+async function handleBattleAction(actionText: string) {
   // 防止重复点击
-  if (__IS_SENDING_OPTION) return;
+  if (__IS_SENDING_ACTION) return;
 
   setSendingState(true);
 
-  // 禁用所有选项按钮
-  const allButtons = document.querySelectorAll('.option-btn, .battle-option-btn');
+  // 禁用所有行动按钮
+  const allButtons = document.querySelectorAll('.option-btn, .battle-action-btn');
   allButtons.forEach(btn => {
     (btn as HTMLButtonElement).disabled = true;
     btn.classList.add('disabled');
@@ -2041,8 +1842,8 @@ async function handleBattleOption(optionText: string) {
   try {
     // 构造战斗触发消息 - 激活战斗系统世界书，并附加奖励摘要
     const activeRun = readRunState(__STAT__);
-    const battleTriggerMessage = formatOptionPrompt({
-      optionText,
+    const battleTriggerMessage = formatActionPrompt({
+      actionText,
       battle: true,
       node: activeRun?.phase === 'in_node' ? activeRun.currentNode : null,
       pending: pendingRunText(),
@@ -2070,17 +1871,18 @@ async function handleBattleOption(optionText: string) {
   }
 }
 
-// 处理选项点击
-async function handleOption(optionText: string) {
+// 处理普通自定义行动
+async function handleCustomAction(actionText: string) {
   // 防止重复点击
-  if (__IS_SENDING_OPTION) return;
+  if (__IS_SENDING_ACTION) return;
 
   setSendingState(true);
 
-  // 禁用所有选项按钮和自定义输入
-  const allButtons = document.querySelectorAll('.option-btn, .battle-option-btn');
+  // 禁用所有行动按钮和自定义输入
+  const allButtons = document.querySelectorAll('.option-btn, .battle-action-btn');
   const customInput = document.getElementById('custom-action-input') as HTMLInputElement;
   const customSendBtn = document.getElementById('custom-action-send') as HTMLButtonElement;
+  const customBattleBtn = document.getElementById('custom-battle-send') as HTMLButtonElement;
 
   allButtons.forEach(btn => {
     (btn as HTMLButtonElement).disabled = true;
@@ -2089,20 +1891,21 @@ async function handleOption(optionText: string) {
 
   if (customInput) customInput.disabled = true;
   if (customSendBtn) customSendBtn.disabled = true;
+  if (customBattleBtn) customBattleBtn.disabled = true;
 
   try {
     // 将奖励摘要绑定到本次发送（若有）
     const activeRun = readRunState(__STAT__);
-    const message = formatOptionPrompt({
-      optionText,
+    const message = formatActionPrompt({
+      actionText,
       battle: false,
       node: activeRun?.phase === 'in_node' ? activeRun.currentNode : null,
       pending: pendingRunText(),
     });
     await commonActionHost.continueWithPrompt({ prompt: message });
   } catch (error) {
-    console.error('发送选项失败', error);
-    alert('发送选项失败，请重试');
+    console.error('发送行动失败', error);
+    alert('发送行动失败，请重试');
 
     // 出错时重新启用按钮
     setSendingState(false);
@@ -2112,6 +1915,7 @@ async function handleOption(optionText: string) {
     });
     if (customInput) customInput.disabled = false;
     if (customSendBtn) customSendBtn.disabled = false;
+    if (customBattleBtn) customBattleBtn.disabled = false;
   } finally {
     // 清空已使用的奖励摘要
     __PENDING_REWARD_SUMMARY = null;

@@ -18,10 +18,12 @@ export interface BattleEndPromptInput {
         lust: number;
         maxLust: number;
         energy: number;
+        block?: number;
         statuses: readonly BattleEndPromptStatus[];
         handCount: number;
         drawPileCount: number;
         discardPileCount: number;
+        exhaustPileCount?: number;
     };
     enemy?: {
         name: string;
@@ -29,9 +31,11 @@ export interface BattleEndPromptInput {
         maxHp: number;
         lust: number;
         maxLust: number;
+        block?: number;
         statuses: readonly BattleEndPromptStatus[];
     } | null;
     turns: number;
+    battleLog?: string;
     narrativeCards?: readonly BattleEndPromptCard[];
     rewardBudget?: string;
     buildGuidance?: string;

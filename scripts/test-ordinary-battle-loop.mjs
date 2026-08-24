@@ -10,7 +10,6 @@ const core = require(resolve('src/game-core/index.ts'));
 const { settleTavernBattleVariables } = require(resolve('src/runtime/battleSettlementAdapter.ts'));
 const { settleBattleProgression } = require(resolve('src/common/progression.ts'));
 const rewards = require(resolve('src/common/rewardTransactions.ts'));
-const { parseOptionTags } = require(resolve('src/common/optionTags.ts'));
 
 const starter = {
   id: 'starter_strike',
@@ -102,22 +101,13 @@ assert.equal(variables.stat_data.battle.enemy.name, '');
 assert.deepEqual(variables.stat_data.battle.player_abilities, []);
 assert.deepEqual(variables.stat_data.battle.player_status_effects, []);
 
-// This is the canonical state produced by a valid ordinary post-battle AI reply.
+// This is the canonical state produced by the post-battle MVU update pass.
 variables.stat_data.battle.exp += 160;
 variables.stat_data.reward.card = [rewardCard];
 variables.stat_data.reward.limits = { cards: 1 };
-const response = `战斗后的街区逐渐恢复平静。
-
-<Options>
-<Option id="1">护送伤员返回据点</Option>
-<BattleOption id="2">追击逃走的影兽</BattleOption>
-</Options>`;
-const options = parseOptionTags(response);
-assert.deepEqual(options, [
-  { kind: 'option', text: '护送伤员返回据点' },
-  { kind: 'battle-option', text: '追击逃走的影兽' },
-]);
-assert.equal(rewards.hasSelectableRewards(variables.stat_data), true, 'rewards temporarily gate ordinary options');
+assert.match(prompt.promptedBattleSummary, /只输出战后剧情正文/);
+assert.doesNotMatch(prompt.promptedBattleSummary, /<Options>|<Option>/);
+assert.equal(rewards.hasSelectableRewards(variables.stat_data), true, 'rewards temporarily gate custom actions');
 
 assert.deepEqual(settleBattleProgression(variables.stat_data.battle), {
   before: { level: 1, exp: 250 },
@@ -132,9 +122,7 @@ assert.deepEqual(rewards.applyRewardSelectionsToStat(variables.stat_data, { card
   artifacts: [],
   items: [],
 });
-assert.equal(rewards.hasSelectableRewards(variables.stat_data), false, 'ordinary options resume after reward settlement');
+assert.equal(rewards.hasSelectableRewards(variables.stat_data), false, 'custom actions resume after reward settlement');
 assert.equal(variables.stat_data.battle.cards.some(card => card.id === rewardCard.id), true);
 assert.equal(variables.stat_data.run, null, 'the complete ordinary loop must not initialize an expedition');
-assert.equal(parseOptionTags(response).length, 2, 'the original post-battle options remain available after reward settlement');
-
-console.log('Ordinary battle settlement, AI continuation, rewards, progression, and story options form one loop.');
+console.log('Ordinary battle settlement, split-model continuation, rewards, progression, and custom actions form one loop.');

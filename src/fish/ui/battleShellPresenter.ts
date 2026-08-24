@@ -186,12 +186,14 @@ export class TavernBattleShellPresenter {
     const root = $(document);
     root.off('.mwgBattleShell');
     root.on(
-      'click.mwgBattleShell',
+      'click.mwgBattleShell mwg:play-card.mwgBattleShell',
       '.card.clickable:not(.disabled), .enhanced-card.clickable:not(.disabled)',
       event => {
         event.preventDefault();
         event.stopPropagation();
-        const cardId = String($(event.currentTarget).data('card-id') || '');
+        const card = $(event.currentTarget);
+        if (event.type === 'click' && card.data('suppressPlayClick')) return;
+        const cardId = String(card.data('card-id') || '');
         if (cardId) void handlers.onPlayCard(cardId);
       },
     );

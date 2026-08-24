@@ -233,11 +233,11 @@ async function captureBattleEndPrompt(route) {
 
 assert.match(
   await captureBattleEndPrompt(null),
-  /\[战斗后续\] ordinary\n\[战斗结算\]\n\[回复要求\].*不得生成胜利奖励。$/,
+  /\[战斗后续\] ordinary\n\[战斗结算\]\n\[剧情模型要求\].*不得叙述尚未发生的胜利奖励。玩家会通过自定义行动继续剧情。$/,
 );
 assert.match(
   await captureBattleEndPrompt({ nodeId: 'node-1' }),
-  /\[战斗后续\] run\n\[战斗结算\]\n\[回复要求\].*不得生成胜利奖励或 <Options>。$/,
+  /\[战斗后续\] run\n\[战斗结算\]\n\[剧情模型要求\].*不得叙述尚未发生的胜利奖励。远征路线由程序继续。$/,
 );
 
 console.log('All Tavern continuations preserve exact prompts and battle-exit transaction semantics.');

@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "version": "0.5.89",
+  "version": "0.5.92",
   "artifacts": [
     {
       "name": "magic-girl-core.mjs",
-      "bytes": 179131,
-      "sha256": "3A9F3C4F224CC6C0A00E845FB75411FE3376FCD2A791EE9CC99D3CF346A4EED1"
+      "bytes": 178729,
+      "sha256": "6B8D4104493D856187F15C3FC02BF423E83DA107EE1ECD459ADE4DAFDBE8A15F"
     },
     {
       "name": "card-backend.mjs",
@@ -14,8 +14,8 @@
     },
     {
       "name": "battle-backend.mjs",
-      "bytes": 179978,
-      "sha256": "0939E4A932B55D422FA22ECAC17A1ACC2B6D19EEDB17BD732D885BE4E91372EF"
+      "bytes": 179576,
+      "sha256": "7337BA723EC2A3C597FF06D8721AF28992AB7446C57D0F2FD161785CAFA3B1C2"
     }
   ]
 }

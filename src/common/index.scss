@@ -1,21 +1,26 @@
 :root {
   color-scheme: light;
-  --surface: #fff8fb;
+  --surface: #fffaf7;
   --surface-raised: #fffefd;
-  --surface-muted: #f8edf2;
-  --border: #e5c8d3;
-  --border-strong: #c894a8;
-  --text: #3b3036;
-  --text-muted: #78636e;
-  --accent: #48765f;
-  --accent-soft: #e5f3eb;
-  --action: #a33f6d;
-  --action-hover: #7f2d53;
+  --surface-muted: #f8f0ed;
+  --border: #ead9cf;
+  --border-strong: #cfae9f;
+  --text: #57484b;
+  --text-muted: #8b7477;
+  --accent: #477761;
+  --accent-soft: #e7f4ec;
+  --action: #a64c72;
+  --action-hover: #873657;
   --danger: #b42318;
   --danger-soft: #fee4e2;
   --notice: #92400e;
   --notice-soft: #fffbeb;
-  --shadow: 0 3px 12px rgba(92, 51, 70, 0.12);
+  --bookmark-pink: #ffdce6;
+  --bookmark-blue: #dceeff;
+  --bookmark-green: #dcf2df;
+  --bookmark-purple: #ebe2fb;
+  --bookmark-yellow: #fff2bd;
+  --shadow: 0 8px 24px rgba(98, 71, 72, 0.14);
 }
 
 * {
@@ -27,9 +32,9 @@ body {
   width: 100%;
   margin: 0;
   padding: 0;
-  background: #fff8fb;
+  background: transparent;
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
+  font-family: 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
   font-size: 14px;
   line-height: 1.5;
   letter-spacing: 0;
@@ -53,7 +58,13 @@ summary:focus-visible {
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--surface);
+  background-color: var(--surface);
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent 31px,
+    rgba(126, 164, 190, 0.12) 32px
+  );
   box-shadow: var(--shadow);
 }
 
@@ -65,7 +76,7 @@ summary:focus-visible {
   min-height: 62px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
-  background: var(--surface-raised);
+  background: rgba(255, 254, 253, 0.94);
 }
 
 .statusbar-title {
@@ -81,7 +92,8 @@ summary:focus-visible {
 }
 
 .statusbar-title strong {
-  font-size: 14px;
+  font-family: 'KaiTi', 'STKaiti', 'Microsoft YaHei', sans-serif;
+  font-size: 16px;
 }
 
 .statusbar-title > div > span {
@@ -90,8 +102,8 @@ summary:focus-visible {
 }
 
 .statusbar-mark {
-  color: var(--accent);
-  font-size: 22px;
+  color: var(--action);
+  font-size: 24px;
 }
 
 .statusbar-summary {
@@ -104,8 +116,15 @@ summary:focus-visible {
 .summary-item {
   min-width: 0;
   padding: 5px 8px;
-  border-left: 2px solid var(--border);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bookmark-yellow);
 }
+
+.summary-item:nth-child(2) { background: var(--bookmark-blue); }
+.summary-item:nth-child(3) { background: var(--bookmark-green); }
+.summary-item:nth-child(4) { background: var(--bookmark-pink); }
+.summary-item:nth-child(5) { background: var(--bookmark-purple); }
 
 .summary-item small,
 .summary-item b {
@@ -256,14 +275,8 @@ summary:focus-visible {
   margin-top: 8px;
 }
 
-.options-text {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-}
-
 .option-btn,
-.battle-option-btn,
+.battle-action-btn,
 .btn,
 .battle-book-btn {
   min-height: 36px;
@@ -286,19 +299,19 @@ summary:focus-visible {
   color: var(--action);
 }
 
-.battle-option-btn {
+.battle-action-btn {
   border-color: var(--danger);
   background: var(--danger-soft);
   color: var(--danger);
 }
 
-.battle-option-btn:hover {
+.battle-action-btn:hover {
   background: var(--danger);
   color: #fff;
 }
 
 .option-btn:disabled,
-.battle-option-btn:disabled,
+.battle-action-btn:disabled,
 .btn:disabled,
 .disabled {
   cursor: not-allowed;
@@ -308,7 +321,7 @@ summary:focus-visible {
 
 .custom-action {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) 38px auto;
   gap: 8px;
   margin-top: 10px;
 }
@@ -493,7 +506,9 @@ summary:focus-visible {
   gap: 8px;
   padding: 8px 12px;
   color: var(--text);
-  font-weight: 650;
+  font-family: 'KaiTi', 'STKaiti', 'Microsoft YaHei', sans-serif;
+  font-size: 14px;
+  font-weight: 700;
   cursor: pointer;
   list-style: none;
 }
@@ -513,8 +528,12 @@ summary:focus-visible {
 }
 
 .status-panel[open] > summary {
-  background: var(--surface-muted);
+  background: var(--bookmark-pink);
 }
+
+.status-panel:nth-child(2) > summary { background-color: var(--bookmark-blue); }
+.status-panel:nth-child(3) > summary { background-color: var(--bookmark-green); }
+.status-panel:nth-child(4) > summary { background-color: var(--bookmark-purple); }
 
 .panel-content {
   padding: 0 12px 12px;
@@ -797,7 +816,7 @@ summary:focus-visible {
   }
 
   .custom-action {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) 38px 58px;
   }
 
   .run-heading {
@@ -823,9 +842,9 @@ summary:focus-visible {
   }
 
   .option-btn,
-  .battle-option-btn,
+  .battle-action-btn,
   .custom-action button {
-    width: 100%;
+    min-width: 38px;
   }
 
   .battle-deck {

@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { parse, parseFragment, serialize } from 'parse5';
-import ts from 'typescript';
+import { parse } from 'parse5';
 
 const htmlSource = await readFile(resolve('src/common/index.html'), 'utf8');
 const scriptSource = await readFile(resolve('src/common/index.ts'), 'utf8');
@@ -11,7 +10,6 @@ const battleScriptSource = await readFile(resolve('src/fish/index.ts'), 'utf8');
 const battleShellSource = await readFile(resolve('src/fish/ui/battleShellPresenter.ts'), 'utf8');
 const messageVariablesSource = await readFile(resolve('src/runtime/messageVariables.ts'), 'utf8');
 const exportSource = await readFile(resolve('scripts/export-tavern-interface.mjs'), 'utf8');
-const optionTagsSource = await readFile(resolve('src/common/optionTags.ts'), 'utf8');
 const runPromptSource = await readFile(resolve('src/game-core/runPrompt.ts'), 'utf8');
 const commonActionHostSource = await readFile(resolve('src/common/commonActionHost.ts'), 'utf8');
 const runActionHostSource = await readFile(resolve('src/common/runActionHost.ts'), 'utf8');
@@ -32,6 +30,7 @@ const ids = nodes
 const requiredIds = [
   'custom-action-input',
   'custom-action-send',
+  'custom-battle-send',
   'choice-container',
   'choice-title',
   'run-section',
@@ -63,7 +62,8 @@ assert.equal((htmlSource.match(/\$2/g) || []).length, 0, 'options must not be tr
 assert.ok(nodes.some(node => classes(node).includes('mwg-statusbar')));
 assert.doesNotMatch(scriptSource, /THEME_STORAGE_KEY|data-theme|prefers-color-scheme/);
 assert.doesNotMatch(styleSource, /\[data-theme='dark'\]|color-scheme:\s*dark/);
-assert.match(styleSource, /background:\s*#fff8fb/);
+assert.match(styleSource, /--surface:\s*#fffaf7/);
+assert.match(styleSource, /background-image:\s*repeating-linear-gradient/);
 assert.ok(
   htmlSource.indexOf('id="run-opt-in"') < htmlSource.indexOf('id="battle-hp"'),
   'the optional expedition entry must be the first card/resource control',
@@ -168,12 +168,13 @@ assert.doesNotMatch(battleScriptSource, /document\.|\$\(|location\.|triggerSlash
 assert.match(scriptSource, /function showRunError/);
 assert.match(scriptSource, /if \(!isCurrentMessageLatest\(\)\) return null/);
 assert.match(scriptSource, /formatRoutePrompt\(/);
-assert.match(scriptSource, /formatOptionPrompt\(/);
+assert.match(scriptSource, /formatActionPrompt\(/);
+assert.doesNotMatch(scriptSource, /renderOptions|parseOptionTags|handleBattleOption|handleOption/);
 assert.doesNotMatch(scriptSource, /\[路线节点\]|\[事件选择\]|非战斗结局写 run_result/);
 assert.match(runPromptSource, /\[事件选择\]/);
 assert.match(runPromptSource, /gold\/hp 用实际 JSON 整数变化量/);
 assert.match(scriptSource, /getCurrentChatMessageText/);
-assert.match(exportSource, /findRegex:[\s\S]*?<Options>/);
+assert.doesNotMatch(exportSource, /findRegex:[\s\S]*?<Options>/);
 assert.doesNotMatch(exportSource, /<Story>/);
 assert.match(
   exportSource,
@@ -181,25 +182,4 @@ assert.match(
   'Tavern regex exports must tolerate the status placeholder appended by MUV',
 );
 
-const optionTagsOutput = ts.transpileModule(optionTagsSource, {
-  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
-}).outputText;
-const optionTags = await import(`data:text/javascript;base64,${Buffer.from(optionTagsOutput).toString('base64')}`);
-const normalizedTemplate = parseFragment(
-  '<template><Option>继续调查</Option><BattleOption>进入战斗</BattleOption></template>',
-);
-const templateNode = normalizedTemplate.childNodes.find(node => node.nodeName === 'template');
-const normalizedOptionsHtml = serialize(templateNode.content);
-assert.match(normalizedOptionsHtml, /<option>/, 'HTML parsing must reproduce Tavern Helper lowercase normalization');
-assert.equal(optionTags.hasOptionTagMarkup(normalizedOptionsHtml), true);
-assert.deepEqual(optionTags.parseOptionTags(normalizedOptionsHtml), [
-  { kind: 'option', text: '继续调查' },
-  { kind: 'battle-option', text: '进入战斗' },
-]);
-assert.deepEqual(optionTags.parseOptionTags('<Option>返回街角</Option>'), [{ kind: 'option', text: '返回街角' }]);
-assert.deepEqual(optionTags.parseOptionTags('<option>继续调查</option><option>返回街角</option>'), [
-  { kind: 'option', text: '继续调查' },
-  { kind: 'option', text: '返回街角' },
-]);
-
-console.log('Common messages keep native story text and append one interactive status bar with distinct options.');
+console.log('Common messages keep native story text and append one user-driven interactive status bar.');

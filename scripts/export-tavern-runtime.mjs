@@ -51,8 +51,8 @@ async function extractViewAsset(sourcePath) {
     throw new Error(`${sourcePath} must not depend on external script files`);
   }
 
-  const script = scripts.map(textContent).join('\n;\n').trim();
-  const styleText = styles.map(textContent).join('\n').trim();
+  const script = scripts.map(textContent).join('\n;\n').replaceAll('\uFEFF', '').trim();
+  const styleText = styles.map(textContent).join('\n').replaceAll('\uFEFF', '').trim();
   stripRuntimeNodes(body);
   const bodyHtml = body.childNodes?.map(serializeOuter).join('').trim() || '';
   if (!bodyHtml || !script || !styleText) throw new Error(`Unable to extract runtime asset from ${sourcePath}`);

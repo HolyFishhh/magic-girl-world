@@ -14,15 +14,15 @@ export interface RoutePromptInput {
 }
 /** Compose one route request without letting a host duplicate marker ordering. */
 export declare function formatRoutePrompt(input: RoutePromptInput): string;
-export interface OptionPromptInput {
-    optionText: string;
+export interface ActionPromptInput {
+    actionText: string;
     battle: boolean;
     node?: Pick<RunNodeChoice, 'id' | 'kind'> | null;
     pending?: string | null;
     buildBudget?: string | null;
 }
 /** Compose normal and battle option messages while sharing event context and pending summaries. */
-export declare function formatOptionPrompt(input: OptionPromptInput): string;
+export declare function formatActionPrompt(input: ActionPromptInput): string;
 /** Keep AI-authored campfire patches small without exposing host-only card fields. */
 export declare function compactCardForUpgrade(cardValue: unknown): Record<string, unknown>;
 export interface RestUpgradePromptInput {

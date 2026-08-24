@@ -143,16 +143,12 @@ const chatFile = `readiness-${scenario}-${timestamp}`;
 const statData = createStatData(battle);
 const worldbookName = `${releaseConfig.worldbookPrefix}${releaseConfig.cardVersion}`;
 const variables = createInitializedMvuLayer(statData, worldbookName);
-const optionMarkup =
-  scenario === 'valid'
-    ? '\n<Options><Option>继续调查</Option><BattleOption>进入战斗</BattleOption></Options>'
-    : '';
 const message = {
   name: characterName,
   is_user: false,
   is_system: false,
   send_date: now.toISOString(),
-  mes: `真实酒馆初始内容回归：${scenario === 'valid' ? '合法快照' : '无效快照'}。${optionMarkup}\n<StatusPlaceHolderImpl/>`,
+  mes: `真实酒馆初始内容回归：${scenario === 'valid' ? '合法快照' : '无效快照'}。\n<StatusPlaceHolderImpl/>`,
   extra: {},
   variables: [variables],
 };
@@ -189,7 +185,7 @@ console.log(
               routeVisibleBeforeOptIn: false,
               startRunButtons: 0,
               repairButtons: 0,
-              options: ['继续调查', '进入战斗'],
+              customActionVisible: true,
             }
           : { routeVisibleBeforeOptIn: false, startRunButtons: 0, repairButtons: 1 },
     },

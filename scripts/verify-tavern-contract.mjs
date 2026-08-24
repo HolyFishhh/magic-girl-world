@@ -182,19 +182,18 @@ assert.equal(commonExported.scriptName, '通用模块');
 assert.deepEqual(commonExported.placement, [2]);
 assert.equal(commonExported.minDepth, 0);
 assert.equal(commonExported.maxDepth, 2);
-const ordinaryResponse =
-  'normal story\n<Options><Option>continue</Option></Options>\n<UpdateVariable></UpdateVariable>';
+const ordinaryResponse = 'normal story\n<StatusPlaceHolderImpl/>';
 const battleResponse = 'battle lead-in\n<UpdateVariable></UpdateVariable>\n<BATTLE_START>';
 const mvuPlaceholder = '<StatusPlaceHolderImpl/>';
-const displayOrdinaryResponse = 'normal story\n<Options><Option>continue</Option></Options>\n<StatusPlaceHolderImpl/>';
+const displayOrdinaryResponse = 'normal story\n<StatusPlaceHolderImpl/>';
 const displayBattleResponse = 'battle lead-in\n<BATTLE_START>\n<StatusPlaceHolderImpl/>';
 assert.ok(new RegExp(commonExported.findRegex).test(ordinaryResponse));
 assert.ok(
-  new RegExp(commonExported.findRegex).test(`${ordinaryResponse}\n${mvuPlaceholder}`),
+  new RegExp(commonExported.findRegex).test(`normal story\n${mvuPlaceholder}`),
   'common regex must tolerate the display placeholder appended by MUV',
 );
 const displayOrdinaryMatch = new RegExp(commonExported.findRegex).exec(displayOrdinaryResponse);
-assert.ok(displayOrdinaryMatch?.[0].includes('<Options><Option>continue</Option></Options>'));
+assert.ok(displayOrdinaryMatch?.[0].includes('<StatusPlaceHolderImpl/>'));
 assert.equal(displayOrdinaryMatch?.length, 1, 'common regex must not transport message data through capture groups');
 assert.ok(!new RegExp(commonExported.findRegex).test('[开始游戏]'));
 assert.ok(
@@ -219,7 +218,7 @@ const renderedCommonMessage = displayOrdinaryResponse.replace(
   commonExported.replaceString,
 );
 assert.ok(renderedCommonMessage.startsWith('normal story\n```\n<body>'));
-assert.ok(!renderedCommonMessage.includes('<Option>continue</Option>'));
+assert.ok(!renderedCommonMessage.includes('<StatusPlaceHolderImpl/>'));
 assert.ok(!commonExported.replaceString.includes('class="story-text"'), 'common iframe must not wrap story text');
 assert.ok(
   !commonExported.replaceString.includes('tab-navigation'),
@@ -328,7 +327,7 @@ function inspectInterface(payload, substitutions = {}, fenced = true) {
 }
 
 const startNodes = inspectInterface(startExported);
-const commonNodes = inspectInterface(commonExported, { 1: 'story test', 2: '<Option>continue</Option>' });
+const commonNodes = inspectInterface(commonExported);
 const hasClass = (nodes, className) =>
   nodes.some(node =>
     node.attrs?.some(attribute => attribute.name === 'class' && attribute.value.split(/\s+/).includes(className)),

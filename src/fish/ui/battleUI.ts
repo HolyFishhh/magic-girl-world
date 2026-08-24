@@ -14,6 +14,8 @@ import { EffectProgramDisplay } from './effectProgramDisplay';
 
 export class BattleUI {
   private static effectDisplay = EffectProgramDisplay.getInstance();
+  private static handResizeBound = false;
+  private static handResizeFrame: number | null = null;
   /**
    * 翻译卡牌类型
    */
@@ -88,7 +90,6 @@ export class BattleUI {
 
       // 更新能力显示
       this.updateAbilitiesDisplay(gameState.player.abilities || [], gameState.enemy?.abilities || []);
-
     } catch (error) {
       console.error('❌ 刷新战斗UI失败:', error);
     }
@@ -245,71 +246,46 @@ export class BattleUI {
         }
       });
 
-      // 自适应单行：能放下一行则按正常间距铺开；放不下时才重叠压缩
-      // 当达到最小压缩距离时，不再压缩，改为横向滚动
-      try {
-        const count = validCards.length;
-        const handContainerWidth = handContainer.width() || 0;
-        const cardWidth = 110; // 与样式保持一致
-        const normalGap = 10; // 正常间距
-        const minOverlapOffset = 36; // 最小重叠偏移（不能再小了，否则看不清）
-
-        const normalOffset = cardWidth + normalGap;
-        const neededWidthNormal = cardWidth + (count - 1) * normalOffset;
-
-        let offset: number;
-
-        if (neededWidthNormal <= handContainerWidth) {
-          // 一行能放下：不重叠
-          offset = normalOffset;
-        } else {
-          // 一行放不下：开始重叠压缩
-          offset = Math.floor((handContainerWidth - cardWidth) / Math.max(1, count - 1));
-
-          // 如果计算出的间距小于最小值，则固定使用最小值，并启用横向滚动
-          if (offset < minOverlapOffset) {
-            offset = minOverlapOffset;
-          }
-        }
-
-        handContainer.attr('data-count', String(count));
-        handContainer.css('--card-offset', (offset + 'px') as any);
-
-        const cards = handContainer.children('.enhanced-card');
-        cards.each((i, el) => {
-          const left = i * offset;
-          $(el).css({ left: `${left}px` });
-        });
-
-        // 设置容器的内容宽度，以便正确显示滚动条
-        // 计算实际需要的宽度：最后一张卡的位置 + 卡宽
-        const totalContentWidth = (count - 1) * offset + cardWidth;
-
-        // 使用伪元素或者直接设置min-width来确保内容宽度
-        if (totalContentWidth > handContainerWidth) {
-          // 需要滚动，设置min-width
-          handContainer.css('min-width', '100%');
-          // 创建一个占位元素来撑开宽度
-          handContainer.find('.hand-spacer').remove(); // 删除旧的
-          $('<div class="hand-spacer"></div>')
-            .css({
-              position: 'absolute',
-              left: totalContentWidth + 'px',
-              width: '1px',
-              height: '1px',
-              pointerEvents: 'none',
-              visibility: 'hidden',
-            })
-            .appendTo(handContainer);
-        } else {
-          handContainer.find('.hand-spacer').remove();
-        }
-      } catch (e) {
-        console.warn('手牌重叠布局计算失败:', e);
-      }
-
+      this.layoutHandCards();
+      this.bindHandResize();
     } catch (error) {
       console.error('❌ 更新手牌显示失败:', error);
+    }
+  }
+
+  private static bindHandResize(): void {
+    if (this.handResizeBound) return;
+    this.handResizeBound = true;
+    window.addEventListener('resize', () => {
+      if (this.handResizeFrame !== null) cancelAnimationFrame(this.handResizeFrame);
+      this.handResizeFrame = requestAnimationFrame(() => {
+        this.handResizeFrame = null;
+        this.layoutHandCards();
+      });
+    });
+  }
+
+  private static layoutHandCards(): void {
+    try {
+      const handContainer = $('.player-hand');
+      const cards = handContainer.children('.enhanced-card');
+      const count = cards.length;
+      const handContainerWidth = handContainer.width() || 0;
+      const handContainerHeight = handContainer.height() || 180;
+      const cardWidth = Math.max(70, Math.min(116, Math.floor((handContainerHeight - 8) * 0.75)));
+      const normalOffset = cardWidth + 8;
+      const fitOffset = count <= 1 ? 0 : (handContainerWidth - cardWidth - 8) / (count - 1);
+      const offset = count <= 1 ? 0 : Math.max(14, Math.min(normalOffset, fitOffset));
+      const totalContentWidth = count === 0 ? 0 : cardWidth + (count - 1) * offset;
+      const start = Math.max(4, (handContainerWidth - totalContentWidth) / 2);
+
+      handContainer.attr('data-count', String(count));
+      handContainer.css('--hand-card-width', `${cardWidth}px`);
+      cards.each((index, element) => {
+        $(element).css({ left: `${start + index * offset}px` });
+      });
+    } catch (error) {
+      console.warn('手牌重叠布局计算失败:', error);
     }
   }
 
@@ -574,7 +550,6 @@ export class BattleUI {
     // 更新消耗堆计数
     const exhaustPileCount = player.exhaustPile?.length || 0;
     $('#exhaust-pile-count').text(exhaustPileCount);
-
   }
 
   /**
@@ -640,7 +615,6 @@ export class BattleUI {
         container.append(detailsHTML);
       }
     });
-
   }
 
   /**
@@ -707,7 +681,6 @@ export class BattleUI {
           BattleUI.showStatusDetail(statusId, target);
         }
       });
-
   }
 
   /**
@@ -789,9 +762,7 @@ export class BattleUI {
     if (statusDef.triggers) {
       Object.entries(statusDef.triggers).forEach(([trigger, effects]) => {
         if (!effects) return;
-        const triggerTags = effects.flatMap(program =>
-          BattleUI.effectDisplay.triggeredProgramToTags(trigger, program),
-        );
+        const triggerTags = effects.flatMap(program => BattleUI.effectDisplay.triggeredProgramToTags(trigger, program));
         if (triggerTags.length > 0) {
           effectsHTML += BattleUI.effectDisplay.createEffectTagsHTML(triggerTags);
         }

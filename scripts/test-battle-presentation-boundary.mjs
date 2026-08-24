@@ -7,6 +7,8 @@ const statePath = resolve('src/fish/core/gameStateManager.ts');
 const presenterPath = resolve('src/fish/ui/battleEffectPresenter.ts');
 const cardSystemPath = resolve('src/fish/combat/cardSystem.ts');
 const cardPresenterPath = resolve('src/fish/ui/cardInteractionPresenter.ts');
+const cardPlayModePath = resolve('src/fish/ui/cardPlayMode.ts');
+const battleUiPath = resolve('src/fish/ui/battleUI.ts');
 const cardSelectionHostPath = resolve('src/fish/core/cardSelectionHost.ts');
 const relicHostPath = resolve('src/fish/core/relicTriggerHost.ts');
 const relicPresenterPath = resolve('src/fish/ui/relicEffectPresenter.ts');
@@ -20,6 +22,8 @@ const [
   presenter,
   cardSystem,
   cardPresenter,
+  cardPlayMode,
+  battleUi,
   cardSelectionHost,
   relicTriggerHost,
   relicPresenter,
@@ -34,6 +38,8 @@ const [
     presenterPath,
     cardSystemPath,
     cardPresenterPath,
+    cardPlayModePath,
+    battleUiPath,
     cardSelectionHostPath,
     relicHostPath,
     relicPresenterPath,
@@ -91,6 +97,12 @@ assert.match(cardPresenter, /AnimationManager\.getInstance\(\)/);
 assert.match(cardPresenter, /card-selection-modal/);
 assert.doesNotMatch(cardPresenter, /discard-selection-modal|selectDiscardCards/);
 assert.doesNotMatch(cardPresenter, /GameStateManager|nextRandom|updatePlayer|commitCardZoneOperation/);
+assert.match(cardPlayMode, /pointerdown\.mwgCardPlay/);
+assert.match(cardPlayMode, /pointermove\.mwgPointerCardPlay/);
+assert.match(cardPlayMode, /card\.trigger\('mwg:play-card'\)/);
+assert.doesNotMatch(cardPlayMode, /dragstart\.mwgCardPlay|touchstart\.mwgCardPlay/);
+assert.match(battleUi, /window\.addEventListener\('resize'/);
+assert.match(battleUi, /requestAnimationFrame\(\(\) =>/);
 assert.match(cardSelectionHost, /planCardSelection/);
 assert.match(cardSelectionHost, /resolveCardSelection/);
 assert.doesNotMatch(cardSelectionHost, /GameStateManager|commitCardZoneOperation|moveCard/);
@@ -105,6 +117,7 @@ assert.match(shellPresenter, /class TavernBattleShellPresenter/);
 assert.match(shellPresenter, /watchCurrentMessageUntilHistorical/);
 assert.match(shellPresenter, /public showItems/);
 assert.match(shellPresenter, /BattleLog\.logPlayerAction/);
+assert.match(shellPresenter, /mwg:play-card\.mwgBattleShell/);
 assert.match(shellPresenter, /escapeHtml\(item\.name\)/);
 assert.doesNotMatch(shellPresenter, /triggerSlash/);
 

@@ -51,13 +51,16 @@ const prompt = core.formatBattleEndPrompt({
   narrativeCards: [{ name: '破门', description: '改变了战场。' }],
   rewardBudget: '[奖励预算] cards=3',
   buildGuidance: '[构筑建议] 防御',
+  battleLog: '- 第1回合 〔星击〕玩家造成6点伤害\n- 第2回合 敌人被击败',
 });
 assert.equal(prompt.resultText, '胜利');
 assert.match(prompt.battleSummary, /祝福2层/);
 assert.match(prompt.battleSummary, /使用了叙事卡牌：破门 - 改变了战场。/);
+assert.match(prompt.battleSummary, /【战斗过程】/);
+assert.match(prompt.battleSummary, /〔星击〕玩家造成6点伤害/);
 assert.match(
   prompt.promptedBattleSummary,
-  /\[战斗后续\] ordinary\n\[战斗结算\]\n\[奖励预算\] cards=3\n\[构筑建议\] 防御\n\[回复要求\].*立即将预算中的奖励候选和经验写入 <UpdateVariable>.*2-5个领奖后的剧情行动 <Option>.*奖励领取、查看、选择、放弃均不是 <Option>。$/,
+  /\[战斗后续\] ordinary\n\[战斗结算\]\n\[奖励预算\] cards=3\n\[构筑建议\] 防御\n\[剧情模型要求\] 只输出战后剧情正文，不输出选项、JSON、<UpdateVariable> 或更新命令。奖励和经验由随后运行的 MVU 额外模型按预算登记。玩家会通过自定义行动继续剧情。$/,
 );
 const runPrompt = core.formatBattleEndPrompt({
   ...{
@@ -79,7 +82,7 @@ const runPrompt = core.formatBattleEndPrompt({
 });
 assert.match(
   runPrompt.promptedBattleSummary,
-  /\[战斗后续\] run\n\[战斗结算\]\n\[回复要求\] 输出剧情和 <UpdateVariable>；不得生成胜利奖励或 <Options>。$/,
+  /\[战斗后续\] run\n\[战斗结算\]\n\[剧情模型要求\] 只输出战后剧情正文，不输出选项、JSON、<UpdateVariable> 或更新命令。不得叙述尚未发生的胜利奖励。远征路线由程序继续。$/,
 );
 
 const terminatedOrdinaryPrompt = core.formatBattleEndPrompt({
@@ -100,7 +103,7 @@ const terminatedOrdinaryPrompt = core.formatBattleEndPrompt({
 });
 assert.match(
   terminatedOrdinaryPrompt.promptedBattleSummary,
-  /\[回复要求\].*2-5个后续剧情行动 <Option>.*只按事件叙事处理奖励或代价。$/,
+  /\[剧情模型要求\].*只输出战后剧情正文.*玩家会通过自定义行动继续剧情。$/,
 );
 
 const stateSource = await readFile(resolve('src/game-core/battleState.ts'), 'utf8');

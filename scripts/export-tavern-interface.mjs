@@ -29,7 +29,7 @@ const interfaces = [
     source: 'dist/src/common/index.html',
     output: 'dist/tavern/common-interface.json',
     findRegex:
-      '(?<![\\s\\S]*<BATTLE_START>[\\s\\S]*)(?![\\s\\S]*<BATTLE_START>)(?:<Options>[\\s\\S]*?<\\/Options>\\s*)?(?:<UpdateVariable>[\\s\\S]*?<\\/UpdateVariable>\\s*(?:<StatusPlaceHolderImpl\\s*\\/?>)?|<StatusPlaceHolderImpl\\s*\\/?>)',
+      '(?<![\\s\\S]*<BATTLE_START>[\\s\\S]*)(?![\\s\\S]*<BATTLE_START>)(?:<UpdateVariable>[\\s\\S]*?<\\/UpdateVariable>\\s*(?:<StatusPlaceHolderImpl\\s*\\/?>)?|<StatusPlaceHolderImpl\\s*\\/?>)',
     placement: [2],
     minDepth: 0,
     maxDepth: 2,

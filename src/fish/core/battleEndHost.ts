@@ -14,6 +14,7 @@ import {
 import type { GameState } from '../../game-core';
 import { TavernBattleEffectPresenter, type BattleEndDialogRequest } from '../ui/battleEffectPresenter';
 import { GameStateManager } from './gameStateManager';
+import { BattleLog } from '../modules/battleLog';
 
 export interface TavernBattleEndPorts {
   getState(): GameState;
@@ -99,7 +100,7 @@ export class TavernBattleEndHost {
       const gameState = this.ports.getState();
       const player = gameState.player;
       const enemy = gameState.enemy;
-      const narrativeCards = player.discardPile.filter(card => card.type === 'Event');
+      const narrativeCards = (player.discardPile ?? []).filter(card => card.type === 'Event');
       const request = gameState.battleRequest;
       const budget =
         result === 'victory' && request
@@ -116,10 +117,12 @@ export class TavernBattleEndHost {
           lust: player.currentLust,
           maxLust: player.maxLust,
           energy: player.energy,
+          block: player.block,
           statuses: player.statusEffects,
-          handCount: player.hand.length,
-          drawPileCount: player.drawPile.length,
-          discardPileCount: player.discardPile.length,
+          handCount: player.hand?.length ?? 0,
+          drawPileCount: player.drawPile?.length ?? 0,
+          discardPileCount: player.discardPile?.length ?? 0,
+          exhaustPileCount: player.exhaustPile?.length ?? 0,
         },
         enemy: enemy
           ? {
@@ -128,10 +131,12 @@ export class TavernBattleEndHost {
               maxHp: enemy.maxHp,
               lust: enemy.currentLust,
               maxLust: enemy.maxLust,
+              block: enemy.block,
               statuses: enemy.statusEffects,
             }
           : null,
         turns: gameState.currentTurn,
+        battleLog: BattleLog.buildNarrativeReport(),
         narrativeCards,
         rewardBudget:
           result === 'victory'
