@@ -33,6 +33,32 @@ for (const [entryName, sourceName] of Object.entries(manifest)) {
   sources.set(entryName, content);
 }
 
+const expectedMvuRoles = {
+  '额外模型变量更新格式': 'update',
+  '首条消息变量更新': 'update',
+  '变量更新规则': 'update',
+  '输出格式要求': 'mixed',
+  '变量说明': 'mixed',
+  '战斗内容生成要求': 'mixed',
+  '战斗场景生成': 'mixed',
+  '远征节点协议': 'mixed',
+  '初始战斗内容修复': 'mixed',
+  '战斗场景修复': 'mixed',
+  '等级表现形式': 'plot',
+  世界信息: 'plot',
+  地点与NPC线路: 'plot',
+  入侵与遭遇类型: 'plot',
+};
+for (const [entryName, role] of Object.entries(expectedMvuRoles)) {
+  const comment = String(entryConfig[entryName]?.comment || '');
+  const hasPlot = /\[mvu_plot\]/i.test(comment);
+  const hasUpdate = /\[mvu_update\]/i.test(comment);
+  const actualRole = hasPlot && hasUpdate ? 'mixed' : hasUpdate ? 'update' : hasPlot ? 'plot' : 'unclassified';
+  assert.equal(actualRole, role, `${entryName} must remain a ${role} MVU world-book entry`);
+}
+assert.equal(entryConfig['[config_override]']?.enabled, false, 'config override must stay a disabled card-settings entry');
+assert.equal(entryConfig['[initvar]不要启用']?.enabled, false, 'initvar template must stay disabled');
+
 const initial = JSON.parse(sources.get('[initvar]不要启用'));
 assert.equal(initial.$meta.extensible, false);
 assert.deepEqual(initial.battle.cards, ['$__META_EXTENSIBLE__$']);
