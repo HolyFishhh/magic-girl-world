@@ -48,6 +48,75 @@ declare function eventOn(eventType: string, listener: (...args: any[]) => void):
     return !!mvu && typeof mvu.getMvuData === 'function' && typeof mvu.replaceMvuData === 'function';
   };
 
+  const arrayMarker = '$__META_EXTENSIBLE__$';
+  const objectEntries = (value: unknown): Record<string, any>[] =>
+    Array.isArray(value)
+      ? value.filter(
+          (entry): entry is Record<string, any> =>
+            !!entry && entry !== arrayMarker && typeof entry === 'object' && !Array.isArray(entry),
+        )
+      : [];
+
+  const isCardDefinition = (value: Record<string, any>): boolean =>
+    typeof value.id === 'string' &&
+    typeof value.name === 'string' &&
+    ['Attack', 'Skill', 'Power', 'Status', 'Curse'].includes(String(value.type)) &&
+    typeof value.rarity === 'string' &&
+    (typeof value.cost === 'number' || value.cost === 'energy') &&
+    Number.isFinite(Number(value.quantity)) &&
+    Number(value.quantity) > 0 &&
+    !!value.effects;
+
+  const recoverMisplacedCards = (variables: Record<string, any> | undefined): number => {
+    const battle = variables?.stat_data?.battle;
+    if (!battle || typeof battle !== 'object') return 0;
+    const abilitySource = Array.isArray(battle.player_abilities) ? battle.player_abilities : [];
+    const misplaced = objectEntries(abilitySource).filter(isCardDefinition);
+    if (misplaced.length === 0) return 0;
+
+    const cardSource = Array.isArray(battle.cards) ? battle.cards : [];
+    const knownIds = new Set(objectEntries(cardSource).map(card => String(card.id || '')));
+    const recovered = misplaced.filter(card => !knownIds.has(String(card.id || '')));
+    battle.cards = [...cardSource, ...recovered];
+    battle.player_abilities = abilitySource.filter(entry => !misplaced.includes(entry));
+    console.warn(`[MagicGirlWorld] 已将 ${recovered.length} 个误写到 player_abilities 的卡牌迁移到 battle.cards`);
+    return recovered.length;
+  };
+
+  const hasInitializedPlayerContent = (
+    variables: Record<string, any> | undefined,
+    requireFullInitialization: boolean,
+  ): boolean => {
+    const battle = variables?.stat_data?.battle;
+    if (!battle || typeof battle !== 'object') return false;
+    const cards = objectEntries(battle.cards).filter(isCardDefinition);
+    const quantity = cards.reduce((total, card) => total + Math.max(0, Number(card.quantity) || 0), 0);
+    const core = battle.core;
+    const validCore =
+      !!core &&
+      typeof core === 'object' &&
+      Number.isFinite(Number(core.hp)) &&
+      Number.isFinite(Number(core.max_hp)) &&
+      Number(core.max_hp) > 0 &&
+      Number(core.hp) >= 0 &&
+      Number(core.hp) <= Number(core.max_hp) &&
+      Number.isFinite(Number(core.lust)) &&
+      Number.isFinite(Number(core.max_lust)) &&
+      Number(core.max_lust) > 0;
+    if (quantity <= 0) return false;
+    if (!requireFullInitialization) return true;
+    return (
+      quantity >= 10 &&
+      objectEntries(battle.artifacts).length > 0 &&
+      objectEntries(battle.items).length > 0 &&
+      !!battle.player_lust_effect &&
+      typeof battle.player_lust_effect === 'object' &&
+      validCore &&
+      Number.isInteger(Number(battle.level)) &&
+      Number(battle.level) >= 1
+    );
+  };
+
   const compareVersions = (left: string, right: string): number => {
     const normalize = (version: string) => version.split(/[.-]/).map(part => Number.parseInt(part, 10) || 0);
     const a = normalize(left);
@@ -126,11 +195,37 @@ declare function eventOn(eventType: string, listener: (...args: any[]) => void):
     const deadline = Date.now() + 120000;
     while (!hasMvuApi() && Date.now() < deadline) await wait(100);
     const beforeMessageUpdate = host.Mvu?.events?.BEFORE_MESSAGE_UPDATE;
+    const variableUpdateEnded = host.Mvu?.events?.VARIABLE_UPDATE_ENDED;
     if (!beforeMessageUpdate || typeof eventOn !== 'function') return;
 
+    if (variableUpdateEnded) {
+      eventOn(variableUpdateEnded, (variables: Record<string, any>) => {
+        recoverMisplacedCards(variables);
+      });
+    }
+
     eventOn(beforeMessageUpdate, (context: { variables?: Record<string, any>; message_content?: string }) => {
-      const message = String(context?.message_content || '');
-      if (!message.includes('<BATTLE_PENDING>') || message.includes('<BATTLE_START>')) return;
+      let message = String(context?.message_content || '');
+      const hasPending = message.includes('<BATTLE_PENDING>');
+      const hasDirectStart = message.includes('<BATTLE_START>');
+      if (!hasPending && !hasDirectStart) return;
+
+      // BATTLE_START belongs to this runtime, never to either AI stage.
+      if (hasDirectStart) {
+        message = message.replace(/\s*<BATTLE_START>\s*/g, '\n').trimEnd();
+        context.message_content = message;
+        if (!hasPending) {
+          console.error('[MagicGirlWorld] AI 越权输出 BATTLE_START，已移除直接启动标记');
+          return;
+        }
+      }
+
+      recoverMisplacedCards(context?.variables);
+      const isCharacterInitialization = message.includes('<CHARACTER_INIT_PENDING>');
+      if (!hasInitializedPlayerContent(context?.variables, isCharacterInitialization)) {
+        console.error('[MagicGirlWorld] 玩家初始战斗内容未完成，已阻止战斗页面提前启动');
+        return;
+      }
 
       const enemy = context?.variables?.stat_data?.battle?.enemy;
       const actions = Array.isArray(enemy?.actions) ? enemy.actions.filter(Boolean) : [];
@@ -140,7 +235,10 @@ declare function eventOn(eventType: string, listener: (...args: any[]) => void):
       }
 
       context.message_content =
-        message.replace(/\s*<BATTLE_PENDING>\s*/g, '\n').trimEnd() + '\n\n<BATTLE_START>';
+        message
+          .replace(/\s*<CHARACTER_INIT_PENDING>\s*/g, '\n')
+          .replace(/\s*<BATTLE_PENDING>\s*/g, '\n')
+          .trimEnd() + '\n\n<BATTLE_START>';
     });
     state.battleHandoffReady = true;
   };

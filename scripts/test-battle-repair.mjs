@@ -56,7 +56,8 @@ assert.match(fishHtml, /id="battle-content-repair"/);
 assert.match(fishSource, /formatBoundedContentIssueSummary\(loadIssues\)/);
 assert.match(fishSource, /battleRepairHost\.requestRepair\(issues\)/);
 assert.match(repairHostSource, /formatBattleContentRepairPrompt\(issues\)/);
-assert.match(repairHostSource, /continuationHost\.continueWithPrompt\(\{ prompt \}\)/);
+assert.match(repairHostSource, /retryCurrentMessageWithExtraModel\(prompt\)/);
+assert.doesNotMatch(repairHostSource, /TavernContinuationHost|continueWithPrompt/);
 assert.doesNotMatch(repairHostSource, /triggerSlash\(`\/send|triggerSlash\('\/send/);
 assert.match(repairHostSource, /assertCurrentMessageLatest\(\)/);
 assert.match(shellPresenterSource, /isCurrentMessageLatest\(\)/);
@@ -65,6 +66,16 @@ assert.doesNotMatch(fishSource, /triggerSlash|document\.|\$\(|location\./);
 assert.match(gameStateSource, /getLastLoadIssues\(\)/);
 assert.match(gameStateSource, /this\.lastLoadIssues = preflight\.issues/);
 assert.match(gameStateSource, /error instanceof BattleContentContractError/);
+
+const misplacedCards = structuredClone(invalidBattle);
+misplacedCards.cards = [];
+misplacedCards.player_abilities = [
+  { id: 'wrong_path', name: '错位斩击', type: 'Attack', rarity: 'Common', cost: 1, quantity: 10, effects: { damage: 6 } },
+];
+const misplacedPreflight = preflightBattleContent(misplacedCards);
+const misplacedPrompt = formatBattleContentRepairPrompt(misplacedPreflight.issues);
+assert.match(misplacedPrompt, /^\[战斗内容修复\]/);
+assert.match(misplacedPrompt, /\[战斗场景修复\]/);
 
 const realFixtureSource = await readFile(resolve('scripts/test-real-tavern-battle-repair.mjs'), 'utf8');
 assert.match(realFixtureSource, /effects: \{ damage: 3, hits: 3 \}/);

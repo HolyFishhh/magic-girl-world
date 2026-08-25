@@ -1,16 +1,8 @@
 // 角色创建器核心模块
 import {
   CharacterConfig,
-  CITIES,
-  City,
   Faction,
   FACTION_INFO,
-  Location,
-  ORDINARY_IDENTITIES,
-  OrdinaryIdentity,
-  SHIROKI_LOCATIONS,
-  SUPERNATURAL_IDENTITIES,
-  SupernaturalIdentity,
 } from '../types';
 import {
   ensureMvuRuntimeReady,
@@ -29,7 +21,6 @@ export class CharacterCreator {
   private isHistorical = false;
   private readonly continuationHost = TavernContinuationHost.getInstance();
   private currentConfig: Partial<CharacterConfig> = {
-    mode: 'story',
     name: this.userName,
   };
 
@@ -42,7 +33,6 @@ export class CharacterCreator {
 
     this.initializeEventListeners();
     this.renderDefaultState();
-    this.renderCityOptions();
     this.fetchUserName();
     watchCurrentMessageUntilHistorical(() => {
       this.lockHistoricalForm();
@@ -72,7 +62,38 @@ export class CharacterCreator {
     document.querySelectorAll<HTMLElement>('.mode-card').forEach(card => {
       card.addEventListener('click', () => {
         const mode = card.dataset.mode;
-        if (mode === 'story' || mode === 'expedition') this.selectMode(mode);
+        if (!card.hasAttribute('disabled') && (mode === 'story' || mode === 'expedition')) this.selectMode(mode);
+      });
+    });
+
+    document.querySelectorAll<HTMLElement>('[data-config-field]').forEach(control => {
+      const eventName = control instanceof HTMLSelectElement ? 'change' : 'input';
+      control.addEventListener(eventName, () => this.syncAdvancedFields());
+    });
+
+    document.querySelectorAll<HTMLElement>('[data-tab]').forEach(tab => {
+      tab.addEventListener('click', () => {
+        const target = tab.dataset.tab;
+        if (!target) return;
+        document.querySelectorAll<HTMLElement>('[data-tab]').forEach(item => {
+          const active = item === tab;
+          item.classList.toggle('active', active);
+          item.setAttribute('aria-selected', String(active));
+        });
+        document.querySelectorAll<HTMLElement>('[data-panel]').forEach(panel => {
+          panel.hidden = panel.dataset.panel !== target;
+        });
+      });
+    });
+
+    document.querySelectorAll<HTMLButtonElement>('.preset-chip[data-fill]').forEach(chip => {
+      chip.addEventListener('click', () => {
+        const field = chip.dataset.fill;
+        const value = chip.dataset.value || '';
+        const target = field ? this.container.querySelector<HTMLElement>(`[data-config-field="${field}"]`) : null;
+        if (!target) return;
+        (target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement).value = value;
+        target.dispatchEvent(new Event(target instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }));
       });
     });
 
@@ -96,17 +117,54 @@ export class CharacterCreator {
     // 创建角色按钮
     const createBtn = document.getElementById('create-character-btn');
     createBtn?.addEventListener('click', () => this.createCharacter());
-
   }
 
   private selectMode(mode: CharacterConfig['mode']): void {
+    if (mode === 'expedition') return;
     this.currentConfig.mode = mode;
     document.querySelectorAll<HTMLElement>('.mode-card').forEach(card => {
       const selected = card.dataset.mode === mode;
       card.classList.toggle('selected', selected);
       card.setAttribute('aria-checked', String(selected));
     });
+    const storyConfig = document.getElementById('story-config');
+    if (storyConfig) storyConfig.hidden = mode !== 'story';
+    const modeHint = document.getElementById('mode-hint');
+    if (modeHint) modeHint.textContent = '已选择剧情模式。按需填写设定，留空的项目交给 AI 自由发挥。';
     this.validateForm();
+  }
+
+  private syncAdvancedFields(): void {
+    const values = new Map<string, string>();
+    this.container
+      .querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('[data-config-field]')
+      .forEach(field => {
+        const key = field.dataset.configField as keyof CharacterConfig | undefined;
+        if (!key) return;
+        const value = field.value.trim();
+        if (value && !values.has(String(key))) values.set(String(key), value);
+      });
+    for (const [key, value] of values) (this.currentConfig as unknown as Record<string, unknown>)[key] = value;
+    for (const key of [
+      'name',
+      'customDescription',
+      'profession',
+      'startingLocation',
+      'world',
+      'theme',
+      'plot',
+      'tone',
+      'style',
+      'pace',
+      'card',
+      'mechanics',
+      'limits',
+      'note',
+      'extra',
+    ]) {
+      if (!values.has(key)) delete (this.currentConfig as unknown as Record<string, unknown>)[key];
+    }
+    this.updatePreview();
   }
 
   private selectFaction(faction: Faction): void {
@@ -119,206 +177,8 @@ export class CharacterCreator {
     targetCard?.classList.add('selected');
 
     this.currentConfig.faction = faction;
-    // 当选择普通人阵营时，自动选择潜在觉醒者并禁用超自然身份选择
-    if (faction === 'ordinary_people') {
-      const potentialAwakener = SUPERNATURAL_IDENTITIES.find(id => id.id === 'potential_awakener');
-      this.currentConfig.supernaturalIdentity = potentialAwakener || null;
-      document.querySelectorAll('.supernatural-identity').forEach(card => {
-        (card as HTMLElement).style.pointerEvents = 'none';
-        card.classList.remove('selected');
-      });
-    } else {
-      this.currentConfig.supernaturalIdentity = undefined; // 允许重新选择
-      document.querySelectorAll('.supernatural-identity').forEach(card => {
-        (card as HTMLElement).style.pointerEvents = 'auto';
-      });
-    }
-
-    this.renderJobOptions();
     this.updatePreview();
     this.validateForm();
-  }
-
-  private renderCityOptions(): void {
-    const cityGrid = document.querySelector('.city-grid');
-    if (!cityGrid) {
-      return;
-    }
-
-    cityGrid.innerHTML = '';
-    CITIES.forEach(city => {
-      const cityCard = document.createElement('div');
-      cityCard.className = 'city-card';
-      cityCard.dataset.cityId = city.id;
-      if (city.status === 'developing') {
-        cityCard.classList.add('disabled');
-      }
-
-      cityCard.innerHTML = `
-        <div class="city-emoji">${city.emoji}</div>
-        <div class="city-name">${city.name}</div>
-        <div class="city-desc">${city.description}</div>
-        ${city.status === 'developing' ? '<div class="city-status">开发中</div>' : ''}
-      `;
-
-      if (city.status === 'available') {
-        cityCard.addEventListener('click', () => this.selectCity(city));
-      }
-
-      cityGrid.appendChild(cityCard);
-    });
-  }
-
-  private selectCity(city: City): void {
-    document.querySelectorAll('.city-card').forEach(card => card.classList.remove('selected'));
-    document.querySelector(`.city-card[data-city-id="${city.id}"]`)?.classList.add('selected');
-
-    this.currentConfig.city = city;
-    this.currentConfig.location = undefined; // 重置地点选择
-
-    const locationContainer = document.getElementById('location-section-container');
-    if (locationContainer) {
-      locationContainer.style.display = 'block';
-    }
-
-    if (city.id === 'shiroki') {
-      this.renderLocationOptions();
-    } else {
-      // 对其他城市清空地点选项
-      const locationGrid = document.querySelector('.location-grid');
-      if (locationGrid) locationGrid.innerHTML = '';
-    }
-
-    this.updatePreview();
-    this.validateForm();
-  }
-
-  private renderJobOptions(): void {
-    const jobGrid = document.querySelector('.job-grid');
-    if (!jobGrid || !this.currentConfig.faction) {
-      return;
-    }
-
-    jobGrid.innerHTML = '';
-
-    const createIdentitySection = (title: string, identities: (SupernaturalIdentity | OrdinaryIdentity)[]) => {
-      const section = document.createElement('div');
-      section.className = 'identity-section';
-      section.innerHTML = `<h4>${title}</h4>`;
-
-      identities.forEach(identity => {
-        const identityCard = document.createElement('div');
-        const isSupernatural = 'faction' in identity;
-        identityCard.className = `job-card ${isSupernatural ? 'supernatural-identity' : 'ordinary-identity'}`;
-        identityCard.dataset.identityId = identity.id;
-        identityCard.innerHTML = `
-          <div class="job-icon">${identity.icon}</div>
-          <div class="job-name">${isSupernatural ? this.getIdentityDisplayName(identity) : identity.name}</div>
-          <div class="job-desc">${identity.description}</div>
-          <div class="job-detailed-desc">${
-            isSupernatural ? (identity as SupernaturalIdentity).detailedDescription : ''
-          }</div>
-        `;
-
-        if (isSupernatural) {
-          identityCard.addEventListener('click', () =>
-            this.selectSupernaturalIdentity(identity as SupernaturalIdentity),
-          );
-        } else {
-          identityCard.addEventListener('click', () => this.selectOrdinaryIdentity(identity as OrdinaryIdentity));
-        }
-        section.appendChild(identityCard);
-      });
-
-      return section;
-    };
-
-    // 为当前阵营创建超自然身份选项
-    const availableSupernatural = SUPERNATURAL_IDENTITIES.filter(
-      identity => identity.faction === this.currentConfig.faction,
-    );
-
-    if (availableSupernatural.length > 0) {
-      jobGrid.appendChild(createIdentitySection('超自然身份', availableSupernatural));
-    }
-
-    // 创建普通身份区域
-    jobGrid.appendChild(createIdentitySection('普通身份', ORDINARY_IDENTITIES));
-  }
-
-  private getIdentityDisplayName(identity: SupernaturalIdentity): string {
-    // 移除性别相关逻辑，直接返回基础名称
-    return identity.name;
-  }
-
-  private selectSupernaturalIdentity(identity: SupernaturalIdentity): void {
-    document.querySelectorAll('.supernatural-identity').forEach(card => card.classList.remove('selected'));
-    document.querySelectorAll('.ordinary-identity').forEach(card => card.classList.remove('selected'));
-    document.querySelector(`[data-identity-id="${identity.id}"]`)?.classList.add('selected');
-
-    this.currentConfig.supernaturalIdentity = identity;
-    // 如果没有选择普通身份，给一个默认的
-    if (!this.currentConfig.ordinaryIdentity) {
-      this.currentConfig.ordinaryIdentity = ORDINARY_IDENTITIES[0];
-      document
-        .querySelector(`.ordinary-identity[data-identity-id="${ORDINARY_IDENTITIES[0].id}"]`)
-        ?.classList.add('selected');
-    }
-    this.updatePreview();
-    this.validateForm();
-  }
-
-  private selectOrdinaryIdentity(identity: OrdinaryIdentity): void {
-    document.querySelectorAll('.ordinary-identity').forEach(card => card.classList.remove('selected'));
-    document.querySelector(`[data-identity-id="${identity.id}"]`)?.classList.add('selected');
-
-    this.currentConfig.ordinaryIdentity = identity;
-    // 如果没有选择超自然身份（非普通人阵营），则设为null
-    if (this.currentConfig.faction !== 'ordinary_people' && this.currentConfig.supernaturalIdentity === undefined) {
-      this.currentConfig.supernaturalIdentity = null;
-    }
-    this.updatePreview();
-    this.validateForm();
-  }
-
-  private renderLocationOptions(): void {
-    const locationGrid = document.querySelector('.location-grid');
-    if (!locationGrid) return;
-
-    locationGrid.innerHTML = '';
-    SHIROKI_LOCATIONS.forEach(location => {
-      const locationCard = document.createElement('div');
-      locationCard.className = 'location-card';
-      locationCard.dataset.locationId = location.id;
-      locationCard.innerHTML = `
-        <div class="location-name">${location.name}</div>
-        <div class="location-desc">${location.description}</div>
-        <div class="location-category">${this.getCategoryName(location.category)}</div>
-      `;
-      locationCard.addEventListener('click', () => this.selectLocation(location));
-      locationGrid.appendChild(locationCard);
-    });
-  }
-
-  private selectLocation(location: Location): void {
-    document.querySelectorAll('.location-card').forEach(card => card.classList.remove('selected'));
-    document.querySelector(`[data-location-id="${location.id}"]`)?.classList.add('selected');
-
-    this.currentConfig.location = location;
-    this.updatePreview();
-    this.validateForm();
-  }
-
-  private getCategoryName(category: string): string {
-    const names: Record<string, string> = {
-      school: '学校',
-      public: '公共设施',
-      commercial: '商业区',
-      residential: '居住区',
-      religious: '宗教场所',
-      entertainment: '娱乐场所',
-    };
-    return names[category] || category;
   }
 
   private updatePreview(): void {
@@ -354,32 +214,22 @@ export class CharacterCreator {
     // 更新职业预览
     const previewJob = elements.job;
     if (previewJob) {
-      let jobText = '未选择';
-      if (this.currentConfig.supernaturalIdentity) {
-        jobText = this.getIdentityDisplayName(this.currentConfig.supernaturalIdentity);
-      } else if (this.currentConfig.supernaturalIdentity === null) {
-        jobText = '待定';
-      }
-      previewJob.textContent = jobText;
+      previewJob.textContent = this.currentConfig.profession || '交给 AI 安排';
     }
 
     // 更新城市/地点预览
     const previewLocation = elements.location;
     if (previewLocation) {
-      let locationText = this.currentConfig.city ? this.currentConfig.city.name : '未选择城市';
-      if (this.currentConfig.location) {
-        locationText = `${this.currentConfig.city?.name} - ${this.currentConfig.location.name}`;
-      }
-      previewLocation.textContent = locationText;
+      previewLocation.textContent = this.currentConfig.startingLocation || '交给 AI 安排';
     }
 
     // 更新描述预览
     const previewDesc = elements.description;
     if (previewDesc) {
       if (this.isConfigValid(this.currentConfig)) {
-        previewDesc.textContent = '点击"创建角色"后，将根据您的选择生成描述并开始故事。';
+        previewDesc.textContent = '点击“开始剧情”后，AI 会根据已有设定补全角色与世界。';
       } else {
-        previewDesc.textContent = 'AI将根据你的选择生成角色';
+        previewDesc.textContent = '先选择剧情模式，其他内容全部可以留空。';
       }
     }
   }
@@ -414,14 +264,10 @@ export class CharacterCreator {
       this.lockHistoricalForm();
       return;
     }
-    // 收集自定义描述信息
-    const customDescInput = document.getElementById('custom-description') as HTMLTextAreaElement;
-    if (customDescInput) {
-      this.currentConfig.customDescription = customDescInput.value.trim();
-    }
+    this.syncAdvancedFields();
 
     if (!this.isConfigValid(this.currentConfig)) {
-      this.showMessage('请完善角色信息后再创建', 'warning');
+      this.showMessage('请先选择剧情模式', 'warning');
       return;
     }
 
@@ -442,7 +288,7 @@ export class CharacterCreator {
         return variables;
       });
       await this.continuationHost.continueWithPrompt({ prompt: startMessage });
-      this.showMessage('角色已提交，正在生成开场剧情。', 'info');
+      this.showMessage('设定已提交，正在生成开场剧情。', 'info');
     } catch (error) {
       console.error('❌ 创建角色失败:', error);
       this.showMessage(
@@ -462,7 +308,7 @@ export class CharacterCreator {
     this.isCreating = active;
     const createBtn = document.getElementById('create-character-btn') as HTMLButtonElement | null;
     const buttonText = createBtn?.querySelector('.btn-text') as HTMLElement | null;
-    if (buttonText) buttonText.textContent = active ? '正在启动' : this.isHistorical ? '角色已提交' : '创建角色';
+    if (buttonText) buttonText.textContent = active ? '正在启动' : this.isHistorical ? '设定已提交' : '开始剧情';
     this.validateForm();
   }
 
@@ -475,28 +321,20 @@ export class CharacterCreator {
         control.disabled = true;
       });
     this.container
-      .querySelectorAll<HTMLElement>('.faction-card, .job-card, .location-card, .city-card')
+      .querySelectorAll<HTMLElement>('.faction-card')
       .forEach(card => {
         card.style.pointerEvents = 'none';
         card.setAttribute('aria-disabled', 'true');
       });
     const buttonText = document.querySelector('#create-character-btn .btn-text');
-    if (buttonText) buttonText.textContent = '角色已提交';
+    if (buttonText) buttonText.textContent = '设定已提交';
     const validationMessage = document.getElementById('validation-message');
     if (validationMessage) validationMessage.style.display = 'none';
   }
 
   private isConfigValid(config: Partial<CharacterConfig>): config is CharacterConfig {
-    const { mode, faction, supernaturalIdentity, ordinaryIdentity, city, location } = config;
-
-    // 玩家必须同时选择普通身份和超自然身份（如果不是普通人阵营）
-    if (faction === 'ordinary_people') {
-      // 普通人阵营只需要普通身份
-      return !!(mode && faction && ordinaryIdentity && city && location);
-    } else {
-      // 其他阵营需要同时有普通身份和超自然身份
-      return !!(mode && faction && supernaturalIdentity && ordinaryIdentity && city && location);
-    }
+    // 剧情模式是唯一必要选择，其余设定由玩家按需填写或交给 AI 补全。
+    return config.mode === 'story';
   }
 
   private showMessage(message: string, type: 'success' | 'error' | 'warning' | 'info'): void {
@@ -516,27 +354,24 @@ export class CharacterCreator {
   private resetForm(): void {
     // 重置配置
     this.currentConfig = {
-      mode: 'story',
       name: this.userName,
     };
 
     // 重置UI元素
-    document.querySelectorAll('.faction-card, .job-card, .location-card, .city-card').forEach(card => {
+    document.querySelectorAll('.faction-card').forEach(card => {
       card.classList.remove('selected');
     });
-    this.selectMode('story');
-
-    (document.getElementById('custom-description') as HTMLTextAreaElement).value = '';
-
-    // 清空并隐藏地点选择
-    const locationContainer = document.getElementById('location-section-container');
-    if (locationContainer) locationContainer.style.display = 'none';
-    const locationGrid = document.querySelector('.location-grid');
-    if (locationGrid) locationGrid.innerHTML = '<!-- 地点选项将通过JS动态生成 -->';
-
-    // 清空动态生成的区域
-    const jobGrid = document.querySelector('.job-grid');
-    if (jobGrid) jobGrid.innerHTML = '<!-- 职业选项将通过JS动态生成 -->';
+    this.container
+      .querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('[data-config-field]')
+      .forEach(field => {
+        field.value = '';
+      });
+    const storyConfig = document.getElementById('story-config');
+    if (storyConfig) storyConfig.hidden = true;
+    document.querySelectorAll<HTMLElement>('.mode-card').forEach(card => {
+      card.classList.remove('selected');
+      card.setAttribute('aria-checked', 'false');
+    });
 
     // 更新预览和按钮状态
     this.updateCharacterCounter();
@@ -547,7 +382,7 @@ export class CharacterCreator {
     const createBtn = document.getElementById('create-character-btn') as HTMLButtonElement;
     if (createBtn) {
       createBtn.disabled = true;
-      (createBtn.querySelector('.btn-text') as HTMLElement).textContent = '创建角色';
+      (createBtn.querySelector('.btn-text') as HTMLElement).textContent = '开始剧情';
     }
 
     this.showMessage('表单已重置。', 'info');
@@ -558,5 +393,7 @@ export class CharacterCreator {
     this.updatePreview();
     this.updateCharacterCounter();
     this.validateForm();
+    const storyConfig = document.getElementById('story-config');
+    if (storyConfig) storyConfig.hidden = true;
   }
 }

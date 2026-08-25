@@ -15,7 +15,7 @@ const interfaces = [
     scriptName: '开始模块',
     source: 'dist/src/start/index.html',
     output: 'dist/tavern/start-interface.json',
-    findRegex: '\\[开始游戏.*\\]\\s*(?:<StatusPlaceHolderImpl\\s*\\/?>)?',
+    findRegex: '(?:\\[开始游戏.*\\]|<CHARACTER_INIT_PENDING>)\\s*(?:<StatusPlaceHolderImpl\\s*\\/?>)?',
     placement: [2],
     minDepth: 0,
     maxDepth: 0,
@@ -29,7 +29,7 @@ const interfaces = [
     source: 'dist/src/common/index.html',
     output: 'dist/tavern/common-interface.json',
     findRegex:
-      '(?<![\\s\\S]*<BATTLE_START>[\\s\\S]*)(?![\\s\\S]*<BATTLE_START>)(?:<UpdateVariable>[\\s\\S]*?<\\/UpdateVariable>\\s*(?:<StatusPlaceHolderImpl\\s*\\/?>)?|<StatusPlaceHolderImpl\\s*\\/?>)',
+      '(?<![\\s\\S]*<BATTLE_START>[\\s\\S]*)(?![\\s\\S]*<BATTLE_START>)(?:(?:<CONTENT_PENDING>\\s*)?(?:<UpdateVariable>[\\s\\S]*?<\\/UpdateVariable>\\s*(?:<StatusPlaceHolderImpl\\s*\\/?>)?|<StatusPlaceHolderImpl\\s*\\/?>)|<CONTENT_PENDING>)',
     placement: [2],
     minDepth: 0,
     maxDepth: 2,

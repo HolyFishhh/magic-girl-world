@@ -1,5 +1,5 @@
 import { assertCurrentMessageLatest } from '../../runtime/messageVariables';
-import { TavernContinuationHost } from '../../runtime/tavernContinuation';
+import { retryCurrentMessageWithExtraModel } from '../../runtime/mvuExtraModelRepair';
 import { formatBattleContentRepairPrompt, type BattleContentIssue } from './battleContentPreflight';
 
 export type BattleRepairRequestResult = 'sent' | 'busy' | 'empty';
@@ -8,8 +8,6 @@ export type BattleRepairRequestResult = 'sent' | 'busy' | 'empty';
 export class TavernBattleRepairHost {
   private static instance: TavernBattleRepairHost;
   private pending = false;
-
-  public constructor(private readonly continuationHost = TavernContinuationHost.getInstance()) {}
 
   public static getInstance(): TavernBattleRepairHost {
     if (!TavernBattleRepairHost.instance) TavernBattleRepairHost.instance = new TavernBattleRepairHost();
@@ -24,7 +22,7 @@ export class TavernBattleRepairHost {
 
     this.pending = true;
     try {
-      await this.continuationHost.continueWithPrompt({ prompt });
+      await retryCurrentMessageWithExtraModel(prompt);
       return 'sent';
     } finally {
       this.pending = false;

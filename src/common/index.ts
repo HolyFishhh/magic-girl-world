@@ -10,6 +10,7 @@ import {
   watchCurrentMessageDepth,
 } from '../runtime/messageVariables';
 import { readRunState } from '../runtime/runStateAdapter';
+import { retryCurrentMessageWithExtraModel } from '../runtime/mvuExtraModelRepair';
 import { createContentPackFromMvuBattle } from '../runtime/contentPackAdapter';
 import { flattenMvuArray } from '../runtime/mvuArrays';
 import {
@@ -1150,7 +1151,7 @@ async function requestInitialContentRepair(readiness: PlayerContentReadiness): P
   setSendingState(true);
   setRunButtonsDisabled(true);
   try {
-    await commonActionHost.continueWithPrompt({ prompt });
+    await retryCurrentMessageWithExtraModel(prompt);
     __RUN_ERROR = null;
   } catch (error) {
     showRunError(error, '请求修复初始战斗内容失败');
@@ -1228,13 +1229,14 @@ function renderRunData(stat: any): void {
     section.style.display = 'none';
     const isLatest = isCurrentMessageLatest();
     const expeditionMode = selectedGameMode(stat) === 'expedition';
-    if (optIn) optIn.style.display = isLatest && expeditionMode ? '' : 'none';
+    const readiness = isLatest ? currentInitialContentReadiness() : null;
+    const needsRepair = !!readiness && !readiness.ok;
+    if (optIn) optIn.style.display = isLatest && (expeditionMode || needsRepair) ? '' : 'none';
     if (!isLatest) return;
-    const readiness = currentInitialContentReadiness();
-    if (repairButton) repairButton.style.display = readiness && !readiness.ok ? '' : 'none';
+    if (repairButton) repairButton.style.display = needsRepair ? '' : 'none';
     if (optInError) {
-      optInError.textContent = readiness && !readiness.ok ? formatPlayerContentReadiness(readiness) : '';
-      optInError.style.display = readiness && !readiness.ok ? '' : 'none';
+      optInError.textContent = needsRepair && readiness ? formatPlayerContentReadiness(readiness) : '';
+      optInError.style.display = needsRepair ? '' : 'none';
     }
     return;
   }

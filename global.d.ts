@@ -41,6 +41,13 @@ declare function createChatMessages(
     refresh?: 'none' | 'affected' | 'all';
   },
 ): Promise<void>;
+declare function getChatMessages(messageId: number | string): Array<{ message?: string }>;
+declare function setChatMessages(
+  messages: Array<{ message_id: number; message?: string }>,
+  options?: { refresh?: 'none' | 'affected' | 'all' },
+): Promise<void>;
+declare function getButtonEvent(name: string): string;
+declare function eventEmit(eventName: string, ...args: unknown[]): Promise<unknown>;
 declare function generate(options?: Record<string, any>): Promise<string>;
 declare function generateRaw(options?: Record<string, any>): Promise<string>;
 

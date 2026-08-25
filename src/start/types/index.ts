@@ -42,13 +42,22 @@ export interface OrdinaryIdentity {
 // 角色创建配置
 export interface CharacterConfig {
   mode: 'story' | 'expedition';
-  faction: Faction;
-  supernaturalIdentity: SupernaturalIdentity | null;
-  ordinaryIdentity: OrdinaryIdentity;
-  city: City;
-  location: Location;
+  faction?: Faction;
+  profession?: string;
+  startingLocation?: string;
   customDescription?: string;
   name?: string;
+  world?: string;
+  theme?: string;
+  plot?: string;
+  tone?: string;
+  style?: string;
+  pace?: string;
+  card?: string;
+  mechanics?: string;
+  limits?: string;
+  note?: string;
+  extra?: string;
 }
 
 // 白木市地点数据

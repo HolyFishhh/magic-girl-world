@@ -1,161 +1,274 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>白木市魔法少女角色创建</title>
+    <title>魔法少女世界 · 开始游戏</title>
   </head>
   <body>
-    <div class="magical-girl-creator" id="character-creator-container">
-      <!-- 标题区域 -->
-      <div class="header-section">
-        <h1 class="main-title">
-          <span class="sparkle">✨</span>
-          白木市角色创建
-          <span class="sparkle">✨</span>
-        </h1>
-        <p class="subtitle">在怪人与怪谈的现代都市中创建你的角色</p>
-      </div>
+    <main class="magical-girl-creator" id="character-creator-container">
+      <header class="header-section">
+        <div class="diary-label">MAGICAL GIRL WORLD / STORY SETUP</div>
+        <h1 class="main-title">魔法少女世界</h1>
+        <p class="subtitle">先选择旅程，再把想玩的故事告诉 AI。</p>
+      </header>
 
-      <!-- 角色创建表单 -->
-      <div class="creator-form">
-        <div class="section mode-section">
-          <h2 class="section-title"><span class="icon">✦</span>选择游戏模式</h2>
-          <div class="mode-grid" role="radiogroup" aria-label="选择游戏模式">
-            <button class="mode-card selected" type="button" data-mode="story" role="radio" aria-checked="true">
+      <section class="creator-form">
+        <section class="section mode-section" aria-labelledby="mode-title">
+          <div class="section-heading">
+            <div>
+              <span class="eyebrow">STEP 01</span>
+              <h2 id="mode-title" class="section-title">选择开始方式</h2>
+            </div>
+            <span class="section-note" id="mode-hint">请选择一个模式继续</span>
+          </div>
+          <div class="mode-grid" role="radiogroup" aria-label="选择开始方式">
+            <button class="mode-card" type="button" data-mode="story" role="radio" aria-checked="false">
               <span class="mode-icon">📖</span>
               <span class="mode-name">剧情模式</span>
-              <span class="mode-desc">以角色扮演和城市故事为主，随时做出选择。</span>
+              <span class="mode-desc">自由扮演、探索城市，让剧情根据你的行动自然发展。</span>
+              <span class="mode-action">点击展开设定 →</span>
             </button>
-            <button class="mode-card" type="button" data-mode="expedition" role="radio" aria-checked="false">
-              <span class="mode-icon">🗺</span>
-              <span class="mode-name">远征模式</span>
-              <span class="mode-desc">在路线、战斗和营火之间推进一场完整远征。</span>
-            </button>
-          </div>
-        </div>
-
-        <!-- 阵营选择 -->
-        <div class="section faction-section">
-          <h2 class="section-title">
-            <span class="icon">⚔️</span>
-            选择阵营
-          </h2>
-          <div class="faction-grid">
-            <div class="faction-card" data-faction="magical_girl">
-              <div class="faction-icon">🌟</div>
-              <div class="faction-name">魔法少女阵营</div>
-              <div class="faction-desc">守护正义与和平的魔法使用者</div>
-            </div>
-            <div class="faction-card" data-faction="evil_forces">
-              <div class="faction-icon">👿</div>
-              <div class="faction-name">邪恶敌对势力</div>
-              <div class="faction-desc">企图破坏世界秩序的黑暗力量</div>
-            </div>
-            <div class="faction-card" data-faction="ordinary_people">
-              <div class="faction-icon">👥</div>
-              <div class="faction-name">普通人</div>
-              <div class="faction-desc">生活在现代社会中的普通民众</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 职业选择 -->
-        <div class="section job-section">
-          <h2 class="section-title">
-            <span class="icon">👔</span>
-            选择职业
-          </h2>
-          <div class="job-grid">
-            <!-- 职业选项将通过JS动态生成 -->
-          </div>
-        </div>
-
-        <!-- 地点选择 -->
-        <div class="section location-section">
-          <h2 class="section-title">
-            <span class="icon">🏙️</span>
-            选择城市
-          </h2>
-          <div class="city-grid">
-            <!-- 城市选项将通过JS动态生成 -->
-          </div>
-        </div>
-
-        <!-- 地点选择 -->
-        <div class="section location-section" id="location-section-container" style="display: none">
-          <h2 class="section-title">
-            <span class="icon">🏢</span>
-            选择所在地点
-          </h2>
-          <div class="location-grid">
-            <!-- 地点选项将通过JS动态生成 -->
-          </div>
-        </div>
-
-        <!-- 额外描述 -->
-        <div class="section description-section">
-          <h2 class="section-title">
-            <span class="icon">💭</span>
-            额外描述（可选）
-          </h2>
-          <div class="description-container">
-            <textarea
-              id="custom-description"
-              placeholder="在这里添加角色的特殊设定、性格特点、背景故事等...&#10;例如：喜欢甜食的温柔女孩，有着不为人知的魔法天赋..."
-              rows="4"
-              maxlength="300"
+            <button
+              class="mode-card disabled"
+              type="button"
+              data-mode="expedition"
+              role="radio"
+              aria-checked="false"
+              disabled
             >
-            </textarea>
-            <div class="char-counter"><span id="char-count">0</span>/300</div>
+              <span class="mode-icon">🗼</span>
+              <span class="mode-name">爬塔模式</span>
+              <span class="mode-desc">路线、战斗、奖励与营火组成的连续挑战。</span>
+              <span class="mode-action">筹备中</span>
+            </button>
           </div>
-        </div>
+        </section>
 
-        <!-- 角色预览 -->
-        <div class="section preview-section">
-          <h2 class="section-title">
-            <span class="icon">👁️</span>
-            角色预览
-          </h2>
-          <div class="character-preview">
-            <div class="preview-card">
-              <div class="preview-header">
-                <div class="preview-name">未设置角色</div>
-                <div class="preview-faction">请先选择阵营</div>
-              </div>
-              <div class="preview-details">
-                <div class="preview-item">
-                  <span class="label">职业：</span>
-                  <span class="value" id="preview-job">未选择</span>
-                </div>
-                <div class="preview-item">
-                  <span class="label">地点：</span>
-                  <span class="value" id="preview-location">未选择</span>
-                </div>
-              </div>
-              <div class="preview-description">
-                <div class="desc-label">描述：</div>
-                <div class="desc-content" id="preview-description">AI将根据你的选择生成角色</div>
+        <div id="story-config" class="story-config" hidden>
+          <div class="setup-bar">
+            <div><span class="eyebrow">STORY MODE</span><strong>剧情设定</strong></div>
+            <span class="setup-tip">预设是快捷起点，所有输入都可以留空或自由改写。</span>
+          </div>
+
+          <nav class="setup-tabs" role="tablist" aria-label="剧情设定分类">
+            <button class="setup-tab active" type="button" data-tab="character" role="tab" aria-selected="true">
+              角色
+            </button>
+            <button class="setup-tab" type="button" data-tab="world" role="tab" aria-selected="false">世界</button>
+            <button class="setup-tab" type="button" data-tab="story" role="tab" aria-selected="false">剧情</button>
+            <button class="setup-tab" type="button" data-tab="cards" role="tab" aria-selected="false">卡牌</button>
+            <button class="setup-tab" type="button" data-tab="preference" role="tab" aria-selected="false">偏好</button>
+          </nav>
+
+          <div class="setup-panel" data-panel="character">
+            <div class="field-grid two-columns">
+              <label class="field"
+                ><span>角色名 <em>可选</em></span
+                ><input data-config-field="name" type="text" maxlength="40" placeholder="默认使用 {{user}}"
+              /></label>
+              <label class="field"
+                ><span>一句话印象 <em>可选</em></span
+                ><input
+                  data-config-field="customDescription"
+                  type="text"
+                  maxlength="160"
+                  placeholder="例如：嘴硬但会照顾人的学生"
+              /></label>
+            </div>
+            <div class="field-block">
+              <span class="field-label">阵营 <em>可选</em></span>
+              <div class="faction-grid">
+                <button class="faction-card" type="button" data-faction="magical_girl">
+                  <span class="faction-icon">🌟</span><span class="faction-name">魔法少女</span
+                  ><span class="faction-desc">守护城市的超自然力量</span>
+                </button>
+                <button class="faction-card" type="button" data-faction="evil_forces">
+                  <span class="faction-icon">🔮</span><span class="faction-name">邪恶势力</span
+                  ><span class="faction-desc">与城市秩序对立的黑暗力量</span>
+                </button>
+                <button class="faction-card" type="button" data-faction="ordinary_people">
+                  <span class="faction-icon">👥</span><span class="faction-name">普通人</span
+                  ><span class="faction-desc">从日常生活开始接触异常</span>
+                </button>
               </div>
             </div>
+            <div class="field-block">
+              <label class="field"
+                ><span>身份或职业 <em>可选</em></span
+                ><input
+                  data-config-field="profession"
+                  type="text"
+                  maxlength="120"
+                  placeholder="例如：学生、调查员、魔法使，留空由 AI 安排"
+              /></label>
+              <label class="field"
+                ><span>希望的开场地点 <em>可选</em></span
+                ><input
+                  data-config-field="startingLocation"
+                  type="text"
+                  maxlength="160"
+                  placeholder="例如：学校、家附近、陌生城市，或完全交给 AI"
+              /></label>
+            </div>
           </div>
-        </div>
 
-        <!-- 操作按钮 -->
-        <div class="section actions-section">
-          <div class="action-buttons">
-            <button id="create-character-btn" class="create-btn" disabled>
-              <span class="btn-icon">🎭</span>
-              <span class="btn-text">创建角色</span>
-            </button>
-            <button id="reset-form-btn" class="reset-btn">
-              <span class="btn-icon">🔄</span>
-              <span class="btn-text">重置表单</span>
-            </button>
+          <div class="setup-panel" data-panel="world" hidden>
+            <div class="preset-row">
+              <span class="field-label">世界观快捷预设</span
+              ><button
+                type="button"
+                class="preset-chip"
+                data-fill="world"
+                data-value="现代都市中的魔法少女与怪谈并存，普通人只知道城市偶尔发生的异常。"
+              >
+                现代都市·怪谈</button
+              ><button
+                type="button"
+                class="preset-chip"
+                data-fill="world"
+                data-value="魔法公开存在，魔法少女组织与政府共同维护城市秩序。"
+              >
+                魔法公开社会</button
+              ><button
+                type="button"
+                class="preset-chip"
+                data-fill="world"
+                data-value="温柔日常与危险异象交替出现，超自然规则保持神秘。"
+              >
+                日常与异象
+              </button>
+            </div>
+            <label class="field"
+              ><span>世界观补充 <em>可选</em></span
+              ><textarea
+                data-config-field="world"
+                rows="4"
+                maxlength="500"
+                placeholder="世界的基本规则、魔法是否公开、怪谈从哪里来……"
+              ></textarea>
+            </label>
+            <div class="field-grid two-columns">
+              <label class="field"
+                ><span>希望常驻的主题</span
+                ><input
+                  data-config-field="theme"
+                  type="text"
+                  maxlength="120"
+                  placeholder="例如：友情、成长、秘密、轻微悬疑" /></label
+              ><label class="field"
+                ><span>内容边界</span
+                ><input
+                  data-config-field="limits"
+                  type="text"
+                  maxlength="160"
+                  placeholder="例如：不出现虐待未成年，不描写过度血腥"
+              /></label>
+            </div>
           </div>
-          <div class="validation-message" id="validation-message">请选择阵营、职业和地点后才能创建角色</div>
+
+          <div class="setup-panel" data-panel="story" hidden>
+            <label class="field"
+              ><span>剧情设定与想看的内容 <em>可选</em></span
+              ><textarea
+                data-config-field="plot"
+                rows="5"
+                maxlength="700"
+                placeholder="想从什么事件开始？希望 AI 安排哪些角色、关系或伏笔？"
+              ></textarea>
+            </label>
+          </div>
+
+          <div class="setup-panel" data-panel="cards" hidden>
+            <div class="preset-row">
+              <span class="field-label">卡牌体系预设</span
+              ><button
+                type="button"
+                class="preset-chip"
+                data-fill="card"
+                data-value="轻量构筑：卡牌数量少而清晰，围绕一个核心主题逐步强化。"
+              >
+                轻量构筑</button
+              ><button
+                type="button"
+                class="preset-chip"
+                data-fill="card"
+                data-value="杀戮尖塔式构筑：攻击、防御、能力和状态互相配合，战斗中逐步形成流派。"
+              >
+                经典构筑</button
+              ><button
+                type="button"
+                class="preset-chip"
+                data-fill="card"
+                data-value="叙事卡牌：卡牌既代表能力，也代表角色关系和剧情选择。"
+              >
+                叙事卡牌
+              </button>
+            </div>
+            <label class="field"
+              ><span>希望的卡牌体系 <em>可选</em></span
+              ><textarea
+                data-config-field="card"
+                rows="4"
+                maxlength="500"
+                placeholder="例如：火焰主题、低费连击、以防御反击为核心……"
+              ></textarea>
+            </label>
+            <label class="field"
+              ><span>机制偏好 <em>可选</em></span
+              ><input
+                data-config-field="mechanics"
+                type="text"
+                maxlength="240"
+                placeholder="例如：能量、抽牌、灼烧、护盾、遗物、升级与删牌"
+            /></label>
+            <p class="helper-text">这里描述“想玩什么”，不用填写公式。卡牌具体数值和效果由后续规则与 AI 共同生成。</p>
+          </div>
+
+          <div class="setup-panel" data-panel="preference" hidden>
+            <div class="field-grid two-columns">
+              <label class="field"
+                ><span>玩家希望扮演的感觉</span
+                ><input
+                  data-config-field="note"
+                  type="text"
+                  maxlength="240"
+                  placeholder="例如：多做决定，多与 NPC 对话，战斗适量" /></label
+              ><label class="field"
+                ><span>其他补充</span
+                ><input data-config-field="extra" type="text" maxlength="240" placeholder="任何不想被遗漏的要求"
+              /></label>
+            </div>
+            <div class="preference-list">
+              <div><strong>AI 会负责</strong><span>把设定融入正文，主动推动剧情，并在确有需要时触发战斗。</span></div>
+              <div><strong>你始终可以</strong><span>用自然语言行动，不需要按按钮或使用固定格式。</span></div>
+              <div><strong>留空也没关系</strong><span>空白项目不会写入首轮提示，减少 token 并保留即兴空间。</span></div>
+            </div>
+          </div>
+
+          <section class="preview-section" aria-label="角色预览">
+            <div class="preview-heading">
+              <span class="eyebrow">QUICK PREVIEW</span><span class="preview-faction">尚未选择阵营</span>
+            </div>
+            <div class="preview-card">
+              <strong class="preview-name">未设置角色</strong>
+              <div class="preview-details">
+                <span><b>身份</b><i id="preview-job">未选择</i></span
+                ><span><b>地点</b><i id="preview-location">未选择</i></span>
+              </div>
+              <p id="preview-description">先选择剧情模式，其他设定都可以留空交给 AI。</p>
+            </div>
+          </section>
+          <div class="actions-section">
+            <div class="action-buttons">
+              <button id="create-character-btn" class="create-btn" disabled>
+                <span class="btn-icon">✦</span><span class="btn-text">开始剧情</span></button
+              ><button id="reset-form-btn" class="reset-btn" type="button">重置</button>
+            </div>
+            <div class="validation-message" id="validation-message">请选择剧情模式后开始，其他内容均可选</div>
+          </div>
         </div>
-      </div>
-    </div>
+      </section>
+    </main>
   </body>
 </html>

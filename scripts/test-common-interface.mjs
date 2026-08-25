@@ -115,6 +115,8 @@ assert.match(scriptSource, /assessInitialPlayerContent\(pack, \{/);
 assert.match(scriptSource, /const needsInitialContentGate = run\.floor === 0/);
 assert.match(scriptSource, /currentEl\.textContent = readiness\.deck\.deckQuantity === 0/);
 assert.match(scriptSource, /formatPlayerContentRepairPrompt\(readiness\)/);
+assert.match(scriptSource, /retryCurrentMessageWithExtraModel\(prompt\)/);
+assert.doesNotMatch(scriptSource, /requestInitialContentRepair[\s\S]{0,500}commonActionHost\.continueWithPrompt/);
 assert.match(scriptSource, /请求 AI 修复/);
 assert.match(scriptSource, /function contentDescriptionStatusNames/);
 assert.match(scriptSource, /describeCompactCard\(card, \{ statusNames: contentDescriptionStatusNames\(card\) \}\)/);

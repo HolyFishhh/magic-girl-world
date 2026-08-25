@@ -7,6 +7,7 @@ const manifest = JSON.parse(await readFile(resolve(root, 'manifest.json'), 'utf8
 const entryConfig = JSON.parse(await readFile(resolve(root, 'entry-config.json'), 'utf8'));
 const requiredEntries = [
   '额外模型变量更新格式',
+  '卡牌常驻规范',
   '首条消息变量更新',
   '战斗内容生成要求',
   '变量更新规则',
@@ -36,6 +37,7 @@ for (const [entryName, sourceName] of Object.entries(manifest)) {
 
 const expectedMvuRoles = {
   '额外模型变量更新格式': 'update',
+  '卡牌常驻规范': 'update',
   '首条消息变量更新': 'update',
   '变量更新规则': 'update',
   '输出格式要求': 'plot',
@@ -80,6 +82,8 @@ assert.equal(initial.run_upgrade, null);
 assert.equal(initial.game_mode, 'story');
 
 const allPromptSources = Array.from(sources.values()).join('\n');
+assert.equal(entryConfig['卡牌常驻规范']?.constant, true, 'compact card rules must stay active for every MVU turn');
+assert.match(sources.get('卡牌常驻规范'), /`<CONTENT_PENDING>`/);
 for (const obsoletePath of [
   'battle.player_deck',
   'battle.player_relics',
@@ -92,7 +96,12 @@ for (const obsoletePath of [
 const battleGuide = sources.get('战斗内容生成要求');
 const firstMessageGuide = sources.get('首条消息变量更新');
 assert.match(firstMessageGuide, /`\[角色创建\]` 后的一行浅层 JSON/);
-assert.match(firstMessageGuide, /`mode\/name\/faction\/ordinary\/supernatural\/city\/location\/note`/);
+assert.match(firstMessageGuide, /始终包含 `mode`/);
+assert.match(firstMessageGuide, /`name\/faction\/profession\/location\/note/);
+assert.match(firstMessageGuide, /`<CHARACTER_INIT_PENDING>`/);
+assert.match(firstMessageGuide, /只更新 `status\.time\/location` 属于失败/);
+assert.match(firstMessageGuide, /卡牌只能写入此路径/);
+assert.match(firstMessageGuide, /禁止写入 `battle\.player_abilities`/);
 assert.match(firstMessageGuide, /剧情模式的 `run` 保持 null/);
 assert.match(firstMessageGuide, /远征模式在起始战斗内容通过门禁后由程序创建/);
 assert.match(firstMessageGuide, /不输出选项或战斗启动标记/);
@@ -120,6 +129,7 @@ assert.match(battleGuide, /`\[构筑建议\] need=\.\.\. synergy=\.\.\. roles=\.
 assert.match(battleGuide, /机制或数值相同可以接受/);
 assert.match(battleGuide, /不同对象使用不同稳定 ID/);
 assert.match(battleGuide, /三张卡依次满足三个 `roles`/);
+assert.ok(entryConfig['战斗内容生成要求'].keys.includes('<CONTENT_PENDING>'));
 assert.doesNotMatch(battleGuide, /`ME\.|`OP\.|`ALL\.|if\[|add_to_hand|copy_card\./);
 
 const sceneGuide = sources.get('战斗场景生成');
@@ -135,6 +145,7 @@ assert.match(sceneGuide, /\[构筑摘要\]/);
 assert.match(sceneGuide, /不要复制、解释或写回/);
 assert.match(sceneGuide, /\[敌人预算\]/);
 assert.match(sceneGuide, /不要自行重算预算/);
+assert.match(sceneGuide, /同时含 `<CHARACTER_INIT_PENDING>`/);
 assert.match(sceneGuide, /名称各自唯一/);
 assert.match(sceneGuide, /主模型的敌人描述为唯一叙事依据/);
 assert.match(sceneGuide, /"effects"/);
@@ -196,6 +207,7 @@ assert.equal(mvuOverride.额外模型解析配置.世界书条目白名单正则
 assert.equal(Object.hasOwn(mvuOverride.额外模型解析配置, '兼容假流式'), false);
 assert.equal(Object.hasOwn(mvuOverride.额外模型解析配置, '模型来源'), false);
 assert.equal(entryConfig['首条消息变量更新'].extensions.scan_depth, 2);
+assert.deepEqual(entryConfig['首条消息变量更新'].keys, ['<CHARACTER_INIT_PENDING>']);
 assert.match(outputGuide, /直接输出自然、连贯的 Markdown 剧情正文/);
 assert.match(outputGuide, /不使用 `<Story>`、HTML、代码块或页面容器/);
 assert.match(outputGuide, /不使用 `<Story>`/);
@@ -240,6 +252,8 @@ assert.match(repairGuide, /保持剧情事实和 `status\/factions\/npcs` 不变
 assert.match(repairGuide, /禁止修改 `run\/run_result\/run_upgrade\/reward\/enemy`/);
 assert.match(repairGuide, /总 `quantity` 至少 10/);
 assert.match(repairGuide, /至少一个遗物、至少一个道具和玩家欲望满溢效果/);
+assert.match(repairGuide, /原楼层修复/);
+assert.match(repairGuide, /所有卡牌只能写入 `battle\.cards`/);
 assert.doesNotMatch(repairGuide, /spec\/op\/steps|"effect"\s*:/);
 
 const battleRepairGuide = sources.get('战斗场景修复');
@@ -298,6 +312,8 @@ assert.match(updateGuide, /`run_result` 只按“远征节点”规则/);
 assert.match(updateGuide, /长期世界连续性/);
 assert.match(updateGuide, /已有 NPC 使用原稳定 ID/);
 assert.match(updateGuide, /禁止用一份重新生成的完整对象重置未变化内容/);
+assert.match(updateGuide, /`<CONTENT_PENDING>`/);
+assert.match(updateGuide, /不能只更新时间和地点/);
 
 const locationGuide = sources.get('地点与NPC线路');
 assert.match(locationGuide, /0-2 名会持续登场的 NPC/);

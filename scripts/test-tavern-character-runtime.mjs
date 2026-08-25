@@ -29,11 +29,15 @@ let sharedRuntime;
 let readinessOptions;
 let chatMessageOptions;
 let beforeMessageUpdateListener;
+let variableUpdateEndedListener;
 const context = {
-  console: { info() {}, error() {} },
+  console: { info() {}, warn() {}, error() {} },
   window: {},
   Mvu: {
-    events: { BEFORE_MESSAGE_UPDATE: 'mag_before_message_update' },
+    events: {
+      BEFORE_MESSAGE_UPDATE: 'mag_before_message_update',
+      VARIABLE_UPDATE_ENDED: 'mag_variable_update_ended',
+    },
     getMvuData() {},
     replaceMvuData() {},
   },
@@ -59,6 +63,7 @@ const context = {
   },
   eventOn(eventName, listener) {
     if (eventName === 'mag_before_message_update') beforeMessageUpdateListener = listener;
+    if (eventName === 'mag_variable_update_ended') variableUpdateEndedListener = listener;
   },
   initializeGlobal(name, value) {
     sharedName = name;
@@ -82,6 +87,32 @@ assert.equal(readinessOptions.message_id, 7);
 assert.equal(sharedRuntime.getMessageText(7), '纯剧情正文');
 assert.equal(chatMessageOptions, 7);
 assert.equal(typeof beforeMessageUpdateListener, 'function');
+assert.equal(typeof variableUpdateEndedListener, 'function');
+
+const misplacedCardVariables = {
+  stat_data: {
+    battle: {
+      cards: [],
+      player_abilities: [
+        {
+          id: 'sword_slash',
+          name: '剑斩',
+          type: 'Attack',
+          rarity: 'Common',
+          cost: 1,
+          quantity: 5,
+          effects: { damage: 6 },
+        },
+        { id: 'battle_focus', name: '战斗专注', trigger: 'turn_start', effects: { block: 2 } },
+      ],
+    },
+  },
+};
+variableUpdateEndedListener(misplacedCardVariables);
+assert.equal(misplacedCardVariables.stat_data.battle.cards.length, 1);
+assert.equal(misplacedCardVariables.stat_data.battle.cards[0].id, 'sword_slash');
+assert.equal(misplacedCardVariables.stat_data.battle.player_abilities.length, 1);
+assert.equal(misplacedCardVariables.stat_data.battle.player_abilities[0].id, 'battle_focus');
 
 const pendingWithoutEnemy = {
   message_content: '敌人逼近。\n<BATTLE_PENDING>',
@@ -97,7 +128,20 @@ assert.equal(
 const pendingWithEnemy = {
   message_content: '雾影魔从喷泉中成形。\n<BATTLE_PENDING>',
   variables: {
-    stat_data: { battle: { enemy: { name: '雾影魔', actions: [{ name: '撕扯', effects: { damage: 8 } }] } } },
+    stat_data: {
+      battle: {
+        core: { hp: 80, max_hp: 80, lust: 0, max_lust: 100 },
+        cards: [
+          { id: 'strike', name: '斩击', type: 'Attack', rarity: 'Common', cost: 1, quantity: 5, effects: { damage: 6 } },
+          { id: 'guard', name: '防御', type: 'Skill', rarity: 'Common', cost: 1, quantity: 5, effects: { block: 5 } },
+        ],
+        artifacts: [{ id: 'stone', name: '护石', trigger: 'battle_start', effects: { block: 2 } }],
+        items: [{ id: 'tonic', name: '药剂', count: 1, effects: { heal: 5 } }],
+        player_lust_effect: { name: '满溢', effects: { damage: 5 } },
+        level: 1,
+        enemy: { name: '雾影魔', actions: [{ name: '撕扯', effects: { damage: 8 } }] },
+      },
+    },
   },
 };
 beforeMessageUpdateListener(pendingWithEnemy);
@@ -106,6 +150,13 @@ assert.equal(
   '雾影魔从喷泉中成形。\n\n<BATTLE_START>',
   'battle UI must activate only after the MVU update event exposes valid enemy data',
 );
+
+const directStart = {
+  message_content: '模型越权启动。\n<BATTLE_START>',
+  variables: pendingWithEnemy.variables,
+};
+beforeMessageUpdateListener(directStart);
+assert.equal(directStart.message_content, '模型越权启动。', 'AI-authored BATTLE_START must never bypass the runtime gate');
 
 function collectNodes(node, output = []) {
   output.push(node);

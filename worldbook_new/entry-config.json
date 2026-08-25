@@ -14,10 +14,25 @@
       "depth": 0
     }
   },
+  "卡牌常驻规范": {
+    "comment": "[mvu_update] 卡牌常驻规范",
+    "create": true,
+    "constant": true,
+    "selective": false,
+    "keys": [],
+    "use_regex": false,
+    "extensions": {
+      "group": "",
+      "group_override": false,
+      "prevent_recursion": true,
+      "exclude_recursion": true,
+      "depth": 0
+    }
+  },
   "首条消息变量更新": {
     "comment": "[mvu_update] 首条消息变量更新",
     "constant": false,
-    "keys": ["[开始游戏]"],
+    "keys": ["<CHARACTER_INIT_PENDING>"],
     "use_regex": true,
     "extensions": {
       "scan_depth": 2
@@ -51,7 +66,7 @@
   "战斗内容生成要求": {
     "comment": "[mvu_update] 战斗内容生成要求",
     "constant": false,
-    "keys": ["[开始游戏]", "[开始战斗]", "<BATTLE_PENDING>", "[战斗结算]", "[营火升级]", "[商店生成]", "[事件选择]", "[战斗内容修复]"],
+    "keys": ["<CHARACTER_INIT_PENDING>", "<CONTENT_PENDING>", "[开始战斗]", "<BATTLE_PENDING>", "[战斗结算]", "[营火升级]", "[商店生成]", "[事件选择]", "[战斗内容修复]"],
     "use_regex": true
   },
   "[initvar]不要启用": {

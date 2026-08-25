@@ -168,5 +168,26 @@ export function formatBattleContentIssues(issues: BattleContentIssue[], limit = 
 }
 
 export function formatBattleContentRepairPrompt(issues: readonly BattleContentIssue[], limit = 4): string {
-  return formatBoundedContentRepairPrompt('[战斗场景修复]', issues, limit);
+  const playerPrefixes = [
+    'battle.core',
+    'battle.cards',
+    'battle.artifacts',
+    'battle.items',
+    'battle.statuses',
+    'battle.player_abilities',
+    'battle.player_status_effects',
+    'battle.player_lust_effect',
+    'battle.level',
+    'battle.exp',
+  ];
+  const playerIssues = issues.filter(issue => playerPrefixes.some(prefix => issue.path.startsWith(prefix)));
+  const sceneIssues = issues.filter(issue => !playerIssues.includes(issue));
+  const prompts: string[] = [];
+  if (playerIssues.length > 0) {
+    prompts.push(formatBoundedContentRepairPrompt('[战斗内容修复]', playerIssues, limit));
+  }
+  if (sceneIssues.length > 0) {
+    prompts.push(formatBoundedContentRepairPrompt('[战斗场景修复]', sceneIssues, limit));
+  }
+  return prompts.filter(Boolean).join('\n');
 }
