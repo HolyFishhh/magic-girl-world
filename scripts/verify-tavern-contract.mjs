@@ -404,6 +404,12 @@ assert.ok(
   'patched card must gate the MUV import until its embedded worldbook is readable',
 );
 assert.ok(
+  patchedMvuScripts[0].content.includes("e.兼容假流式=true") &&
+    patchedMvuScripts[0].content.includes("e.模型来源='与插头相同'") &&
+    patchedMvuScripts[0].content.includes('魔法少女世界额外模型默认'),
+  'the card loader must apply the unsupported-by-character-override extra-model defaults once',
+);
+assert.ok(
   patchedMvuScripts[0].content.includes('globalThis[k]?.promise') &&
     patchedMvuScripts[0].content.includes("lastError:''") &&
     !patchedMvuScripts[0].content.includes('globalThis[k]=true'),

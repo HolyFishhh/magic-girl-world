@@ -13,6 +13,7 @@ import {
   SupernaturalIdentity,
 } from '../types';
 import {
+  ensureMvuRuntimeReady,
   isCurrentMessageLatest,
   rerenderHistoricalMessageForDepth,
   updateCurrentMessageVariablesWith,
@@ -428,17 +429,18 @@ export class CharacterCreator {
     this.setCreatingState(true);
 
     try {
+      // The first assistant reply is the only place where the initial MVU
+      // update can run. Wait until the chat-level MVU listener has been
+      // installed before creating the user message, otherwise MESSAGE_RECEIVED
+      // can be emitted while the dependency is still initializing.
+      await ensureMvuRuntimeReady({ mvuTimeoutMs: 30000, battleDataTimeoutMs: 30000 });
       const startMessage = createCharacterStartMessage(config);
-      try {
-        await updateCurrentMessageVariablesWith(variables => {
-          if (!variables.stat_data || typeof variables.stat_data !== 'object') variables.stat_data = {};
-          variables.stat_data.game_mode = config.mode;
-          variables.stat_data.run = null;
-          return variables;
-        });
-      } catch (error) {
-        console.warn('[MagicGirlWorld] 游戏模式暂未写入 MUV，将由首轮标记补充', error);
-      }
+      await updateCurrentMessageVariablesWith(variables => {
+        if (!variables.stat_data || typeof variables.stat_data !== 'object') variables.stat_data = {};
+        variables.stat_data.game_mode = config.mode;
+        variables.stat_data.run = null;
+        return variables;
+      });
       await this.continuationHost.continueWithPrompt({ prompt: startMessage });
       this.showMessage('角色已提交，正在生成开场剧情。', 'info');
     } catch (error) {
@@ -446,7 +448,9 @@ export class CharacterCreator {
       this.showMessage(
         error instanceof TavernContinuationError && error.messageSent
           ? '角色已提交，但生成请求失败，请在当前消息重试生成。'
-          : '创建角色失败，请重试。',
+          : error instanceof Error
+            ? error.message
+            : '创建角色失败，请重试。',
         'error',
       );
     } finally {

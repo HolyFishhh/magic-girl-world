@@ -18,7 +18,10 @@
     "comment": "[mvu_update] 首条消息变量更新",
     "constant": false,
     "keys": ["[开始游戏]"],
-    "use_regex": true
+    "use_regex": true,
+    "extensions": {
+      "scan_depth": 2
+    }
   },
   "变量更新规则": {
     "comment": "[mvu_update] 变量更新规则",

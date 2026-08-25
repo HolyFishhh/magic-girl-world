@@ -47,6 +47,13 @@ assert.ok(encode(message).length <= 75, 'the generated start handoff must stay w
 
 const creatorSource = await readFile(resolve('src/start/core/characterCreator.ts'), 'utf8');
 assert.match(creatorSource, /TavernContinuationHost\.getInstance\(\)/);
+assert.match(creatorSource, /ensureMvuRuntimeReady\(\{ mvuTimeoutMs: 30000, battleDataTimeoutMs: 30000 \}\)/);
+assert.match(
+  creatorSource,
+  /await ensureMvuRuntimeReady\(\{ mvuTimeoutMs: 30000, battleDataTimeoutMs: 30000 \}\);[\s\S]*await updateCurrentMessageVariablesWith/,
+  'the first generation must wait for the chat-level MVU listener before writing or sending the handoff',
+);
+assert.doesNotMatch(creatorSource, /游戏模式暂未写入 MUV/);
 assert.match(creatorSource, /continuationHost\.continueWithPrompt\(\{ prompt: startMessage \}\)/);
 assert.doesNotMatch(creatorSource, /triggerSlash\(`\/send|triggerSlash\('\/send/);
 

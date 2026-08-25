@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "0.5.92",
+  "version": "0.5.93",
   "artifacts": [
     {
       "name": "magic-girl-core.mjs",

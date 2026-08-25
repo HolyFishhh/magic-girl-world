@@ -87,10 +87,9 @@ function bindCustomActionControls() {
   if (__customActionBound) return;
   const inputEl = document.getElementById('custom-action-input') as HTMLInputElement | null;
   const sendBtn = document.getElementById('custom-action-send') as HTMLButtonElement | null;
-  const battleBtn = document.getElementById('custom-battle-send') as HTMLButtonElement | null;
-  if (!inputEl || !sendBtn || !battleBtn) return;
+  if (!inputEl || !sendBtn) return;
   __customActionBound = true;
-  const doSend = async (battle: boolean) => {
+  const doSend = async () => {
     const text = (inputEl.value || '').trim();
     if (!text) {
       if (typeof toastr !== 'undefined') toastr.info('请输入要发送的内容');
@@ -106,8 +105,7 @@ function bindCustomActionControls() {
     if (__IS_SENDING_ACTION) return;
 
     try {
-      if (battle) await handleBattleAction(text);
-      else await handleCustomAction(text);
+      await handleCustomAction(text);
     } catch (e) {
       console.error('自定义行动发送失败:', e);
       if (typeof toastr !== 'undefined') toastr.error('发送失败，请重试');
@@ -116,10 +114,9 @@ function bindCustomActionControls() {
       inputEl.focus();
     }
   };
-  sendBtn.onclick = () => void doSend(false);
-  battleBtn.onclick = () => void doSend(true);
+  sendBtn.onclick = () => void doSend();
   inputEl.addEventListener('keydown', e => {
-    if ((e as KeyboardEvent).key === 'Enter') void doSend(false);
+    if ((e as KeyboardEvent).key === 'Enter') void doSend();
   });
 }
 
@@ -1825,52 +1822,6 @@ function setSendingState(value: boolean) {
   __IS_SENDING_ACTION = value;
 }
 
-// 处理用户明确发起的战斗行动
-async function handleBattleAction(actionText: string) {
-  // 防止重复点击
-  if (__IS_SENDING_ACTION) return;
-
-  setSendingState(true);
-
-  // 禁用所有行动按钮
-  const allButtons = document.querySelectorAll('.option-btn, .battle-action-btn');
-  allButtons.forEach(btn => {
-    (btn as HTMLButtonElement).disabled = true;
-    btn.classList.add('disabled');
-  });
-
-  try {
-    // 构造战斗触发消息 - 激活战斗系统世界书，并附加奖励摘要
-    const activeRun = readRunState(__STAT__);
-    const battleTriggerMessage = formatActionPrompt({
-      actionText,
-      battle: true,
-      node: activeRun?.phase === 'in_node' ? activeRun.currentNode : null,
-      pending: pendingRunText(),
-      buildBudget: buildBudgetPrompt(currentBuildContext()),
-    });
-
-    await commonActionHost.continueWithPrompt({ prompt: battleTriggerMessage });
-
-  } catch (error) {
-    console.error('❌ 触发战斗失败:', error);
-    alert('触发战斗失败，请重试');
-
-    // 出错时重新启用按钮
-    setSendingState(false);
-    allButtons.forEach(btn => {
-      (btn as HTMLButtonElement).disabled = false;
-      btn.classList.remove('disabled');
-    });
-  } finally {
-    // 清空已使用的奖励摘要
-    __PENDING_REWARD_SUMMARY = null;
-    __PENDING_RUN_SUMMARY = null;
-    // 无论成功还是失败，都重置发送状态（成功后由页面刷新处理按钮状态）
-    setSendingState(false);
-  }
-}
-
 // 处理普通自定义行动
 async function handleCustomAction(actionText: string) {
   // 防止重复点击
@@ -1882,7 +1833,6 @@ async function handleCustomAction(actionText: string) {
   const allButtons = document.querySelectorAll('.option-btn, .battle-action-btn');
   const customInput = document.getElementById('custom-action-input') as HTMLInputElement;
   const customSendBtn = document.getElementById('custom-action-send') as HTMLButtonElement;
-  const customBattleBtn = document.getElementById('custom-battle-send') as HTMLButtonElement;
 
   allButtons.forEach(btn => {
     (btn as HTMLButtonElement).disabled = true;
@@ -1891,7 +1841,6 @@ async function handleCustomAction(actionText: string) {
 
   if (customInput) customInput.disabled = true;
   if (customSendBtn) customSendBtn.disabled = true;
-  if (customBattleBtn) customBattleBtn.disabled = true;
 
   try {
     // 将奖励摘要绑定到本次发送（若有）
@@ -1915,7 +1864,6 @@ async function handleCustomAction(actionText: string) {
     });
     if (customInput) customInput.disabled = false;
     if (customSendBtn) customSendBtn.disabled = false;
-    if (customBattleBtn) customBattleBtn.disabled = false;
   } finally {
     // 清空已使用的奖励摘要
     __PENDING_REWARD_SUMMARY = null;

@@ -30,7 +30,6 @@ const ids = nodes
 const requiredIds = [
   'custom-action-input',
   'custom-action-send',
-  'custom-battle-send',
   'choice-container',
   'choice-title',
   'run-section',
@@ -61,6 +60,8 @@ assert.equal((htmlSource.match(/\$1/g) || []).length, 0, 'story capture must not
 assert.equal((htmlSource.match(/\$2/g) || []).length, 0, 'options must not be transported through the iframe shell');
 assert.ok(nodes.some(node => classes(node).includes('mwg-statusbar')));
 assert.doesNotMatch(scriptSource, /THEME_STORAGE_KEY|data-theme|prefers-color-scheme/);
+assert.doesNotMatch(htmlSource, /custom-battle-send|按当前行动进入战斗/);
+assert.doesNotMatch(scriptSource, /handleBattleAction|battle:\s*true/);
 assert.doesNotMatch(styleSource, /\[data-theme='dark'\]|color-scheme:\s*dark/);
 assert.match(styleSource, /--surface:\s*#fffaf7/);
 assert.match(styleSource, /background-image:\s*repeating-linear-gradient/);
