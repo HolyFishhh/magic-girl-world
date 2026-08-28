@@ -10,7 +10,7 @@ const output = ts.transpileModule(source, {
 const contract = await import(`data:text/javascript;base64,${Buffer.from(output).toString('base64')}`);
 
 const battle = {
-  core: { hp: 80, max_hp: 80, lust: 0, max_lust: 100 },
+  core: { emoji: '🧙', hp: 80, max_hp: 80, lust: 0, max_lust: 100 },
   cards: [{ id: 'strike', quantity: 4 }],
   enemy: { name: 'Training Dummy', hp: 60, max_hp: 60, lust: 0, max_lust: 100 },
 };
@@ -42,7 +42,7 @@ assert.deepEqual(
   }),
   {
     ok: false,
-    issue: { code: 'INVALID_TYPE', path: 'battle.core.hp', message: '必须是有限数' },
+    issue: { code: 'INVALID_TYPE', path: 'battle.core.hp', message: '必须是最多两位小数的有限数值' },
   },
 );
 assert.deepEqual(
@@ -51,7 +51,7 @@ assert.deepEqual(
   }),
   {
     ok: false,
-    issue: { code: 'INVALID_TYPE', path: 'battle.enemy.max_hp', message: '必须是有限数' },
+    issue: { code: 'INVALID_TYPE', path: 'battle.enemy.max_hp', message: '必须是最多两位小数的有限数值' },
   },
 );
 assert.deepEqual(
@@ -60,8 +60,21 @@ assert.deepEqual(
   }),
   {
     ok: false,
-    issue: { code: 'INVALID_TYPE', path: 'battle.enemy.lust', message: '必须是有限数' },
+    issue: { code: 'INVALID_TYPE', path: 'battle.enemy.lust', message: '必须是最多两位小数的有限数值' },
   },
+);
+assert.equal(
+  contract.inspectBattleDataContract({
+    stat_data: { battle: { ...battle, enemy: { ...battle.enemy, hp: 46.2 } } },
+  }).ok,
+  true,
+);
+assert.equal(
+  contract.inspectBattleDataContract({
+    stat_data: { battle: { ...battle, enemy: { ...battle.enemy, hp: 46.237 } } },
+  }).ok,
+  false,
+  'runtime battle state accepts at most two decimal places',
 );
 assert.deepEqual(
   contract.inspectBattleDataContract({

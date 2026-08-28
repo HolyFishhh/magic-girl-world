@@ -20,7 +20,7 @@ assert.throws(() => core.createBattleRandomState(-1));
 let run = core.createRunState({ seed: 777 });
 run = core.enterRunNode(run, run.choices[0].id);
 const battle = {
-  core: { hp: 63, max_hp: 80, lust: 12, max_lust: 100 },
+  core: { emoji: '🧙', hp: 63, max_hp: 80, lust: 12, max_lust: 100 },
   level: 3,
   cards: [
     {

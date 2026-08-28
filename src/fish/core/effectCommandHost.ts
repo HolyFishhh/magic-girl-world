@@ -26,7 +26,14 @@ export interface TavernEffectCommandHostPorts {
   removeStatuses(targetType: 'player' | 'enemy', selection: string): Promise<void>;
   registerAbility(
     targetType: 'player' | 'enemy',
-    definition: { trigger: string; effectProgram: EffectProgram },
+    definition: {
+      trigger: string;
+      effectProgram: EffectProgram;
+      name?: string;
+      emoji?: string;
+      description?: string;
+      source?: string;
+    },
   ): Promise<void>;
   narrate(text: string): Promise<void>;
 }

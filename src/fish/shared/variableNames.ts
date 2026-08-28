@@ -10,7 +10,7 @@ export const variableDisplayMap: { [key: string]: string } = {
   hp: '生命值',
   lust: '欲望值',
   energy: '当前能量',
-  spent_energy: '本次支付能量',
+  spent_energy: '使用能量',
   block: '格挡',
   draw: '抽牌数',
   discard: '弃牌数',

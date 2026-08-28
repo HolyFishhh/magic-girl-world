@@ -20,6 +20,17 @@
   }
 }
 
+@keyframes mwgDamageFloat {
+  0% { opacity: 0; transform: translate(0, 8px) scale(0.72); }
+  22% { opacity: 1; transform: translate(calc(var(--damage-drift-x, 0px) * 0.35), -10px) scale(1.08); }
+  100% { opacity: 0; transform: translate(var(--damage-drift-x, 0px), -54px) scale(0.92); }
+}
+
+.physics-damage-active {
+  animation: mwgDamageFloat 900ms cubic-bezier(0.2, 0.8, 0.25, 1) both;
+  will-change: transform, opacity;
+}
+
 @keyframes slideInUp {
   from {
     transform: translateY(100%);
@@ -177,6 +188,153 @@
 }
 
 // 遗物动画
+@keyframes relicTriggerPulse {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: none;
+  }
+  45% {
+    transform: scale(1.08);
+    box-shadow: 0 0 14px rgba(196, 154, 58, 0.65);
+  }
+}
+
+@keyframes epic-glow {
+  from { box-shadow: 0 7px 16px rgba(220, 38, 38, 0.4); }
+  to { box-shadow: 0 8px 24px rgba(220, 38, 38, 0.76), 0 0 18px rgba(220, 38, 38, 0.35); }
+}
+
+@keyframes legendary-glow {
+  from { box-shadow: 0 8px 18px rgba(245, 158, 11, 0.38); }
+  to { box-shadow: 0 10px 28px rgba(245, 158, 11, 0.7), 0 0 20px rgba(251, 191, 36, 0.32); }
+}
+
+@keyframes corrupt-pulse {
+  0%, 100% { box-shadow: 0 7px 18px rgba(139, 0, 0, 0.52); }
+  50% { box-shadow: 0 9px 28px rgba(185, 0, 24, 0.82), inset 0 0 16px rgba(0, 0, 0, 0.65); }
+}
+
+@keyframes stageActorLunge {
+  0%,
+  100% {
+    transform: translateX(0) scale(1);
+  }
+  45% {
+    transform: translateX(6px) scale(1.08);
+  }
+}
+
+.stage-enemy .stage-emoji.stage-acting {
+  animation: stageActorLunge 430ms ease reverse;
+}
+
+.stage-player .stage-emoji.stage-acting {
+  animation: stageActorLunge 430ms ease;
+}
+
+@keyframes stageActorChannel {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+    filter: drop-shadow(0 7px 7px rgba(52, 35, 70, 0.3));
+  }
+  48% {
+    transform: translateY(-3px) scale(1.08);
+    filter: drop-shadow(0 0 13px rgba(166, 76, 114, 0.55));
+  }
+}
+
+.stage-emoji.stage-channeling {
+  animation: stageActorChannel 760ms ease-in-out;
+}
+
+
+@keyframes stageAttackToken {
+  0% { opacity: 0; transform: translate(0, 0) scale(0.72); }
+  18% { opacity: 1; transform: translate(0, 0) scale(1); }
+  66% { opacity: 1; transform: translate(var(--stage-dx), var(--stage-dy)) scale(1.2) rotate(var(--stage-rotation)); }
+  82% { opacity: 0.9; transform: translate(var(--stage-dx), var(--stage-dy)) scale(0.84) rotate(var(--stage-rotation)); }
+  100% { opacity: 0; transform: translate(0, 0) scale(0.62); }
+}
+
+@keyframes stageSkillToken {
+  0% { opacity: 0; transform: translate(0, 0) scale(0.4) rotate(-18deg); filter: hue-rotate(0deg); }
+  42% { opacity: 1; transform: translate(var(--stage-dx), var(--stage-dy)) scale(1.35) rotate(12deg); filter: drop-shadow(0 0 12px #60a5fa); }
+  100% { opacity: 0; transform: translate(var(--stage-dx), var(--stage-dy)) scale(1.8) rotate(28deg); filter: drop-shadow(0 0 18px #93c5fd); }
+}
+
+@keyframes stagePowerToken {
+  0% { opacity: 0; transform: translate(0, 12px) scale(0.45); }
+  48% { opacity: 1; transform: translate(var(--stage-dx), calc(var(--stage-dy) - 12px)) scale(1.45); filter: drop-shadow(0 0 14px #c084fc); }
+  100% { opacity: 0; transform: translate(var(--stage-dx), calc(var(--stage-dy) - 24px)) scale(2); filter: drop-shadow(0 0 21px #a855f7); }
+}
+
+@keyframes stageCurseToken {
+  0% { opacity: 0; transform: translate(0, 0) scale(1.15) rotate(0deg); }
+  55% { opacity: 1; transform: translate(var(--stage-dx), var(--stage-dy)) scale(1) rotate(210deg); filter: drop-shadow(0 0 13px #6b21a8); }
+  100% { opacity: 0; transform: translate(var(--stage-dx), calc(var(--stage-dy) + 10px)) scale(0.2) rotate(420deg); filter: drop-shadow(0 0 18px #111827); }
+}
+
+@keyframes stageAuraToken {
+  0% {
+    opacity: 0;
+    transform: translateY(14px) scale(0.52);
+  }
+  34% {
+    opacity: 1;
+    transform: translateY(-4px) scale(1.08);
+  }
+  72% {
+    opacity: 0.92;
+    transform: translateY(var(--stage-dy)) scale(1.2);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(calc(var(--stage-dy) - 12px)) scale(1.38);
+  }
+}
+
+.stage-action-token.is-running.action-attack,
+.stage-action-token.is-running.action-enemy {
+  animation: stageAttackToken 500ms cubic-bezier(0.16, 0.72, 0.22, 1) both;
+}
+
+.stage-action-token.is-running.action-skill,
+.stage-action-token.is-running.action-event,
+.stage-action-token.is-running.action-relic {
+  animation: stageSkillToken 470ms ease-out both;
+}
+
+.stage-action-token.is-running.action-power {
+  animation: stagePowerToken 500ms ease-out both;
+}
+
+.stage-action-token.is-running.action-curse {
+  animation: stageCurseToken 500ms ease-in both;
+}
+
+/* Non-attack actions bloom directly on their resolved target. This rule is
+ * intentionally after the type animations so self/enemy buffs never fly
+ * across the stage or delay rapid card play. */
+.stage-action-token.is-running.stage-aura {
+  animation: stageAuraToken 800ms ease-out both;
+}
+
+.stage-action-token.is-running.stage-aura.action-skill,
+.stage-action-token.is-running.stage-aura.action-event,
+.stage-action-token.is-running.stage-aura.action-relic {
+  filter: drop-shadow(0 0 12px rgba(96, 165, 250, 0.7));
+}
+
+.stage-action-token.is-running.stage-aura.action-power {
+  filter: drop-shadow(0 0 14px rgba(168, 85, 247, 0.72));
+}
+
+.stage-action-token.is-running.stage-aura.action-curse {
+  filter: drop-shadow(0 0 14px rgba(88, 28, 135, 0.78));
+}
+
 .relic-activated {
   animation: glow 1s ease-in-out;
 }

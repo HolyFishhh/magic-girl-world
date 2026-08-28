@@ -1,7 +1,13 @@
-import { allocateRuntimeId, selectEnemyAction } from '../../game-core';
+import {
+  allocateRuntimeId,
+  normalizeChinesePlayerDescription,
+  roundBattleValue,
+  selectEnemyAction,
+  summarizeEffectProgram,
+} from '../../game-core';
 import type { Card, EffectProgram, Enemy, EnemyIntent, Relic } from '../../game-core';
 import { normalizeRuntimeStatusDefinition } from '../../game-core';
-import { flattenMvuArray } from '../../runtime/mvuArrays';
+import { flattenMvuArray, normalizeMvuStatusDefinitions } from '../../runtime/mvuArrays';
 import {
   normalizeAbilityDefinition,
   normalizeActiveStatus,
@@ -11,7 +17,6 @@ import {
   normalizeNamedEffectDefinition,
   normalizeRelicDefinition,
 } from './battleContentAdapter';
-import { summarizeEffectProgram } from '../ui/effectProgramDisplay';
 
 export function normalizeMvuArray<T extends Record<string, any> = Record<string, any>>(value: unknown): T[] {
   return flattenMvuArray<T>(value, { objectsOnly: true });
@@ -24,7 +29,7 @@ export interface MvuStatusDisplayContext {
 
 /** Resolve status labels before descriptions so cross-status references always use visible names. */
 export function buildMvuStatusDisplayContext(mvuStatuses: unknown): MvuStatusDisplayContext {
-  const statuses = normalizeMvuArray(mvuStatuses);
+  const statuses = normalizeMvuStatusDefinitions(mvuStatuses);
   const statusNames = Object.fromEntries(
     statuses
       .filter(status => typeof status.id === 'string' && typeof status.name === 'string' && status.name.trim())
@@ -165,7 +170,7 @@ export function convertMvuEnemy(
   const actionConfig = source.action_config || {};
   const selection = selectEnemyAction({ ...source, actions, actionMode, actionConfig }, random);
   const preview = selection.action as import('../../game-core').EnemyAction | null;
-  const lustEffect = normalizeNamedEffectDefinition(source.lust_effect, options) || {
+  const lustEffect = normalizeNamedEffectDefinition(source.lust_effect, { ...options, fallbackName: '欲望爆发' }) || {
     name: '欲望爆发',
     description: '敌人欲望达到上限时，对玩家造成额外伤害',
     effectProgram: {
@@ -178,10 +183,10 @@ export function convertMvuEnemy(
     id: source.name,
     name: source.name,
     emoji: source.emoji || '👹',
-    maxHp: source.max_hp ?? 100,
-    currentHp: source.hp ?? source.max_hp ?? 100,
-    maxLust: source.max_lust ?? 100,
-    currentLust: source.lust ?? 0,
+    maxHp: Math.max(1, roundBattleValue(source.max_hp ?? 100)),
+    currentHp: Math.max(0, roundBattleValue(source.hp ?? source.max_hp ?? 100)),
+    maxLust: Math.max(1, roundBattleValue(source.max_lust ?? 100)),
+    currentLust: Math.max(0, roundBattleValue(source.lust ?? 0)),
     energy: 0,
     maxEnergy: 0,
     block: 0,
@@ -192,7 +197,7 @@ export function convertMvuEnemy(
     actions: actions as any,
     nextAction: preview ? ({ ...preview } as any) : null,
     abilities: convertMvuAbilities(source.abilities, options) as any,
-    dialogue: source.description || '',
+    dialogue: normalizeChinesePlayerDescription(source.description),
     lustEffect,
     actionMode,
     actionConfig,

@@ -90,7 +90,9 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
       chunkFilename: `${script_filepath.name}.[contenthash].chunk.js`,
       asyncChunks: true,
       chunkLoading: 'import',
-      clean: true,
+      // `src/common/update` has its own compiler/output directory nested under
+      // `src/common`. Preserve it when the parent compiler cleans concurrently.
+      clean: entry.script === 'src/common/index.ts' ? { keep: /^update\// } : true,
       publicPath: '',
       library: {
         type: 'module',

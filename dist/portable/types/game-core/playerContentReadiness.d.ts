@@ -11,6 +11,7 @@ export interface PlayerContentReadiness {
     deck: DeckPlayabilityAssessment;
 }
 export interface InitialPlayerStateInput {
+    emoji: unknown;
     hp: unknown;
     maxHp: unknown;
     lust: unknown;

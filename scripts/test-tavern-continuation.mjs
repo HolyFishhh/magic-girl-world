@@ -231,13 +231,35 @@ async function captureBattleEndPrompt(route) {
   return dialog.battleSummary;
 }
 
-assert.match(
-  await captureBattleEndPrompt(null),
-  /\[战斗后续\] ordinary\n\[战斗结算\]\n\[剧情模型要求\].*不得叙述尚未发生的胜利奖励。玩家会通过自定义行动继续剧情。$/,
+for (const prompt of [await captureBattleEndPrompt(null), await captureBattleEndPrompt({ nodeId: 'node-1' })]) {
+  assert.match(prompt, /^请根据以下战斗日志/);
+  assert.doesNotMatch(prompt, /\[战斗后续\]|\[战斗结算\]|\[战败惩罚\]|\[剧情模型要求\]/);
+}
+
+const continuationBox = { value: clone(initialVariables) };
+const continuationPromptCalls = [];
+let continuationDialog = null;
+const continuationInputHost = new TavernBattleEndHost(
+  new TavernContinuationHost(
+    continuationPorts({
+      createChatMessages: async messages => continuationPromptCalls.push(messages[0].message),
+    }),
+  ),
+  battlePorts(continuationBox, [], { getState: () => presentationState(null) }),
+  {
+    hasBattleEndDialog: () => false,
+    showBattleEndDialog: request => {
+      continuationDialog = request;
+    },
+    addLog: () => undefined,
+  },
 );
+await continuationInputHost.presentBattleEnd('defeat');
+await continuationDialog.onConfirm('先检查敌人遗留的武器，再安抚受伤的同伴。');
+assert.equal(continuationPromptCalls.length, 1);
 assert.match(
-  await captureBattleEndPrompt({ nodeId: 'node-1' }),
-  /\[战斗后续\] run\n\[战斗结算\]\n\[剧情模型要求\].*不得叙述尚未发生的胜利奖励。远征路线由程序继续。$/,
+  continuationPromptCalls[0],
+  /【玩家指定的战后行动】先检查敌人遗留的武器，再安抚受伤的同伴。/,
 );
 
 console.log('All Tavern continuations preserve exact prompts and battle-exit transaction semantics.');

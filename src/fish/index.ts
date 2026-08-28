@@ -44,6 +44,8 @@ class FishRPGCoordinator {
   private battleRepairHost: TavernBattleRepairHost;
   private shellPresenter: TavernBattleShellPresenter;
   private refreshTimer: any = null;
+  private readonly disposeStateListeners: Array<() => void> = [];
+  private destroyed = false;
 
   constructor() {
     // 初始化所有模块
@@ -177,6 +179,7 @@ class FishRPGCoordinator {
       }
       this.refreshTimer = setTimeout(async () => {
         this.refreshTimer = null;
+        if (this.destroyed) return;
         try {
           await this.refreshUI();
         } catch (e) {
@@ -206,9 +209,11 @@ class FishRPGCoordinator {
     ];
 
     eventsToRefresh.forEach(evt => {
-      gsm.addEventListener(evt, () => {
-        scheduleRefresh();
-      });
+      this.disposeStateListeners.push(
+        gsm.addEventListener(evt, () => {
+          scheduleRefresh();
+        }),
+      );
     });
   }
 
@@ -278,10 +283,11 @@ class FishRPGCoordinator {
    */
   private async refreshUI(): Promise<void> {
     try {
+      if (this.destroyed) return;
+      // Sync persistent MVU additions before taking the render snapshot.
+      this.gameStateManager.syncNewCardsFromMVU();
       const gameState = this.gameStateManager.getGameState();
       if (gameState) {
-        // 将本轮新增的 MUV 卡牌增量同步到抽牌堆。
-        this.gameStateManager.syncNewCardsFromMVU();
         await this.shellPresenter.refresh(gameState);
       } else {
         console.warn('⚠️ 没有游戏状态数据');
@@ -398,7 +404,17 @@ class FishRPGCoordinator {
   private canMutateCurrentMessage(): boolean {
     return this.shellPresenter.canMutateCurrentMessage();
   }
+
+  public destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    if (this.refreshTimer) clearTimeout(this.refreshTimer);
+    this.refreshTimer = null;
+    for (const dispose of this.disposeStateListeners.splice(0)) dispose();
+    this.shellPresenter.destroy();
+  }
 }
 
 const coordinator = new FishRPGCoordinator();
 void coordinator.initialize();
+window.addEventListener('pagehide', () => coordinator.destroy(), { once: true });

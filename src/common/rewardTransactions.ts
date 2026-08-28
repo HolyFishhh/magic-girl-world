@@ -1,10 +1,11 @@
 import {
+  readRewardCandidateQuantity,
   validateRewardCandidateAgainstLibrary,
   type RewardCandidateValidationResult,
 } from '../game-core/rewardCandidateValidation';
 import { planRewardSelections } from '../game-core/rewardSettlement';
 import type { RewardCategory, RewardSelections } from '../game-core/rewardSelection';
-import { flattenMvuArray } from '../runtime/mvuArrays';
+import { flattenMvuArray, normalizeMvuStatusDefinitions } from '../runtime/mvuArrays';
 
 export type { RewardCategory, RewardSelections } from '../game-core/rewardSelection';
 
@@ -96,7 +97,7 @@ export function inspectRewardCandidates(statRoot: unknown): RewardCandidateInspe
     artifacts: normalizeMvuList<Record<string, any>>(battle.artifacts),
     items: normalizeMvuList<Record<string, any>>(battle.items),
   };
-  const statusDefinitions = normalizeMvuList<Record<string, any>>(battle.statuses);
+  const statusDefinitions = normalizeMvuStatusDefinitions(battle.statuses);
 
   return {
     cards: candidates.cards.map(candidate =>
@@ -135,7 +136,8 @@ function appendReward(target: any[], value: Record<string, any>, category: Rewar
   const copy = clonePlainValue(value);
   delete copy.status;
   if (category === 'cards') {
-    const quantity = rewardQuantity(copy, category);
+    const quantity = readRewardCandidateQuantity(category, copy);
+    if (quantity === null) throw new Error(`奖励 ${rewardName(copy)} 的数量无效`);
     const existing = findByIdentity(target, copy);
     if (existing) {
       existing.quantity = rewardQuantity(existing, category) + quantity;
@@ -147,7 +149,8 @@ function appendReward(target: any[], value: Record<string, any>, category: Rewar
   }
 
   if (category === 'items') {
-    const count = rewardQuantity(copy, category);
+    const count = readRewardCandidateQuantity(category, copy);
+    if (count === null) throw new Error(`奖励 ${rewardName(copy)} 的数量无效`);
     const existing = findByIdentity(target, copy);
     if (existing) {
       existing.count = rewardQuantity(existing, category) + count;
@@ -176,7 +179,7 @@ export function applyRewardSelectionsToStat(
     artifacts: normalizeMvuList<Record<string, any>>(reward.artifact),
     items: normalizeMvuList<Record<string, any>>(reward.item),
   };
-  const statusDefinitions = normalizeMvuList<Record<string, any>>(battle.statuses);
+  const statusDefinitions = normalizeMvuStatusDefinitions(battle.statuses);
   const validationLibraries: Record<RewardCategory, Record<string, any>[]> = {
     cards: normalizeMvuList<Record<string, any>>(battle.cards).map(clonePlainValue),
     artifacts: normalizeMvuList<Record<string, any>>(battle.artifacts).map(clonePlainValue),

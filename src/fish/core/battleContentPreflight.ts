@@ -29,24 +29,40 @@ function isRecord(value: unknown): value is Record<string, any> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function validateEntityNumbers(
-  source: Record<string, any>,
-  path: string,
-  issues: BattleContentIssue[],
-): void {
+function hasAuthoredBattlePrecision(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && Math.abs(value * 10 - Math.round(value * 10)) < 1e-7;
+}
+
+function validateEntityNumbers(source: Record<string, any>, path: string, issues: BattleContentIssue[]): void {
   const hp = source.hp;
   const maxHp = source.max_hp;
   const lust = source.lust;
   const maxLust = source.max_lust;
-  if (typeof maxHp !== 'number' || !Number.isFinite(maxHp) || maxHp <= 0) {
-    issues.push({ path: `${path}.max_hp`, code: 'INVALID_MAX_HP', message: '最大生命必须是大于 0 的有限数' });
-  } else if (typeof hp !== 'number' || !Number.isFinite(hp) || hp < 0 || hp > maxHp) {
-    issues.push({ path: `${path}.hp`, code: 'INVALID_HP', message: `当前生命必须在 0..${maxHp} 内` });
+  if (!hasAuthoredBattlePrecision(maxHp) || maxHp <= 0) {
+    issues.push({
+      path: `${path}.max_hp`,
+      code: 'INVALID_MAX_HP',
+      message: '最大生命必须是大于 0、最多一位小数的数值',
+    });
+  } else if (!hasAuthoredBattlePrecision(hp) || hp < 0 || hp > maxHp) {
+    issues.push({
+      path: `${path}.hp`,
+      code: 'INVALID_HP',
+      message: `当前生命必须是 0..${maxHp} 内、最多一位小数的数值`,
+    });
   }
-  if (typeof maxLust !== 'number' || !Number.isFinite(maxLust) || maxLust <= 0) {
-    issues.push({ path: `${path}.max_lust`, code: 'INVALID_MAX_LUST', message: '最大欲望必须是大于 0 的有限数' });
-  } else if (typeof lust !== 'number' || !Number.isFinite(lust) || lust < 0 || lust > maxLust) {
-    issues.push({ path: `${path}.lust`, code: 'INVALID_LUST', message: `当前欲望必须在 0..${maxLust} 内` });
+  if (!hasAuthoredBattlePrecision(maxLust) || maxLust <= 0) {
+    issues.push({
+      path: `${path}.max_lust`,
+      code: 'INVALID_MAX_LUST',
+      message: '最大欲望必须是大于 0、最多一位小数的数值',
+    });
+  } else if (!hasAuthoredBattlePrecision(lust) || lust < 0 || lust > maxLust) {
+    issues.push({
+      path: `${path}.lust`,
+      code: 'INVALID_LUST',
+      message: `当前欲望必须是 0..${maxLust} 内、最多一位小数的数值`,
+    });
   }
 }
 
@@ -76,16 +92,25 @@ function collectDescriptionWarnings(battle: Record<string, any>, warnings: Battl
   if (enemy?.lust_effect) {
     addDescriptionWarnings(warnings, enemy.lust_effect, 'battle.enemy.lust_effect');
   }
-  if (battle.player_lust_effect) addDescriptionWarnings(warnings, battle.player_lust_effect, 'battle.player_lust_effect');
+  if (battle.player_lust_effect)
+    addDescriptionWarnings(warnings, battle.player_lust_effect, 'battle.player_lust_effect');
 }
 
 function validateEnemyActionConfig(enemy: Record<string, any>, issues: BattleContentIssue[]): void {
   const mode = String(enemy.action_mode || 'random');
   if (!ENEMY_ACTION_MODES.has(mode)) {
-    issues.push({ path: 'battle.enemy.action_mode', code: 'INVALID_ACTION_MODE', message: `不支持的行动模式: ${mode}` });
+    issues.push({
+      path: 'battle.enemy.action_mode',
+      code: 'INVALID_ACTION_MODE',
+      message: `不支持的行动模式: ${mode}`,
+    });
     return;
   }
-  const names = new Set(normalizeMvuArray(enemy.actions).map(action => String(action.name || '')).filter(Boolean));
+  const names = new Set(
+    normalizeMvuArray(enemy.actions)
+      .map(action => String(action.name || ''))
+      .filter(Boolean),
+  );
   const root = enemy.action_config || {};
   if (!isRecord(root)) {
     issues.push({ path: 'battle.enemy.action_config', code: 'INVALID_ACTION_CONFIG', message: '行动配置必须是对象' });
@@ -94,11 +119,19 @@ function validateEnemyActionConfig(enemy: Record<string, any>, issues: BattleCon
   const config = isRecord(root[mode]) ? root[mode] : root;
   if (mode === 'sequence' || mode === 'sequence_then_probability') {
     if (!Array.isArray(config.sequence) || config.sequence.length === 0) {
-      issues.push({ path: 'battle.enemy.action_config.sequence', code: 'INVALID_SEQUENCE', message: '序列模式必须提供非空 sequence' });
+      issues.push({
+        path: 'battle.enemy.action_config.sequence',
+        code: 'INVALID_SEQUENCE',
+        message: '序列模式必须提供非空 sequence',
+      });
     } else {
       config.sequence.forEach((name: unknown, index: number) => {
         if (typeof name !== 'string' || !names.has(name)) {
-          issues.push({ path: `battle.enemy.action_config.sequence[${index}]`, code: 'UNKNOWN_ACTION', message: '序列引用了不存在的行动' });
+          issues.push({
+            path: `battle.enemy.action_config.sequence[${index}]`,
+            code: 'UNKNOWN_ACTION',
+            message: '序列引用了不存在的行动',
+          });
         }
       });
     }
@@ -106,11 +139,19 @@ function validateEnemyActionConfig(enemy: Record<string, any>, issues: BattleCon
   if (mode === 'probability' || mode === 'sequence_then_probability') {
     const probability = isRecord(config.probability) ? config.probability : mode === 'probability' ? config : null;
     if (!probability) {
-      issues.push({ path: 'battle.enemy.action_config.probability', code: 'INVALID_PROBABILITY', message: '概率模式必须提供 probability 对象' });
+      issues.push({
+        path: 'battle.enemy.action_config.probability',
+        code: 'INVALID_PROBABILITY',
+        message: '概率模式必须提供 probability 对象',
+      });
     } else {
       for (const [name, weight] of Object.entries(probability)) {
         if (!names.has(name) || typeof weight !== 'number' || !Number.isFinite(weight) || weight <= 0) {
-          issues.push({ path: `battle.enemy.action_config.probability.${name}`, code: 'INVALID_PROBABILITY', message: '行动概率必须引用现有行动并使用正数权重' });
+          issues.push({
+            path: `battle.enemy.action_config.probability.${name}`,
+            code: 'INVALID_PROBABILITY',
+            message: '行动概率必须引用现有行动并使用正数权重',
+          });
         }
       }
     }
@@ -125,17 +166,26 @@ function addPlayabilityWarnings(battle: Record<string, any>, warnings: BattleCon
     analysis: analyzeContentDefinition(card),
   }));
   const assessment = assessDeckPlayability(cards);
-  if (assessment.deckQuantity < 8) warnings.push({ path: 'battle.cards', code: 'SMALL_DECK', message: `牌组总数量仅 ${assessment.deckQuantity}，可能频繁循环或无法稳定展开` });
-  if (!assessment.hasPlayableCard) warnings.push({ path: 'battle.cards', code: 'NO_PLAYABLE_CARD', message: '没有能在基础 3 能量下打出的非诅咒牌' });
-  if (!assessment.hasVictoryPressure) warnings.push({ path: 'battle.cards', code: 'NO_VICTORY_PRESSURE', message: '未发现直接生命/欲望伤害或 Event，战斗可能无法结束' });
-  if (!assessment.hasDefenseOrRecovery) warnings.push({ path: 'battle.cards', code: 'NO_DEFENSE', message: '未发现直接格挡或治疗，构筑容错较低' });
+  if (!assessment.hasPlayableCard)
+    warnings.push({ path: 'battle.cards', code: 'NO_PLAYABLE_CARD', message: '没有能在基础 3 能量下打出的非诅咒牌' });
+  if (!assessment.hasVictoryPressure)
+    warnings.push({
+      path: 'battle.cards',
+      code: 'NO_VICTORY_PRESSURE',
+      message: '未发现直接生命/欲望伤害或 Event，战斗可能无法结束',
+    });
 
   const enemyActions = normalizeMvuArray(battle.enemy?.actions);
   const enemyHasPressure = enemyActions.some(action => {
     const analysis: ContentAnalysis = analyzeContentDefinition(action);
     return hasContentMetric(analysis, 'attack');
   });
-  if (!enemyHasPressure) warnings.push({ path: 'battle.enemy.actions', code: 'NO_ENEMY_PRESSURE', message: '敌人没有直接生命/欲望压力，可能形成无风险无限战斗' });
+  if (!enemyHasPressure)
+    warnings.push({
+      path: 'battle.enemy.actions',
+      code: 'NO_ENEMY_PRESSURE',
+      message: '敌人没有直接生命/欲望压力，可能形成无风险无限战斗',
+    });
 }
 
 /** Validate the strict shallow-JSON contract before a battle mutates MUV state. */
@@ -152,6 +202,10 @@ export function preflightBattleContent(battleData: unknown): BattleContentPrefli
     contract.issues.forEach(issue => issues.push({ ...issue, path: contentPathToBattlePath(issue.path) }));
   }
   validateEntityNumbers(isRecord(battleData.core) ? battleData.core : {}, 'battle.core', issues);
+  const playerEmoji = isRecord(battleData.core) ? battleData.core.emoji : undefined;
+  if (typeof playerEmoji !== 'string' || !playerEmoji.trim()) {
+    issues.push({ path: 'battle.core.emoji', code: 'MISSING_PLAYER_EMOJI', message: '玩家战斗形象不能为空' });
+  }
   if (isRecord(battleData.enemy)) {
     validateEntityNumbers(battleData.enemy, 'battle.enemy', issues);
     validateEnemyActionConfig(battleData.enemy, issues);
@@ -167,7 +221,7 @@ export function formatBattleContentIssues(issues: BattleContentIssue[], limit = 
   return shown.join('；');
 }
 
-export function formatBattleContentRepairPrompt(issues: readonly BattleContentIssue[], limit = 4): string {
+export function formatBattleContentRepairPrompt(issues: readonly BattleContentIssue[], limit = 8): string {
   const playerPrefixes = [
     'battle.core',
     'battle.cards',

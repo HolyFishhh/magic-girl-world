@@ -4,6 +4,8 @@ import {
   resolvePassiveModifierOperations,
   resolvePendingBattleEnd,
   resolveStatusHoldModifierOperations,
+  roundBattleDisplayValue,
+  roundBattleValue,
   roundModifierBreakdown,
   type BattleEffectCommand,
   type BattleEffectRuntimeEvent,
@@ -53,6 +55,7 @@ export class UnifiedEffectExecutor {
   private _cardSystem?: CardSystem;
   private executionContext: ModernEffectExecutionContext & { sourceIsPlayer: boolean } = { sourceIsPlayer: false };
   private pendingDeaths = new Set<'player' | 'enemy'>();
+  private readonly activeLustOverflows = new Set<'player' | 'enemy'>();
 
   private constructor() {
     this.relicTriggerHost.configureExecutionPorts({
@@ -76,13 +79,28 @@ export class UnifiedEffectExecutor {
       executeBattleCommand: (command, sourceIsPlayer) => this.executeModernBattleCommand(command, sourceIsPlayer),
       applyStatus: (target, status, stacks) => this.triggerHost.applyStatus(target, status, stacks),
       removeStatuses: (target, selection) => this.triggerHost.removeStatuses(target, selection),
-      registerAbility: (target, definition) => this.triggerHost.registerAbility(target, definition),
+      registerAbility: (target, definition) => {
+        const card = this.executionContext.cardContext;
+        const relic = this.executionContext.relicContext;
+        const status = this.executionContext.statusContext;
+        const ability = this.executionContext.abilityContext;
+        const intent = this.executionContext.battleContext?.intent;
+        const sourceValue = card || relic || status || ability || intent;
+        const sourceName = sourceValue?.name || sourceValue?.id;
+        const sourceKind = card ? '卡牌' : relic ? '遗物' : status ? '状态' : ability ? '能力' : intent ? '敌方行动' : '战斗效果';
+        return this.triggerHost.registerAbility(target, {
+          ...definition,
+          ...(sourceName ? { name: sourceName, source: `${sourceKind}「${sourceName}」` } : { source: sourceKind }),
+          ...(sourceValue?.emoji ? { emoji: sourceValue.emoji } : {}),
+          ...(sourceValue?.description ? { description: sourceValue.description } : {}),
+        });
+      },
       narrate: text => this.triggerNarrative(text),
     });
     this.triggerHost = new TavernBattleTriggerHost({
       executeProgram: (program, sourceIsPlayer, context) => this.executeEffectProgram(program, sourceIsPlayer, context),
       runRelic: (trigger, context) => this.relicTriggerHost.triggerRelics(trigger, { ...context }),
-      addLog: (message, type = 'info') => this.presentation.addLog(message, type),
+      addLog: (message, type = 'info', source) => this.presentation.addLog(message, type, source),
       logStatusEffect: (targetName, statusName, stacks, duration, isApply) =>
         this.presentation.logStatusEffect(targetName, statusName, stacks, duration, isApply),
     });
@@ -127,18 +145,19 @@ export class UnifiedEffectExecutor {
     );
   }
 
-  public getModifierBreakdown(entity: Player | Enemy, modifier: string): { add: number; mul: number } {
+  public getModifierBreakdown(target: BattleEntityType, modifier: string): { add: number; mul: number } {
     const result = { add: 0, mul: 1 };
-    for (const source of this.getDeclarativeModifierOperations(this.resolveEntityType(entity), modifier)) {
+    for (const source of this.getDeclarativeModifierOperations(target, modifier)) {
       addModifierOperation(result, source.operation);
     }
-    const direct = entity.modifiers?.[modifier];
+    const entity = this.getEntity(target);
+    const direct = entity?.modifiers?.[modifier];
     if (typeof direct === 'number' && direct !== 0) result.add += direct;
     return roundModifierBreakdown(result);
   }
 
-  public analyzeModifierFromStatusEffects(entity: Player | Enemy, modifier: string): { add: number; mul: number } {
-    return this.getModifierBreakdown(entity, modifier);
+  public analyzeModifierFromStatusEffects(target: BattleEntityType, modifier: string): { add: number; mul: number } {
+    return this.getModifierBreakdown(target, modifier);
   }
 
   public async processStatusEffectsAtTurnEnd(target: 'player' | 'enemy'): Promise<void> {
@@ -188,7 +207,7 @@ export class UnifiedEffectExecutor {
     if (event.type === 'direct_modifier_changed') {
       if (Math.abs(event.nextValue - event.previousValue) >= 1) {
         this.presentation.addLog(
-          `${event.target === 'player' ? '我方' : '对方'}的${this.getAttributeDisplayName(event.modifier)}: ${event.previousValue} ${event.operation.operator} ${event.operation.value} = ${event.nextValue}`,
+          `${event.target === 'player' ? '我方' : '敌方'}的${this.getAttributeDisplayName(event.modifier)}: ${event.previousValue} ${event.operation.operator} ${event.operation.value} = ${event.nextValue}`,
           'info',
         );
       }
@@ -197,7 +216,7 @@ export class UnifiedEffectExecutor {
     if (event.type === 'attribute_changed') {
       const entity = this.getEntity(event.target);
       if (!entity) return;
-      const change = event.nextValue - event.previousValue;
+      const change = roundBattleValue(event.nextValue - event.previousValue);
       if (event.attribute === 'hp' && change !== 0) {
         this.presentation.showHealthChange(event.target, change, event.nextValue, entity.maxHp);
       } else if (event.attribute === 'lust') {
@@ -207,7 +226,12 @@ export class UnifiedEffectExecutor {
       }
       return;
     }
-    this.logAttributeChange(event.target, event.attribute, event.nextValue - event.previousValue, event.nextValue);
+    this.logAttributeChange(
+      event.target,
+      event.attribute,
+      roundBattleValue(event.nextValue - event.previousValue),
+      event.nextValue,
+    );
   }
 
   private getDeclarativeModifierOperations(
@@ -262,18 +286,32 @@ export class UnifiedEffectExecutor {
     if (target === 'player') {
       const effect = this.gameStateManager.getEnemy()?.lustEffect;
       if (!effect) return;
-      this.presentation.logLustOverflow('玩家', effect.name);
-      this.presentation.showLustOverflow('player', effect);
-      await this.executeEffectProgram(effect.effectProgram, false);
-      this.gameStateManager.updatePlayer({ currentLust: 0 });
+      if (this.activeLustOverflows.has(target)) return;
+      this.activeLustOverflows.add(target);
+      try {
+        this.presentation.logLustOverflow('玩家', effect.name);
+        this.presentation.showLustOverflow('player', effect);
+        await this.executeEffectProgram(effect.effectProgram, false);
+      } finally {
+        // 欲望效果本身仍可能包含欲望变化。保持本次溢出锁直到整段效果
+        // 结束，避免它在归零前递归触发自身并卡死酒馆页面。
+        this.gameStateManager.updatePlayer({ currentLust: 0 });
+        this.activeLustOverflows.delete(target);
+      }
       return;
     }
     const effect = this.gameStateManager.getGameState().battle?.player_lust_effect;
     if (!effect?.effectProgram) return;
-    this.presentation.logLustOverflow('敌人', effect.name || '榨精支配');
-    this.presentation.showLustOverflow('enemy', effect);
-    await this.executeEffectProgram(effect.effectProgram, true);
-    this.gameStateManager.updateEnemy({ currentLust: 0 });
+    if (this.activeLustOverflows.has(target)) return;
+    this.activeLustOverflows.add(target);
+    try {
+      this.presentation.logLustOverflow('敌人', effect.name || '榨精支配');
+      this.presentation.showLustOverflow('enemy', effect);
+      await this.executeEffectProgram(effect.effectProgram, true);
+    } finally {
+      this.gameStateManager.updateEnemy({ currentLust: 0 });
+      this.activeLustOverflows.delete(target);
+    }
   }
 
   private createCoreEffectState(sourceIsPlayer: boolean): CoreEffectState {
@@ -331,10 +369,6 @@ export class UnifiedEffectExecutor {
     return target === 'player' ? this.gameStateManager.getPlayer() : this.gameStateManager.getEnemy();
   }
 
-  private resolveEntityType(entity: Player | Enemy): BattleEntityType {
-    return entity === this.gameStateManager.getPlayer() ? 'player' : 'enemy';
-  }
-
   private getEffectSourceInfo(): { entityName: string; sourceName: string; logSource?: any } | null {
     const entityName = this.executionContext.sourceIsPlayer ? '玩家' : '敌人';
     if (this.executionContext.statusContext) {
@@ -367,7 +401,7 @@ export class UnifiedEffectExecutor {
     const prefix = source && source.logSource?.type !== 'status' ? `${source.sourceName}-` : '';
     const direction = change > 0 ? '增加' : '减少';
     this.presentation.addLog(
-      `${prefix}${target === 'player' ? '玩家' : '敌人'}的${this.getAttributeDisplayName(attribute)}${direction}${Math.abs(change)}点，当前${nextValue}`,
+      `${prefix}${target === 'player' ? '玩家' : '敌人'}的${this.getAttributeDisplayName(attribute)}${direction}${roundBattleDisplayValue(Math.abs(change))}点，当前${roundBattleDisplayValue(nextValue)}`,
       'info',
       source?.logSource,
     );

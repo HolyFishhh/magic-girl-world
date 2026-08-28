@@ -110,6 +110,36 @@ assert.deepEqual(
   'one malformed AI candidate must not make valid siblings unavailable',
 );
 
+const zeroQuantityReward = {
+  battle: { core: {}, cards: [], artifacts: [], items: [], statuses: [] },
+  reward: {
+    card: [
+      {
+        id: 'fresh_strike',
+        name: '新生斩',
+        type: 'Attack',
+        rarity: 'Common',
+        cost: 1,
+        quantity: 0,
+        effects: { damage: 6 },
+      },
+    ],
+    artifact: [],
+    item: [],
+    limits: { cards: 1 },
+  },
+};
+assert.equal(
+  rewards.inspectRewardCandidates(zeroQuantityReward).cards[0].ok,
+  true,
+  'an AI reward quantity of zero means one unclaimed card candidate',
+);
+assert.deepEqual(
+  rewards.applyRewardSelectionsToStat(zeroQuantityReward, { cards: [0], artifacts: [], items: [] }),
+  { cards: ['新生斩'], artifacts: [], items: [] },
+);
+assert.equal(zeroQuantityReward.battle.cards[0].quantity, 1);
+
 const missingStatusReward = {
   battle: { core: {}, cards: [], artifacts: [], items: [], statuses: [] },
   reward: {
@@ -482,5 +512,66 @@ const noAllowance = { core: { card_removal_count: 0 }, cards: [{ id: 'guard', na
 const noAllowanceBefore = structuredClone(noAllowance);
 assert.throws(() => rewards.removeOneCardFromBattleDeck(noAllowance, 'guard'), /次数不足/);
 assert.deepEqual(noAllowance, noAllowanceBefore);
+
+const directStatusPowerRewards = {
+  battle: { core: {}, cards: [], artifacts: [], items: [], statuses: [bundledStatus] },
+  reward: {
+    card: [
+      {
+        id: 'ember_stance',
+        name: '余烬架势',
+        type: 'Power',
+        rarity: 'Uncommon',
+        cost: 1,
+        quantity: 1,
+        effects: { apply_status: 'ember_mark', stacks: 2 },
+      },
+      {
+        id: 'invalid_power_strike',
+        name: '错误能力打击',
+        type: 'Power',
+        rarity: 'Uncommon',
+        cost: 1,
+        quantity: 1,
+        effects: { damage: 8 },
+      },
+    ],
+    artifact: [],
+    item: [],
+  },
+};
+const directStatusPowerInspections = rewards.inspectRewardCandidates(directStatusPowerRewards).cards;
+assert.equal(directStatusPowerInspections[0].ok, true, 'a Power may directly apply one registered persistent status');
+assert.equal(directStatusPowerInspections[1].ok, false, 'a triggerless Power must not execute immediate damage');
+
+const structuredTriggerRewards = {
+  battle: { core: {}, cards: [], artifacts: [], items: [], statuses: [bundledStatus] },
+  reward: {
+    card: [
+      {
+        id: 'structured_power',
+        name: '结构化能力',
+        type: 'Power',
+        rarity: 'Uncommon',
+        cost: 1,
+        quantity: 1,
+        effects: { block: 4 },
+        trigger: { on: 'deal_damage', effects: { apply_status: 'ember_mark', stacks: 1, to: 'opponent' } },
+      },
+    ],
+    artifact: [
+      {
+        id: 'structured_relic',
+        name: '结构化遗物',
+        rarity: 'Common',
+        trigger: { on: 'passive', effects: { modify: 'block', add: 1 } },
+      },
+    ],
+    item: [],
+  },
+};
+const structuredTriggerInspections = rewards.inspectRewardCandidates(structuredTriggerRewards);
+assert.equal(structuredTriggerInspections.cards[0].ok, true);
+assert.equal(structuredTriggerInspections.artifacts[0].ok, true);
 
 console.log('Atomic reward selection, stack merging, skipping, and single-card removal passed.');

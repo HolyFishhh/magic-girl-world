@@ -12,7 +12,7 @@ const { formatBattleContentRepairPrompt, preflightBattleContent } = require(
 );
 
 const invalidBattle = {
-  core: { hp: 50, max_hp: 50, lust: 0, max_lust: 100 },
+  core: { emoji: '🧙', hp: 50, max_hp: 50, lust: 0, max_lust: 100 },
   cards: [
     { id: 'strike', name: '斩击', type: 'Attack', rarity: 'Common', cost: 1, quantity: 5, effects: { damage: 7 } },
     { id: 'guard', name: '防御', type: 'Skill', rarity: 'Common', cost: 1, quantity: 5, effects: { block: 6 } },
@@ -45,6 +45,16 @@ assert.match(prompt, /^\[战斗场景修复\]\n问题=battle\.enemy/);
 assert.doesNotMatch(prompt, /泄漏名称|损坏敌人|unknown/);
 assert.ok(prompt.length < 300);
 
+const completeRepairPrompt = formatBattleContentRepairPrompt(
+  Array.from({ length: 6 }, (_value, index) => ({
+    path: `battle.cards[${index}].effects.discard`,
+    code: 'INVALID_EXPRESSION',
+    message: 'hidden detail',
+  })),
+);
+assert.match(completeRepairPrompt, /battle\.cards\[5\]\.effects\.discard\(INVALID_EXPRESSION\)/);
+assert.doesNotMatch(completeRepairPrompt, /hidden detail/);
+
 const [fishSource, fishHtml, gameStateSource, repairHostSource, shellPresenterSource] = await Promise.all([
   readFile(resolve('src/fish/index.ts'), 'utf8'),
   readFile(resolve('src/fish/index.html'), 'utf8'),
@@ -56,7 +66,9 @@ assert.match(fishHtml, /id="battle-content-repair"/);
 assert.match(fishSource, /formatBoundedContentIssueSummary\(loadIssues\)/);
 assert.match(fishSource, /battleRepairHost\.requestRepair\(issues\)/);
 assert.match(repairHostSource, /formatBattleContentRepairPrompt\(issues\)/);
-assert.match(repairHostSource, /retryCurrentMessageWithExtraModel\(prompt\)/);
+assert.match(repairHostSource, /retryCurrentMessageWithExtraModel\(prompt,\s*\{/);
+assert.match(repairHostSource, /validateVariables:/);
+assert.match(repairHostSource, /preflightBattleContent\(variables\?\.stat_data\?\.battle\)/);
 assert.doesNotMatch(repairHostSource, /TavernContinuationHost|continueWithPrompt/);
 assert.doesNotMatch(repairHostSource, /triggerSlash\(`\/send|triggerSlash\('\/send/);
 assert.match(repairHostSource, /assertCurrentMessageLatest\(\)/);
@@ -76,6 +88,25 @@ const misplacedPreflight = preflightBattleContent(misplacedCards);
 const misplacedPrompt = formatBattleContentRepairPrompt(misplacedPreflight.issues);
 assert.match(misplacedPrompt, /^\[战斗内容修复\]/);
 assert.match(misplacedPrompt, /\[战斗场景修复\]/);
+
+const sharedMissingStatus = structuredClone(invalidBattle);
+sharedMissingStatus.artifacts = [
+  { id: 'stone', name: '护石', rarity: 'Common', trigger: 'battle_start', effects: { block: 2 } },
+];
+sharedMissingStatus.items = [{ id: 'tonic', name: '药剂', count: 1, effects: { heal: 8 } }];
+sharedMissingStatus.player_lust_effect = {
+  name: '玩家满溢效果',
+  effects: { damage: 8, apply_status: 'missing_shared_status' },
+};
+sharedMissingStatus.enemy.actions = [
+  { name: '状态攻击', weight: 1, effects: { damage: 7, apply_status: 'missing_shared_status' } },
+];
+sharedMissingStatus.enemy.action_mode = 'random';
+sharedMissingStatus.enemy.action_config = {};
+const sharedMissingStatusPreflight = preflightBattleContent(sharedMissingStatus);
+const sharedMissingStatusPrompt = formatBattleContentRepairPrompt(sharedMissingStatusPreflight.issues);
+assert.match(sharedMissingStatusPrompt, /^\[战斗内容修复\]/);
+assert.match(sharedMissingStatusPrompt, /\[战斗场景修复\]/);
 
 const realFixtureSource = await readFile(resolve('scripts/test-real-tavern-battle-repair.mjs'), 'utf8');
 assert.match(realFixtureSource, /effects: \{ damage: 3, hits: 3 \}/);

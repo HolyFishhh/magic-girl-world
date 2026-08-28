@@ -1,3 +1,5 @@
+import { roundBattleValue } from './battleMath';
+
 export interface BattleOutcomeVitals {
   hp: number;
   lust: number;
@@ -15,7 +17,7 @@ export function settleBattleOutcomeVitals(
   const maxHp = Math.max(1, finiteOr(core.max_hp, 1));
   const maxLust = Math.max(1, finiteOr(core.max_lust, 1));
   return {
-    hp: Math.min(maxHp, Math.max(0, finiteOr(player.currentHp, 0))),
-    lust: Math.min(maxLust, Math.max(0, finiteOr(player.currentLust, 0))),
+    hp: roundBattleValue(Math.min(maxHp, Math.max(0, finiteOr(player.currentHp, 0)))),
+    lust: roundBattleValue(Math.min(maxLust, Math.max(0, finiteOr(player.currentLust, 0)))),
   };
 }

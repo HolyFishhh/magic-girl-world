@@ -1,5 +1,6 @@
 import {
   createBattleResult,
+  recommendBattleRewardBudget,
   settleBattleOutcomeVitals,
   type BattleEndResult,
   type BattleRequest,
@@ -13,6 +14,7 @@ export interface TavernBattleSettlementInput {
   player: { currentHp: number; currentLust: number };
   items?: ReadonlyArray<{ id: string; count: number }>;
   turns: number;
+  rewardRequest?: Record<string, unknown> | null;
 }
 
 function syncItemCounts(value: unknown, itemCounts: ReadonlyMap<string, number>): void {
@@ -35,6 +37,11 @@ function settleBattleRoot(
     const vitals = result?.player || settleBattleOutcomeVitals(input.player, core);
     core.hp = vitals.hp;
     core.lust = vitals.lust;
+  }
+  if (input.result === 'victory' && input.request) {
+    const experience = recommendBattleRewardBudget(input.request.route || null).experience;
+    const currentExperience = Number(battleRoot.exp);
+    battleRoot.exp = (Number.isInteger(currentExperience) && currentExperience >= 0 ? currentExperience : 0) + experience;
   }
   battleRoot.player_abilities = [];
   battleRoot.player_status_effects = [];
@@ -83,6 +90,10 @@ export function settleTavernBattleVariables(
       battleResult?.outcome || input.result,
       battleResult?.route?.nodeId,
     );
+    const reward = variables.stat_data.reward;
+    if (reward && typeof reward === 'object' && !Array.isArray(reward)) {
+      reward.request = input.rewardRequest ?? null;
+    }
   }
 
   const roots = [variables.stat_data?.battle].filter(

@@ -11,6 +11,7 @@ const viewSources = {
   start: 'dist/src/start/index.html',
   common: 'dist/src/common/index.html',
   fish: 'dist/src/fish/index.html',
+  update: 'dist/src/common/update/index.html',
 };
 
 function textContent(node) {

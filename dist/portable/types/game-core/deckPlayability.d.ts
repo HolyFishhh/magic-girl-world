@@ -14,7 +14,6 @@ export interface DeckPlayabilityAssessment {
     deckQuantity: number;
     hasPlayableCard: boolean;
     hasVictoryPressure: boolean;
-    hasDefenseOrRecovery: boolean;
 }
 /** Assess minimum deck properties without reading a host runtime or simulating combat. */
 export declare function assessDeckPlayability(cards: readonly DeckPlayabilityCard[], options?: DeckPlayabilityOptions): DeckPlayabilityAssessment;

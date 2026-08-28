@@ -28,7 +28,8 @@ assert.equal(math.clampBattleAttribute('hp', 90, { maxHp: 80 }), 80);
 assert.equal(math.clampBattleAttribute('lust', 120, { maxLust: 100 }), 100);
 assert.equal(math.clampBattleAttribute('block', -1), 0);
 assert.equal(math.clampBattleAttribute('max_energy', 0), 1);
-assert.equal(math.roundBattleValue(4.26), 4.3);
+assert.equal(math.roundBattleValue(4.266), 4.27);
+assert.equal(math.roundBattleValue(4.6), 4.6);
 
 assert.deepEqual(math.absorbDamageWithBlock(8, 6), {
   damage: 2,
@@ -43,8 +44,8 @@ assert.deepEqual(math.absorbDamageWithBlock(4, 9), {
 
 assert.equal(math.evaluateBattleMathExpression('2 + 3 * 4'), 14);
 assert.equal(math.evaluateBattleMathExpression('(2 + 3) * 4'), 20);
-assert.equal(math.evaluateBattleMathExpression('10 / 4'), 2, 'dynamic effect math keeps the existing floor behavior');
-assert.equal(math.evaluateBattleMathExpression('-(2 + 1.5)'), -4);
+assert.equal(math.evaluateBattleMathExpression('10 / 4'), 2.5, 'runtime settlement keeps up to two decimal places');
+assert.equal(math.evaluateBattleMathExpression('-(2 + 1.5)'), -3.5);
 assert.throws(() => math.evaluateBattleMathExpression('1 / 0'), /Division by zero/);
 assert.throws(() => math.evaluateBattleMathExpression('globalThis.alert(1)'), /Invalid number|Unexpected token/);
 assert.throws(() => math.evaluateBattleMathExpression('2 ** 3'), /Invalid number/);

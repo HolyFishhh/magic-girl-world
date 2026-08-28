@@ -31,7 +31,7 @@ if (!avatarUrl.endsWith('.png')) {
 
 function baseBattle() {
   return {
-    core: { hp: 80, max_hp: 80, lust: 0, max_lust: 100, card_removal_count: 1 },
+    core: { emoji: '', hp: 80, max_hp: 80, lust: 0, max_lust: 100, card_removal_count: 1 },
     cards: [],
     artifacts: [],
     items: [],
@@ -79,6 +79,7 @@ function createBattle(scenarioName) {
     return battle;
   }
 
+  battle.core.emoji = '🧙';
   battle.cards = [
     { id: 'strike', name: '星辉斩击', type: 'Attack', rarity: 'Common', cost: 1, quantity: 5, effects: { damage: 7 } },
     { id: 'guard', name: '月幕防御', type: 'Skill', rarity: 'Common', cost: 1, quantity: 5, effects: { block: 6 } },
@@ -114,6 +115,7 @@ function createStatData(battle) {
 
 function readinessFor(battle) {
   return core.assessInitialPlayerContent(createContentPackFromMvuBattle(battle), {
+    emoji: battle.core.emoji,
     hp: battle.core.hp,
     maxHp: battle.core.max_hp,
     lust: battle.core.lust,

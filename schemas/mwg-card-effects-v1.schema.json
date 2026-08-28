@@ -4,9 +4,12 @@
   "title": "Magic Girl World Compact Card Effects v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["effects"],
+  "anyOf": [
+    { "required": ["effects"] },
+    { "required": ["trigger"] }
+  ],
   "properties": {
-    "trigger": { "$ref": "#/$defs/trigger" },
+    "trigger": { "$ref": "#/$defs/triggerInput" },
     "creates": {
       "type": "array",
       "maxItems": 32,
@@ -19,7 +22,7 @@
   "$defs": {
     "formula": {
       "oneOf": [
-        { "type": "number" },
+        { "type": "number", "multipleOf": 0.1 },
         {
           "type": "string",
           "minLength": 1,
@@ -67,6 +70,20 @@
         "enemy_lose_debuff",
         "gain_block",
         "lose_block"
+      ]
+    },
+    "triggerInput": {
+      "oneOf": [
+        { "$ref": "#/$defs/trigger" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["on", "effects"],
+          "properties": {
+            "on": { "$ref": "#/$defs/trigger" },
+            "effects": { "$ref": "#/$defs/effectList" }
+          }
+        }
       ]
     },
     "amountEffect": {
@@ -329,7 +346,11 @@
     "cardTemplate": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "name", "effects"],
+      "required": ["id", "name"],
+      "anyOf": [
+        { "required": ["effects"] },
+        { "required": ["trigger"] }
+      ],
       "properties": {
         "id": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
         "name": { "type": "string", "minLength": 1 },
@@ -344,7 +365,7 @@
         "discard_effects": {
           "$ref": "#/$defs/effectList"
         },
-        "trigger": { "$ref": "#/$defs/trigger" },
+        "trigger": { "$ref": "#/$defs/triggerInput" },
         "retain": { "type": "boolean" },
         "exhaust": { "type": "boolean" },
         "ethereal": { "type": "boolean" }

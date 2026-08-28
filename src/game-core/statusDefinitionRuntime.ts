@@ -1,6 +1,6 @@
 import { STATUS_TRIGGERS, type StatusTrigger } from './battleTriggers';
 import { compileCompactEffectList } from './compactEffectDsl';
-import { describeCompactStatus } from './contentDescription';
+import { describeCompactStatus, normalizeChinesePlayerDescription } from './contentDescription';
 import type { EffectProgram } from './effectDsl';
 import { validateCompactStatusDefinition } from './statusDefinitionValidation';
 
@@ -63,7 +63,7 @@ export function normalizeRuntimeStatusDefinition(
   const triggers: RuntimeStatusDefinition['triggers'] = {};
   for (const trigger of STATUS_TRIGGERS) {
     if (!(trigger in rawTriggers)) continue;
-    const compiled = compileCompactEffectList(rawTriggers[trigger]);
+    const compiled = compileCompactEffectList(rawTriggers[trigger], { implicitTarget: 'self' });
     if (!compiled.ok) return null;
     triggers[trigger] = [compiled.value];
   }
@@ -73,7 +73,7 @@ export function normalizeRuntimeStatusDefinition(
   const rawMaxStacks = value.maxStacks;
   const maxStacks = rawMaxStacks === undefined ? undefined : Number(rawMaxStacks);
   if (maxStacks !== undefined && (!Number.isInteger(maxStacks) || maxStacks < 1 || maxStacks > 999)) return null;
-  const description = readRequiredString(value, 'description') || describeCompactStatus(value, options);
+  const description = normalizeChinesePlayerDescription(value.description) || describeCompactStatus(value, options);
   if (!description) return null;
 
   return {

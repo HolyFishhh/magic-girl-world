@@ -21,6 +21,10 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+function hasBattlePrecision(value: unknown): value is number {
+  return isFiniteNumber(value) && Math.abs(value * 100 - Math.round(value * 100)) < 1e-7;
+}
+
 /**
  * Resolve and validate the canonical battle input accepted from MUV.
  */
@@ -53,9 +57,12 @@ export function inspectBattleDataContract(variables: unknown): BattleDataContrac
 
   const core = data.core;
   if (!isRecord(core)) return failure('INVALID_TYPE', 'battle.core', '必须是对象');
+  if (typeof core.emoji !== 'string' || core.emoji.trim() === '') {
+    return failure('MISSING_VALUE', 'battle.core.emoji', '必须设置玩家战斗形象');
+  }
   for (const field of ['hp', 'max_hp', 'lust', 'max_lust'] as const) {
-    if (!isFiniteNumber(core[field])) {
-      return failure('INVALID_TYPE', `battle.core.${field}`, '必须是有限数');
+    if (!hasBattlePrecision(core[field])) {
+      return failure('INVALID_TYPE', `battle.core.${field}`, '必须是最多两位小数的有限数值');
     }
   }
 
@@ -65,8 +72,8 @@ export function inspectBattleDataContract(variables: unknown): BattleDataContrac
     return failure('MISSING_VALUE', 'battle.enemy.name', '名称不能为空');
   }
   for (const field of ['hp', 'max_hp', 'lust', 'max_lust'] as const) {
-    if (!isFiniteNumber(enemy[field])) {
-      return failure('INVALID_TYPE', `battle.enemy.${field}`, '必须是有限数');
+    if (!hasBattlePrecision(enemy[field])) {
+      return failure('INVALID_TYPE', `battle.enemy.${field}`, '必须是最多两位小数的有限数值');
     }
   }
   if (!Array.isArray(data.cards)) return failure('INVALID_TYPE', 'battle.cards', '必须是数组');

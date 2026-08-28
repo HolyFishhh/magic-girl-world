@@ -37,7 +37,7 @@ const variables = {
     battle: {
       core: { hp: 20, max_hp: 20, lust: 0, max_lust: 100, card_removal_count: 0 },
       level: 1,
-      exp: 90,
+      exp: 225,
       cards: [starter],
       artifacts: [],
       items: [{ id: 'potion', name: '药剂', count: 2, effects: { heal: 5 } }],
@@ -83,9 +83,9 @@ const prompt = core.formatBattleEndPrompt({
     discardPileCount: 10,
   },
   turns: 3,
-  rewardBudget: '[奖励预算] cards=3/1 rarity=Common exp=160',
+  rewardBudget: '[奖励预算] cards=3/1 rarity=Common',
 });
-assert.match(prompt.promptedBattleSummary, /\[战斗后续\] ordinary/);
+assert.doesNotMatch(prompt.promptedBattleSummary, /\[战斗后续\]|\[战斗结算\]|\[奖励预算\]/);
 
 settleTavernBattleVariables(variables, {
   result: 'victory',
@@ -101,11 +101,11 @@ assert.equal(variables.stat_data.battle.enemy.name, '');
 assert.deepEqual(variables.stat_data.battle.player_abilities, []);
 assert.deepEqual(variables.stat_data.battle.player_status_effects, []);
 
-// This is the canonical state produced by the post-battle MVU update pass.
-variables.stat_data.battle.exp += 160;
+// Experience was already settled by the battle runtime; MVU only creates candidates.
 variables.stat_data.reward.card = [rewardCard];
 variables.stat_data.reward.limits = { cards: 1 };
-assert.match(prompt.promptedBattleSummary, /只输出战后剧情正文/);
+assert.match(prompt.promptedBattleSummary, /^请根据以下战斗日志，生成后续的剧情/);
+assert.doesNotMatch(prompt.promptedBattleSummary, /\[战斗后续\]|\[战斗结算\]|\[奖励预算\]|\[剧情模型要求\]/);
 assert.doesNotMatch(prompt.promptedBattleSummary, /<Options>|<Option>/);
 assert.equal(rewards.hasSelectableRewards(variables.stat_data), true, 'rewards temporarily gate custom actions');
 

@@ -7,9 +7,21 @@ export declare const COMPACT_EFFECT_META_KEY_SET: Set<string>;
 export declare const COMPACT_EFFECT_BUNDLE_OPERATIONS: readonly ["damage", "heal", "block", "energy", "lust", "apply_status", "remove_status", "draw"];
 export type CompactEffectBundleOperation = (typeof COMPACT_EFFECT_BUNDLE_OPERATIONS)[number];
 export declare const COMPACT_EFFECT_BUNDLE_OPERATION_SET: Set<string>;
+/**
+ * One auxiliary card-zone operation may accompany a common shallow bundle.
+ * Its position is deterministic (after common operations), so the adapter can
+ * split the object internally without guessing author intent.
+ */
+export declare const COMPACT_EFFECT_SAFE_AUXILIARY_BUNDLE_OPERATION_SET: Set<string>;
 /** AI may omit the array wrapper when a card has exactly one shallow effect. */
 export declare function normalizeCompactEffectEntries(value: unknown): unknown[] | null;
 export declare function isCompactEffectList(value: unknown): boolean;
+/**
+ * Tolerate the common compact-model shape `{ name?, damage, ... }` at the runtime boundary.
+ * The authored contract remains `{ name, effects }`; this only prevents a valid shallow
+ * effect from making a battle unplayable before the repair pass can canonicalize it.
+ */
+export declare function normalizeCompactNamedEffectInput(value: unknown, fallbackName: string): unknown;
 export declare function compactEffectOperationKeys(value: Readonly<Record<string, unknown>>): string[];
 export declare function sortCompactBundleOperations(operations: readonly string[]): string[];
 export declare function compactOperationMetaKeys(operation: string): readonly string[];

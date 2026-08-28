@@ -1,307 +1,313 @@
 /**
- * 卡牌出牌模式管理 - 支持点击和拖动两种模式
+ * Unified card interaction: drag and two-click play are always available.
  */
 
 import { BattleUI } from './battleUI';
+import {
+  resolveCardClickAction,
+  resolveCardDropAction,
+  restoreDraggedElementToSlot,
+  type CardDragSlot,
+  type CardDropAction,
+} from './cardPlayInteraction';
 
 export class CardPlayMode {
   private static instance: CardPlayMode;
-  private playMode: 'click' | 'drag' = 'click';
   private selectedCard: JQuery | null = null;
   private draggedCard: JQuery | null = null;
-  private cardGhost: JQuery | null = null;
+  private dragTooltip: JQuery | null = null;
+  private dragSlot: CardDragSlot | null = null;
   private dragPointerId: number | null = null;
   private dragOrigin: { x: number; y: number } | null = null;
+  private lastPointer: { x: number; y: number } | null = null;
+  private pendingPointer: { x: number; y: number } | null = null;
+  private dragFrame: number | null = null;
+  private playAreaRect: DOMRect | null = null;
   private pointerDragActive = false;
-  private justEndedDrag: boolean = false; // 标记刚结束拖动，防止立即hover
+  private justEndedDrag = false;
   private initialized = false;
-  private readonly STORAGE_KEY = 'fishRPG_cardPlayMode_v2';
 
-  private constructor() {
-    // 不在构造函数中初始化，等待 DOM 准备好
-  }
+  private constructor() {}
 
   public static getInstance(): CardPlayMode {
-    if (!CardPlayMode.instance) {
-      CardPlayMode.instance = new CardPlayMode();
-    }
+    if (!CardPlayMode.instance) CardPlayMode.instance = new CardPlayMode();
     return CardPlayMode.instance;
   }
 
-  /**
-   * 公开的初始化方法，应该在 DOM 准备好后调用
-   */
   public init(): void {
-    if (this.initialized) {
+    if (this.initialized) return;
+    document.documentElement.classList.add('card-play-unified');
+    $(document)
+      .off('.mwgPointerCardPlay')
+      .on('pointermove.mwgPointerCardPlay', event => this.handlePointerMove(event as JQuery.Event))
+      .on('pointerup.mwgPointerCardPlay pointercancel.mwgPointerCardPlay', event =>
+        this.handlePointerEnd(event as JQuery.Event),
+      )
+      .on('click.mwgPointerCardPlay', event => {
+        if ($(event.target).closest('.enhanced-card').length === 0) this.clearSelection();
+      });
+    this.initialized = true;
+  }
+
+  private clearSelection(): void {
+    if (!this.selectedCard) return;
+    this.selectedCard.removeClass('selected').removeAttr('aria-pressed');
+    this.selectedCard = null;
+  }
+
+  private selectCard(card: JQuery): void {
+    this.clearSelection();
+    this.selectedCard = card;
+    card.addClass('selected').attr('aria-pressed', 'true');
+    const cardData = card.data('cardData');
+    if (cardData) BattleUI.showCardTooltip(card, cardData);
+  }
+
+  private requestPlay(card: JQuery): void {
+    if (!card.hasClass('clickable') || card.data('playPending')) return;
+    this.clearSelection();
+    card
+      .data('playPending', true)
+      .removeClass('clickable selected')
+      .addClass('card-playing')
+      .attr('aria-disabled', 'true');
+    card.trigger('mwg:play-card');
+  }
+
+  private handleCardClick(event: JQuery.Event, card: JQuery): void {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!card.hasClass('clickable') || card.data('suppressPlayClick') || card.data('justEndedDrag')) return;
+    if (resolveCardClickAction(this.selectedCard?.get(0), card.get(0)) === 'play') {
+      this.requestPlay(card);
       return;
     }
-
-    // 从 localStorage 读取用户设置，如果没有则根据设备类型自动选择
-    const savedMode = this.loadModeFromStorage();
-    if (savedMode) {
-      this.playMode = savedMode;
-    } else {
-      // 根据设备类型自动选择模式
-      if (this.isMobileDevice()) {
-        this.playMode = 'click';
-      } else {
-        this.playMode = 'drag';
-      }
-      // 保存到本地存储
-      this.saveModeToStorage(this.playMode);
-    }
-
-    // 等待 DOM 元素准备好
-    setTimeout(() => {
-      this.updateModeUI(this.playMode);
-
-      // 绑定模式切换按钮
-      $('#modeToggle').on('click', () => this.toggleMode());
-
-      $(document)
-        .off('.mwgPointerCardPlay')
-        .on('pointermove.mwgPointerCardPlay', e => this.handlePointerMove(e as JQuery.Event))
-        .on('pointerup.mwgPointerCardPlay pointercancel.mwgPointerCardPlay', e =>
-          this.handlePointerEnd(e as JQuery.Event),
-        );
-
-      this.initialized = true;
-      // 显示初始提示
-      this.showModeHint(`当前模式: ${this.playMode === 'click' ? '点击出牌' : '拖动出牌'}`);
-    }, 100);
+    this.selectCard(card);
   }
 
-  /**
-   * 检测是否为移动设备
-   */
-  private isMobileDevice(): boolean {
-    return (
-      /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
-      (window.matchMedia?.('(pointer: coarse)').matches === true && window.innerWidth < 900)
-    );
-  }
-
-  /**
-   * 从 localStorage 读取模式设置
-   */
-  private loadModeFromStorage(): 'click' | 'drag' | null {
-    try {
-      const saved = localStorage.getItem(this.STORAGE_KEY);
-      if (saved === 'click' || saved === 'drag') {
-        return saved;
-      }
-    } catch (error) {
-      console.warn('无法读取本地存储:', error);
-    }
-    return null;
-  }
-
-  /**
-   * 保存模式设置到 localStorage
-   */
-  private saveModeToStorage(mode: 'click' | 'drag'): void {
-    try {
-      localStorage.setItem(this.STORAGE_KEY, mode);
-    } catch (error) {
-      console.warn('无法保存到本地存储:', error);
-    }
-  }
-
-  /**
-   * 切换模式
-   */
-  private toggleMode(): void {
-    this.playMode = this.playMode === 'click' ? 'drag' : 'click';
-    this.updateModeUI(this.playMode);
-
-    // 保存到本地存储
-    this.saveModeToStorage(this.playMode);
-
-    $('.enhanced-card').attr('draggable', 'false');
-
-    // 清除选中状态
-    if (this.selectedCard) {
-      this.selectedCard.removeClass('selected');
-      this.selectedCard = null;
-    }
-
-    this.showModeHint(`切换为${this.playMode === 'click' ? '点击出牌' : '拖动出牌'}模式`);
-  }
-
-  /**
-   * 更新模式UI
-   */
-  private updateModeUI(mode: 'click' | 'drag'): void {
-    const modeIcon = $('#modeIcon');
-    const modeText = $('#modeText');
-    const modeToggle = $('#modeToggle');
-
-    if (mode === 'click') {
-      modeIcon.text('👆');
-      modeText.text('点击出牌');
-      modeToggle.removeClass('active');
-    } else {
-      modeIcon.text('👋');
-      modeText.text('拖动出牌');
-      modeToggle.addClass('active');
-    }
-    document.documentElement.classList.toggle('card-play-drag-mode', mode === 'drag');
-  }
-
-  /**
-   * 显示模式提示
-   */
-  private showModeHint(text: string): void {
-    const hint = $('#modeHint');
-    hint.text(text);
-    hint.addClass('show');
-    setTimeout(() => {
-      hint.removeClass('show');
-    }, 2000);
-  }
-
-  /**
-   * 创建跟随鼠标的卡牌副本
-   */
-  private createCardGhost(card: JQuery, x: number, y: number): JQuery {
-    const ghost = card.clone();
-    ghost.addClass('card-ghost');
-    ghost.css({
-      width: card.outerWidth() + 'px',
-      height: card.outerHeight() + 'px',
-      left: x - 50 + 'px',
-      top: y - 70 + 'px',
-    });
-    $('body').append(ghost);
-    return ghost;
-  }
-
-  /**
-   * 清理跟随的卡牌副本
-   */
-  private cleanupGhost(): void {
-    if (this.cardGhost) {
-      this.cardGhost.remove();
-      this.cardGhost = null;
-    }
-  }
-
-  /**
-   * 显示卡牌详情 - 直接调用BattleUI的showCardTooltip方法
-   */
-  private showCardDetail(card: JQuery): void {
-    const cardData = card.data('cardData');
-    if (cardData) {
-      BattleUI.showCardTooltip(card, cardData);
-    }
-  }
-
-  /**
-   * 隐藏卡牌详情 - 触发卡牌的mouseleave事件
-   */
   private hideCardDetail(): void {
-    // 隐藏所有tooltip
-    $('.card-tooltip').fadeOut(200, function () {
-      $(this).remove();
+    $('.card-tooltip').stop(true, true).remove();
+  }
+
+  /**
+   * Reserve the exact hand slot, then move the one real card to the viewport.
+   * The slot—not a geometry calculation—is the source of truth on cancel.
+   */
+  private beginVisualDrag(card: JQuery): boolean {
+    const element = card.get(0) as HTMLElement | undefined;
+    const parent = element?.parentElement;
+    if (!element || !parent) return false;
+
+    const rect = element.getBoundingClientRect();
+    const placeholder = document.createElement('div');
+    placeholder.className = 'card-drag-slot';
+    placeholder.setAttribute('aria-hidden', 'true');
+    const originalStyle = element.getAttribute('style');
+    if (originalStyle === null) placeholder.removeAttribute('style');
+    else placeholder.setAttribute('style', originalStyle);
+    parent.insertBefore(placeholder, element);
+    this.dragSlot = { parent, placeholder, originalStyle };
+
+    if ($('.card-tooltip').length === 0) {
+      const cardData = card.data('cardData');
+      if (cardData) BattleUI.showCardTooltip(card, cardData);
+    }
+    this.dragTooltip = $('.card-tooltip').last();
+    this.dragTooltip.css({ pointerEvents: 'none', transition: 'none', willChange: 'transform' });
+    card.removeClass('card-hover selected').removeAttr('aria-pressed').addClass('dragging');
+    document.body.appendChild(element);
+    if (this.dragPointerId !== null) element.setPointerCapture?.(this.dragPointerId);
+    card.css({
+      position: 'fixed',
+      left: `${rect.left}px`,
+      top: `${rect.top}px`,
+      bottom: 'auto',
+      width: `${rect.width}px`,
+      height: `${rect.height}px`,
+      maxHeight: 'none',
+      margin: 0,
+      opacity: 1,
+      pointerEvents: 'none',
+      transform: 'translate3d(0, 0, 0)',
+      transition: 'none',
+      zIndex: 3000,
+    });
+    this.playAreaRect = document.getElementById('playArea')?.getBoundingClientRect() || null;
+    return true;
+  }
+
+  private scheduleDragVisual(x: number, y: number): void {
+    this.pendingPointer = { x, y };
+    if (this.dragFrame !== null) return;
+    this.dragFrame = requestAnimationFrame(() => {
+      this.dragFrame = null;
+      this.applyDragVisual();
     });
   }
 
-  private handlePointerStart(e: JQuery.Event, card: JQuery): void {
-    if (this.playMode !== 'drag' || !card.hasClass('clickable')) return;
-    const pointer = (e as any).originalEvent as PointerEvent | undefined;
-    if (!pointer || (pointer.pointerType === 'mouse' && pointer.button !== 0)) return;
+  private applyDragVisual(): void {
+    if (!this.draggedCard || !this.dragOrigin || !this.pendingPointer) return;
+    const { x, y } = this.pendingPointer;
+    const previous = this.lastPointer || this.dragOrigin;
+    const tilt = Math.max(-8, Math.min(8, (x - previous.x) * 0.5));
+    this.lastPointer = { x, y };
+    const dx = x - this.dragOrigin.x;
+    const dy = y - this.dragOrigin.y;
+    this.draggedCard.css('transform', `translate3d(${dx}px, ${dy}px, 0) rotate(${tilt}deg) scale(1.035)`);
+    this.dragTooltip?.css('transform', `translate3d(${dx}px, ${dy}px, 0)`);
+    const insidePlayArea = this.isPointInPlayArea(x, y);
+    $('#playArea').toggleClass('active', insidePlayArea);
+    this.draggedCard.toggleClass('is-cast-ready', insidePlayArea);
+  }
 
+  private restoreCardToSlot(card: JQuery, slot: CardDragSlot): void {
+    const element = card.get(0) as HTMLElement | undefined;
+    if (!element) return;
+    card.removeClass('dragging is-cast-ready card-playing');
+
+    restoreDraggedElementToSlot(element, slot);
+  }
+
+  private releaseDragSlot(slot: CardDragSlot | null): void {
+    slot?.placeholder.remove();
+  }
+
+  private animatePlayedCard(card: JQuery): void {
+    const element = card.get(0) as HTMLElement | undefined;
+    const stage = document.getElementById('battle-stage')?.getBoundingClientRect();
+    if (!element || !stage) {
+      card.remove();
+      return;
+    }
+    const current = element.getBoundingClientRect();
+    const targetX = stage.left + stage.width / 2 - current.width / 2;
+    const targetY = stage.top + stage.height * 0.46 - current.height / 2;
+    card.css({ left: `${current.left}px`, top: `${current.top}px`, transform: 'none' });
+    const animation = element.animate(
+      [
+        { transform: 'translate3d(0, 0, 0) scale(1.035)', opacity: 1 },
+        {
+          transform: `translate3d(${targetX - current.left}px, ${targetY - current.top}px, 0) scale(.72)`,
+          opacity: 0,
+        },
+      ],
+      { duration: 145, easing: 'cubic-bezier(.22,.8,.2,1)', fill: 'forwards' },
+    );
+    let removed = false;
+    const remove = (): void => {
+      if (removed) return;
+      removed = true;
+      card.remove();
+    };
+    const fallback = window.setTimeout(remove, 220);
+    void animation.finished
+      .catch(() => undefined)
+      .finally(() => {
+        window.clearTimeout(fallback);
+        remove();
+      });
+  }
+
+  private handlePointerStart(event: JQuery.Event, card: JQuery): void {
+    if (!card.hasClass('clickable')) return;
+    const pointer = (event as any).originalEvent as PointerEvent | undefined;
+    if (!pointer || (pointer.pointerType === 'mouse' && pointer.button !== 0)) return;
     this.draggedCard = card;
     this.dragPointerId = pointer.pointerId;
     this.dragOrigin = { x: pointer.clientX, y: pointer.clientY };
+    this.lastPointer = { x: pointer.clientX, y: pointer.clientY };
     this.pointerDragActive = false;
     (card.get(0) as HTMLElement | undefined)?.setPointerCapture?.(pointer.pointerId);
   }
 
-  private handlePointerMove(e: JQuery.Event): void {
-    const pointer = (e as any).originalEvent as PointerEvent | undefined;
+  private handlePointerMove(event: JQuery.Event): void {
+    const pointer = (event as any).originalEvent as PointerEvent | undefined;
     if (!pointer || !this.draggedCard || pointer.pointerId !== this.dragPointerId || !this.dragOrigin) return;
+    event.preventDefault();
+    event.stopPropagation();
 
     if (!this.pointerDragActive) {
       const distance = Math.hypot(pointer.clientX - this.dragOrigin.x, pointer.clientY - this.dragOrigin.y);
       if (distance < 6) return;
       this.pointerDragActive = true;
-      this.draggedCard.addClass('dragging');
-      this.cardGhost = this.createCardGhost(this.draggedCard, pointer.clientX, pointer.clientY);
+      this.clearSelection();
+      if (!this.beginVisualDrag(this.draggedCard)) {
+        this.pointerDragActive = false;
+        return;
+      }
       $('#playArea').addClass('show');
-      this.showCardDetail(this.draggedCard);
     }
-
-    e.preventDefault();
-    this.cardGhost?.css({ left: pointer.clientX - 50 + 'px', top: pointer.clientY - 70 + 'px' });
-    $('#playArea').toggleClass('active', this.isPointInPlayArea(pointer.clientX, pointer.clientY));
+    this.scheduleDragVisual(pointer.clientX, pointer.clientY);
   }
 
-  private handlePointerEnd(e: JQuery.Event): void {
-    const pointer = (e as any).originalEvent as PointerEvent | undefined;
+  private handlePointerEnd(event: JQuery.Event): void {
+    const pointer = (event as any).originalEvent as PointerEvent | undefined;
     if (!pointer || !this.draggedCard || pointer.pointerId !== this.dragPointerId) return;
-
     const card = this.draggedCard;
-    const shouldPlay = this.pointerDragActive && this.isPointInPlayArea(pointer.clientX, pointer.clientY);
     if (this.pointerDragActive) {
-      e.preventDefault();
+      this.pendingPointer = { x: pointer.clientX, y: pointer.clientY };
+      if (this.dragFrame !== null) cancelAnimationFrame(this.dragFrame);
+      this.dragFrame = null;
+      this.applyDragVisual();
+      event.preventDefault();
+      event.stopPropagation();
       card.data('suppressPlayClick', true);
     }
-    this.finishPointerDrag(card);
-    if (shouldPlay) card.trigger('mwg:play-card');
+    const action = resolveCardDropAction({
+      dragActive: this.pointerDragActive,
+      pointerCancelled: event.type === 'pointercancel',
+      insidePlayArea: this.isPointInPlayArea(pointer.clientX, pointer.clientY),
+    });
+    this.finishPointerDrag(card, action);
   }
 
   private isPointInPlayArea(x: number, y: number): boolean {
-    const area = document.getElementById('playArea');
-    if (!area) return false;
-    const rect = area.getBoundingClientRect();
-    return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+    const rect = this.playAreaRect || document.getElementById('playArea')?.getBoundingClientRect();
+    return Boolean(rect && x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom);
   }
 
-  private finishPointerDrag(card: JQuery): void {
+  private finishPointerDrag(card: JQuery, action: CardDropAction): void {
+    if (this.dragPointerId !== null) {
+      (card.get(0) as HTMLElement | undefined)?.releasePointerCapture?.(this.dragPointerId);
+    }
     this.justEndedDrag = this.pointerDragActive;
     card.data('justEndedDrag', this.pointerDragActive);
-    card.removeClass('dragging card-hover is-active').trigger('mouseleave');
     this.hideCardDetail();
-    this.cleanupGhost();
     $('#playArea').removeClass('show active');
+
+    if (this.pointerDragActive && this.dragSlot) {
+      if (action === 'play') {
+        this.releaseDragSlot(this.dragSlot);
+        this.animatePlayedCard(card);
+        this.requestPlay(card);
+      } else {
+        this.restoreCardToSlot(card, this.dragSlot);
+      }
+    } else {
+      card.removeClass('dragging card-hover is-active').trigger('mouseleave');
+    }
+
     this.draggedCard = null;
+    this.dragTooltip = null;
+    this.dragSlot = null;
     this.dragPointerId = null;
     this.dragOrigin = null;
+    this.lastPointer = null;
+    this.pendingPointer = null;
+    this.playAreaRect = null;
     this.pointerDragActive = false;
 
-    setTimeout(() => {
+    window.setTimeout(() => {
       this.justEndedDrag = false;
       card.removeData('justEndedDrag');
       card.removeData('suppressPlayClick');
-    }, 500);
+    }, 220);
   }
 
-  /**
-   * 点击模式：点击卡牌直接出牌
-   */
-  private handleCardClick(card: JQuery): void {
-    if (this.playMode !== 'click') return;
-
-    // 点击模式不需要额外显示详情，因为原始的mouseenter已经显示了
-    // 直接触发原始的点击处理即可
-  }
-
-  /**
-   * 为卡牌绑定事件
-   */
   public bindCardEvents(card: JQuery): void {
     card.off('.mwgCardPlay');
-    card.on('click.mwgCardPlay', () => this.handleCardClick(card));
-
     card.attr('draggable', 'false');
-    card.on('pointerdown.mwgCardPlay', e => this.handlePointerStart(e as JQuery.Event, card));
-  }
-
-  /**
-   * 获取当前模式
-   */
-  public getCurrentMode(): 'click' | 'drag' {
-    return this.playMode;
+    card.on('click.mwgCardPlay', event => this.handleCardClick(event as JQuery.Event, card));
+    card.on('pointerdown.mwgCardPlay', event => this.handlePointerStart(event as JQuery.Event, card));
   }
 }

@@ -19,24 +19,30 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+function hasBattlePrecision(value: unknown): value is number {
+  return isFiniteNumber(value) && Math.abs(value * 100 - Math.round(value * 100)) < 1e-7;
+}
+
 function hasValidCombatNumbers(entity: Record<string, any>): boolean {
   const { maxHp, currentHp, maxLust, currentLust, energy, maxEnergy, block } = entity;
   return (
-    isFiniteNumber(maxHp) &&
+    hasBattlePrecision(maxHp) &&
     maxHp > 0 &&
-    isFiniteNumber(currentHp) &&
+    hasBattlePrecision(currentHp) &&
     currentHp >= 0 &&
     currentHp <= maxHp &&
-    isFiniteNumber(maxLust) &&
+    hasBattlePrecision(maxLust) &&
     maxLust > 0 &&
-    isFiniteNumber(currentLust) &&
+    hasBattlePrecision(currentLust) &&
     currentLust >= 0 &&
     currentLust <= maxLust &&
     isFiniteNumber(energy) &&
+    Number.isInteger(energy) &&
     energy >= 0 &&
     isFiniteNumber(maxEnergy) &&
+    Number.isInteger(maxEnergy) &&
     maxEnergy >= 0 &&
-    isFiniteNumber(block) &&
+    hasBattlePrecision(block) &&
     block >= 0
   );
 }
@@ -127,6 +133,13 @@ export function readBattleSessionSnapshot(value: unknown): BattleSessionSnapshot
     return null;
   }
   if (typeof state.battleNarrative !== 'string') return null;
+  if (state.battleHistory !== undefined) {
+    if (!Array.isArray(state.battleHistory) || state.battleHistory.length > 600) return null;
+    for (const entry of state.battleHistory) {
+      if (!isRecord(entry) || !Number.isInteger(entry.turn) || entry.turn < 0 || typeof entry.message !== 'string')
+        return null;
+    }
+  }
   if (state.random !== undefined && !isBattleRandomState(state.random)) return null;
   if (state.enemy !== null) {
     if (!isRecord(state.enemy) || !hasValidCombatNumbers(state.enemy)) return null;

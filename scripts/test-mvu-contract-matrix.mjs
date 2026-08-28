@@ -13,7 +13,7 @@ assert.equal(contract.initialization, 'worldbook_new/变量初始化.json');
 
 const allowedShapes = new Set(['string', 'number', 'array', 'object', 'nullable-object']);
 const allowedOwners = new Set(['ai', 'program', 'shared']);
-const allowedLifecycles = new Set(['persistent', 'battle-temporary', 'candidate', 'optional-run']);
+const allowedLifecycles = new Set(['persistent', 'battle-temporary', 'candidate', 'one-shot-request', 'optional-run']);
 const allowedOperations = new Set(['set', 'assign', 'remove', 'add']);
 const declared = new Map();
 

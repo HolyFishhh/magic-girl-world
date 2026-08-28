@@ -28,8 +28,6 @@ const ids = nodes
   .filter(attribute => attribute.name === 'id')
   .map(attribute => attribute.value);
 const requiredIds = [
-  'custom-action-input',
-  'custom-action-send',
   'choice-container',
   'choice-title',
   'run-section',
@@ -61,10 +59,14 @@ assert.equal((htmlSource.match(/\$2/g) || []).length, 0, 'options must not be tr
 assert.ok(nodes.some(node => classes(node).includes('mwg-statusbar')));
 assert.doesNotMatch(scriptSource, /THEME_STORAGE_KEY|data-theme|prefers-color-scheme/);
 assert.doesNotMatch(htmlSource, /custom-battle-send|按当前行动进入战斗/);
+assert.doesNotMatch(htmlSource, /notify-section|changes-section|本次变化|状态更新/);
 assert.doesNotMatch(scriptSource, /handleBattleAction|battle:\s*true/);
 assert.doesNotMatch(styleSource, /\[data-theme='dark'\]|color-scheme:\s*dark/);
 assert.match(styleSource, /--surface:\s*#fffaf7/);
-assert.match(styleSource, /background-image:\s*repeating-linear-gradient/);
+assert.match(styleSource, /background-image:[\s\S]*repeating-linear-gradient/);
+assert.match(styleSource, /--bookmark-pink:\s*#ffd9e2/);
+assert.match(scriptSource, /compactContentToDisplayTags/);
+assert.match(scriptSource, /reward-effect-summary/);
 assert.ok(
   htmlSource.indexOf('id="run-opt-in"') < htmlSource.indexOf('id="battle-hp"'),
   'the optional expedition entry must be the first card/resource control',
@@ -124,12 +126,13 @@ assert.match(scriptSource, /function contentRuleDescription/);
 assert.match(scriptSource, /canGenerateCompactStatusDescription\(status\)/);
 assert.match(scriptSource, /describeCompactStatus\(status, \{ statusNames \}\)/);
 assert.match(scriptSource, /statusDefinitions\.get\(status\.id\)/);
-assert.match(
-  scriptSource,
-  /describeCompactContent\(content, \{ statusNames: contentDescriptionStatusNames\(content\) \}\)/,
-);
+assert.match(scriptSource, /resolveCompactCardDescription\(content/);
+assert.match(scriptSource, /resolveCompactContentDescription\(content, options\)/);
 assert.match(scriptSource, /contentRuleDescription\(artifact, '效果见规则'\)/);
 assert.match(scriptSource, /contentRuleDescription\(item, '效果见规则'\)/);
+assert.match(scriptSource, /value\.name \?\? value\.title \?\? value\.id/);
+assert.match(scriptSource, /name && description \? `\$\{name\}：\$\{description\}`/);
+assert.doesNotMatch(scriptSource, /let items: string\[\] = status/);
 assert.doesNotMatch(scriptSource, /diagnoseMechanicalDuplicates/);
 assert.doesNotMatch(scriptSource, /reward-diversity-warning/);
 assert.match(scriptSource, /\[构筑建议\]/);
@@ -171,7 +174,8 @@ assert.doesNotMatch(battleScriptSource, /document\.|\$\(|location\.|triggerSlash
 assert.match(scriptSource, /function showRunError/);
 assert.match(scriptSource, /if \(!isCurrentMessageLatest\(\)\) return null/);
 assert.match(scriptSource, /formatRoutePrompt\(/);
-assert.match(scriptSource, /formatActionPrompt\(/);
+assert.doesNotMatch(scriptSource, /formatActionPrompt\(/);
+assert.doesNotMatch(htmlSource, /custom-action-input|custom-action-send/);
 assert.doesNotMatch(scriptSource, /renderOptions|parseOptionTags|handleBattleOption|handleOption/);
 assert.doesNotMatch(scriptSource, /\[路线节点\]|\[事件选择\]|非战斗结局写 run_result/);
 assert.match(runPromptSource, /\[事件选择\]/);

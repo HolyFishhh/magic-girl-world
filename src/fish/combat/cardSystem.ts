@@ -126,7 +126,7 @@ export class CardSystem {
         },
         isTerminal: () => this.gameStateManager.isGameOver(),
         presentCardPlay: async () => {
-          await this.presentation.animateCardPlay(cardId);
+          await this.presentation.animateCardPlay(cardId, cardBeforePlay);
         },
         applyCardPlayCommit: committed => {
           this.gameStateManager.updatePlayer({ energy: committed.energy, hand: committed.hand });
@@ -474,6 +474,7 @@ export class CardSystem {
       'curse_turn_end',
       this.sessionHost.triggerTransactionPorts(),
       async () => {
+        await this.presentation.animateTriggeredCard(curse);
         const executor = UnifiedEffectExecutor.getInstance();
         const context = { triggerType: 'turn_end', cardContext: curse };
         await executor.executeEffectProgram(curse.effectProgram, true, context);

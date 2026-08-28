@@ -67,7 +67,18 @@ await core.runEffectCommandProgram(
   { spentEnergy: 0 },
   { readState: () => structuredClone(state), execute: command => fractional.push(command) },
 );
-assert.equal(fractional[0].amount, 2, 'formula results keep the established integer-floor rule');
+assert.equal(fractional[0].amount, 2.5, 'numeric battle formulas keep up to two decimal places');
+
+const discreteCommands = [];
+await core.runEffectCommandProgram(
+  {
+    spec: 'mwg.effect/v1',
+    steps: [{ op: 'draw_cards', amount: { op: 'divide', left: 5, right: 2 } }],
+  },
+  { spentEnergy: 0 },
+  { readState: () => structuredClone(state), execute: command => discreteCommands.push(command) },
+);
+assert.equal(discreteCommands[0].amount, 2, 'card counts remain discrete even when a formula is used');
 
 const recoveryCommands = [];
 await core.runEffectCommandProgram(

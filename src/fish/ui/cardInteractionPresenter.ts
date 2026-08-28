@@ -1,7 +1,8 @@
 import type { Card } from '../../game-core';
 import { BattleLog } from '../modules/battleLog';
 import { escapeHtml, escapeHtmlAttribute } from '../shared/html';
-import { AnimationManager } from './animationManager';
+import { AnimationManager, resolveCombatAnimationTarget } from './animationManager';
+import { EffectProgramDisplay } from './effectProgramDisplay';
 
 export interface CardSelectionModalRequest {
   title: string;
@@ -14,6 +15,7 @@ export interface CardSelectionModalRequest {
 export class TavernCardInteractionPresenter {
   private static instance: TavernCardInteractionPresenter;
   private readonly animationManager = AnimationManager.getInstance();
+  private readonly effectDisplay = EffectProgramDisplay.getInstance();
 
   public static getInstance(): TavernCardInteractionPresenter {
     if (!TavernCardInteractionPresenter.instance) {
@@ -22,9 +24,9 @@ export class TavernCardInteractionPresenter {
     return TavernCardInteractionPresenter.instance;
   }
 
-  public async animateCardPlay(cardId: string): Promise<void> {
+  public async animateCardPlay(cardId: string, card?: Card): Promise<void> {
     const cardElement = $(`.card[data-card-id="${cardId}"], .enhanced-card[data-card-id="${cardId}"]`);
-    if (cardElement.length > 0) await this.animationManager.animateCardPlay(cardElement);
+    if (cardElement.length > 0) await this.animationManager.animateCardPlay(cardElement, card);
   }
 
   public showCardBlockedNotification(cardName: string, reason: string): void {
@@ -45,9 +47,17 @@ export class TavernCardInteractionPresenter {
 
   public clearCardInteractionStates(): void {
     $('.card').removeClass('card-hover selected');
-    $('.card-tooltip').fadeOut(200, function () {
-      $(this).remove();
-    });
+    $('.card-tooltip').stop(true, true).remove();
+  }
+
+  public async animateTriggeredCard(card: Card): Promise<void> {
+    await this.animationManager.playCombatAction(
+      'player',
+      'curse',
+      card.emoji || '🕸️',
+      card.name,
+      resolveCombatAnimationTarget(card.effectProgram, 'curse'),
+    );
   }
 
   public async selectCards(
@@ -69,16 +79,20 @@ export class TavernCardInteractionPresenter {
             <div class="modal-body">
               <div class="selection-cards-container">
                 ${availableCards
-                  .map(
-                    card => `
+                  .map(card => {
+                    const effectTags = this.effectDisplay.createWrappedEffectTagsHTML(
+                      this.effectDisplay.programToTags(card.effectProgram),
+                    );
+                    return `
                   <div class="selection-card" data-card-id="${escapeHtmlAttribute(card.id)}">
                     <div class="card-emoji">${escapeHtml(card.emoji)}</div>
                     <div class="card-name">${escapeHtml(card.name)}</div>
                     <div class="card-cost">${escapeHtml(card.cost)}</div>
+                    ${effectTags}
                     <div class="card-description">${escapeHtml(card.description || '')}</div>
                   </div>
-                `,
-                  )
+                `;
+                  })
                   .join('')}
               </div>
             </div>

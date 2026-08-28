@@ -17,6 +17,7 @@ export interface PlayerContentReadiness {
 }
 
 export interface InitialPlayerStateInput {
+  emoji: unknown;
   hp: unknown;
   maxHp: unknown;
   lust: unknown;
@@ -25,7 +26,7 @@ export interface InitialPlayerStateInput {
   exp: unknown;
 }
 
-const INITIAL_DECK_QUANTITY = 10;
+const INITIAL_DECK_MIN_QUANTITY = 10;
 
 const ISSUE_LABELS: Readonly<Record<string, string>> = {
   INVALID_ID: 'ID 格式错误',
@@ -57,10 +58,10 @@ const ISSUE_LABELS: Readonly<Record<string, string>> = {
   MISSING_RELIC: '至少需要 1 个可执行初始遗物',
   MISSING_ITEM: '至少需要 1 个可执行初始道具',
   MISSING_DESIRE_EFFECT: '缺少玩家欲望满溢效果',
-  DECK_TOO_SMALL: `初始牌组总 quantity 必须至少为 ${INITIAL_DECK_QUANTITY}`,
+  MISSING_PLAYER_EMOJI: '缺少玩家战斗形象',
+  DECK_TOO_SMALL: `初始牌组总 quantity 必须至少为 ${INITIAL_DECK_MIN_QUANTITY}`,
   NO_PLAYABLE_CARD: '没有能在基础 3 能量下打出的非诅咒牌',
   NO_VICTORY_PRESSURE: '缺少稳定的生命/欲望伤害或 Event 胜利手段',
-  NO_DEFENSE_OR_RECOVERY: '缺少稳定的格挡或治疗手段',
 };
 
 function issueLabel(issue: Pick<PlayerContentReadinessIssue, 'code'>): string {
@@ -106,6 +107,9 @@ export function assessInitialPlayerContent(
   if (pack.items.length === 0) addIssue('battle.items', 'MISSING_ITEM');
   if (pack.desireEffects.player === null) addIssue('battle.player_lust_effect', 'MISSING_DESIRE_EFFECT');
   if (player) {
+    if (typeof player.emoji !== 'string' || !player.emoji.trim()) {
+      addIssue('battle.core.emoji', 'MISSING_PLAYER_EMOJI');
+    }
     const maxHp = Number(player.maxHp);
     const hp = Number(player.hp);
     const maxLust = Number(player.maxLust);
@@ -117,10 +121,9 @@ export function assessInitialPlayerContent(
     if (!Number.isInteger(player.level) || Number(player.level) < 1) addIssue('battle.level', 'INVALID_LEVEL');
     if (!Number.isInteger(player.exp) || Number(player.exp) < 0) addIssue('battle.exp', 'INVALID_EXP');
   }
-  if (deck.deckQuantity < INITIAL_DECK_QUANTITY) addDeckIssue('DECK_TOO_SMALL');
+  if (deck.deckQuantity < INITIAL_DECK_MIN_QUANTITY) addDeckIssue('DECK_TOO_SMALL');
   if (!deck.hasPlayableCard) addDeckIssue('NO_PLAYABLE_CARD');
   if (!deck.hasVictoryPressure) addDeckIssue('NO_VICTORY_PRESSURE');
-  if (!deck.hasDefenseOrRecovery) addDeckIssue('NO_DEFENSE_OR_RECOVERY');
 
   return { ok: issues.length === 0, issues, deck };
 }

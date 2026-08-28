@@ -51,18 +51,24 @@ export function clampBattleAttribute(attribute: string, value: number, limits: B
   return Math.max(0, finiteValue);
 }
 
+/** Canonical internal battle precision: at most two decimal places. */
 export function roundBattleValue(value: number): number {
-  return Math.round(value * 10) / 10;
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+/** Player-facing battle precision: at most one decimal place. */
+export function roundBattleDisplayValue(value: number): number {
+  return Math.round((value + Number.EPSILON) * 10) / 10;
 }
 
 export function absorbDamageWithBlock(incomingDamage: number, currentBlock: number): BlockAbsorptionResult {
-  const incoming = Math.max(0, Number.isFinite(incomingDamage) ? incomingDamage : 0);
-  const block = Math.max(0, Number.isFinite(currentBlock) ? currentBlock : 0);
-  const blockUsed = Math.min(block, incoming);
+  const incoming = roundBattleValue(Math.max(0, Number.isFinite(incomingDamage) ? incomingDamage : 0));
+  const block = roundBattleValue(Math.max(0, Number.isFinite(currentBlock) ? currentBlock : 0));
+  const blockUsed = roundBattleValue(Math.min(block, incoming));
   return {
-    damage: incoming - blockUsed,
+    damage: roundBattleValue(incoming - blockUsed),
     blockUsed,
-    remainingBlock: block - blockUsed,
+    remainingBlock: roundBattleValue(block - blockUsed),
   };
 }
 
@@ -134,9 +140,9 @@ export function evaluateFiniteBattleMathExpression(expression: string): number {
   return result;
 }
 
-/** Evaluate an effect amount and apply the battle rule that amounts are integers. */
+/** Evaluate an effect amount and keep at most two decimal places for runtime settlement. */
 export function evaluateBattleMathExpression(expression: string): number {
-  return Math.floor(evaluateFiniteBattleMathExpression(expression));
+  return roundBattleValue(evaluateFiniteBattleMathExpression(expression));
 }
 
 type ConditionValue = number | boolean;

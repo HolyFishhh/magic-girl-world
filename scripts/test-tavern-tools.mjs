@@ -117,5 +117,7 @@ assert.match(apiSource, /await saveSettings\(/);
 assert.match(importSource, /tavern_helper\.script\.enabled\.characters/);
 assert.match(importSource, /enabledCharacterScripts\.includes\(releaseConfig\.characterName\)/);
 assert.match(importSource, /enabledCharacterScripts\.push\(releaseConfig\.characterName\)/);
+assert.match(importSource, /settings\.active_character = importedAvatar/);
+assert.match(importSource, /settings\.active_group = null/);
 
 console.log('One Tavern HTTP boundary serves import, snapshot, calibration, start, readiness, and battle-repair fixtures.');

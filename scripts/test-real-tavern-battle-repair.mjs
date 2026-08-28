@@ -22,8 +22,8 @@ const releaseConfig = JSON.parse(await readFile(resolve(root, 'release.config.js
 const [scenario = 'invalid', avatarUrl, mode = 'ordinary'] = process.argv.slice(2);
 const tavernUrl = new URL(process.env.TAVERN_URL || releaseConfig.defaultTavernUrl);
 
-if (!['invalid', 'valid', 'recovery', 'scry', 'seek', 'effects', 'status', 'triggers', 'loop'].includes(scenario))
-  throw new Error('Scenario must be invalid, valid, recovery, scry, seek, effects, status, triggers, or loop');
+if (!['invalid', 'valid', 'recovery', 'scry', 'seek', 'effects', 'status', 'triggers', 'loop', 'model-shape'].includes(scenario))
+  throw new Error('Scenario must be invalid, valid, recovery, scry, seek, effects, status, triggers, loop, or model-shape');
 if (!['ordinary', 'run'].includes(mode)) throw new Error('Mode must be ordinary or run');
 if (!avatarUrl?.endsWith('.png')) {
   throw new Error(
@@ -32,6 +32,47 @@ if (!avatarUrl?.endsWith('.png')) {
 }
 
 function createBattle(scenarioName) {
+  if (scenarioName === 'model-shape') {
+    return {
+      core: { emoji: '🧙', hp: 100, max_hp: 100, lust: 0, max_lust: 100, card_removal_count: 1 },
+      cards: [
+        { id: 'combo_strike', name: '连击拳', type: 'Attack', rarity: 'Common', cost: 1, quantity: 5, effects: { damage: 7, apply_status: 'combo_flow', stacks: 1 } },
+        { id: 'combo_guard', name: '连击架', type: 'Skill', rarity: 'Common', cost: 1, quantity: 5, effects: { block: 6 } },
+        { id: 'combo_power', name: '蓄势专注', type: 'Power', rarity: 'Uncommon', cost: 1, quantity: 1, effects: { apply_status: 'combo_flow', stacks: 2 } },
+      ],
+      artifacts: [{ id: 'combo_ring', name: '连击扳指', rarity: 'Uncommon', trigger: 'attack_played', effects: { block: 1 } }],
+      items: [{ id: 'tonic', name: '恢复剂', count: 1, effects: { heal: 10 } }],
+      statuses: {
+        combo_flow: {
+          id: 'combo_flow',
+          name: '连击心流',
+          emoji: 'F',
+          type: 'buff',
+          stacks_change: 'keep',
+          triggers: { apply: { effects: { lust: 1 } }, tick: { effects: { block: 1 } } },
+        },
+      },
+      player_abilities: [{ id: 'combo_awareness', name: '连段意识', trigger: 'card_played', when: 'self.status.combo_flow.stacks >= 5', effects: { draw: 1 } }],
+      player_status_effects: [],
+      player_lust_effect: { damage: 6 },
+      level: 1,
+      exp: 0,
+      enemy: {
+        name: '回归测试敌人',
+        emoji: 'E',
+        max_hp: 42,
+        hp: 42,
+        max_lust: 100,
+        lust: 0,
+        actions: [{ name: '测试攻击', weight: 1, effects: { damage: 6 } }],
+        abilities: [],
+        status_effects: [],
+        lust_effect: { damage: 4 },
+        action_mode: 'probability',
+        action_config: { probability: { 测试攻击: 1 } },
+      },
+    };
+  }
   const validLike = scenarioName !== 'invalid';
   const enemy = {
     name:
@@ -67,7 +108,11 @@ function createBattle(scenarioName) {
         : [{ name: '不可回显的错乱行动', weight: 0, effects: { damage: 'unknown * 4' } }],
     abilities: [],
     status_effects: [],
-    lust_effect: { name: '镜面反噬', effects: { damage: 4 } },
+    lust_effect: {
+      name: '镜面反噬',
+      description: '镜面在欲望满溢时折回一道刺目的裂光。',
+      effects: { damage: 4 },
+    },
     action_mode: 'probability',
     action_config:
       validLike ? { probability: { 裂光: 2, 镜壳: 1 } } : { probability: { 不可回显的错乱行动: 0 } },
@@ -260,9 +305,29 @@ function createBattle(scenarioName) {
       type: 'Skill',
       rarity: 'Uncommon',
       cost: 0,
-      quantity: 3,
+      quantity: 1,
       innate: true,
       effects: { apply_status: 'star_mark', stacks: 1, to: 'self' },
+    },
+    {
+      id: 'status_holder_probe',
+      name: '归属探针',
+      type: 'Skill',
+      rarity: 'Uncommon',
+      cost: 0,
+      quantity: 1,
+      innate: true,
+      effects: { apply_status: 'holder_probe' },
+    },
+    {
+      id: 'status_holder_self_probe',
+      name: '自持探针',
+      type: 'Skill',
+      rarity: 'Uncommon',
+      cost: 0,
+      quantity: 1,
+      innate: true,
+      effects: { apply_status: 'holder_probe', to: 'self' },
     },
     {
       id: 'status_guard',
@@ -327,6 +392,7 @@ function createBattle(scenarioName) {
   ];
   return {
     core: {
+      emoji: '🧙',
       hp: scenarioName === 'effects' ? 60 : scenarioName === 'status' ? 40 : scenarioName === 'triggers' ? 50 : 80,
       max_hp: 80,
       lust: 0,
@@ -387,6 +453,17 @@ function createBattle(scenarioName) {
                 remove: { heal: 3 },
               },
             },
+            {
+              id: 'holder_probe',
+              name: '归属印记',
+              emoji: 'P',
+              type: 'debuff',
+              stacks_change: 'keep',
+              triggers: {
+                apply: { damage: 2 },
+                tick: { damage: 3 },
+              },
+            },
           ]
         : scenarioName === 'effects'
         ? [
@@ -412,7 +489,11 @@ function createBattle(scenarioName) {
           ],
     player_status_effects:
       scenarioName === 'effects' ? [{ id: 'focus', name: '专注', type: 'buff', stacks: 1 }] : [],
-    player_lust_effect: { name: '星蚀满溢', effects: { damage: 6 } },
+    player_lust_effect: {
+      name: '星蚀满溢',
+      description: '积蓄的星光越过承受极限，在对方身旁骤然坍缩。',
+      effects: { damage: 6 },
+    },
     level: 1,
     exp: scenarioName === 'loop' ? 90 : 0,
     enemy,
@@ -476,6 +557,15 @@ const chat = [
     character_name: 'unused',
   },
   {
+    name: 'unused',
+    is_user: true,
+    is_system: false,
+    send_date: now.toISOString(),
+    mes: '我迎向眼前的敌人，准备战斗。',
+    extra: {},
+    variables: [structuredClone(variables)],
+  },
+  {
     name: characterName,
     is_user: false,
     is_system: false,
@@ -503,7 +593,9 @@ console.log(
         scenario !== 'invalid'
           ? {
               enemy:
-                scenario === 'recovery'
+                scenario === 'model-shape'
+                  ? '回归测试敌人'
+                  : scenario === 'recovery'
                   ? '回收训练体'
                   : scenario === 'scry'
                     ? '星见训练体'
@@ -521,7 +613,9 @@ console.log(
               repairButtons: 0,
               phase: '玩家回合',
               mechanics:
-                scenario === 'recovery'
+                scenario === 'model-shape'
+                  ? ['对象式状态表', '触发器 effects 包装', '持续状态 Power', '能力同级 when']
+                  : scenario === 'recovery'
                   ? ['回声落片', '余烬落片', '弃牌召回', '余烬召回']
                   : scenario === 'scry'
                     ? ['星见', '牌库顶3张可选0-3张', '不触发on_draw/on_discard']
@@ -530,7 +624,7 @@ console.log(
                       : scenario === 'effects'
                         ? ['星位校准', '校准射线', '生命回路', '心焰烙印', '净化星环', '星力增幅']
                         : scenario === 'status'
-                          ? ['星痕叠印', '星痕护幕', '星痕净化', 'apply/stack/hold/tick/remove']
+                          ? ['星痕叠印', '归属探针', '自持探针', '星痕护幕', '星痕净化', 'apply/stack/hold/tick/remove', '状态持有者默认目标']
                           : scenario === 'triggers'
                             ? ['四源共鸣', '能力触发', '遗物触发', '被动修饰']
                             : scenario === 'loop'

@@ -18,10 +18,7 @@
 }
 ```
 
-新卡牌、状态、遗物、道具、能力、敌人行动和双方欲望效果不要输出 `description`。程序会从已验证的
-`effects`、公式、`when/on`、`trigger`、状态衰减和关键词生成玩家看到的规则说明；这避免 AI 把同一规则写两遍并出现冲突。状态执行使用稳定 ID，界面从同场
-`battle.statuses` 或奖励候选同级 `status`
-读取玩家可见名称。机械对象即使带有可选说明，执行仍只以 `effects` 编译结果为准；敌人对象本身的剧情描述不受此规则影响。
+`description` 是可选的叙事补充，但通常建议用一句自然中文说明动作感、来源、形态或非数值特征。不要复述无条件的简单伤害、格挡、层数或抽牌数；只要存在 `when/on/trigger/discard_effects`、分支或多阶段规则，描述必须明确写出触发时机、条件和结果。程序会始终从已验证的可执行字段生成独立效果标签和权威规则说明；AI 叙事可以与规则并存，但不能代替、覆盖或歪曲规则。状态执行使用稳定 ID，界面从同场 `battle.statuses` 或奖励候选同级 `status` 读取玩家可见名称。所有玩家可见文本必须为自然中文，不得暴露英文 ID、公式路径或内部字段名；实际执行始终只以 `effects` 编译结果为准。
 
 卡牌只在确有需要时增加布尔标记：`"innate":true` 开战时优先进入起始手牌，`"retain":true` 跨回合保留，`"exhaust":true`
 打出后消耗，`"ethereal":true` 未打出则回合末消耗。不要写 false 默认值。`innate`
@@ -178,7 +175,7 @@ X 费示例：
 
 ## Power 触发器
 
-同一触发器只在卡牌级写一次：
+持续能力使用一个结构化 `trigger`，把触发时机与对应效果放在一起：
 
 ```json
 {
@@ -186,35 +183,41 @@ X 费示例：
   "name": "月相守护",
   "type": "Power",
   "cost": 1,
-  "trigger": "turn_start",
-  "effects": [{ "block": 4 }, { "draw": 1, "when": "self.hp < self.max_hp / 2" }]
+  "trigger": {
+    "on": "turn_start",
+    "effects": [{ "block": 4 }, { "draw": 1, "when": "self.hp < self.max_hp / 2" }]
+  }
 }
 ```
+
+若 Power 打出时还有即时效果，可在卡牌同级另写 `effects`；没有即时效果就省略。若 Power 的唯一作用是打出时施加已注册的持续状态，可以省略 `trigger`；除此以外 Power 必须提供合法的结构化触发器。条件直接放在对应效果对象中。
 
 同一张 Power 需要第二种触发器时，只在例外效果上写 `on`：
 
 ```json
 {
-  "trigger": "turn_start",
-  "effects": [{ "block": 4 }, { "apply_status": "bleed", "on": "take_damage" }]
+  "trigger": {
+    "on": "turn_start",
+    "effects": [{ "block": 4 }, { "apply_status": "bleed", "on": "take_damage" }]
+  }
 }
 ```
 
 `Attack/Skill/Event/Curse` 不能注册持续触发器。`battle_start` 不用于打出后才注册的 Power；状态触发器
 `apply/stack/tick/remove/hold` 也不能混入 Power。
 
-构筑联动继续使用同一个同级字段，不增加嵌套：`card_played` 响应任意可打出的牌，`attack_played`、`skill_played`、`power_played`
+构筑联动继续使用同一个触发对象：`card_played` 响应任意可打出的牌，`attack_played`、`skill_played`、`power_played`
 分别只响应攻击牌、技能牌和能力牌。每次打牌先结算 `card_played`，再结算对应牌型事件；每个事件内玩家能力先于遗物。效果产生战斗终态后不再进入后续牌型事件。
 
 ```json
-{"id":"blade_echo","name":"刃光回声","rarity":"Uncommon","trigger":"attack_played","effects":{"block":1}}
+{"id":"blade_echo","name":"刃光回声","rarity":"Uncommon","trigger":{"on":"attack_played","effects":{"block":1}}}
 ```
 
 遗物、能力或 Power 可用 `on_exhaust`：每张牌实际进入消耗堆后触发一次，覆盖打出后消耗、空灵和效果选择消耗。消耗牌本身不需要增加字段。`on_draw` 在牌进入手牌后逐张触发，`on_shuffle` 在弃牌堆回洗后触发一次；起始手牌不触发，且这两个触发器的效果不能再次抽牌，避免循环。
 
 ```json
-{"id":"draw_guard","name":"抽牌护幕","rarity":"Uncommon","trigger":"on_draw","effects":{"block":1}}
-{"id":"recycle_focus","name":"回洗专注","rarity":"Rare","trigger":"on_shuffle","effects":{"energy":1}}
+{"id":"draw_guard","name":"抽牌护幕","rarity":"Uncommon","trigger":{"on":"on_draw","effects":{"block":1}}}
+{"id":"recycle_focus","name":"回洗专注","rarity":"Rare","trigger":{"on":"on_shuffle","effects":{"energy":1}}}
 ```
 
 ## 弃牌触发
@@ -265,7 +268,7 @@ JSON，也不会改变真实战斗的实时公式结果。固定数字效果不�
 校验：未知变量、函数调用、数组/对象字面量、未知字段、非法目标、公式过长和不支持的运算都会阻止本场战斗初始化。SillyTavern 的 fish 预检只把该核心错误映射到酒馆字段路径，并额外检查实体数值、行动配置和可玩性警告；不会再次解释现代 JSON。
 
 首轮 AI 回复还会在状态栏开放路线前经过 `playerContentReadiness`：除上述规则外，总
-`quantity`、基础 3 能量可出牌、稳定胜利手段、防御或恢复、遗物、道具、欲望满溢效果和初始生命/成长数据必须齐全。失败时 AI 只收到
+`quantity`、基础 3 能量可出牌、稳定胜利手段、遗物、道具、欲望满溢效果和初始生命/成长数据必须齐全；攻守与恢复比例不作硬性要求。失败时 AI 只收到
 `[战斗内容修复]`
 和最多四个字段路径/错误码；先前对象的名称或文本不会被复制回提示。修复说明位于独立条件世界书，正常首轮与战斗回合不增加字段或 token，修复也继续输出本文件的浅层 JSON，不输出内部 AST。
 

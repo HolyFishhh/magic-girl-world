@@ -10,6 +10,8 @@ export interface RewardCandidateLibrary {
     knownStatusIds?: Iterable<string>;
     statusDefinitions?: readonly unknown[];
 }
+/** Read the amount granted by one reward candidate. AI card candidates commonly use 0 to mean "not owned yet". */
+export declare function readRewardCandidateQuantity(category: RewardCandidateCategory, value: unknown): number | null;
 /** Validate an AI reward before it is committed to persistent MUV state. */
 export declare function validateRewardCandidate(category: RewardCandidateCategory, value: unknown): RewardCandidateValidationResult;
 /** Validate references and identity against the persistent content library. */

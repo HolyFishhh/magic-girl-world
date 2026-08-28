@@ -51,4 +51,27 @@ const display = adapter.buildMvuStatusDisplayContext([
 assert.equal(display.statusNames.focus, '专注');
 assert.match(display.statusDescriptions.focus, /伤害/);
 
+const keyedDisplay = adapter.buildMvuStatusDisplayContext({
+  combo_flow: {
+    name: '连击心流',
+    emoji: 'F',
+    type: 'buff',
+    stacks_change: 'keep',
+    triggers: { apply: { effects: { block: 1 } } },
+  },
+});
+assert.equal(keyedDisplay.statusNames.combo_flow, '连击心流');
+assert.match(keyedDisplay.statusDescriptions.combo_flow, /格挡/);
+
+const conditionedAbility = adapter.convertMvuAbilities([
+  {
+    id: 'combo_awareness',
+    name: '连段意识',
+    trigger: 'card_played',
+    when: 'self.status.combo_flow.stacks >= 5',
+    effects: { draw: 1 },
+  },
+]);
+assert.equal(conditionedAbility[0].effectProgram.steps[0].op, 'if');
+
 console.log('Modern MUV battle adapter passed.');

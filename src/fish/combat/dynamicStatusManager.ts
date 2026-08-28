@@ -14,8 +14,8 @@ import {
   type StatusRuntimeEffect,
   type StatusTrigger,
 } from '../../game-core';
+import { normalizeMvuStatusDefinitions } from '../../runtime/mvuArrays';
 import { readBattleDataContract } from '../core/battleDataContract';
-import { normalizeMvuArray } from '../core/mvuBattleAdapter';
 
 export class DynamicStatusManager {
   private static instance: DynamicStatusManager;
@@ -48,7 +48,7 @@ export class DynamicStatusManager {
     try {
       const variables = getCurrentMessageVariables();
       const statusesRaw = readBattleDataContract(variables)?.data.statuses;
-      const rawStatuses = normalizeMvuArray(statusesRaw);
+      const rawStatuses = normalizeMvuStatusDefinitions(statusesRaw);
       const statusNames = Object.fromEntries(
         rawStatuses
           .filter(status => typeof status.id === 'string' && typeof status.name === 'string' && status.name.trim())

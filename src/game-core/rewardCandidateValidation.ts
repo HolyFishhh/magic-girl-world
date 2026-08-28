@@ -7,6 +7,9 @@ import {
   validateCompactStatusDefinition,
 } from './statusDefinitionValidation';
 import { CARD_RARITY_SET, CARD_TYPE_SET, RELIC_RARITY_SET } from './contentCatalog';
+import { validateEffectProgramPolicy } from './effectProgramPolicy';
+import { resolveTriggerInput } from './triggerInput';
+import type { EffectProgram } from './effectDsl';
 
 export type RewardCandidateCategory = 'cards' | 'artifacts' | 'items';
 
@@ -16,6 +19,19 @@ export interface RewardCandidateLibrary {
   existing?: readonly unknown[];
   knownStatusIds?: Iterable<string>;
   statusDefinitions?: readonly unknown[];
+}
+
+/** Read the amount granted by one reward candidate. AI card candidates commonly use 0 to mean "not owned yet". */
+export function readRewardCandidateQuantity(category: RewardCandidateCategory, value: unknown): number | null {
+  if (!isRecord(value)) return null;
+  if (category === 'artifacts') return 1;
+
+  const raw = category === 'items' ? value.count : value.quantity;
+  if (raw === undefined || raw === null || raw === '') return 1;
+  const quantity = Number(raw);
+  if (category === 'cards' && quantity === 0) return 1;
+  const maximum = category === 'items' ? 999 : 100;
+  return Number.isInteger(quantity) && quantity >= 1 && quantity <= maximum ? quantity : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -28,12 +44,28 @@ function failure(message: string): RewardCandidateValidationResult {
 
 function compactPrograms(value: Record<string, unknown>): unknown[] {
   const programs: unknown[] = [];
+  const resolved = resolveTriggerInput(value);
+  if (resolved.structured) {
+    for (const [effects, trigger] of [
+      [resolved.immediateEffects, undefined],
+      [resolved.triggeredEffects, value.type === 'Power' ? resolved.trigger : undefined],
+    ] as const) {
+      if (!isCompactEffectList(effects)) continue;
+      const compiled = compileCompactEffectList(effects, { trigger, creates: value.creates });
+      if (compiled.ok) programs.push(compiled.value);
+    }
+  }
   for (const [field, trigger] of [
-    ['effects', value.trigger],
+    ['effects', resolved.structured ? undefined : value.trigger],
     ['discard_effects', undefined],
   ] as const) {
+    if (field === 'effects' && resolved.structured) continue;
     if (!isCompactEffectList(value[field])) continue;
-    const compiled = compileCompactEffectList(value[field], { trigger, creates: value.creates });
+    const compiled = compileCompactEffectList(value[field], {
+      trigger: field === 'effects' && value.type === 'Power' ? trigger : undefined,
+      when: field === 'effects' ? value.when : undefined,
+      creates: value.creates,
+    });
     if (compiled.ok) programs.push(compiled.value);
   }
   return programs;
@@ -65,22 +97,54 @@ function hasValidIdentity(value: Record<string, unknown>): boolean {
 
 function validateEffects(
   value: Record<string, unknown>,
-  options: { trigger?: unknown; creates?: unknown; allowModifiers?: boolean } = {},
+  options: {
+    trigger?: unknown;
+    when?: unknown;
+    creates?: unknown;
+    allowModifiers?: boolean;
+    power?: boolean;
+    allowSpentEnergy?: boolean;
+  } = {},
 ): RewardCandidateValidationResult {
   for (const field of ['effect', 'effect_program', 'effectProgram']) {
     if (Object.prototype.hasOwnProperty.call(value, field)) return failure(`${field} 已移除，请使用浅层 effects`);
   }
-  const hasCompact = isCompactEffectList(value.effects);
-  if (!hasCompact) return failure('必须提供浅层 effects');
-  const compiled = compileCompactEffectList(value.effects, { trigger: options.trigger, creates: options.creates });
-  if (!compiled.ok) {
-    const issue = compiled.issues[0];
-    return failure(`${issue.path}: ${issue.message}`);
+  const resolved = resolveTriggerInput(value);
+  const sources = resolved.structured
+    ? [
+        [resolved.immediateEffects, undefined],
+        [resolved.triggeredEffects, options.power ? resolved.trigger : undefined],
+      ] as const
+    : [[value.effects, options.trigger]] as const;
+  const programs: EffectProgram[] = [];
+  for (const [effects, trigger] of sources) {
+    if (effects === undefined) continue;
+    if (!isCompactEffectList(effects)) return failure('必须提供浅层 effects');
+    const compiled = compileCompactEffectList(effects, {
+      trigger,
+      when: trigger ? undefined : options.when,
+      creates: options.creates,
+    });
+    if (!compiled.ok) {
+      const issue = compiled.issues[0];
+      return failure(`${issue.path}: ${issue.message}`);
+    }
+    programs.push(compiled.value);
   }
-  const encoded = JSON.stringify(compiled.value);
+  if (programs.length === 0) return failure('必须提供浅层 effects');
+  const combined: EffectProgram = { spec: 'mwg.effect/v1', steps: programs.flatMap(program => program.steps) };
+  const encoded = JSON.stringify(combined);
   if (encoded.includes('context.status_stacks')) return failure('stacks 只允许用于状态 triggers');
   if (!options.allowModifiers && encoded.includes('"op":"modify"')) {
     return failure('modify 只允许用于 passive 或状态 hold');
+  }
+  if (options.power) {
+    const policy = validateEffectProgramPolicy(combined, {
+      triggerPolicy: 'require_root_or_status',
+      modifierPolicy: 'forbid',
+      allowSpentEnergy: options.allowSpentEnergy,
+    });
+    if (!policy.ok) return failure(`${policy.issues[0].path}: ${policy.issues[0].message}`);
   }
   return { ok: true };
 }
@@ -98,8 +162,7 @@ export function validateRewardCandidate(
     if (!CARD_TYPE_SET.has(type) || !CARD_RARITY_SET.has(rarity)) {
       return failure('卡牌 type/rarity 无效');
     }
-    const quantity = Number(value.quantity ?? 1);
-    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100) return failure('卡牌 quantity 必须是 1..100');
+    if (readRewardCandidateQuantity(category, value) === null) return failure('卡牌 quantity 必须是 0..100');
     if (Object.prototype.hasOwnProperty.call(value, 'discard_requirement')) {
       return failure('卡牌 discard_requirement 已移除');
     }
@@ -111,12 +174,19 @@ export function validateRewardCandidate(
     ) {
       return failure('卡牌 cost 必须是非负整数或 energy');
     }
-    const trigger = type === 'Power' ? value.trigger : undefined;
-    if ((type === 'Power') !== (value.trigger !== undefined)) return failure('只有 Power 必须提供 trigger');
+    const triggerInput = resolveTriggerInput(value);
+    const trigger = type === 'Power' ? triggerInput.trigger : undefined;
+    if (type !== 'Power' && value.trigger !== undefined) return failure('只有 Power 可以提供 trigger');
     for (const flag of ['retain', 'exhaust', 'ethereal', 'innate']) {
       if (value[flag] !== undefined && typeof value[flag] !== 'boolean') return failure(`卡牌 ${flag} 必须是布尔值`);
     }
-    const main = validateEffects(value, { trigger, creates: value.creates });
+    const main = validateEffects(value, {
+      trigger,
+      when: value.when,
+      creates: value.creates,
+      power: type === 'Power',
+      allowSpentEnergy: value.cost === 'energy',
+    });
     if (!main.ok) return main;
     if (Object.prototype.hasOwnProperty.call(value, 'discard_effect')) {
       return failure('discard_effect 已移除，请使用浅层 discard_effects');
@@ -131,17 +201,19 @@ export function validateRewardCandidate(
 
   if (category === 'artifacts') {
     if (!RELIC_RARITY_SET.has(String(value.rarity ?? 'Common'))) return failure('遗物 rarity 无效');
-    const compact = isCompactEffectList(value.effects);
-    if (compact && (typeof value.trigger !== 'string' || !ABILITY_TRIGGER_SET.has(value.trigger))) {
+    const triggerInput = resolveTriggerInput(value);
+    if (typeof triggerInput.trigger !== 'string' || !ABILITY_TRIGGER_SET.has(triggerInput.trigger)) {
       return failure('浅层遗物必须提供合法 trigger');
     }
-    return validateEffects(value, { allowModifiers: value.trigger === 'passive' });
+    return validateEffects(value, {
+      when: value.when,
+      allowModifiers: triggerInput.trigger === 'passive',
+    });
   }
 
-  const count = Number(value.count ?? 1);
-  if (!Number.isInteger(count) || count < 1 || count > 999) return failure('道具 count 必须是 1..999');
+  if (readRewardCandidateQuantity(category, value) === null) return failure('道具 count 必须是 1..999');
   if (value.trigger !== undefined) return failure('道具不得包含 trigger');
-  return validateEffects(value);
+  return validateEffects(value, { when: value.when });
 }
 
 /** Validate references and identity against the persistent content library. */

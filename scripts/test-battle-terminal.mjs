@@ -41,13 +41,18 @@ const prompt = core.formatBattleEndPrompt({
     lust: 3,
     maxLust: 100,
     energy: 4,
-    statuses: [{ name: '祝福', stacks: 2 }],
+    maxEnergy: 5,
+    drawPerTurn: 3,
+    statuses: [{ name: '祝福', stacks: 2, duration: 2, description: '提高下一次攻击的威力。' }],
     handCount: 1,
     drawPileCount: 2,
     discardPileCount: 3,
+    cards: [{ name: '星击', count: 2, description: '造成6点伤害。' }],
+    relics: [{ name: '星环', description: '首次出牌时获得格挡。' }],
   },
-  enemy: { name: '校验体', hp: 0, maxHp: 10, lust: 0, maxLust: 100, statuses: [] },
+  enemy: { name: '校验体', hp: 0, maxHp: 10, lust: 0, maxLust: 100, energy: 1, maxEnergy: 3, statuses: [] },
   turns: 2,
+  playerContinuation: '先检查敌人遗留的法杖，再询问同伴是否受伤。',
   narrativeCards: [{ name: '破门', description: '改变了战场。' }],
   rewardBudget: '[奖励预算] cards=3',
   buildGuidance: '[构筑建议] 防御',
@@ -55,13 +60,19 @@ const prompt = core.formatBattleEndPrompt({
 });
 assert.equal(prompt.resultText, '胜利');
 assert.match(prompt.battleSummary, /祝福2层/);
-assert.match(prompt.battleSummary, /使用了叙事卡牌：破门 - 改变了战场。/);
-assert.match(prompt.battleSummary, /【战斗过程】/);
+assert.match(prompt.battleSummary, /祝福2层（剩余2回合；提高下一次攻击的威力。）/);
+assert.match(prompt.battleSummary, /剩余能量：4\/5/);
+assert.match(prompt.battleSummary, /每回合抽牌：3张/);
+assert.match(prompt.battleSummary, /能量1\/3/);
+assert.match(prompt.battleSummary, /【叙事卡牌使用】[\s\S]*破门：改变了战场。/);
+assert.match(prompt.battleSummary, /【按回合战斗摘要】/);
 assert.match(prompt.battleSummary, /〔星击〕玩家造成6点伤害/);
-assert.match(
-  prompt.promptedBattleSummary,
-  /\[战斗后续\] ordinary\n\[战斗结算\]\n\[奖励预算\] cards=3\n\[构筑建议\] 防御\n\[剧情模型要求\] 只输出战后剧情正文，不输出选项、JSON、<UpdateVariable> 或更新命令。奖励和经验由随后运行的 MVU 额外模型按预算登记。玩家会通过自定义行动继续剧情。$/,
-);
+assert.match(prompt.battleSummary, /卡牌：星击×2（造成6点伤害。）/);
+assert.match(prompt.battleSummary, /遗物：星环（首次出牌时获得格挡。）/);
+assert.match(prompt.battleSummary, /【玩家指定的战后行动】先检查敌人遗留的法杖，再询问同伴是否受伤。/);
+assert.equal(prompt.promptedBattleSummary, prompt.battleSummary);
+assert.doesNotMatch(prompt.promptedBattleSummary, /\[战斗后续\]|\[战斗结算\]|\[奖励预算\]|\[剧情模型要求\]/);
+assert.doesNotMatch(prompt.promptedBattleSummary, /随后运行的 MVU|另一个奖励模型|第三个奖励模型/);
 const runPrompt = core.formatBattleEndPrompt({
   ...{
     result: 'defeat',
@@ -80,10 +91,9 @@ const runPrompt = core.formatBattleEndPrompt({
     turns: 3,
   },
 });
-assert.match(
-  runPrompt.promptedBattleSummary,
-  /\[战斗后续\] run\n\[战斗结算\]\n\[剧情模型要求\] 只输出战后剧情正文，不输出选项、JSON、<UpdateVariable> 或更新命令。不得叙述尚未发生的胜利奖励。远征路线由程序继续。$/,
-);
+assert.equal(runPrompt.promptedBattleSummary, runPrompt.battleSummary);
+assert.doesNotMatch(runPrompt.promptedBattleSummary, /\[战斗后续\]|\[战败惩罚\]|\[剧情模型要求\]/);
+assert.doesNotMatch(prompt.promptedBattleSummary, /\[战败惩罚\]/);
 
 const terminatedOrdinaryPrompt = core.formatBattleEndPrompt({
   result: 'terminated',
@@ -101,9 +111,10 @@ const terminatedOrdinaryPrompt = core.formatBattleEndPrompt({
   },
   turns: 1,
 });
-assert.match(
+assert.equal(terminatedOrdinaryPrompt.promptedBattleSummary, terminatedOrdinaryPrompt.battleSummary);
+assert.doesNotMatch(
   terminatedOrdinaryPrompt.promptedBattleSummary,
-  /\[剧情模型要求\].*只输出战后剧情正文.*玩家会通过自定义行动继续剧情。$/,
+  /\[战斗后续\]|\[战斗结算\]|\[奖励预算\]|\[剧情模型要求\]/,
 );
 
 const stateSource = await readFile(resolve('src/game-core/battleState.ts'), 'utf8');
@@ -111,6 +122,9 @@ assert.match(stateSource, /setBattleOutcome\(result: BattleEndResult/);
 assert.match(stateSource, /transitionToBattleEnd\(this\.gameState, result, narrativeText\)/);
 assert.doesNotMatch(stateSource, /setGameOver\(|setBattleTerminated\(/);
 const executorSource = await readFile(resolve('src/fish/combat/unifiedEffectExecutor.ts'), 'utf8');
-assert.match(executorSource, /processPendingDeaths[\s\S]*this\.gameStateManager\.isGameOver\(\)[\s\S]*this\.pendingDeaths\.clear\(\)/);
+assert.match(
+  executorSource,
+  /processPendingDeaths[\s\S]*this\.gameStateManager\.isGameOver\(\)[\s\S]*this\.pendingDeaths\.clear\(\)/,
+);
 
 console.log('One portable terminal state machine owns death priority, recovery, and end-prompt formatting.');

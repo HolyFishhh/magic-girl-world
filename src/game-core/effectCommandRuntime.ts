@@ -16,6 +16,7 @@ import {
   type NumericExpression,
   type RecoverCardZone,
 } from './effectDsl';
+import { roundBattleValue } from './battleMath';
 
 export type EffectCommand =
   | { type: 'damage' | 'heal' | 'gain_block' | 'gain_energy' | 'gain_lust'; target: EffectTarget; amount: number }
@@ -62,9 +63,10 @@ function readAmount(
   state: CoreEffectState,
   context: EffectExecutionContext,
   path: string,
+  discrete = false,
 ): number {
   const evaluated = evaluateNumericExpression(expression, state, context, path);
-  const value = typeof expression === 'number' ? evaluated : Math.floor(evaluated);
+  const value = discrete ? Math.floor(evaluated) : roundBattleValue(evaluated);
   if (value < 0) throw new EffectExecutionError('NEGATIVE_AMOUNT', path, '效果数量不能为负数');
   return value;
 }
@@ -77,13 +79,13 @@ function createCommand(
 ): EffectCommand {
   if (node.op === 'narrate') return { type: 'narration', text: node.text };
   if (node.op === 'draw_cards' || node.op === 'scry_cards') {
-    return { type: node.op, amount: readAmount(node.amount, state, context, `${path}.amount`) };
+    return { type: node.op, amount: readAmount(node.amount, state, context, `${path}.amount`, true) };
   }
   if (node.op === 'discard_cards' || node.op === 'exhaust_cards') {
     return {
       type: node.op,
       selector: clone(node.selector),
-      amount: readAmount(node.amount, state, context, `${path}.amount`),
+      amount: readAmount(node.amount, state, context, `${path}.amount`, true),
     };
   }
   if (node.op === 'recover_cards') {
@@ -91,14 +93,14 @@ function createCommand(
       type: 'recover_cards',
       source: node.source,
       pick: node.pick,
-      amount: readAmount(node.amount, state, context, `${path}.amount`),
+      amount: readAmount(node.amount, state, context, `${path}.amount`, true),
     };
   }
   if (node.op === 'reduce_card_cost') {
     return {
       type: 'reduce_card_cost',
       selector: clone(node.selector),
-      amount: readAmount(node.amount, state, context, `${path}.amount`),
+      amount: readAmount(node.amount, state, context, `${path}.amount`, true),
     };
   }
   if (node.op === 'copy_cards' || node.op === 'double_card_effect') {
@@ -113,10 +115,7 @@ function createCommand(
       target: node.target,
       stat: node.stat,
       operator: node.operator,
-      value:
-        typeof node.value === 'number'
-          ? node.value
-          : Math.floor(evaluateNumericExpression(node.value, state, context, `${path}.value`)),
+      value: roundBattleValue(evaluateNumericExpression(node.value, state, context, `${path}.value`)),
     };
   }
   if (node.op === 'register_trigger') {
@@ -132,7 +131,7 @@ function createCommand(
       type: 'apply_status',
       target: node.target,
       status: node.status,
-      stacks: readAmount(node.stacks, state, context, `${path}.stacks`),
+      stacks: readAmount(node.stacks, state, context, `${path}.stacks`, true),
     };
   }
   if (node.op === 'remove_status') {
@@ -144,15 +143,15 @@ function createCommand(
       target: node.target,
       stat: node.stat,
       value:
-        typeof node.value === 'number'
-          ? node.value
-          : Math.floor(evaluateNumericExpression(node.value, state, context, `${path}.value`)),
+        node.stat === 'energy'
+          ? Math.floor(evaluateNumericExpression(node.value, state, context, `${path}.value`))
+          : roundBattleValue(evaluateNumericExpression(node.value, state, context, `${path}.value`)),
     };
   }
   return {
     type: node.op,
     target: node.target,
-    amount: readAmount(node.amount, state, context, `${path}.amount`),
+    amount: readAmount(node.amount, state, context, `${path}.amount`, node.op === 'gain_energy'),
   };
 }
 

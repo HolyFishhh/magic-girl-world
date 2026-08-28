@@ -3,16 +3,19 @@ import { getCurrentMessageVariables, replaceCurrentMessageVariables } from '../.
 import { TavernContinuationHost } from '../../runtime/tavernContinuation';
 import {
   formatBattleEndPrompt,
-  formatBattleRewardBudget,
+  effectProgramToDisplayTags,
   formatBuildGuidance,
   readBattleEndResult,
   recommendBattleRewardBudget,
   recommendBuildGuidance,
   summarizeBuildBudget,
+  triggeredEffectProgramToDisplayTags,
   type BattleEndResult,
+  type EffectProgram,
 } from '../../game-core';
 import type { GameState } from '../../game-core';
 import { TavernBattleEffectPresenter, type BattleEndDialogRequest } from '../ui/battleEffectPresenter';
+import { DynamicStatusManager } from '../combat/dynamicStatusManager';
 import { GameStateManager } from './gameStateManager';
 import { BattleLog } from '../modules/battleLog';
 
@@ -34,6 +37,64 @@ export interface TavernBattleEndPresentationPorts {
 
 function cloneVariables(value: Record<string, any>): Record<string, any> {
   return JSON.parse(JSON.stringify(value));
+}
+
+type NamedBattleAsset = {
+  id?: string;
+  name?: string;
+  description?: string;
+  count?: number;
+  effectProgram?: EffectProgram;
+  trigger?: string;
+  source?: string;
+};
+
+function compactText(value: unknown, maximum = 96): string {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text.length > maximum ? `${text.slice(0, maximum - 1)}…` : text;
+}
+
+function describeNamedAsset(entry: NamedBattleAsset, resolveStatusName: (statusId: string) => string | undefined): string {
+  const trigger = String(entry.trigger || '').trim();
+  const tags = trigger
+    ? triggeredEffectProgramToDisplayTags(trigger, entry.effectProgram, { resolveStatusName })
+    : effectProgramToDisplayTags(entry.effectProgram, { resolveStatusName });
+  const mechanics = [...new Set(tags.map(tag => tag.text.trim()).filter(Boolean))].join('；');
+  const source = compactText(entry.source, 64);
+  const narrative = compactText(entry.description);
+  return [source ? `来源：${source}` : '', mechanics ? `效果：${mechanics}` : '', narrative ? `说明：${narrative}` : '']
+    .filter(Boolean)
+    .join('；');
+}
+
+function compactNamedAssets(
+  entries: ReadonlyArray<NamedBattleAsset> | undefined,
+  useStoredCount = false,
+  resolveStatusName: (statusId: string) => string | undefined = () => undefined,
+): Array<{ name: string; count: number; description?: string }> {
+  const grouped = new Map<string, { name: string; count: number; description?: string }>();
+  for (const entry of entries || []) {
+    const name = String(entry?.name || entry?.source || entry?.id || '').trim();
+    if (!name) continue;
+    const description = describeNamedAsset(entry, resolveStatusName);
+    const key = `${name}\u0000${description}`;
+    const current = grouped.get(key) || {
+      name,
+      count: 0,
+      description: description || undefined,
+    };
+    current.count += useStoredCount ? Math.max(0, Math.floor(Number(entry.count) || 0)) : 1;
+    grouped.set(key, current);
+  }
+  return [...grouped.values()].filter(entry => entry.count > 0);
+}
+
+function compactNamedEffect(
+  entry: NamedBattleAsset | null | undefined,
+  resolveStatusName: (statusId: string) => string | undefined,
+): string {
+  const asset = compactNamedAssets(entry ? [entry] : [], false, resolveStatusName)[0];
+  return asset ? `${asset.name}${asset.description ? `（${asset.description}）` : ''}` : '';
 }
 
 /** Tavern-only continuation boundary for leaving a completed battle message. */
@@ -62,7 +123,11 @@ export class TavernBattleEndHost {
     return TavernBattleEndHost.instance;
   }
 
-  public async confirmBattleEnd(result: BattleEndResult, battleSummary: string): Promise<void> {
+  public async confirmBattleEnd(
+    result: BattleEndResult,
+    battleSummary: string,
+    rewardRequest?: Record<string, unknown> | null,
+  ): Promise<void> {
     const gameState = this.ports.getState();
     const settlement = {
       result,
@@ -70,6 +135,7 @@ export class TavernBattleEndHost {
       player: gameState.player,
       items: gameState.player.items || [],
       turns: gameState.currentTurn,
+      rewardRequest,
     };
 
     await this.continuationHost.continueWithPrompt({
@@ -100,14 +166,41 @@ export class TavernBattleEndHost {
       const gameState = this.ports.getState();
       const player = gameState.player;
       const enemy = gameState.enemy;
+      const statusManager = DynamicStatusManager.getInstance();
+      const resolveStatusName = (statusId: string): string | undefined =>
+        statusManager.getStatusDefinition(statusId)?.name?.trim() || undefined;
       const narrativeCards = (player.discardPile ?? []).filter(card => card.type === 'Event');
       const request = gameState.battleRequest;
       const budget =
         result === 'victory' && request
           ? summarizeBuildBudget(request.content, { hp: player.currentHp, maxHp: player.maxHp })
           : null;
+      const rewardBudget = result === 'victory' ? recommendBattleRewardBudget(request?.route || null) : null;
       const guidance = request && budget ? formatBuildGuidance(recommendBuildGuidance(request.content, budget)) : '';
-      const prompt = formatBattleEndPrompt({
+      const limits: Record<string, number> = {};
+      if (rewardBudget) {
+        limits.cards = rewardBudget.cards.pick;
+        if (rewardBudget.artifacts) limits.artifacts = rewardBudget.artifacts.pick;
+        if (rewardBudget.items) limits.items = rewardBudget.items.pick;
+      }
+      const rewardRequest: Record<string, unknown> =
+        result === 'victory' && rewardBudget
+          ? {
+              marker: '[MVU_BATTLE_SETTLEMENT]',
+              result,
+              cards: rewardBudget.cards,
+              artifacts: rewardBudget.artifacts,
+              items: rewardBudget.items,
+              limits,
+              build: guidance,
+            }
+          : {
+              marker: '[MVU_BATTLE_SETTLEMENT]',
+              result,
+              penalty: true,
+              enemy: enemy ? { name: enemy.name } : null,
+            };
+      const promptInput = {
         result,
         continuation: request?.route ? 'run' : 'ordinary',
         narrativeText,
@@ -117,12 +210,19 @@ export class TavernBattleEndHost {
           lust: player.currentLust,
           maxLust: player.maxLust,
           energy: player.energy,
+          maxEnergy: player.maxEnergy,
+          drawPerTurn: player.drawPerTurn,
           block: player.block,
           statuses: player.statusEffects,
           handCount: player.hand?.length ?? 0,
           drawPileCount: player.drawPile?.length ?? 0,
           discardPileCount: player.discardPile?.length ?? 0,
           exhaustPileCount: player.exhaustPile?.length ?? 0,
+          cards: compactNamedAssets(player.deck, false, resolveStatusName),
+          relics: compactNamedAssets(player.relics, false, resolveStatusName),
+          abilities: compactNamedAssets(player.abilities, false, resolveStatusName),
+          items: compactNamedAssets(player.items, true, resolveStatusName),
+          desireEffect: compactNamedEffect(gameState.battle?.player_lust_effect, resolveStatusName),
         },
         enemy: enemy
           ? {
@@ -131,26 +231,30 @@ export class TavernBattleEndHost {
               maxHp: enemy.maxHp,
               lust: enemy.currentLust,
               maxLust: enemy.maxLust,
+              energy: enemy.energy,
+              maxEnergy: enemy.maxEnergy,
               block: enemy.block,
               statuses: enemy.statusEffects,
+              actions: compactNamedAssets(enemy.actions, false, resolveStatusName),
+              abilities: compactNamedAssets(enemy.abilities, false, resolveStatusName),
+              desireEffect: compactNamedEffect(enemy.lustEffect, resolveStatusName),
             }
           : null,
         turns: gameState.currentTurn,
-        battleLog: BattleLog.buildNarrativeReport(),
+        battleLog: BattleLog.buildTurnSummaryReport(),
         narrativeCards,
-        rewardBudget:
-          result === 'victory'
-            ? `[奖励预算] ${formatBattleRewardBudget(recommendBattleRewardBudget(request?.route || null))}`
-            : '',
-        buildGuidance: guidance ? `[构筑建议] ${guidance}` : '',
-      });
+      } as const;
+      const prompt = formatBattleEndPrompt(promptInput);
 
       const presentation = this.presentation();
       presentation.showBattleEndDialog({
         result,
         battleSummary: prompt.promptedBattleSummary,
         narrativeText,
-        onConfirm: () => this.confirmBattleEnd(result, prompt.promptedBattleSummary),
+        onConfirm: playerContinuation => {
+          const continuationPrompt = formatBattleEndPrompt({ ...promptInput, playerContinuation });
+          return this.confirmBattleEnd(result, continuationPrompt.promptedBattleSummary, rewardRequest);
+        },
         onRestart: () => this.restartBattle(),
       });
       presentation.addLog(`战斗结束：${prompt.resultText}`, 'system');

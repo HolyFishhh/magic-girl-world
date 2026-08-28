@@ -1,4 +1,4 @@
-import { validateRewardCandidateAgainstLibrary } from './rewardCandidateValidation';
+import { readRewardCandidateQuantity, validateRewardCandidateAgainstLibrary } from './rewardCandidateValidation';
 import {
   validateRewardSelections,
   type RewardCategory,
@@ -41,13 +41,6 @@ function rewardName(value: Record<string, any>): string {
   return String(value.name || value.id || '未知');
 }
 
-function rewardQuantity(value: Record<string, any>, category: RewardCategory): number {
-  const raw = category === 'items' ? (value.count ?? 1) : (value.quantity ?? 1);
-  const quantity = Number(raw);
-  if (!Number.isInteger(quantity) || quantity < 1) throw new Error(`奖励 ${rewardName(value)} 的数量无效`);
-  return quantity;
-}
-
 /** Validate all selected candidates before a host applies any MUV mutation. */
 export function planRewardSelections(input: RewardSelectionPlanInput): RewardSelectionPlan {
   const selections = validateRewardSelections(
@@ -81,7 +74,10 @@ export function planRewardSelections(input: RewardSelectionPlanInput): RewardSel
       });
       if (!validation.ok) throw new Error(`奖励 ${rewardName(raw)} 无效：${validation.message}`);
       const value = clone(raw);
-      const quantity = rewardQuantity(value, category);
+      const quantity = readRewardCandidateQuantity(category, value);
+      if (quantity === null) throw new Error(`奖励 ${rewardName(value)} 的数量无效`);
+      if (category === 'cards') value.quantity = quantity;
+      if (category === 'items') value.count = quantity;
       if (isRecord(value.status)) {
         const statusId = String(value.status.id);
         const existing = statuses.get(statusId);

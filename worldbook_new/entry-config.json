@@ -32,10 +32,10 @@
   "首条消息变量更新": {
     "comment": "[mvu_update] 首条消息变量更新",
     "constant": false,
-    "keys": ["<CHARACTER_INIT_PENDING>"],
-    "use_regex": true,
+    "keys": ["<CHARACTER_INIT_PENDING>", "〈CHARACTER_INIT_PENDING〉", "＜CHARACTER_INIT_PENDING＞"],
+    "use_regex": false,
     "extensions": {
-      "scan_depth": 2
+      "scan_depth": 1
     }
   },
   "变量更新规则": {
@@ -43,7 +43,7 @@
     "constant": true,
     "selective": false,
     "keys": [],
-    "use_regex": true,
+    "use_regex": false,
     "extensions": {
       "group": "",
       "group_override": false
@@ -54,20 +54,42 @@
     "constant": true,
     "selective": false,
     "keys": [],
-    "use_regex": true
+    "use_regex": false,
+    "extensions": {
+      "position": 4,
+      "depth": 1,
+      "role": 0,
+      "prevent_recursion": true,
+      "exclude_recursion": true
+    }
+  },
+  "剧情交接锚点": {
+    "comment": "[mvu_plot] 剧情交接终检",
+    "create": true,
+    "constant": true,
+    "selective": false,
+    "keys": [],
+    "use_regex": false,
+    "extensions": {
+      "position": 4,
+      "depth": 0,
+      "role": 0,
+      "prevent_recursion": true,
+      "exclude_recursion": true
+    }
   },
   "变量说明": {
     "comment": "[mvu_plot] 剧情可见状态与构筑",
     "constant": true,
     "selective": false,
     "keys": [],
-    "use_regex": true
+    "use_regex": false
   },
   "战斗内容生成要求": {
     "comment": "[mvu_update] 战斗内容生成要求",
     "constant": false,
-    "keys": ["<CHARACTER_INIT_PENDING>", "<CONTENT_PENDING>", "[开始战斗]", "<BATTLE_PENDING>", "[战斗结算]", "[营火升级]", "[商店生成]", "[事件选择]", "[战斗内容修复]"],
-    "use_regex": true
+    "keys": ["<CHARACTER_INIT_PENDING>", "〈CHARACTER_INIT_PENDING〉", "＜CHARACTER_INIT_PENDING＞", "<CONTENT_PENDING>", "〈CONTENT_PENDING〉", "＜CONTENT_PENDING＞", "[开始战斗]", "<BATTLE_PENDING>", "〈BATTLE_PENDING〉", "＜BATTLE_PENDING＞", "[MVU_BATTLE_SETTLEMENT]", "[营火升级]", "[商店生成]", "[事件选择]", "[战斗内容修复]"],
+    "use_regex": false
   },
   "[initvar]不要启用": {
     "comment": "[mvu_plot] [initvar]不要启用",
@@ -76,63 +98,77 @@
   "战斗场景生成": {
     "comment": "[mvu_update] 战斗场景生成",
     "constant": false,
-    "keys": ["[开始战斗]", "<BATTLE_PENDING>", "[战斗场景修复]"],
-    "use_regex": true
+    "keys": ["[开始战斗]", "<BATTLE_PENDING>", "〈BATTLE_PENDING〉", "＜BATTLE_PENDING＞", "[战斗场景修复]"],
+    "use_regex": false
+  },
+  "战斗结算生成": {
+    "comment": "[mvu_update] 战斗结算生成",
+    "create": true,
+    "constant": false,
+    "keys": ["[MVU_BATTLE_SETTLEMENT]"],
+    "use_regex": false,
+    "extensions": {
+      "group": "",
+      "group_override": false,
+      "prevent_recursion": true,
+      "exclude_recursion": true,
+      "depth": 0
+    }
   },
   "等级表现形式": {
     "comment": "[mvu_plot] 等级表现形式",
     "constant": false,
     "keys": [],
-    "use_regex": true
+    "use_regex": false
   },
   "远征节点协议": {
     "comment": "[mvu_update] 远征节点协议",
     "create": true,
     "constant": false,
     "keys": ["[路线节点]", "[事件选择]", "[营火升级]", "[商店生成]"],
-    "use_regex": true
+    "use_regex": false
   },
   "初始战斗内容修复": {
     "comment": "[mvu_update] 初始战斗内容修复",
     "create": true,
     "constant": false,
     "keys": ["[战斗内容修复]"],
-    "use_regex": true
+    "use_regex": false
   },
   "战斗场景修复": {
     "comment": "[mvu_update] 战斗场景修复",
     "create": true,
     "constant": false,
     "keys": ["[战斗场景修复]"],
-    "use_regex": true
+    "use_regex": false
   },
   "世界信息": {
     "comment": "[mvu_plot] 世界信息",
     "create": true,
     "constant": false,
     "keys": ["[开始游戏]"],
-    "use_regex": true
+    "use_regex": false
   },
   "地点与NPC线路": {
     "comment": "[mvu_plot] 地点与NPC线路",
     "create": true,
     "constant": false,
     "keys": ["[开始游戏]"],
-    "use_regex": true
+    "use_regex": false
   },
   "入侵与遭遇类型": {
     "comment": "[mvu_plot] 入侵与遭遇类型",
     "create": true,
     "constant": false,
     "keys": ["[开始游戏]"],
-    "use_regex": true
+    "use_regex": false
   },
   "变量数据结构": {
     "comment": "[mvu_update] 变量数据结构",
     "create": true,
-    "constant": true,
-    "selective": false,
-    "keys": [],
+    "constant": false,
+    "selective": true,
+    "keys": ["<CHARACTER_INIT_PENDING>", "〈CHARACTER_INIT_PENDING〉", "＜CHARACTER_INIT_PENDING＞", "<CONTENT_PENDING>", "〈CONTENT_PENDING〉", "＜CONTENT_PENDING＞", "<BATTLE_PENDING>", "〈BATTLE_PENDING〉", "＜BATTLE_PENDING＞", "[MVU_BATTLE_SETTLEMENT]", "[路线节点]", "[事件选择]", "[营火升级]", "[商店生成]", "[战斗内容修复]", "[战斗场景修复]"],
     "use_regex": false,
     "extensions": {
       "group": "",

@@ -51,15 +51,27 @@ assert.ok(
   'an event must enter its terminal state before its end dialog is created',
 );
 
-const presentBattleEnd = readClassMethod(battleEndHostSource, battleEndHostPath, 'TavernBattleEndHost', 'presentBattleEnd');
+const presentBattleEnd = readClassMethod(
+  battleEndHostSource,
+  battleEndHostPath,
+  'TavernBattleEndHost',
+  'presentBattleEnd',
+);
 assert.match(presentBattleEnd, /formatBattleEndPrompt\(\{/);
-assert.match(presentBattleEnd, /\[奖励预算\]/);
-assert.match(presentBattleEnd, /\[构筑建议\]/);
+assert.match(presentBattleEnd, /\[MVU_BATTLE_SETTLEMENT\]/);
+assert.match(presentBattleEnd, /const rewardRequest/);
+assert.doesNotMatch(presentBattleEnd, /\[奖励预算\]|\[构筑建议\]|\[剧情模型要求\]/);
 assert.match(presentBattleEnd, /recommendBattleRewardBudget/);
 assert.match(presentBattleEnd, /recommendBuildGuidance/);
 assert.match(presentBattleEnd, /presentation\.showBattleEndDialog\(\{/);
 assert.match(presentBattleEnd, /battleSummary: prompt\.promptedBattleSummary/);
-assert.match(presentBattleEnd, /this\.confirmBattleEnd\(result, prompt\.promptedBattleSummary\)/);
+assert.match(presentBattleEnd, /formatBattleEndPrompt\(\{ \.\.\.promptInput, playerContinuation \}\)/);
+assert.match(battleEndHostSource, /effectProgramToDisplayTags/);
+assert.match(battleEndHostSource, /triggeredEffectProgramToDisplayTags/);
+assert.match(
+  presentBattleEnd,
+  /this\.confirmBattleEnd\(result, continuationPrompt\.promptedBattleSummary, rewardRequest\)/,
+);
 assert.doesNotMatch(
   presentBattleEnd,
   /await presentation\.showBattleEndDialog/,
@@ -76,6 +88,17 @@ assert.match(executeEffectProgram, /catch \(error\)[\s\S]*throw error/);
 assert.doesNotMatch(executorSource, /executeExpression|calculateDynamicValue/);
 assert.match(presentBattleEnd, /prompt\.resultText/);
 
+const handleLustOverflow = readClassMethod(
+  executorSource,
+  executorPath,
+  'UnifiedEffectExecutor',
+  'handleLustOverflow',
+);
+assert.match(executorSource, /activeLustOverflows = new Set<'player' \| 'enemy'>\(\)/);
+assert.match(handleLustOverflow, /activeLustOverflows\.has\(target\)/);
+assert.match(handleLustOverflow, /activeLustOverflows\.add\(target\)/);
+assert.match(handleLustOverflow, /finally[\s\S]*currentLust: 0[\s\S]*activeLustOverflows\.delete\(target\)/);
+
 const showBattleEndDialog = readClassMethod(
   presenterSource,
   presenterPath,
@@ -88,7 +111,8 @@ assert.match(
   /\.text\(request\.narrativeText\)/,
   'narrative text must be rendered as text, not HTML',
 );
-assert.match(showBattleEndDialog, /await request\.onConfirm\(\)/);
+assert.match(showBattleEndDialog, /await request\.onConfirm\(playerContinuation\)/);
+assert.match(showBattleEndDialog, /battle-end-choice/);
 assert.match(showBattleEndDialog, /await request\.onRestart\(\)/);
 
 assert.doesNotMatch(

@@ -6,7 +6,7 @@ import { DynamicStatusManager } from '../combat/dynamicStatusManager';
 import { UnifiedEffectExecutor } from '../combat/unifiedEffectExecutor';
 import { GameStateManager } from '../core/gameStateManager';
 import { escapeHtml, escapeHtmlAttribute } from '../shared/html';
-import type { Card } from '../../game-core';
+import { roundBattleDisplayValue, type Card } from '../../game-core';
 import { CardPlayMode } from './cardPlayMode';
 import { EnemyIntentPresenter } from './enemyIntentPresenter';
 import { PileStatsDisplay } from './pileViewer';
@@ -14,8 +14,14 @@ import { EffectProgramDisplay } from './effectProgramDisplay';
 
 export class BattleUI {
   private static effectDisplay = EffectProgramDisplay.getInstance();
+  private static activeCardTooltip: JQuery | null = null;
+  private static activeCardTooltipAnchor: JQuery | null = null;
   private static handResizeBound = false;
   private static handResizeFrame: number | null = null;
+
+  private static displayBattleValue(value: unknown, fallback = 0): number {
+    return typeof value === 'number' && Number.isFinite(value) ? roundBattleDisplayValue(value) : fallback;
+  }
   /**
    * 翻译卡牌类型
    */
@@ -64,6 +70,7 @@ export class BattleUI {
       if (enemy) {
         this.updateEnemyDisplay(enemy);
         EnemyIntentPresenter.getInstance().render(enemy);
+        this.bindEnemyIntentDetails(enemy);
       }
 
       // 更新玩家信息
@@ -84,7 +91,8 @@ export class BattleUI {
         const drawCount = gameState.player.drawPile?.length || 0;
         const discardCount = gameState.player.discardPile?.length || 0;
         const exhaustCount = gameState.player.exhaustPile?.length || 0;
-        PileStatsDisplay.updatePileStats(drawCount, discardCount, exhaustCount);
+        const deckCount = gameState.player.deck?.length || 0;
+        PileStatsDisplay.updatePileStats(drawCount, discardCount, exhaustCount, deckCount);
       }
       this.updateDeckCounts(gameState);
 
@@ -101,21 +109,22 @@ export class BattleUI {
   private static updateEnemyDisplay(enemy: any): void {
     $('#enemy-name').text(enemy.name || '未知敌人');
     $('.enemy-emoji').text(enemy.emoji || '👹');
+    $('#stage-enemy-emoji').text(enemy.emoji || '👹');
 
     // 更新敌人血条
     const enemyHpPercent = enemy.maxHp > 0 ? (enemy.currentHp / enemy.maxHp) * 100 : 0;
     $('.enemy-card .hp-fill').css('width', `${enemyHpPercent}%`);
-    $('#enemy-hp').text(`${enemy.currentHp}/${enemy.maxHp}`);
+    $('#enemy-hp').text(`${this.displayBattleValue(enemy.currentHp)}/${this.displayBattleValue(enemy.maxHp, 1)}`);
 
     // 更新敌人欲望条
     const enemyLustPercent = enemy.maxLust > 0 ? (enemy.currentLust / enemy.maxLust) * 100 : 0;
 
     // 使用新的统一选择器
     $('.enemy-card .lust-fill').css('width', `${enemyLustPercent}%`);
-    $('#enemy-lust').text(`${enemy.currentLust}/${enemy.maxLust}`);
+    $('#enemy-lust').text(`${this.displayBattleValue(enemy.currentLust)}/${this.displayBattleValue(enemy.maxLust, 1)}`);
 
     // 更新敌人格挡 - 条件显示
-    const enemyBlockValue = enemy.block || 0;
+    const enemyBlockValue = this.displayBattleValue(enemy.block);
     $('#enemy-block').text(enemyBlockValue);
 
     // 格挡为0时隐藏，大于0时显示
@@ -137,12 +146,14 @@ export class BattleUI {
    * 更新玩家显示
    */
   private static updatePlayerDisplay(player: any): void {
-    const playerHp = player.currentHp || 0;
-    const playerMaxHp = player.maxHp || 100;
-    const playerLust = player.currentLust || 0;
-    const playerMaxLust = player.maxLust || 100;
-    const playerEnergy = player.energy || 0;
-    const playerBlock = player.block || 0;
+    const playerHp = this.displayBattleValue(player.currentHp);
+    const playerMaxHp = this.displayBattleValue(player.maxHp, 100);
+    const playerLust = this.displayBattleValue(player.currentLust);
+    const playerMaxLust = this.displayBattleValue(player.maxLust, 100);
+    const playerEnergy = this.displayBattleValue(player.energy);
+    const playerBlock = this.displayBattleValue(player.block);
+    const playerEmoji = typeof player.emoji === 'string' && player.emoji.trim() ? player.emoji.trim() : '✨';
+    $('.player-emblem, #stage-player-emoji').text(playerEmoji);
 
     // 更新玩家血条
     const playerHpPercent = playerMaxHp > 0 ? (playerHp / playerMaxHp) * 100 : 0;
@@ -157,7 +168,7 @@ export class BattleUI {
     $('#player-lust').text(`${playerLust}/${playerMaxLust}`);
 
     // 更新能量显示
-    $('#player-energy').text(`${playerEnergy}/${player.maxEnergy || 3}`);
+    $('#player-energy').text(`${playerEnergy}/${this.displayBattleValue(player.maxEnergy, 3)}`);
 
     // 更新格挡显示 - 条件显示
     $('#player-block').text(playerBlock);
@@ -199,7 +210,7 @@ export class BattleUI {
 
     const battleEnded = gameState.isGameOver === true || gameState.phase === 'game_over';
     const playerCanAct = gameState.phase === 'player_turn' && !battleEnded;
-    $('.end-turn-button, #modeToggle, #use-item-btn')
+    $('.end-turn-button, #use-item-btn')
       .prop('disabled', !playerCanAct)
       .attr('aria-disabled', String(!playerCanAct));
     $('#hand-cards').toggleClass('battle-ended', battleEnded);
@@ -268,11 +279,12 @@ export class BattleUI {
   private static layoutHandCards(): void {
     try {
       const handContainer = $('.player-hand');
-      const cards = handContainer.children('.enhanced-card');
+      const cards = handContainer.children('.enhanced-card, .card-drag-slot');
       const count = cards.length;
       const handContainerWidth = handContainer.width() || 0;
       const handContainerHeight = handContainer.height() || 180;
-      const cardWidth = Math.max(70, Math.min(116, Math.floor((handContainerHeight - 8) * 0.75)));
+      const maxCardWidth = document.documentElement.classList.contains('mwg-fullscreen-active') ? 150 : 116;
+      const cardWidth = Math.max(70, Math.min(maxCardWidth, Math.floor((handContainerHeight - 8) * 0.75)));
       const normalOffset = cardWidth + 8;
       const fitOffset = count <= 1 ? 0 : (handContainerWidth - cardWidth - 8) / (count - 1);
       const offset = count <= 1 ? 0 : Math.max(14, Math.min(normalOffset, fitOffset));
@@ -341,7 +353,7 @@ export class BattleUI {
     const isPlayerTurn = gameState.phase === 'player_turn';
     const isCurse = cardData.type === 'Curse';
     // 如果被眩晕，所有卡牌都不可点击
-    const isClickable = isPlayerTurn && (canAfford || isCurse) && !isStunned;
+    const isClickable = isPlayerTurn && canAfford && !isCurse && !isStunned;
 
     // 创建完整的卡牌元素
     const cardElement = $(`
@@ -351,8 +363,7 @@ export class BattleUI {
            data-card-id="${escapeHtmlAttribute(cardData.id)}">
         <div class="card-header">
           <div class="card-cost ${canAfford ? '' : 'insufficient-energy'}">${escapeHtml(displayCost)}</div>
-          <div class="card-rarity-gem"></div>
-          <div class="card-type-indicator">${escapeHtml(this.translateCardType(cardData.type))}</div>
+          <div class="card-rarity-badge"><span class="card-rarity-gem"></span>${escapeHtml(this.translateRarity(cardData.rarity))}</div>
         </div>
         <div class="card-artwork">
           <div class="card-emoji">${escapeHtml(cardData.emoji)}</div>
@@ -364,8 +375,11 @@ export class BattleUI {
           </div>
         </div>
         <div class="card-body">
-          <div class="card-name">${escapeHtml(cardData.name)}</div>
-          <div class="card-description">${escapeHtml(cardData.description)}</div>
+          <div class="card-title-row">
+            <div class="card-name">${escapeHtml(cardData.name)}</div>
+            <div class="card-type-indicator">${escapeHtml(this.translateCardType(cardData.type))}</div>
+          </div>
+          ${cardData.description ? `<div class="card-description">${escapeHtml(cardData.description)}</div>` : ''}
         </div>
         <div class="card-glow"></div>
       </div>
@@ -413,6 +427,10 @@ export class BattleUI {
    * 显示卡牌工具提示
    */
   public static showCardTooltip(cardElement: JQuery, card: Card): void {
+    // Hover and drag can request details in the same frame. Keep exactly one
+    // tooltip instead of waiting for an older fade-out to finish.
+    this.activeCardTooltip?.stop(true, true).remove();
+    $('.card-tooltip').stop(true, true).remove();
     // 解析效果标签 - 工具提示内完整换行显示
     const effectTags = BattleUI.effectDisplay.programToTags(card.effectProgram);
     const wrappedEffectHTML = BattleUI.effectDisplay.createWrappedEffectTagsHTML(effectTags);
@@ -423,7 +441,7 @@ export class BattleUI {
       : '';
 
     const tooltip = $(`
-      <div class="card-tooltip">
+      <div class="card-tooltip" id="mwg-active-card-tooltip">
         <div class="tooltip-header">${escapeHtml(card.name)}</div>
         <div class="tooltip-meta">
           <span class="tooltip-cost">💎${escapeHtml(card.cost)}</span>
@@ -431,8 +449,8 @@ export class BattleUI {
           <span class="tooltip-rarity">${escapeHtml(this.translateRarity(card.rarity))}</span>
         </div>
         ${wrappedEffectHTML ? `<div class="tooltip-effects">${wrappedEffectHTML}</div>` : ''}
-        ${wrappedDiscardHTML ? `<div class="tooltip-effects"><div class="tooltip-subtitle">被弃掉时：</div>${wrappedDiscardHTML}</div>` : ''}
-        <div class="tooltip-description">${escapeHtml(card.description)}</div>
+        ${wrappedDiscardHTML ? `<div class="tooltip-effects"><div class="tooltip-subtitle">此牌被战斗效果弃掉后：</div>${wrappedDiscardHTML}</div>` : ''}
+        ${card.description ? `<div class="tooltip-description">${escapeHtml(card.description)}</div>` : ''}
         ${
           card.innate || card.retain || card.exhaust || card.ethereal
             ? `
@@ -449,83 +467,56 @@ export class BattleUI {
     `);
 
     $('body').append(tooltip);
-
-    // 定位工具提示
-    const offset = cardElement.offset();
-    if (offset) {
-      const $win = $(window);
-      const vw = $win.width() || 0;
-      const vh = $win.height() || 0;
-      const isMobile = vw <= 768;
-      const tooltipWidth = isMobile ? Math.min(vw * 0.9, 320) : 320;
-      const tooltipHeight = 220; // 预估
-
-      // 检查是否处于拖动状态（如果卡牌有dragging类或card-ghost存在）
-      const isDragging = cardElement.hasClass('dragging') || $('.card-ghost').length > 0;
-
-      let left = 0;
-      let top = 0;
-
-      if (isDragging) {
-        // 拖动状态：显示在手牌区域下方
-        const handSection = $('.hand-section');
-        if (handSection.length > 0) {
-          const handOffset = handSection.offset();
-          const handHeight = handSection.outerHeight() || 0;
-          if (handOffset) {
-            // 居中显示在手牌区域下方
-            left = Math.max(10, (vw - tooltipWidth) / 2);
-            top = handOffset.top + handHeight + 10;
-            // 确保不超出屏幕底部
-            if (top + tooltipHeight > vh - 10) {
-              top = vh - tooltipHeight - 10;
-            }
-          }
-        } else {
-          // 如果找不到手牌区域，默认居中显示
-          left = (vw - tooltipWidth) / 2;
-          top = vh - tooltipHeight - 20;
-        }
-      } else if (isMobile) {
-        // 手机端：居中显示在屏幕上方
-        left = (vw - tooltipWidth) / 2;
-        top = Math.max(10, Math.min(offset.top - tooltipHeight - 10, vh * 0.1));
-      } else {
-        // PC非拖动状态：智能定位（左右优先，不足则上下）
-        const cardW = cardElement.outerWidth() || 0;
-        const cardH = cardElement.outerHeight() || 0;
-        const spaceRight = vw - (offset.left + cardW);
-        const spaceLeft = offset.left;
-        const spaceAbove = offset.top;
-
-        if (spaceRight >= tooltipWidth + 12) {
-          left = offset.left + cardW + 8;
-          top = Math.max(8, Math.min(offset.top, vh - tooltipHeight - 8));
-        } else if (spaceLeft >= tooltipWidth + 12) {
-          left = offset.left - tooltipWidth - 8;
-          top = Math.max(8, Math.min(offset.top, vh - tooltipHeight - 8));
-        } else if (spaceAbove >= tooltipHeight + 12) {
-          left = Math.max(8, Math.min(offset.left + cardW / 2 - tooltipWidth / 2, vw - tooltipWidth - 8));
-          top = offset.top - tooltipHeight - 8;
-        } else {
-          left = Math.max(8, Math.min(offset.left + cardW / 2 - tooltipWidth / 2, vw - tooltipWidth - 8));
-          top = offset.top + cardH + 8;
-        }
-      }
-
-      tooltip.css({ position: 'absolute', left, top, width: tooltipWidth, zIndex: 1000 });
-    }
+    this.activeCardTooltip = tooltip;
+    this.activeCardTooltipAnchor = cardElement;
+    this.repositionCardTooltip(cardElement);
 
     tooltip.fadeIn(200);
+    requestAnimationFrame(() => {
+      $('.card-tooltip').not(tooltip).stop(true, true).remove();
+    });
+  }
+
+  /** Keep the details visually attached to the actual card or drag ghost. */
+  public static repositionCardTooltip(cardElement?: JQuery): void {
+    const tooltip = this.activeCardTooltip;
+    const anchor = cardElement || this.activeCardTooltipAnchor;
+    const element = anchor?.get(0) as HTMLElement | undefined;
+    if (!tooltip?.length || !element?.isConnected) return;
+    this.activeCardTooltipAnchor = anchor || null;
+    const rect = element.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const width = Math.min(360, Math.max(260, viewportWidth - 16));
+    tooltip.css({ position: 'fixed', width, visibility: 'hidden', display: 'block', zIndex: 5000 });
+    const height = Math.min(tooltip.outerHeight() || 220, viewportHeight - 16);
+    const left = Math.max(8, Math.min(rect.left + rect.width / 2 - width / 2, viewportWidth - width - 8));
+    const top =
+      rect.top >= height + 10
+        ? rect.top - height - 8
+        : Math.max(8, Math.min(rect.bottom + 8, viewportHeight - height - 8));
+    const isAbove = top < rect.top;
+    const arrowLeft = Math.max(14, Math.min(rect.left + rect.width / 2 - left, width - 14));
+    tooltip
+      .toggleClass('is-above', isAbove)
+      .toggleClass('is-below', !isAbove)
+      .addClass('is-card-attached')
+      .css({
+        left,
+        top,
+        maxHeight: viewportHeight - 16,
+        visibility: 'visible',
+        '--tooltip-arrow-left': `${arrowLeft}px`,
+      });
   }
 
   /**
    * 隐藏卡牌工具提示
    */
   private static hideCardTooltip(): void {
-    $('.card-tooltip').fadeOut(200, function () {
-      $(this).remove();
-    });
+    this.activeCardTooltip = null;
+    this.activeCardTooltipAnchor = null;
+    $('.card-tooltip').stop(true, true).remove();
   }
 
   /**
@@ -538,6 +529,8 @@ export class BattleUI {
     }
 
     const player = gameState.player;
+
+    $('#deck-pile-count').text(player.deck?.length || 0);
 
     // 更新抽牌堆计数
     const drawPileCount = player.drawPile?.length || 0;
@@ -564,7 +557,7 @@ export class BattleUI {
     }
 
     if (!relics || relics.length === 0) {
-      relicsContainer.html('<div class="no-relics">暂无遗物</div>');
+      relicsContainer.empty();
       return;
     }
 
@@ -576,7 +569,11 @@ export class BattleUI {
              data-relic-name="${escapeHtmlAttribute(relic.name || '未知遗物')}"
              data-relic-description="${escapeHtmlAttribute(relic.description || '无描述')}"
              data-relic-index="${index}">
-          <button class="relic-toggle">${escapeHtml(relic.emoji || '📿')} ${escapeHtml(relic.name || '未知遗物')}</button>
+          <button type="button" class="relic-toggle support-icon-button"
+                  aria-label="查看遗物：${escapeHtmlAttribute(relic.name || '未知遗物')}"
+                  title="${escapeHtmlAttribute(relic.name || '未知遗物')}">
+            <span aria-hidden="true">${escapeHtml(relic.emoji || '📿')}</span>
+          </button>
         </div>
       `;
       })
@@ -585,35 +582,12 @@ export class BattleUI {
     relicsContainer.html(relicsHTML);
 
     // 绑定点击事件
-    relicsContainer.find('.relic-toggle').on('click', function () {
+    relicsContainer.find('.relic-toggle').on('click', function (event) {
+      event.preventDefault();
+      event.stopPropagation();
       const container = $(this).closest('.relic-container');
-      const isExpanded = container.hasClass('expanded');
-
-      // 先收缩所有其他遗物并移除详情
-      $('.relic-container').removeClass('expanded');
-      $('.relic-details').remove();
-
-      // 如果当前遗物之前没有展开，则展开它并创建详情
-      if (!isExpanded) {
-        container.addClass('expanded');
-
-        // 动态创建详情内容
-        const relicName = container.data('relic-name');
-        const relicDescription = container.data('relic-description');
-        const relic = relics[Number(container.data('relic-index'))];
-        const effectTags = BattleUI.effectDisplay.triggeredProgramToTags(relic?.trigger || '', relic?.effectProgram);
-        const effectTagsHTML = BattleUI.effectDisplay.createEffectTagsHTML(effectTags);
-
-        const detailsHTML = `
-          <div class="relic-details">
-            <div class="relic-name">${escapeHtml(relicName)}</div>
-            <div class="relic-description">${escapeHtml(relicDescription)}</div>
-            <div class="relic-effects">${effectTagsHTML}</div>
-          </div>
-        `;
-
-        container.append(detailsHTML);
-      }
+      const relic = relics[Number(container.data('relic-index'))];
+      BattleUI.showSupportDetails($(this), relic, '遗物');
     });
   }
 
@@ -638,31 +612,18 @@ export class BattleUI {
         const stacks = status.stacks || 1;
         const duration = status.duration;
 
-        // 构建显示文本，包含实际效果值
-        let displayText = `${emoji} ${name}`;
-
-        // 计算并显示实际效果值
-        // 总是先显示层数（>0）
-        if (stacks > 0) {
-          displayText += ` ${stacks}`;
-        }
-
-        // 再尝试显示修饰值（如果有）
-        const effectValue = BattleUI.calculateStatusEffectValue(status, statusDef);
-        if (effectValue !== null) {
-          displayText += effectValue;
-        }
-
-        if (duration && duration > 0) {
-          displayText += ` (${duration})`;
-        }
+        const title = `${name}${stacks > 0 ? ` · ${stacks}层` : ''}${duration && duration > 0 ? ` · ${duration}回合` : ''}`;
 
         return `
-          <div class="status-effect-item clickable"
+          <button type="button" class="status-effect-item support-icon-button clickable"
                data-status-id="${escapeHtmlAttribute(status.id)}"
-               data-target="${target}">
-            ${escapeHtml(displayText)}
-          </div>
+               data-target="${target}"
+               aria-label="查看状态：${escapeHtmlAttribute(title)}"
+               title="${escapeHtmlAttribute(title)}">
+            <span class="status-effect-emoji" aria-hidden="true">${escapeHtml(emoji)}</span>
+            ${stacks > 1 ? `<span class="status-stack-badge">${escapeHtml(stacks)}</span>` : ''}
+            ${duration && duration > 0 ? `<span class="status-duration-badge">${escapeHtml(duration)}</span>` : ''}
+          </button>
         `;
       })
       .join('');
@@ -706,6 +667,7 @@ export class BattleUI {
     if (playerAbilitiesContainer) {
       if (playerAbilities.length > 0) {
         playerAbilitiesContainer.innerHTML = playerAbilities.map(ability => this.createAbilityHTML(ability)).join('');
+        this.bindAbilityDetails($('#player-abilities'), playerAbilities, '我方能力');
       } else {
         playerAbilitiesContainer.innerHTML = '';
       }
@@ -716,10 +678,28 @@ export class BattleUI {
     if (enemyAbilitiesContainer) {
       if (enemyAbilities.length > 0) {
         enemyAbilitiesContainer.innerHTML = enemyAbilities.map(ability => this.createAbilityHTML(ability)).join('');
+        this.bindAbilityDetails($('#enemy-abilities'), enemyAbilities, '敌人能力');
       } else {
         enemyAbilitiesContainer.innerHTML = '';
       }
     }
+  }
+
+  private static bindEnemyIntentDetails(enemy: any): void {
+    const action = enemy?.nextAction || (Array.isArray(enemy?.actions) ? enemy.actions[0] : null);
+    const intent = $('.enemy-intent');
+    intent.toggleClass('clickable', !!action).attr('tabindex', action ? '0' : '-1');
+    intent.off('.mwgIntentDetail');
+    if (!action) return;
+    const open = (event: JQuery.TriggeredEvent): void => {
+      event.preventDefault();
+      event.stopPropagation();
+      BattleUI.showSupportDetails(intent, action, '敌方行动');
+    };
+    intent.on('click.mwgIntentDetail', open);
+    intent.on('keydown.mwgIntentDetail', event => {
+      if (event.key === 'Enter' || event.key === ' ') open(event);
+    });
   }
 
   /**
@@ -730,16 +710,83 @@ export class BattleUI {
     const effectTagsHTML = BattleUI.effectDisplay.createEffectTagsHTML(effectTags);
     const description = typeof ability.description === 'string' ? ability.description.trim() : '';
     const name = typeof ability.name === 'string' ? ability.name.trim() : ability.id;
+    const source = typeof ability.source === 'string' && ability.source.trim() ? ability.source.trim() : '来源未注明';
 
     return `
-      <div class="ability-item"
+      <button type="button" class="ability-item"
            data-ability-id="${escapeHtmlAttribute(ability.id)}"
            data-ability-name="${escapeHtmlAttribute(name || ability.id)}"
            data-ability-description="${escapeHtmlAttribute(description)}"
-           ${description ? `title="${escapeHtmlAttribute(description)}"` : ''}>
-        ${effectTagsHTML || '<div class="ability-error">无效能力</div>'}
-      </div>
+           data-ability-source="${escapeHtmlAttribute(source)}"
+           aria-label="查看能力：${escapeHtmlAttribute(name || ability.id)}"
+           title="${escapeHtmlAttribute(name || ability.id)}">
+        <span class="ability-emoji" aria-hidden="true">${escapeHtml(ability.emoji || '⚡')}</span>
+        <span class="ability-name visually-hidden">${escapeHtml(name || '未命名能力')}</span>
+        <span class="ability-effect-preview" aria-hidden="true">${effectTagsHTML || '<span class="ability-error">无效能力</span>'}</span>
+      </button>
     `;
+  }
+
+  private static bindAbilityDetails(container: JQuery, abilities: any[], ownerLabel: string): void {
+    container
+      .find('.ability-item')
+      .each((index, element) => {
+        $(element).data('ability', abilities[index]);
+      })
+      .off('click.mwgAbility')
+      .on('click.mwgAbility', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        BattleUI.showSupportDetails($(this), $(this).data('ability'), ownerLabel);
+      });
+  }
+
+  private static showSupportDetails(anchor: JQuery, value: any, ownerLabel: string): void {
+    $('.support-details-popover').remove();
+    if (!value) return;
+    const name = typeof value.name === 'string' && value.name.trim() ? value.name.trim() : value.id || ownerLabel;
+    const description = typeof value.description === 'string' ? value.description.trim() : '';
+    const source = typeof value.source === 'string' ? value.source.trim() : '';
+    const trigger = typeof value.trigger === 'string' ? value.trigger.trim() : '';
+    const displayContext = ownerLabel.startsWith('敌')
+      ? { selfLabel: '敌方', opponentLabel: '我方' }
+      : { selfLabel: '自身', opponentLabel: '敌方' };
+    const effectTags = trigger
+      ? this.effectDisplay.triggeredProgramToTags(trigger, value.effectProgram, displayContext)
+      : this.effectDisplay.programToTags(value.effectProgram, displayContext);
+    const popover = $(`
+      <div class="support-details-popover" role="dialog" aria-label="${escapeHtmlAttribute(name)}">
+        <div class="support-details-heading">
+          <span>${escapeHtml(value.emoji || (ownerLabel.includes('欲望') ? '💗' : ownerLabel === '遗物' ? '🔮' : '⚡'))}</span>
+          <strong>${escapeHtml(name)}</strong>
+          <small>${escapeHtml(ownerLabel)}</small>
+        </div>
+        ${description ? `<div class="support-details-description">${escapeHtml(description)}</div>` : ''}
+        ${source ? `<div class="support-details-source">来源：${escapeHtml(source)}</div>` : ''}
+        <div class="support-details-effects">${this.effectDisplay.createWrappedEffectTagsHTML(effectTags)}</div>
+      </div>
+    `);
+    $('body').append(popover);
+    const offset = anchor.offset();
+    const width = Math.min(430, ($(window).width() || 446) - 16);
+    popover.css({ width });
+    const height = popover.outerHeight() || 160;
+    const viewportWidth = $(window).width() || width;
+    const viewportHeight = $(window).height() || height;
+    const anchorWidth = anchor.outerWidth() || 0;
+    const anchorHeight = anchor.outerHeight() || 0;
+    const left = offset
+      ? Math.max(8, Math.min(offset.left + anchorWidth / 2 - width / 2, viewportWidth - width - 8))
+      : Math.max(8, (viewportWidth - width) / 2);
+    const preferredTop = offset ? offset.top + anchorHeight + 6 : (viewportHeight - height) / 2;
+    const top = Math.max(8, Math.min(preferredTop, viewportHeight - height - 8));
+    popover.css({ left, top });
+    $(document)
+      .off('click.mwgSupportPopover')
+      .on('click.mwgSupportPopover', () => {
+        $('.support-details-popover').remove();
+        $(document).off('click.mwgSupportPopover');
+      });
   }
 
   /**
@@ -762,9 +809,26 @@ export class BattleUI {
     if (statusDef.triggers) {
       Object.entries(statusDef.triggers).forEach(([trigger, effects]) => {
         if (!effects) return;
-        const triggerTags = effects.flatMap(program => BattleUI.effectDisplay.triggeredProgramToTags(trigger, program));
+        const displayContext =
+          target === 'enemy'
+            ? { selfLabel: '敌方', opponentLabel: '我方' }
+            : { selfLabel: '自身', opponentLabel: '敌方' };
+        const programs = Array.isArray(effects) ? effects : [effects];
+        const triggerTags = programs.flatMap(program =>
+          BattleUI.effectDisplay.triggeredProgramToTags(trigger, program, displayContext),
+        );
         if (triggerTags.length > 0) {
-          effectsHTML += BattleUI.effectDisplay.createEffectTagsHTML(triggerTags);
+          const triggerNames: Record<string, string> = {
+            apply: '获得时',
+            stack: '叠加时',
+            tick: '回合变化时',
+            remove: '消失时',
+            hold: '持续生效',
+          };
+          effectsHTML += `<section class="status-trigger-group">
+            <div class="status-trigger-label">${escapeHtml(triggerNames[trigger] || trigger)}</div>
+            ${BattleUI.effectDisplay.createWrappedEffectTagsHTML(triggerTags)}
+          </section>`;
         }
       });
     }
@@ -783,12 +847,14 @@ export class BattleUI {
             <button class="close-status-detail">&times;</button>
           </div>
           <div class="status-detail-body">
-            <div class="status-description">${escapeHtml(statusDef.description)}</div>
+            <div class="status-description">${escapeHtml(statusDef.description || '无额外叙事说明')}</div>
               <div class="status-stats">
               <div>层数: ${escapeHtml(currentStatus.stacks || 1)}</div>
               <div>类型: ${statusDef.type === 'buff' ? '增益' : statusDef.type === 'debuff' ? '减益' : '中性'}</div>
+              ${statusDef.maxStacks ? `<div>层数上限: ${escapeHtml(statusDef.maxStacks)}</div>` : ''}
+              ${statusDef.stacks_change ? `<div>回合变化: ${escapeHtml(statusDef.stacks_change)}</div>` : ''}
             </div>
-            ${effectsHTML ? `<div class="status-effects"><h4>效果:</h4>${effectsHTML}</div>` : ''}
+            <div class="status-detail-effects"><h4>完整效果</h4>${effectsHTML || '<div class="status-no-effect">没有额外数值效果，仅保留层数或特殊状态规则。</div>'}</div>
           </div>
         </div>
       </div>
@@ -815,37 +881,39 @@ export class BattleUI {
     const container = $(containerId);
 
     if (lustEffect && lustEffect.name) {
+      const displayContext =
+        target === 'enemy'
+          ? { selfLabel: '敌方', opponentLabel: '我方' }
+          : { selfLabel: '自身', opponentLabel: '敌方' };
       const effectTagsHTML = BattleUI.effectDisplay.createEffectTagsHTML(
-        BattleUI.effectDisplay.programToTags(lustEffect.effectProgram),
+        BattleUI.effectDisplay.programToTags(lustEffect.effectProgram, displayContext),
       );
 
+      const description = typeof lustEffect.description === 'string' ? lustEffect.description.trim() : '';
       const effectHTML = `
         <div class="lust-effect-container">
-          <button class="lust-effect-toggle">欲望效果</button>
+          <span class="lust-effect-label">欲望效果：</span>
+          <button type="button" class="lust-effect-toggle" aria-label="查看欲望效果：${escapeHtmlAttribute(lustEffect.name)}" title="点击查看完整效果">${escapeHtml(lustEffect.name)}</button>
           <div class="lust-effect-details">
             <div class="lust-effect-name">${escapeHtml(lustEffect.name)}</div>
-            <div class="lust-effect-description">${escapeHtml(lustEffect.description || '')}</div>
+            <div class="lust-effect-description">${escapeHtml(description)}</div>
             ${effectTagsHTML ? `<div class="lust-effect-tags">${effectTagsHTML}</div>` : ''}
           </div>
         </div>
       `;
       container.html(effectHTML);
 
-      // 绑定点击事件
-      container.find('.lust-effect-toggle').on('click', function () {
-        const container = $(this).closest('.lust-effect-container');
-        const isExpanded = container.hasClass('expanded');
-
-        // 先收缩所有其他欲望效果
-        $('.lust-effect-container').removeClass('expanded');
-
-        // 如果当前效果之前没有展开，则展开它
-        if (!isExpanded) {
-          container.addClass('expanded');
-        }
-      });
+      // 欲望效果与遗物、能力共用可越过紧凑栏裁切的详情层。
+      container
+        .find('.lust-effect-toggle')
+        .off('click.mwgLustDetail')
+        .on('click.mwgLustDetail', function (event) {
+          event.preventDefault();
+          event.stopPropagation();
+          BattleUI.showSupportDetails($(this), lustEffect, target === 'enemy' ? '敌人欲望效果' : '我方欲望效果');
+        });
     } else {
-      container.html('<div class="no-lust-effect">无特殊效果</div>');
+      container.empty();
     }
   }
 }

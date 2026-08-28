@@ -13,11 +13,14 @@ export interface BlockAbsorptionResult {
 export declare function parseBattleNumericLiteral(value: unknown): number | null;
 export declare function applyNumericOperator(current: number, operator: string, operand: number): number;
 export declare function clampBattleAttribute(attribute: string, value: number, limits?: BattleAttributeLimits): number;
+/** Canonical internal battle precision: at most two decimal places. */
 export declare function roundBattleValue(value: number): number;
+/** Player-facing battle precision: at most one decimal place. */
+export declare function roundBattleDisplayValue(value: number): number;
 export declare function absorbDamageWithBlock(incomingDamage: number, currentBlock: number): BlockAbsorptionResult;
 /** Evaluate numeric arithmetic without executing JavaScript or rounding the result. */
 export declare function evaluateFiniteBattleMathExpression(expression: string): number;
-/** Evaluate an effect amount and apply the battle rule that amounts are integers. */
+/** Evaluate an effect amount and keep at most two decimal places for runtime settlement. */
 export declare function evaluateBattleMathExpression(expression: string): number;
 /** Evaluate a variable-free battle condition without executing JavaScript. */
 export declare function evaluateBattleConditionExpression(expression: string): boolean;

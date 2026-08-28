@@ -1,4 +1,4 @@
-import { applyNumericOperator } from './battleMath';
+import { applyNumericOperator, roundBattleValue } from './battleMath';
 import {
   executeEffectProgram,
   type CoreEffectState,
@@ -88,6 +88,5 @@ export function addModifierOperation(breakdown: ModifierBreakdown, operation: Mo
 }
 
 export function roundModifierBreakdown(breakdown: ModifierBreakdown): ModifierBreakdown {
-  const round = (value: number) => Math.round(value * 10) / 10;
-  return { add: round(breakdown.add), mul: round(breakdown.mul) };
+  return { add: roundBattleValue(breakdown.add), mul: roundBattleValue(breakdown.mul) };
 }

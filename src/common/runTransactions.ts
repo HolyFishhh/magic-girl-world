@@ -14,6 +14,7 @@ import {
   type RewardSelections,
   type RewardSelectionSummary,
 } from './rewardTransactions';
+import { normalizeMvuStatusDefinitions } from '../runtime/mvuArrays';
 
 export interface RestHealResult {
   healed: number;
@@ -91,7 +92,7 @@ export function settleRestUpgradeInStat(statValue: unknown): RestUpgradeResult {
   }
   const battle = requireRecord(stat.battle, 'battle 数据不存在');
   const cards = normalizeMvuList<Record<string, unknown>>(battle.cards);
-  const statusDefinitions = normalizeMvuList<Record<string, any>>(battle.statuses);
+  const statusDefinitions = normalizeMvuStatusDefinitions(battle.statuses);
   const upgraded = applyCardUpgradeToDeck(cards, stat.run_upgrade, { statusDefinitions });
   if (!upgraded.ok) throw new Error(`卡牌升级失败：${upgraded.message}`);
   if (!upgraded.cards) throw new Error('卡牌升级失败：升级牌组未生成');

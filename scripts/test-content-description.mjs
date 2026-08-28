@@ -8,11 +8,20 @@ require('ts-node/register/transpile-only');
 const {
   canGenerateCompactStatusDescription,
   describeCompactCard,
+  describeCompactCardWhenNeeded,
   describeCompactContent,
   describeCompactEffectList,
   describeCompactStatus,
+  normalizeChinesePlayerDescription,
+  isMechanicalDescriptionRestatement,
   compileCompactEffectList,
 } = require(resolve('src/game-core/index.ts'));
+
+assert.equal(normalizeChinesePlayerDescription('疾风般的连续攻势。'), '疾风般的连续攻势。');
+assert.equal(normalizeChinesePlayerDescription('造成 opponent.status.death_mark.stacks * 10 点伤害。'), '');
+assert.equal(normalizeChinesePlayerDescription('Apply death_mark to opponent.'), '');
+assert.equal(isMechanicalDescriptionRestatement('造成8点伤害，并向对方施加2层印记。'), true);
+assert.equal(isMechanicalDescriptionRestatement('疾风般的连续攻势，在目标身上留下战斗痕迹。'), false);
 
 assert.equal(
   describeCompactCard({
@@ -20,18 +29,18 @@ assert.equal(
     innate: true,
     effects: [{ damage: 8 }, { block: 3 }],
   }),
-  '固有。造成8点伤害；获得3点格挡。',
+  '固有。对敌方造成8点伤害；获得3点格挡。',
 );
 
 assert.equal(
   describeCompactCard({ type: 'Attack', effects: { block: 3, damage: 8 } }),
-  '造成8点伤害，并获得3点格挡。',
+  '对敌方造成8点伤害，并获得3点格挡。',
   'single-object bundles use the same canonical order as the compiler',
 );
 
 assert.equal(
   describeCompactCard({ type: 'Attack', effects: { damage: 4, hits: 3 } }),
-  '造成3次4点伤害。',
+  '对敌方造成3次4点伤害。',
   'multi-hit damage stays one shallow AI object but has per-hit player-facing semantics',
 );
 
@@ -42,7 +51,7 @@ assert.equal(
 
 assert.equal(
   describeCompactCard({ type: 'Attack', effects: { damage: 'turn_number + attacks_played_this_turn * 2' } }),
-  '造成当前回合数 + 本回合攻击牌数 * 2点伤害。',
+  '对敌方造成当前回合数 + 本回合攻击牌数 * 2点伤害。',
 );
 
 assert.equal(
@@ -69,8 +78,11 @@ assert.equal(describeCompactContent({ trigger: 'on_draw', effects: { block: 1 } 
 assert.equal(describeCompactContent({ trigger: 'on_shuffle', effects: { energy: 1 } }), '洗牌时，获得1点能量。');
 
 assert.equal(
-  describeCompactContent({ effects: { damage: 5, apply_status: 'weak', stacks: 2, when: 'opponent.hp > 0' } }),
-  '若对方生命 > 0，造成5点伤害，并向对方施加2层weak。',
+  describeCompactContent(
+    { effects: { damage: 5, apply_status: 'weak', stacks: 2, when: 'opponent.hp > 0' } },
+    { statusNames: { weak: '虚弱' } },
+  ),
+  '当敌方生命高于0时，对敌方造成5点伤害，并向敌方施加2层虚弱。',
   'shared bundle conditions are described once',
 );
 
@@ -80,7 +92,7 @@ assert.equal(
     trigger: 'turn_start',
     effects: [{ block: 4 }, { draw: 1, when: 'self.hp < self.max_hp / 2' }],
   }),
-  '消耗。回合开始时，获得4点格挡；若自身生命 < 自身最大生命 / 2，抽1张牌。',
+  '消耗。回合开始时，获得4点格挡；当自身生命低于自身最大生命的一半时，抽1张牌。',
 );
 
 assert.equal(
@@ -89,15 +101,19 @@ assert.equal(
     trigger: 'turn_start',
     effects: [{ block: 4 }, { damage: 2, on: 'take_damage' }],
   }),
-  '消耗。回合开始时，获得4点格挡；受到伤害时，造成2点伤害。',
+  '消耗。回合开始时，获得4点格挡；受到伤害时，对敌方造成2点伤害。',
 );
 
 assert.equal(
-  describeCompactCard({
-    type: 'Attack',
-    effects: [{ damage: 'self.status.focus.stacks * 2' }],
-  }),
-  '造成自身focus层数 * 2点伤害。',
+  describeCompactCard(
+    {
+      type: 'Attack',
+      effects: [{ damage: 'self.status.focus.stacks * 2' }],
+    },
+    { statusNames: { focus: '专注' } },
+  ),
+  '对敌方造成自身专注层数 * 2点伤害。',
+  'status IDs inside formulas are rendered with their registered Chinese names',
 );
 
 assert.equal(
@@ -115,7 +131,13 @@ assert.equal(
     discard_effects: [{ draw: 1 }],
     creates: [{ id: 'spark', name: '火花', effects: [{ damage: 3 }] }],
   }),
-  '将2张火花加入手牌。被效果弃掉时，抽1张牌。',
+  '将2张火花加入手牌。此牌被战斗效果弃掉后，抽1张牌。',
+);
+
+assert.equal(
+  describeCompactCard({ type: 'Skill', effects: { block: 1 }, discard_effects: { block: 5 } }),
+  '获得1点格挡。此牌被战斗效果弃掉后，获得5点格挡。',
+  'discard payoff states the card, timing, and exact result',
 );
 
 assert.equal(
@@ -129,7 +151,7 @@ assert.equal(
     },
     { statusNames: { ember_mark: '余烬印记', weak: '虚弱' } },
   ),
-  '向对方施加2层余烬印记；移除自身的虚弱。',
+  '向敌方施加2层余烬印记；移除自身的虚弱。',
 );
 
 assert.equal(
@@ -147,7 +169,7 @@ assert.equal(
 assert.equal(describeCompactContent({ trigger: 'battle_start', effects: [{ block: 3 }] }), '战斗开始时，获得3点格挡。');
 assert.equal(
   describeCompactContent({ trigger: 'passive', effects: [{ modify: 'damage', add: 2 }] }),
-  '持续生效，自身的伤害增加2。',
+  '持续生效，自身造成的伤害增加2。',
 );
 assert.equal(
   describeCompactContent(
@@ -168,7 +190,7 @@ assert.equal(
     },
     { statusNames: { focus: '聚焦' } },
   ),
-  '持续生效，自身的伤害增加当前层数；回合结束时，对自身造成当前层数点伤害；回合结束后减少1层；最多叠加12层。',
+  '持续生效，自身造成的伤害增加当前层数；回合结束时，对自身造成当前层数点伤害；回合结束后减少1层；最多叠加12层。',
 );
 assert.equal(
   describeCompactStatus({ stun: true, stacks_change: 'reset', triggers: {} }),
@@ -182,13 +204,32 @@ const generated = compileCompactEffectList([{ add_card: 'spark' }], {
   creates: [{ id: 'spark', name: '火花', type: 'Attack', cost: 0, effects: [{ damage: 3 }], exhaust: true }],
 });
 assert.equal(generated.ok, true);
-assert.equal(generated.value.steps[0].card.description, '造成3点伤害。');
+assert.equal(generated.value.steps[0].card.description, '');
 
 const generatedStatusCard = compileCompactEffectList([{ add_card: 'ember' }], {
   creates: [{ id: 'ember', name: '余烬牌', type: 'Skill', effects: [{ apply_status: 'ember_mark' }] }],
   statusNames: { ember_mark: '余烬印记' },
 });
 assert.equal(generatedStatusCard.ok, true);
-assert.equal(generatedStatusCard.value.steps[0].card.description, '向对方施加1层余烬印记。');
+assert.equal(generatedStatusCard.value.steps[0].card.description, '');
+
+assert.equal(
+  describeCompactCardWhenNeeded({ type: 'Attack', effects: { damage: 6 } }),
+  '',
+  'literal effects rely on the authoritative UI tags instead of duplicating them',
+);
+assert.equal(
+  describeCompactCardWhenNeeded({ type: 'Skill', effects: { block: 1 }, discard_effects: { block: 5 } }),
+  '此牌被战斗效果弃掉后，获得5点格挡。',
+  'literal discard effects still require an explicit rule description',
+);
+assert.equal(
+  describeCompactCardWhenNeeded(
+    { type: 'Attack', effects: { damage: 'opponent.status.death_mark.stacks * 10' } },
+    { statusNames: { death_mark: '死印' } },
+  ),
+  '对敌方造成敌方死印层数 * 10点伤害。',
+  'formula-heavy cards receive a fully Chinese rules fallback',
+);
 
 console.log('Compact card rules generate deterministic player-facing descriptions without AI prose.');

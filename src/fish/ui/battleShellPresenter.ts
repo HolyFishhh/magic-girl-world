@@ -9,12 +9,14 @@ import { BattleLog } from '../modules/battleLog';
 import { escapeHtml, escapeHtmlAttribute } from '../shared/html';
 import type { GameState, Item } from '../../game-core';
 import { BattleUI } from './battleUI';
-import { Card3DEffects, CardParticleEffects } from './card3DEffects';
+import { Card3DEffects } from './card3DEffects';
 import { CardPlayMode } from './cardPlayMode';
 import { LustOverflowDisplay } from './lustOverflowDisplay';
 import { ModifierDisplay } from './modifierDisplay';
 import { PileViewer } from './pileViewer';
+import { EffectProgramDisplay } from './effectProgramDisplay';
 import { StatusDetailViewer } from './statusDetailViewer';
+import { BattleFullscreenController } from './battleFullscreenController';
 
 type MaybePromise = void | Promise<void>;
 
@@ -32,12 +34,15 @@ export class TavernBattleShellPresenter {
   private static instance: TavernBattleShellPresenter;
   private readonly gameStateManager = GameStateManager.getInstance();
   private readonly pileViewer = PileViewer.getInstance();
+  private readonly effectDisplay = EffectProgramDisplay.getInstance();
   private readonly statusDetailViewer = StatusDetailViewer.getInstance();
   private readonly lustOverflowDisplay = LustOverflowDisplay.getInstance();
   private readonly modifierDisplay = new ModifierDisplay(this.gameStateManager);
   private readonly cardPlayMode = CardPlayMode.getInstance();
+  private readonly fullscreenController = new BattleFullscreenController();
   private initialized = false;
   private stopLatestMessageGuard: (() => void) | null = null;
+  private readonly detailListeners: Array<readonly [string, EventListener]> = [];
 
   public static getInstance(): TavernBattleShellPresenter {
     if (!TavernBattleShellPresenter.instance) {
@@ -53,8 +58,8 @@ export class TavernBattleShellPresenter {
     BattleLog.init();
     this.statusDetailViewer.initializeStatusDetailSystem();
     Card3DEffects.getInstance();
-    CardParticleEffects.getInstance();
     this.cardPlayMode.init();
+    this.fullscreenController.initialize();
     this.bindControls(handlers);
     this.pileViewer.setupPileClickEvents();
     this.statusDetailViewer.setupStatusClickEvents();
@@ -116,8 +121,11 @@ export class TavernBattleShellPresenter {
     }
 
     const itemHtml = availableItems
-      .map(
-        item => `
+      .map(item => {
+        const effectTags = this.effectDisplay.createCompactEffectTagsHTML(
+          this.effectDisplay.programToTags(item.effectProgram),
+        );
+        return `
           <div class="item-entry">
             <div class="item-info">
               <div class="item-header">
@@ -125,12 +133,13 @@ export class TavernBattleShellPresenter {
                 <span class="item-name">${escapeHtml(item.name)}</span>
                 <span class="item-count">x${escapeHtml(item.count)}</span>
               </div>
-              <div class="item-description">${escapeHtml(item.description || '无描述')}</div>
+              ${effectTags}
+              ${item.description ? `<div class="item-description">${escapeHtml(item.description)}</div>` : ''}
             </div>
             <button class="item-use-btn" data-item-id="${escapeHtmlAttribute(item.id)}">使用</button>
           </div>
-        `,
-      )
+        `;
+      })
       .join('');
 
     $('#item-use-modal .item-list').html(itemHtml);
@@ -164,7 +173,7 @@ export class TavernBattleShellPresenter {
     }
     document
       .querySelectorAll<HTMLButtonElement>(
-        '.end-turn-button, #modeToggle, #use-item-btn, .item-use-btn, .restart-btn, .return-setup-btn, .no-enemy-refresh-btn, .repair-battle-btn, .skip-reward-btn, .confirm-selection',
+        '.end-turn-button, #use-item-btn, .item-use-btn, .restart-btn, .return-setup-btn, .no-enemy-refresh-btn, .repair-battle-btn, .skip-reward-btn, .confirm-selection',
       )
       .forEach(button => {
         button.disabled = true;
@@ -186,13 +195,12 @@ export class TavernBattleShellPresenter {
     const root = $(document);
     root.off('.mwgBattleShell');
     root.on(
-      'click.mwgBattleShell mwg:play-card.mwgBattleShell',
-      '.card.clickable:not(.disabled), .enhanced-card.clickable:not(.disabled)',
+      'mwg:play-card.mwgBattleShell',
+      '.card:not(.disabled), .enhanced-card:not(.disabled)',
       event => {
         event.preventDefault();
         event.stopPropagation();
         const card = $(event.currentTarget);
-        if (event.type === 'click' && card.data('suppressPlayClick')) return;
         const cardId = String(card.data('card-id') || '');
         if (cardId) void handlers.onPlayCard(cardId);
       },
@@ -210,16 +218,27 @@ export class TavernBattleShellPresenter {
   }
 
   private bindDetailRequests(): void {
-    document.addEventListener('requestPileData', event => {
+    const pileListener: EventListener = event => {
       const pileType = (event as CustomEvent<{ pileType?: string }>).detail?.pileType;
-      if (pileType === 'draw' || pileType === 'discard' || pileType === 'exhaust') {
+      if (pileType === 'deck' || pileType === 'draw' || pileType === 'discard' || pileType === 'exhaust') {
         this.pileViewer.showPileByType(pileType, this.gameStateManager);
       }
-    });
-    document.addEventListener('requestStatusDetail', event => {
+    };
+    const statusListener: EventListener = event => {
       const statType = (event as CustomEvent<{ statType?: string }>).detail?.statType;
       if (typeof statType === 'string') this.statusDetailViewer.showStatusByType(statType, this.gameStateManager);
-    });
+    };
+    document.addEventListener('requestPileData', pileListener);
+    document.addEventListener('requestStatusDetail', statusListener);
+    this.detailListeners.push(['requestPileData', pileListener], ['requestStatusDetail', statusListener]);
+  }
+
+  public destroy(): void {
+    this.stopLatestMessageGuard?.();
+    this.stopLatestMessageGuard = null;
+    this.fullscreenController.destroy();
+    for (const [type, listener] of this.detailListeners.splice(0)) document.removeEventListener(type, listener);
+    $(document).off('.mwgBattleShell');
   }
 
   private startLatestMessageGuard(): void {

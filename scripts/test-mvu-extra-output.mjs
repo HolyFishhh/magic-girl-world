@@ -13,7 +13,8 @@ const dedicated = await readFile(resolve(root, 'worldbook_new', manifest[dedicat
 assert.match(dedicated, /<UpdateVariable>/);
 assert.match(dedicated, /每个非空行都必须是一个完整的 MVU 函数命令/);
 assert.match(dedicated, /不能把对象属性拆成标签或树形节点/);
-assert.match(dedicated, /_\.assign\('battle\.statuses'/);
+assert.match(dedicated, /_\.assign\('array\.path', value\)/);
+assert.doesNotMatch(dedicated, /_\.assign\('battle\.statuses'/, 'format example must not teach a reusable status definition');
 
 const config = entryConfig[dedicatedName];
 assert.equal(config.comment, '[mvu_update] 额外模型变量更新格式');

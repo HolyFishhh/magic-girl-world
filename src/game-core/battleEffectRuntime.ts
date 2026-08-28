@@ -210,8 +210,8 @@ export class BattleEffectRuntime {
           target: definition.target,
           modifier: definition.attribute,
           source,
-          previousValue,
-          nextValue: result,
+          previousValue: roundBattleValue(previousValue),
+          nextValue: roundBattleValue(result),
         });
       }
     }
@@ -229,7 +229,9 @@ export class BattleEffectRuntime {
     let entity = this.getEntity(target);
     if (!entity) return { applied: false, target };
 
-    let value = this.applyModifiers(Number.isFinite(requestedValue) ? requestedValue : 0, modifiers);
+    let value = roundBattleValue(
+      this.applyModifiers(Number.isFinite(requestedValue) ? requestedValue : 0, modifiers),
+    );
     if (attribute === 'hp' && operator === '-') {
       const absorption = absorbDamageWithBlock(value, entity.block);
       if (absorption.blockUsed > 0) {
@@ -261,7 +263,7 @@ export class BattleEffectRuntime {
     this.updateEntity(target, attributeUpdate(attribute, nextValue));
     this.ports.present?.({ type: 'attribute_changed', target, attribute, previousValue, nextValue });
 
-    const change = nextValue - previousValue;
+    const change = roundBattleValue(nextValue - previousValue);
     await this.ports.dispatchTriggers(
       resolveAttributeTriggerDispatch({ attribute, change, target, source }),
     );

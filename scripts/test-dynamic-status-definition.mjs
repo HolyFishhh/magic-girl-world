@@ -17,7 +17,7 @@ const valid = {
   maxStacks: 8,
   triggers: {
     apply: { block: 2 },
-    tick: [{ block: 'stacks' }, { heal: 1 }],
+    tick: [{ damage: 'stacks' }, { heal: 1, to: 'opponent' }],
     hold: { modify: 'block', add: 'stacks * 2' },
   },
 };
@@ -26,8 +26,8 @@ assert.match(normalized.description, /首次获得时/);
 assert.match(normalized.description, /最多叠加8层/);
 assert.equal(normalized.maxStacks, 8);
 assert.deepEqual(normalized.triggers.tick[0].steps, [
-  { op: 'gain_block', target: 'self', amount: { op: 'var', path: 'context.status_stacks' } },
-  { op: 'heal', target: 'self', amount: 1 },
+  { op: 'damage', target: 'self', amount: { op: 'var', path: 'context.status_stacks' } },
+  { op: 'heal', target: 'opponent', amount: 1 },
 ]);
 assert.equal(normalized.triggers.hold[0].steps[0].op, 'modify');
 
@@ -44,6 +44,8 @@ for (const invalid of [
 
 const managerSource = readFileSync(resolve('src/fish/combat/dynamicStatusManager.ts'), 'utf8');
 assert.match(managerSource, /new StatusDefinitionRegistry\(\)/);
+assert.match(managerSource, /normalizeMvuStatusDefinitions\(statusesRaw\)/);
+assert.doesNotMatch(managerSource, /normalizeMvuArray\(statusesRaw\)/);
 assert.doesNotMatch(managerSource, /insertOrAssignCurrentMessageVariables|saveToMVU|Date\.now|createdAt/);
 
 console.log('Dynamic status definitions keep one modern program registry.');

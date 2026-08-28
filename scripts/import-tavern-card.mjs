@@ -53,6 +53,11 @@ if (!Array.isArray(enabledCharacterScripts)) {
 }
 
 let settingsChanged = false;
+if (settings.active_character !== importedAvatar || settings.active_group !== null) {
+  settings.active_character = importedAvatar;
+  settings.active_group = null;
+  settingsChanged = true;
+}
 if (!settings.extension_settings.character_allowed_regex.includes(importedAvatar)) {
   settings.extension_settings.character_allowed_regex.push(importedAvatar);
   settingsChanged = true;
@@ -75,3 +80,4 @@ if (settingsChanged) {
 console.log(`Imported character card as ${importedAvatar} at ${tavernUrl.origin}`);
 console.log(`Enabled embedded character regexes for ${importedAvatar}`);
 console.log(`Enabled Tavern Helper character scripts for ${releaseConfig.characterName}`);
+console.log(`Selected ${importedAvatar} as the active SillyTavern character`);

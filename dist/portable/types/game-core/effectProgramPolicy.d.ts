@@ -1,5 +1,5 @@
 import { type EffectProgram } from './effectDsl';
-export type EffectTriggerPolicy = 'allow' | 'forbid' | 'require_root';
+export type EffectTriggerPolicy = 'allow' | 'forbid' | 'require_root' | 'require_root_or_status';
 export type EffectModifierPolicy = 'allow' | 'forbid' | 'only';
 export interface EffectProgramPolicyOptions {
     triggerPolicy?: EffectTriggerPolicy;

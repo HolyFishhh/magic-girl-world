@@ -1,6 +1,11 @@
 import { assertCurrentMessageLatest } from '../../runtime/messageVariables';
 import { retryCurrentMessageWithExtraModel } from '../../runtime/mvuExtraModelRepair';
-import { formatBattleContentRepairPrompt, type BattleContentIssue } from './battleContentPreflight';
+import {
+  formatBattleContentIssues,
+  formatBattleContentRepairPrompt,
+  preflightBattleContent,
+  type BattleContentIssue,
+} from './battleContentPreflight';
 
 export type BattleRepairRequestResult = 'sent' | 'busy' | 'empty';
 
@@ -22,7 +27,14 @@ export class TavernBattleRepairHost {
 
     this.pending = true;
     try {
-      await retryCurrentMessageWithExtraModel(prompt);
+      await retryCurrentMessageWithExtraModel(prompt, {
+        validateVariables: variables => {
+          const result = preflightBattleContent(variables?.stat_data?.battle);
+          if (!result.ok) {
+            throw new Error(`AI 修复结果仍未通过战斗校验：${formatBattleContentIssues(result.issues, 8)}`);
+          }
+        },
+      });
       return 'sent';
     } finally {
       this.pending = false;

@@ -8,3 +8,6 @@ entries:
 
   - script: src/common/index.ts
     html: src/common/index.html
+
+  - script: src/common/update/index.ts
+    html: src/common/update/index.html

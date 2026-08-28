@@ -1,5 +1,35 @@
-import type { Card, StatusEffect } from '../../game-core';
+import {
+  roundBattleDisplayValue,
+  type Card,
+  type EffectNode,
+  type EffectProgram,
+  type StatusEffect,
+} from '../../game-core';
 import { escapeHtml } from '../shared/html';
+
+export type CombatActionKind = 'attack' | 'skill' | 'power' | 'event' | 'curse' | 'relic' | 'enemy';
+export type CombatAnimationTarget = 'self' | 'opponent';
+
+function collectImmediateTargets(nodes: readonly EffectNode[], targets: Set<CombatAnimationTarget>): void {
+  for (const node of nodes) {
+    if ('target' in node && (node.target === 'self' || node.target === 'opponent')) targets.add(node.target);
+    if (node.op === 'if') {
+      collectImmediateTargets(node.then, targets);
+      if (node.else) collectImmediateTargets(node.else, targets);
+    }
+  }
+}
+
+/** Resolve where a card/action animation should appear without duplicating effect execution rules. */
+export function resolveCombatAnimationTarget(
+  program: EffectProgram | null | undefined,
+  kind: CombatActionKind,
+): CombatAnimationTarget {
+  if (kind === 'attack' || kind === 'enemy') return 'opponent';
+  const targets = new Set<CombatAnimationTarget>();
+  collectImmediateTargets(program?.steps || [], targets);
+  return targets.has('opponent') ? 'opponent' : 'self';
+}
 
 /**
  * 动画管理模块 - 处理战斗中的各种动画效果
@@ -25,7 +55,12 @@ export class AnimationManager {
     timestamp: number;
   }> = [];
   private lastDamageTime = 0;
+  private damageTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly DAMAGE_INTERVAL = 150; // 最小间隔150ms
+
+  private displayBattleValue(value: number): number {
+    return roundBattleDisplayValue(value);
+  }
 
   /**
    * 显示伤害数字动画 - 抛物线物理效果
@@ -49,8 +84,15 @@ export class AnimationManager {
 
     const now = Date.now();
     if (now - this.lastDamageTime < this.DAMAGE_INTERVAL) {
-      // 延迟处理
-      setTimeout(() => this.processDamageQueue(), this.DAMAGE_INTERVAL);
+      // One shared timer drains the queue; one timer per event grows rapidly on
+      // multi-hit/status-heavy turns and was the main source of late-battle lag.
+      if (this.damageTimer === null) {
+        const remaining = Math.max(0, this.DAMAGE_INTERVAL - (now - this.lastDamageTime));
+        this.damageTimer = setTimeout(() => {
+          this.damageTimer = null;
+          this.processDamageQueue();
+        }, remaining);
+      }
       return;
     }
 
@@ -61,8 +103,11 @@ export class AnimationManager {
     this.createPhysicalDamageAnimation(damageData.target, damageData.damage, damageData.type);
 
     // 继续处理队列
-    if (this.damageQueue.length > 0) {
-      setTimeout(() => this.processDamageQueue(), this.DAMAGE_INTERVAL);
+    if (this.damageQueue.length > 0 && this.damageTimer === null) {
+      this.damageTimer = setTimeout(() => {
+        this.damageTimer = null;
+        this.processDamageQueue();
+      }, this.DAMAGE_INTERVAL);
     }
   }
 
@@ -71,17 +116,9 @@ export class AnimationManager {
     damage: number,
     type: 'damage' | 'heal' | 'lust' | 'block',
   ): void {
-    // 选择动画起点：格挡使用时从格挡图标位置弹出
-    let targetSelector = target === 'player' ? '.player-card .character-stats' : '.enemy-card .character-stats';
-    if (type === 'block') {
-      const blockSelector = target === 'player' ? '#block-stat-container' : '#enemy-block-container';
-      if ($(blockSelector).length) {
-        targetSelector = blockSelector;
-      }
-    }
-    const targetElement = $(targetSelector);
-
-    if (targetElement.length === 0) return;
+    const stage = $('#battle-stage');
+    const targetElement = target === 'player' ? $('#stage-player-emoji') : $('#stage-enemy-emoji');
+    if (stage.length === 0 || targetElement.length === 0) return;
 
     // 确定颜色和前缀
     let color = '#ff4444';
@@ -106,17 +143,15 @@ export class AnimationManager {
         break;
       case 'block':
         color = '#4169e1';
-        prefix = '-';
+        prefix = '+';
         icon = '🛡︎';
         break;
     }
 
-    const offset = targetElement.offset();
-    if (!offset) return;
-
-    // 随机起始位置（在目标区域内）
-    const randomX = offset.left + Math.random() * targetElement.outerWidth()!;
-    const randomY = offset.top + Math.random() * targetElement.outerHeight()!;
+    const stageRect = stage.get(0)!.getBoundingClientRect();
+    const targetRect = targetElement.get(0)!.getBoundingClientRect();
+    const randomX = targetRect.left - stageRect.left + targetRect.width / 2 + (Math.random() - 0.5) * 42;
+    const randomY = targetRect.top - stageRect.top + targetRect.height * 0.35 + (Math.random() - 0.5) * 18;
 
     const damageText = $(`
       <div class="physics-damage" style="
@@ -131,72 +166,18 @@ export class AnimationManager {
         z-index: 1000;
         font-family: 'ZCOOL KuaiLe', 'Noto Sans SC', 'Microsoft YaHei', sans-serif !important;
       ">
-        ${icon} ${prefix}${damage}
+        ${icon} ${prefix}${this.displayBattleValue(damage)}
       </div>
     `);
 
-    $('body').append(damageText);
+    stage.append(damageText);
 
-    // 物理动画参数
-    let x = randomX;
-    let y = randomY;
-    let vx = (Math.random() - 0.5) * 200; // 水平初速度
-    let vy = -150 - Math.random() * 100; // 垂直初速度（向上）
-    const gravity = 500; // 重力加速度
-    const bounce = 0.6; // 反弹系数
-    const friction = 0.98; // 摩擦系数
-
-    const startTime = Date.now();
-    const duration = 3000; // 3秒后消失
-
-    const animate = () => {
-      const elapsed = Date.now() - startTime;
-      if (elapsed > duration) {
-        damageText.remove();
-        return;
-      }
-
-      const dt = 16 / 1000; // 约60fps
-
-      // 更新速度
-      vy += gravity * dt;
-      vx *= friction;
-
-      // 更新位置
-      x += vx * dt;
-      y += vy * dt;
-
-      // 边界检测和反弹
-      const windowWidth = $(window).width()!;
-      const windowHeight = $(window).height()!;
-
-      if (x <= 0 || x >= windowWidth - 50) {
-        vx = -vx * bounce;
-        x = Math.max(0, Math.min(windowWidth - 50, x));
-      }
-
-      if (y >= windowHeight - 50) {
-        vy = -vy * bounce;
-        y = windowHeight - 50;
-
-        // 如果速度太小，停止弹跳
-        if (Math.abs(vy) < 50) {
-          vy = 0;
-        }
-      }
-
-      // 应用位置和透明度
-      const opacity = Math.max(0, 1 - elapsed / duration);
-      damageText.css({
-        left: x + 'px',
-        top: y + 'px',
-        opacity: opacity,
-      });
-
-      requestAnimationFrame(animate);
-    };
-
-    requestAnimationFrame(animate);
+    // A short compositor animation is cheaper than one requestAnimationFrame
+    // loop per number and never blocks rapid card play.
+    const driftX = Math.round((Math.random() - 0.5) * 36);
+    damageText.css({ '--damage-drift-x': `${driftX}px` });
+    damageText.addClass('physics-damage-active');
+    setTimeout(() => damageText.remove(), 950);
   }
 
   /**
@@ -337,7 +318,7 @@ export class AnimationManager {
     );
 
     // 更新血量文本
-    $(hpTextSelector).text(`${currentHp}/${maxHp}`);
+    $(hpTextSelector).text(`${this.displayBattleValue(currentHp)}/${this.displayBattleValue(maxHp)}`);
 
     // 根据血量百分比改变血条颜色
     hpBar.removeClass('hp-low hp-critical');
@@ -375,7 +356,7 @@ export class AnimationManager {
     );
 
     // 更新欲望值文本
-    $(lustTextSelector).text(`${currentLust}/${maxLust}`);
+    $(lustTextSelector).text(`${this.displayBattleValue(currentLust)}/${this.displayBattleValue(maxLust)}`);
 
     // 根据欲望值改变颜色
     lustBar.removeClass('lust-high lust-critical');
@@ -389,32 +370,91 @@ export class AnimationManager {
   /**
    * 卡牌使用动画
    */
-  animateCardPlay(cardElement: JQuery): Promise<void> {
-    return new Promise(resolve => {
-      cardElement.addClass('card-playing');
+  async animateCardPlay(cardElement: JQuery, card?: Card): Promise<void> {
+    $('.card-tooltip').stop(true, true).remove();
+    const resolved = card || (cardElement.data('cardData') as Card | undefined);
+    const kindByType: Record<string, CombatActionKind> = {
+      Attack: 'attack',
+      Skill: 'skill',
+      Power: 'power',
+      Event: 'event',
+      Curse: 'curse',
+    };
+    cardElement.addClass('card-playing').css({ opacity: 0.45, transform: 'translateY(-18px) scale(1.04)' });
+    void this.playCombatAction(
+      'player',
+      kindByType[resolved?.type || 'Skill'] || 'skill',
+      resolved?.emoji || '🃏',
+      resolved?.name || '使用卡牌',
+      resolveCombatAnimationTarget(
+        resolved?.effectProgram,
+        kindByType[resolved?.type || 'Skill'] || 'skill',
+      ),
+    );
+    window.setTimeout(() => {
+      cardElement.removeClass('card-playing').css({ opacity: '', transform: '' });
+    }, 180);
+  }
 
-      // 卡牌飞向目标的动画
-      cardElement.animate(
-        {
-          opacity: 0.7,
-          transform: 'scale(1.1) translateY(-20px)',
-        },
-        300,
-        () => {
-          cardElement.animate(
-            {
-              opacity: 0,
-              transform: 'scale(0.8) translateY(-40px)',
-            },
-            200,
-            () => {
-              cardElement.removeClass('card-playing');
-              resolve();
-            },
-          );
-        },
-      );
+  /** Render one bounded action in the central stage without covering the hand or combatants. */
+  public playCombatAction(
+    source: 'player' | 'enemy',
+    kind: CombatActionKind,
+    emoji: string,
+    name: string,
+    animationTarget: CombatAnimationTarget = kind === 'attack' || kind === 'enemy' ? 'opponent' : 'self',
+  ): Promise<void> {
+    const stage = $('#battle-stage');
+    const sourceElement = source === 'player' ? $('#stage-player-emoji') : $('#stage-enemy-emoji');
+    const targetElement = source === 'player' ? $('#stage-enemy-emoji') : $('#stage-player-emoji');
+    if (stage.length === 0 || sourceElement.length === 0 || targetElement.length === 0) return Promise.resolve();
+
+    const crossesStage = kind === 'attack' || kind === 'enemy';
+    const visualTarget = crossesStage || animationTarget === 'opponent' ? targetElement : sourceElement;
+    const token = $('<div class="stage-action-token"></div>')
+      .addClass(
+        `action-${kind} source-${source} target-${animationTarget} ${crossesStage ? 'stage-crossing' : 'stage-aura'}`,
+      )
+      .attr('aria-label', name || '战斗行动')
+      .text(emoji || (source === 'player' ? '✨' : '👹'));
+    stage.append(token);
+
+    const stageOffset = stage.offset();
+    const sourceOffset = sourceElement.offset();
+    const targetOffset = targetElement.offset();
+    const visualTargetOffset = visualTarget.offset();
+    if (!stageOffset || !sourceOffset || !targetOffset || !visualTargetOffset) {
+      token.remove();
+      return Promise.resolve();
+    }
+
+    const tokenSize = 44;
+    const originOffset = crossesStage ? sourceOffset : visualTargetOffset;
+    const originElement = crossesStage ? sourceElement : visualTarget;
+    const startX = originOffset.left - stageOffset.left + (originElement.outerWidth() || 0) / 2 - tokenSize / 2;
+    const startY = originOffset.top - stageOffset.top + (originElement.outerHeight() || 0) / 2 - tokenSize / 2;
+    const targetX = targetOffset.left - stageOffset.left + (targetElement.outerWidth() || 0) / 2 - tokenSize / 2;
+    const targetY = targetOffset.top - stageOffset.top + (targetElement.outerHeight() || 0) / 2 - tokenSize / 2;
+    const deltaX = crossesStage ? (targetX - startX) * 0.9 : 0;
+    const deltaY = crossesStage ? (targetY - startY) * 0.9 - 4 : -24;
+    const rotation = source === 'player' ? 10 : -10;
+    token.css({
+      left: startX,
+      top: startY,
+      opacity: 1,
+      '--stage-dx': `${deltaX}px`,
+      '--stage-dy': `${deltaY}px`,
+      '--stage-rotation': `${rotation}deg`,
     });
+    sourceElement.addClass(crossesStage ? 'stage-acting' : 'stage-channeling');
+    requestAnimationFrame(() => token.addClass('is-running'));
+    const duration = crossesStage ? 520 : 820;
+    window.setTimeout(() => {
+      token.remove();
+      sourceElement.removeClass('stage-acting stage-channeling');
+    }, duration);
+    // Animation is deliberately fire-and-forget so rapid card play is never blocked.
+    return Promise.resolve();
   }
 
   /**
@@ -609,33 +649,16 @@ export class AnimationManager {
   /**
    * 显示敌人行动动画（屏幕中央半透明弹窗）
    */
-  showEnemyActionAnimation(actionName: string, description: string): void {
-    // 移除已存在的动画
-    $('.enemy-action-popup').remove();
-
-    const popup = $(`
-      <div class="enemy-action-popup">
-        <div class="enemy-action-content">
-          <div class="enemy-action-name">${escapeHtml(actionName)}</div>
-          <div class="enemy-action-description">${escapeHtml(description)}</div>
-        </div>
-      </div>
-    `);
-
-    $('body').append(popup);
-
-    // 动画效果
-    popup
-      .css({ opacity: 0, transform: 'translate(-50%, -50%) scale(0.8)' })
-      .animate({ opacity: 1 }, 300)
-      .css({ transform: 'translate(-50%, -50%) scale(1)' });
-
-    // 2秒后自动消失
-    setTimeout(() => {
-      popup.animate({ opacity: 0 }, 300, function () {
-        $(this).remove();
-      });
-    }, 2000);
+  showEnemyActionAnimation(
+    actionName: string,
+    description: string,
+    kind: CombatActionKind = 'enemy',
+    emoji = '',
+    program?: EffectProgram,
+  ): void {
+    const enemyEmoji = emoji || String($('#stage-enemy-emoji').text() || '👹');
+    const caption = description ? `${actionName}：${description}` : actionName;
+    void this.playCombatAction('enemy', kind, enemyEmoji, caption, resolveCombatAnimationTarget(program, kind));
   }
   /**
    * 播放卡牌使用动画（根据卡名选取元素，带飞行与命中闪烁）
@@ -697,45 +720,8 @@ export class AnimationManager {
     targetSelector: string,
     type: 'damage' | 'heal' | 'lust' = 'damage',
   ): Promise<void> {
-    const target = $(targetSelector);
-    if (target.length === 0) return;
-
-    const damageText = $(`<div class="damage-number damage-${type}">${value}</div>`);
-
-    // 随机偏移
-    const offsetX = (Math.random() - 0.5) * 60;
-    const offsetY = (Math.random() - 0.5) * 40;
-
-    const off = target.offset();
-    if (!off) return;
-
-    damageText.css({
-      position: 'absolute',
-      left: off.left + target.width()! / 2 + offsetX,
-      top: off.top + offsetY,
-      zIndex: 1000,
-      fontSize: `${Math.min(24 + value / 10, 48)}px`,
-      fontWeight: 'bold',
-      color: type === 'damage' ? '#ff4444' : type === 'heal' ? '#44ff44' : '#ff44ff',
-      textShadow: '2px 2px 4px rgba(0,0,0,0.8)',
-      pointerEvents: 'none',
-    });
-
-    $('body').append(damageText);
-
-    await new Promise<void>(resolve => {
-      damageText.animate(
-        {
-          top: '-=80',
-          opacity: 0,
-        },
-        1500,
-        () => {
-          damageText.remove();
-          resolve();
-        },
-      );
-    });
+    const isPlayer = /player|self/i.test(targetSelector) && !/enemy|opponent/i.test(targetSelector);
+    this.showDamageNumber(isPlayer ? 'player' : 'enemy', Math.abs(value), type);
   }
 
   /**

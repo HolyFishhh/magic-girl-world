@@ -50,6 +50,15 @@
       "ai_operations": ["set", "add"]
     },
     {
+      "id": "battle_avatar",
+      "paths": ["battle.core.emoji"],
+      "shape": "string",
+      "owner": "ai",
+      "lifecycle": "persistent",
+      "writers": ["ai:init", "ai:narrative"],
+      "ai_operations": ["set"]
+    },
+    {
       "id": "card_removal_count",
       "paths": ["battle.core.card_removal_count"],
       "shape": "number",
@@ -234,6 +243,15 @@
       "lifecycle": "candidate",
       "writers": ["ai:reward", "program:reward"],
       "ai_operations": ["set", "assign"]
+    },
+    {
+      "id": "reward_request",
+      "paths": ["reward.request"],
+      "shape": "nullable-object",
+      "owner": "program",
+      "lifecycle": "one-shot-request",
+      "writers": ["program:battle-settlement", "ai:reward"],
+      "ai_operations": ["set"]
     },
     {
       "id": "run",

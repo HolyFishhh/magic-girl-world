@@ -142,6 +142,17 @@ assert.deepEqual(
   ['damage', 'draw_cards'],
 );
 
+const commonWithScry = compileCompactEffectList({ scry: 2, block: 4 });
+assert.equal(commonWithScry.ok, true, JSON.stringify(commonWithScry.issues));
+assert.deepEqual(
+  commonWithScry.value.steps.map(step => step.op),
+  ['gain_block', 'scry_cards'],
+  'one auxiliary card-zone effect is split after the common bundle in a deterministic order',
+);
+
+const ambiguousCardZoneBundle = compileCompactEffectList({ scry: 2, discard: 1, block: 4 });
+assert.equal(ambiguousCardZoneBundle.ok, false, 'multiple card-zone operations must remain explicit array entries');
+
 const statusVariable = compileCompactEffectList([{ damage: 'opponent.status.bleed.stacks * 2' }]);
 assert.equal(statusVariable.ok, true);
 const statusState = structuredClone(state);
@@ -163,17 +174,38 @@ assert.deepEqual(
   ['apply_status', 'apply_status', 'remove_status'],
 );
 
+const nestedStatusInput = compileCompactEffectList([
+  { damage: 5, apply_status: { id: 'drenched', stacks: 2 } },
+  { apply_status: { id: 'drenched', stacks: 3, to: 'opponent' } },
+  { remove_status: { id: 'drenched', to: 'self' } },
+]);
+assert.equal(nestedStatusInput.ok, true, JSON.stringify(nestedStatusInput.issues));
+assert.deepEqual(
+  nestedStatusInput.value.steps.map(step => ({ op: step.op, target: step.target })),
+  [
+    { op: 'damage', target: 'opponent' },
+    { op: 'apply_status', target: 'opponent' },
+    { op: 'apply_status', target: 'opponent' },
+    { op: 'remove_status', target: 'self' },
+  ],
+);
+const conflictingNestedStatus = compileCompactEffectList({
+  apply_status: { id: 'drenched', stacks: 2 },
+  stacks: 3,
+});
+assert.equal(conflictingNestedStatus.ok, false, 'conflicting nested status fields must remain invalid');
+
 const modifiers = compileCompactEffectList([
   { modify: 'damage', add: 2 },
   { modify: 'block', add: 'stacks * 3' },
-  { modify: 'damage_taken', multiply: 0.75, to: 'opponent' },
+  { modify: 'damage_taken', multiply: 0.8, to: 'opponent' },
 ]);
 assert.equal(modifiers.ok, true);
 const modifierResult = executeEffectProgram(modifiers.value, state, { spentEnergy: 0, statusStacks: 2 });
 assert.deepEqual(modifierResult.events, [
   { type: 'modify', target: 'self', stat: 'damage', operator: 'add', value: 2 },
   { type: 'modify', target: 'self', stat: 'block', operator: 'add', value: 6 },
-  { type: 'modify', target: 'opponent', stat: 'damage_taken', operator: 'multiply', value: 0.75 },
+  { type: 'modify', target: 'opponent', stat: 'damage_taken', operator: 'multiply', value: 0.8 },
 ]);
 
 const cardOperations = compileCompactEffectList([
@@ -293,6 +325,8 @@ for (const [effects, code] of [
   [[{ damage: 'unknown * 4' }], 'UNKNOWN_VARIABLE'],
   [[{ damage: 'size([1])' }], 'UNSUPPORTED_FORMULA'],
   [[{ damage: 'self.foo + 1' }], 'UNKNOWN_VARIABLE'],
+  [[{ damage: 1.25 }], 'TOO_MANY_DECIMALS'],
+  [[{ damage: 'self.hp * 0.25' }], 'TOO_MANY_DECIMALS'],
   [[{ damage: 1, extra: true }], 'INVALID_EFFECT_BUNDLE'],
   [[{ damage: 1, to: 'everyone' }], 'INVALID_TARGET'],
   [[{ apply_status: 'bad-id' }], 'INVALID_STATUS_ID'],
@@ -336,6 +370,7 @@ assert.deepEqual(
 );
 assert.equal(compactSchema.properties.effects.$ref, '#/$defs/effectList');
 assert.deepEqual(compactSchema.$defs.amountEffect.properties.hits, { type: 'integer', minimum: 1, maximum: 20 });
+assert.deepEqual(compactSchema.$defs.formula.oneOf[0], { type: 'number', multipleOf: 0.1 });
 assert.equal(compactSchema.$defs.trigger.enum.includes('on_exhaust'), true);
 assert.equal(compactSchema.$defs.trigger.enum.includes('on_draw'), true);
 assert.equal(compactSchema.$defs.trigger.enum.includes('on_shuffle'), true);

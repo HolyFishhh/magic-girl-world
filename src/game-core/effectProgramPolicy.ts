@@ -7,7 +7,7 @@ import {
   type NumericExpression,
 } from './effectDsl';
 
-export type EffectTriggerPolicy = 'allow' | 'forbid' | 'require_root';
+export type EffectTriggerPolicy = 'allow' | 'forbid' | 'require_root' | 'require_root_or_status';
 export type EffectModifierPolicy = 'allow' | 'forbid' | 'only';
 
 export interface EffectProgramPolicyOptions {
@@ -111,7 +111,7 @@ function generatedCardPolicy(card: GeneratedCardDefinition): NormalizedPolicy {
   const isPower = card.type === 'Power';
   const isEvent = card.type === 'Event';
   return normalizePolicy({
-    triggerPolicy: isPower ? 'require_root' : 'forbid',
+    triggerPolicy: isPower ? 'require_root_or_status' : 'forbid',
     modifierPolicy: 'forbid',
     allowSpentEnergy: card.cost === 'energy',
     allowNarrate: isEvent,
@@ -130,6 +130,25 @@ function visitProgram(
     (program.steps.length === 0 || program.steps.some(node => node.op !== 'register_trigger'))
   ) {
     addIssue(issues, `${path}.steps`, 'ROOT_TRIGGER_REQUIRED', 'Power 的所有顶层效果必须注册为触发器');
+  }
+  const isDirectStatusPowerNode = (node: EffectNode): boolean =>
+    node.op === 'apply_status' ||
+    (node.op === 'if' &&
+      node.then.length > 0 &&
+      node.then.every(isDirectStatusPowerNode) &&
+      (node.else || []).every(isDirectStatusPowerNode));
+  if (
+    policy.triggerPolicy === 'require_root_or_status' &&
+    (program.steps.length === 0 ||
+      (!program.steps.some(node => node.op === 'register_trigger') &&
+        program.steps.some(node => !isDirectStatusPowerNode(node))))
+  ) {
+    addIssue(
+      issues,
+      `${path}.steps`,
+      'ROOT_TRIGGER_REQUIRED',
+      'Power 必须至少注册一个触发器，或只施加已注册状态',
+    );
   }
   if (
     policy.requireSingleNarrate &&

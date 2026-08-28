@@ -155,8 +155,8 @@ setTimeout(() => {
 await messageModule.ensureMvuRuntimeReady({ mvuTimeoutMs: 1000, battleDataTimeoutMs: 1000 });
 assert.equal(globalThis.Mvu, stableMvu, 'MUV polling must also work without the optional global notification hook');
 
-const [startExported, commonExported, exported] = await Promise.all(
-  ['start', 'common', 'fish'].map(async name =>
+const [startExported, updateExported, commonExported, exported] = await Promise.all(
+  ['start', 'update', 'common', 'fish'].map(async name =>
     JSON.parse(await readFile(resolve(root, `dist/tavern/${name}-interface.json`), 'utf8')),
   ),
 );
@@ -178,6 +178,15 @@ assert.ok(
 assert.ok(!startExported.replaceString.includes('jQuery v3'), 'start interface must not bundle jQuery');
 assert.ok(/(?:const|var) view = "start"/.test(startExported.replaceString));
 assert.ok(startExported.replaceString.includes("waitGlobalInitialized('MagicGirlWorld')"));
+assert.equal(updateExported.scriptName, '变量更新展示');
+assert.deepEqual(updateExported.placement, [2]);
+assert.equal(updateExported.minDepth, 0);
+assert.equal(updateExported.maxDepth, 2);
+assert.ok(new RegExp(updateExported.findRegex).test('<UpdateVariable>_.set(\'status.time\', \'新时间\');</UpdateVariable>'));
+assert.ok(updateExported.replaceString.startsWith('```\n<body>'));
+assert.ok(updateExported.replaceString.endsWith('</body>\n```'));
+assert.ok(/(?:const|var) view = "update"/.test(updateExported.replaceString));
+assert.ok(updateExported.replaceString.includes("waitGlobalInitialized('MagicGirlWorld')"));
 assert.equal(commonExported.scriptName, '通用模块');
 assert.deepEqual(commonExported.placement, [2]);
 assert.equal(commonExported.minDepth, 0);
@@ -209,7 +218,7 @@ assert.ok(
 assert.ok(commonExported.replaceString.length < 10000, 'common regex must contain only a lightweight runtime shell');
 assert.ok(commonExported.replaceString.includes("waitGlobalInitialized('MagicGirlWorld')"));
 assert.equal(commonExported.replaceString.match(/\$(?:\d+|<[^>]+>)/g), null);
-for (const payload of [startExported, commonExported, exported]) {
+for (const payload of [startExported, updateExported, commonExported, exported]) {
   const bootstrap = payload.replaceString.match(/<script>([\s\S]*)<\/script>/)?.[1] || '';
   assert.doesNotMatch(bootstrap, /`|\?\.|</, 'Tavern bootstrap must not be reparsed as HTML/modern syntax');
 }
@@ -231,6 +240,11 @@ assert.equal(exported.disabled, false);
 assert.equal(exported.markdownOnly, true);
 assert.equal(exported.promptOnly, false);
 assert.ok(new RegExp(exported.findRegex).test(battleResponse));
+assert.equal(
+  new RegExp(exported.findRegex).exec(battleResponse)?.[0].includes('<UpdateVariable>'),
+  false,
+  'battle regex must leave UpdateVariable for the independent update view',
+);
 assert.ok(
   new RegExp(exported.findRegex).test(`${battleResponse}\n${mvuPlaceholder}`),
   'battle regex must tolerate the display placeholder appended by MUV',
@@ -265,6 +279,7 @@ assert.ok(
   'default character runtime must not import view modules from the network',
 );
 assert.ok(!/<script\s+[^>]*src=/i.test(startExported.replaceString), 'start interface must be self-contained');
+assert.ok(!/<script\s+[^>]*src=/i.test(updateExported.replaceString), 'update interface must be self-contained');
 assert.ok(!/<script\s+[^>]*src=/i.test(commonExported.replaceString), 'common interface must be self-contained');
 assert.equal(exported.replaceString.match(/\$(?:\d+|<[^>]+>)/g), null);
 assert.ok(
@@ -327,6 +342,7 @@ function inspectInterface(payload, substitutions = {}, fenced = true) {
 }
 
 const startNodes = inspectInterface(startExported);
+const updateNodes = inspectInterface(updateExported);
 const commonNodes = inspectInterface(commonExported);
 const hasClass = (nodes, className) =>
   nodes.some(node =>
@@ -341,6 +357,8 @@ assert.equal(startNodes.filter(node => node.nodeName === 'script').length, 1);
 assert.ok(hasClass(startNodes, 'mwg-runtime-loading'), 'start regex must render a lightweight loading shell');
 assert.equal(countClass(startNodes, 'mwg-runtime-loading'), 1, 'start regex must render exactly one loading shell');
 assert.equal(startNodes.filter(node => node.nodeName === 'body').length, 1, 'start regex must render exactly one body');
+assert.equal(updateNodes.filter(node => node.nodeName === 'script').length, 1);
+assert.ok(hasClass(updateNodes, 'mwg-runtime-loading'), 'update regex must render a lightweight loading shell');
 assert.ok(
   characterRuntimeSource.includes('magical-girl-creator') &&
     characterRuntimeSource.includes('create-character-btn') &&
@@ -357,6 +375,12 @@ assert.ok(characterRuntimeSource.includes('经验值异常：单次升级次数�
 assert.equal(characterRuntimeManifest.spec, 'mwg.tavern-runtime/v1');
 assert.equal(characterRuntimeManifest.cardVersion, releaseConfig.cardVersion);
 assert.doesNotThrow(() => new vm.Script(characterRuntimeSource), 'character runtime must be valid classic JavaScript');
+assert.ok(
+  characterRuntimeSource.includes("getVariables?.({ type: 'global' })") &&
+    characterRuntimeSource.includes('extra_analysis') &&
+    characterRuntimeSource.includes('COMMAND_PARSED'),
+  'character runtime must follow MVU global extra-analysis lifecycle and capture the parsed update block',
+);
 
 const patchedCardPath = resolve(root, '魔法少女世界.png');
 const patchedChunks = extractPngChunks(new Uint8Array(await readFile(patchedCardPath)));
@@ -371,11 +395,18 @@ assert.equal(patchedCard.name, releaseConfig.characterName);
 assert.equal(patchedCard.data.name, releaseConfig.characterName);
 assert.equal(patchedCard.data.character_version, releaseConfig.cardVersion);
 assert.equal(
+  patchedCard.data.creator_notes,
+  '剧情模式可直接开始游玩；角色卡已内置世界书、MVU 变量框架与交互界面。爬塔模式暂未开放。',
+  'patched card creator notes must describe the embedded current architecture',
+);
+assert.equal(
   patchedCard.data.first_mes,
   '[开始游戏]',
   'patched card first_mes must contain the bare start marker without a Markdown fence',
 );
-for (const payload of [startExported, commonExported, exported]) {
+assert.equal(patchedExtensions.regex_scripts.some(script => script.scriptName === '去除变量'), false);
+assert.equal(patchedExtensions.regex_scripts.length, 7, 'update display must replace, not duplicate, the old removal regex');
+for (const payload of [startExported, updateExported, commonExported, exported]) {
   const matchingRegexes = patchedExtensions.regex_scripts.filter(script => script.scriptName === payload.scriptName);
   assert.equal(matchingRegexes.length, 1, `patched card must contain exactly one ${payload.scriptName} regex`);
   assert.equal(matchingRegexes[0].findRegex, payload.findRegex);
@@ -406,21 +437,46 @@ assert.ok(
 assert.ok(
   patchedMvuScripts[0].content.includes("e.兼容假流式=true") &&
     patchedMvuScripts[0].content.includes("e.模型来源='与插头相同'") &&
-    patchedMvuScripts[0].content.includes('魔法少女世界额外模型默认'),
+    patchedMvuScripts[0].content.includes("e.破限方案='使用内置破限'") &&
+    patchedMvuScripts[0].content.includes("e.其他预设名称=''") &&
+    patchedMvuScripts[0].content.includes('e.关闭thinking=true') &&
+    patchedMvuScripts[0].content.includes('e.随机头部=false') &&
+    patchedMvuScripts[0].content.includes("e.应答格式='聊天消息'") &&
+    patchedMvuScripts[0].content.includes("e.请求方式='依次请求，失败后重试'") &&
+    patchedMvuScripts[0].content.includes('e.max_chat_history=2') &&
+    patchedMvuScripts[0].content.includes('e.请求次数=2') &&
+    patchedMvuScripts[0].content.includes('e.最大回复token数=2600') &&
+    patchedMvuScripts[0].content.includes("e.世界书条目白名单正则='^\\\\[mvu_update\\\\]'") &&
+    patchedMvuScripts[0].content.includes('已开启默认不兼容假流式=true') &&
+    patchedMvuScripts[0].content.includes('魔法少女世界额外模型默认版本'),
   'the card loader must apply the unsupported-by-character-override extra-model defaults once',
 );
 assert.ok(
-  patchedMvuScripts[0].content.includes('globalThis[k]?.promise') &&
+  !patchedMvuScripts[0].content.includes('__MAGIC_GIRL_WORLD_GENERATE_RAW_MONITOR__') &&
+    !patchedMvuScripts[0].content.includes('g.generateRaw='),
+  'the card loader must not monkey-patch Tavern Helper generation functions',
+);
+assert.ok(
+  patchedMvuScripts[0].content.includes('g[k]?.promise') &&
     patchedMvuScripts[0].content.includes("lastError:''") &&
-    !patchedMvuScripts[0].content.includes('globalThis[k]=true'),
+    !patchedMvuScripts[0].content.includes('g[k]=true'),
   'patched card must reuse one observable MUV loader promise instead of a write-only boolean flag',
+);
+assert.ok(
+  patchedMvuScripts[0].content.includes("presetMode:'builtin'") &&
+    !patchedMvuScripts[0].content.includes('getPreset') &&
+    !patchedMvuScripts[0].content.includes('wrappedGetPreset') &&
+    !patchedMvuScripts[0].content.includes('魔法少女世界卡内变量预设'),
+  'patched card must use MVU built-in jailbreak without touching SillyTavern presets',
 );
 assert.ok(
   !Object.hasOwn(patchedExtensions.tavern_helper.variables || {}, 'battle_result'),
   'patched card must not ship stale battle state',
 );
 const patchedCharacterRuntimes = patchedExtensions.tavern_helper.scripts.filter(
-  entry => entry?.type === 'script' && entry.id === 'magic-girl-world-runtime',
+  entry =>
+    entry?.type === 'script' &&
+    entry.id === `magic-girl-world-runtime-${releaseConfig.cardVersion.replace(/[^a-z0-9]+/gi, '-')}`,
 );
 assert.equal(patchedCharacterRuntimes.length, 1, 'patched card must contain exactly one Magic Girl World runtime');
 assert.equal(patchedCharacterRuntimes[0].name, '魔法少女世界运行时');
@@ -430,6 +486,11 @@ assert.equal(patchedCharacterRuntimes[0].content, characterRuntimeSource);
 const worldbookManifest = JSON.parse(await readFile(resolve(root, 'worldbook_new/manifest.json'), 'utf8'));
 const worldbookEntryConfig = JSON.parse(await readFile(resolve(root, 'worldbook_new/entry-config.json'), 'utf8'));
 const patchedWorldbookEntries = patchedCard.data.character_book?.entries || [];
+assert.equal(
+  patchedWorldbookEntries.length,
+  Object.keys(worldbookManifest).length,
+  'patched card world-book must contain only entries declared by the current manifest',
+);
 assert.equal(
   patchedCard.data.character_book?.name,
   expectedWorldbookName,

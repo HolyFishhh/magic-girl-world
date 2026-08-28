@@ -18,8 +18,8 @@ registry.replace([
     stacks_change: -1,
     maxStacks: 3,
     triggers: {
-      apply: { damage: 1, to: 'self' },
-      tick: { damage: 'stacks', to: 'self' },
+      apply: { damage: 1 },
+      tick: { damage: 'stacks' },
     },
   },
 ]);
@@ -56,10 +56,12 @@ const applied = await runtime.apply('player', 'bleed', 1);
 assert.equal(applied.stacks, 1);
 assert.equal(store.getPlayer().statusEffects[0].id, 'bleed');
 assert.equal(executions[0][2].triggerType, 'apply');
+assert.equal(executions[0][0].steps[0].target, 'self');
 assert.equal(dispatches[0].trigger, 'gain_debuff');
 
 await runtime.processTurnEnd('player');
 assert.equal(executions[1][2].triggerType, 'tick');
+assert.equal(executions[1][0].steps[0].target, 'self');
 assert.deepEqual(store.getPlayer().statusEffects, []);
 assert.ok(events.some(event => event.type === 'status_removed' && event.reason === 'decay'));
 assert.ok(dispatches.some(dispatch => dispatch.trigger === 'lose_debuff'));

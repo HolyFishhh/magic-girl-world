@@ -2,6 +2,7 @@ import {
   REGISTERABLE_EFFECT_TRIGGER_SET,
   type RegisterableEffectTrigger,
 } from './battleTriggers';
+import { roundBattleValue } from './battleMath';
 
 export const EFFECT_PROGRAM_SPEC = 'mwg.effect/v1' as const;
 
@@ -664,8 +665,10 @@ function evaluateAmount(
   state: CoreEffectState,
   context: EffectExecutionContext,
   path: string,
+  discrete = false,
 ): number {
-  const value = evaluateNumericExpression(expression, state, context, path);
+  const evaluated = evaluateNumericExpression(expression, state, context, path);
+  const value = discrete ? Math.floor(evaluated) : roundBattleValue(evaluated);
   if (value < 0) throw new EffectExecutionError('NEGATIVE_AMOUNT', path, '效果数量不能为负数');
   return value;
 }
@@ -679,10 +682,10 @@ function readStat(entity: CoreCombatantState, stat: 'hp' | 'lust' | 'energy' | '
 }
 
 function writeStat(entity: CoreCombatantState, stat: 'hp' | 'lust' | 'energy' | 'block', value: number): void {
-  if (stat === 'hp') entity.hp = clamp(value, 0, entity.maxHp);
-  else if (stat === 'lust') entity.lust = clamp(value, 0, entity.maxLust);
-  else if (stat === 'energy') entity.energy = Math.max(0, value);
-  else entity.block = Math.max(0, value);
+  if (stat === 'hp') entity.hp = roundBattleValue(clamp(value, 0, entity.maxHp));
+  else if (stat === 'lust') entity.lust = roundBattleValue(clamp(value, 0, entity.maxLust));
+  else if (stat === 'energy') entity.energy = Math.max(0, Math.floor(value));
+  else entity.block = roundBattleValue(Math.max(0, value));
 }
 
 function executeNode(
@@ -704,18 +707,18 @@ function executeNode(
     return;
   }
   if (node.op === 'draw_cards') {
-    events.push({ type: 'draw_cards', amount: evaluateAmount(node.amount, state, context, `${path}.amount`) });
+    events.push({ type: 'draw_cards', amount: evaluateAmount(node.amount, state, context, `${path}.amount`, true) });
     return;
   }
   if (node.op === 'scry_cards') {
-    events.push({ type: 'scry_cards', amount: evaluateAmount(node.amount, state, context, `${path}.amount`) });
+    events.push({ type: 'scry_cards', amount: evaluateAmount(node.amount, state, context, `${path}.amount`, true) });
     return;
   }
   if (node.op === 'discard_cards' || node.op === 'exhaust_cards') {
     events.push({
       type: node.op,
       selector: clone(node.selector),
-      amount: evaluateAmount(node.amount, state, context, `${path}.amount`),
+      amount: evaluateAmount(node.amount, state, context, `${path}.amount`, true),
     });
     return;
   }
@@ -724,7 +727,7 @@ function executeNode(
       type: 'recover_cards',
       source: node.source,
       pick: node.pick,
-      amount: evaluateAmount(node.amount, state, context, `${path}.amount`),
+      amount: evaluateAmount(node.amount, state, context, `${path}.amount`, true),
     });
     return;
   }
@@ -732,7 +735,7 @@ function executeNode(
     events.push({
       type: 'reduce_card_cost',
       selector: clone(node.selector),
-      amount: evaluateAmount(node.amount, state, context, `${path}.amount`),
+      amount: evaluateAmount(node.amount, state, context, `${path}.amount`, true),
     });
     return;
   }
@@ -750,7 +753,7 @@ function executeNode(
       target: node.target,
       stat: node.stat,
       operator: node.operator,
-      value: evaluateNumericExpression(node.value, state, context, `${path}.value`),
+      value: roundBattleValue(evaluateNumericExpression(node.value, state, context, `${path}.value`)),
     });
     return;
   }
@@ -765,7 +768,7 @@ function executeNode(
   }
   const entity = state[node.target];
   if (node.op === 'apply_status') {
-    const stacks = evaluateAmount(node.stacks, state, context, `${path}.stacks`);
+    const stacks = evaluateAmount(node.stacks, state, context, `${path}.stacks`, true);
     entity.statusStacks = { ...(entity.statusStacks || {}) };
     entity.statusStacks[node.status] = (entity.statusStacks[node.status] || 0) + stacks;
     events.push({ type: 'apply_status', target: node.target, status: node.status, stacks });
@@ -779,24 +782,26 @@ function executeNode(
     return;
   }
   if (node.op === 'set_stat') {
-    const value = evaluateNumericExpression(node.value, state, context, `${path}.value`);
+    const value = node.stat === 'energy'
+      ? Math.floor(evaluateNumericExpression(node.value, state, context, `${path}.value`))
+      : roundBattleValue(evaluateNumericExpression(node.value, state, context, `${path}.value`));
     writeStat(entity, node.stat, value);
     events.push({ type: 'set_stat', target: node.target, stat: node.stat, value: readStat(entity, node.stat) });
     return;
   }
-  const amount = evaluateAmount(node.amount, state, context, `${path}.amount`);
+  const amount = evaluateAmount(node.amount, state, context, `${path}.amount`, node.op === 'gain_energy');
   if (node.op === 'damage') {
-    const blocked = Math.min(entity.block, amount);
-    entity.block -= blocked;
-    const hpLost = Math.min(entity.hp, amount - blocked);
-    entity.hp -= hpLost;
+    const blocked = roundBattleValue(Math.min(entity.block, amount));
+    entity.block = roundBattleValue(entity.block - blocked);
+    const hpLost = roundBattleValue(Math.min(entity.hp, amount - blocked));
+    entity.hp = roundBattleValue(entity.hp - hpLost);
     events.push({ type: 'damage', target: node.target, requested: amount, blocked, hpLost });
   } else if (node.op === 'heal') {
     const previous = entity.hp;
-    entity.hp = clamp(entity.hp + amount, 0, entity.maxHp);
-    events.push({ type: 'heal', target: node.target, requested: amount, hpGained: entity.hp - previous });
+    entity.hp = roundBattleValue(clamp(entity.hp + amount, 0, entity.maxHp));
+    events.push({ type: 'heal', target: node.target, requested: amount, hpGained: roundBattleValue(entity.hp - previous) });
   } else if (node.op === 'gain_block') {
-    entity.block += amount;
+    entity.block = roundBattleValue(entity.block + amount);
     events.push({ type: 'gain_block', target: node.target, amount });
   } else if (node.op === 'gain_energy') {
     const previous = entity.energy;
@@ -804,8 +809,8 @@ function executeNode(
     events.push({ type: 'gain_energy', target: node.target, amount: entity.energy - previous });
   } else {
     const previous = entity.lust;
-    entity.lust = clamp(entity.lust + amount, 0, entity.maxLust);
-    events.push({ type: 'gain_lust', target: node.target, amount: entity.lust - previous });
+    entity.lust = roundBattleValue(clamp(entity.lust + amount, 0, entity.maxLust));
+    events.push({ type: 'gain_lust', target: node.target, amount: roundBattleValue(entity.lust - previous) });
   }
 }
 

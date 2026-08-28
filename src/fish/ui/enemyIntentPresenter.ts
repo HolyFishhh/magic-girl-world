@@ -1,5 +1,5 @@
 import { BattleLog } from '../modules/battleLog';
-import { escapeHtml } from '../shared/html';
+import { escapeHtml, escapeHtmlAttribute } from '../shared/html';
 import type { Enemy, EnemyAction } from '../../game-core';
 import { AnimationManager } from './animationManager';
 import { EffectProgramDisplay, summarizeEffectProgram, type IntentType } from './effectProgramDisplay';
@@ -30,18 +30,32 @@ export class EnemyIntentPresenter {
   showStunned(enemyName: string): void {
     try {
       this.addLog(`${enemyName}被眩晕，无法行动！`, 'system');
-      this.animationManager.showEnemyActionAnimation('眩晕', `${enemyName}无法行动！`);
+      this.animationManager.showEnemyActionAnimation('眩晕', `${enemyName}无法行动！`, 'skill', '💫');
     } catch (error) {
       console.warn('显示敌人眩晕状态失败:', error);
     }
   }
 
-  showAction(action: Pick<EnemyAction, 'name' | 'description'>): void {
+  showAction(action: EnemyAction): void {
     try {
-      this.animationManager.showEnemyActionAnimation(action.name, action.description);
+      const summary = summarizeEffectProgram(action.effectProgram);
+      const kind = summary.type === 'attack' || summary.type === 'lust_attack' ? 'enemy' : 'skill';
+      const emoji = this.iconFor(summary.type);
+      this.logAction(action.name, action.description || '执行行动');
+      this.animationManager.showEnemyActionAnimation(
+        action.name,
+        action.description,
+        kind,
+        emoji,
+        action.effectProgram,
+      );
     } catch (error) {
       console.warn('显示敌人行动动画失败:', error);
     }
+  }
+
+  logAction(actionName: string, description: string): void {
+    BattleLog.logEnemyAction(actionName, description);
   }
 
   render(enemy: Enemy | null): void {
@@ -52,7 +66,7 @@ export class EnemyIntentPresenter {
       if (intentElement.length > 0) {
         intentElement.html(`
           <div class="intent-icon">${escapeHtml(model.icon)}</div>
-          <div class="intent-description">${escapeHtml(model.description)}</div>
+          <div class="intent-description" title="${escapeHtmlAttribute(model.details)}">${escapeHtml(model.description)}</div>
           ${model.effectTagsHtml ? `<div class="intent-effects">${model.effectTagsHtml}</div>` : ''}
         `);
       } else {
@@ -64,18 +78,22 @@ export class EnemyIntentPresenter {
     }
   }
 
-  private createDisplayModel(enemy: Enemy): { icon: string; description: string; effectTagsHtml: string } {
+  private createDisplayModel(enemy: Enemy): {
+    icon: string;
+    description: string;
+    details: string;
+    effectTagsHtml: string;
+  } {
     const action = enemy.nextAction || this.firstAction(enemy.actions);
     if (action) {
       const parsed = this.parseAction(action);
-      let description = parsed.description;
-      if (parsed.damage) description += ` (${parsed.damage}伤害)`;
-      if (parsed.lustDamage) description += ` (${parsed.lustDamage}欲望)`;
-      if (parsed.block) description += ` (${parsed.block}格挡)`;
       return {
         icon: this.iconFor(parsed.type),
-        description,
-        effectTagsHtml: this.effectDisplay.createEffectTagsHTML(this.effectDisplay.programToTags(action.effectProgram)),
+        description: action.name || '未知行动',
+        details: parsed.description,
+        effectTagsHtml: this.effectDisplay.createEffectTagsHTML(
+          this.effectDisplay.programToTags(action.effectProgram, { selfLabel: '敌方', opponentLabel: '我方' }),
+        ),
       };
     }
 
@@ -83,10 +101,11 @@ export class EnemyIntentPresenter {
       return {
         icon: enemy.intent.emoji || '？',
         description: enemy.intent.description || '准备行动',
+        details: enemy.intent.description || '准备行动',
         effectTagsHtml: '',
       };
     }
-    return { icon: '？', description: '准备行动', effectTagsHtml: '' };
+    return { icon: '？', description: '准备行动', details: '准备行动', effectTagsHtml: '' };
   }
 
   private parseAction(action: EnemyAction): IntentPresentation {

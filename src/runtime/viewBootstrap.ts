@@ -1,4 +1,4 @@
-type RuntimeViewName = 'start' | 'common' | 'fish';
+type RuntimeViewName = 'start' | 'common' | 'fish' | 'update';
 
 type RuntimeViewAsset = Readonly<{
   title: string;

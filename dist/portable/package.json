@@ -1,6 +1,6 @@
 {
   "name": "@magic-girl-world/portable-core",
-  "version": "0.5.93",
+  "version": "0.5.148",
   "type": "module",
   "sideEffects": false,
   "exports": {

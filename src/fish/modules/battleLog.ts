@@ -4,16 +4,23 @@
 
 import { GameStateManager } from '../core/gameStateManager';
 import { escapeHtml, escapeHtmlAttribute } from '../shared/html';
+import type { BattleHistoryEntry } from '../../game-core';
 
 export class BattleLog {
   private static logContainer: JQuery | null = null;
-  private static maxLogs = 50; // 最大日志条数
-  private static entries: Array<{
-    turn: number;
-    type: 'info' | 'damage' | 'heal' | 'action' | 'system';
-    message: string;
-    source?: { type: 'card' | 'relic' | 'ability' | 'status'; name: string; details?: string };
-  }> = [];
+  /** Only the visible dialog is bounded. The narrative report keeps the whole battle. */
+  private static maxVisibleLogs = 180;
+  private static entries: BattleHistoryEntry[] = [];
+
+  private static restorePersistedEntries(): void {
+    const persisted = GameStateManager.getInstance().getGameState()?.battleHistory;
+    if (!Array.isArray(persisted) || persisted.length <= this.entries.length) return;
+    this.entries = persisted.map(entry => ({ ...entry, source: entry.source ? { ...entry.source } : undefined }));
+  }
+
+  private static persistEntries(): void {
+    GameStateManager.getInstance().setBattleHistory(this.entries);
+  }
 
   /**
    * 初始化战斗日志
@@ -48,11 +55,13 @@ export class BattleLog {
     message: string,
     type: 'info' | 'damage' | 'heal' | 'action' | 'system' = 'info',
     source?: { type: 'card' | 'relic' | 'ability' | 'status'; name: string; details?: string },
+    action?: { actor: 'player' | 'enemy'; name: string },
   ): void {
     if (!this.logContainer) {
       this.init();
     }
 
+    this.restorePersistedEntries();
     // 获取当前回合数
     const gameStateManager = GameStateManager.getInstance();
     const gameState = gameStateManager.getGameState();
@@ -63,8 +72,11 @@ export class BattleLog {
       type,
       message: String(message).replace(/\s+/g, ' ').trim(),
       source: source ? { ...source } : undefined,
+      actor: action?.actor,
+      actionName: action?.name,
     });
-    if (this.entries.length > this.maxLogs) this.entries.splice(0, this.entries.length - this.maxLogs);
+    if (this.entries.length > 600) this.entries.splice(0, this.entries.length - 600);
+    this.persistEntries();
 
     let icon = '';
 
@@ -128,7 +140,7 @@ export class BattleLog {
 
     // 限制日志数量
     const logs = this.logContainer!.find('.log-entry');
-    if (logs.length > this.maxLogs) {
+    if (logs.length > this.maxVisibleLogs) {
       logs.first().remove();
     }
 
@@ -144,14 +156,15 @@ export class BattleLog {
    * 记录玩家行动
    */
   static logPlayerAction(actionType: string, description: string): void {
-    this.addLog(`玩家${actionType}: ${description}`, 'action');
+    const actionName = description.replace(/^使用了(?:卡牌|道具)[:：]?\s*/, '').trim() || description;
+    this.addLog(`玩家${actionType}: ${description}`, 'action', undefined, { actor: 'player', name: actionName });
   }
 
   /**
    * 记录敌人行动
    */
   static logEnemyAction(actionName: string, description: string): void {
-    this.addLog(`敌人使用了 ${actionName}: ${description}`, 'action');
+    this.addLog(`敌人使用了 ${actionName}: ${description}`, 'action', undefined, { actor: 'enemy', name: actionName });
   }
 
   /**
@@ -200,20 +213,80 @@ export class BattleLog {
    */
   static clear(): void {
     this.entries = [];
+    this.persistEntries();
     if (this.logContainer) {
       this.logContainer.empty();
     }
   }
 
-  /** Reuse the same bounded event stream for post-battle narrative context. */
-  static buildNarrativeReport(maxEntries = 36): string {
-    const selected = this.entries.slice(-Math.max(1, Math.floor(maxEntries)));
+  /** Reuse the complete battle event stream for the on-screen diagnostic log. */
+  static buildNarrativeReport(maxEntries?: number): string {
+    this.restorePersistedEntries();
+    const selected = maxEntries === undefined ? this.entries : this.entries.slice(-Math.max(1, Math.floor(maxEntries)));
     if (selected.length === 0) return '- 无可用战斗事件记录';
     return selected
       .map(entry => {
         const source = entry.source?.name ? `〔${entry.source.name}〕` : '';
         const details = entry.source?.details ? `（${entry.source.details.replace(/\s+/g, ' ').trim()}）` : '';
         return `- 第${entry.turn}回合 ${source}${entry.message}${details}`;
+      })
+      .join('\n');
+  }
+
+  /**
+   * Build one compact line per turn. Repeated numeric events stay in the UI log;
+   * the story model receives actions, triggered sources and decisive events only.
+   */
+  static buildTurnSummaryReport(): string {
+    this.restorePersistedEntries();
+    if (this.entries.length === 0) return '- 无可用战斗事件记录';
+
+    const grouped = new Map<number, BattleHistoryEntry[]>();
+    for (const entry of this.entries) {
+      const turn = Math.max(1, Math.floor(entry.turn || 1));
+      const current = grouped.get(turn) || [];
+      current.push(entry);
+      grouped.set(turn, current);
+    }
+
+    const unique = (values: string[]): string[] => [...new Set(values.map(value => value.trim()).filter(Boolean))];
+    const countActions = (values: string[]): string[] => {
+      const order: string[] = [];
+      const counts = new Map<string, number>();
+      for (const rawValue of values) {
+        const value = rawValue.trim();
+        if (!value) continue;
+        if (!counts.has(value)) order.push(value);
+        counts.set(value, (counts.get(value) || 0) + 1);
+      }
+      return order.map(value => `${value}${(counts.get(value) || 0) > 1 ? `×${counts.get(value)}` : ''}`);
+    };
+    return [...grouped.entries()]
+      .sort(([left], [right]) => left - right)
+      .map(([turn, entries]) => {
+        const playerActions = countActions(
+          entries.filter(entry => entry.actor === 'player').map(entry => entry.actionName || ''),
+        );
+        const enemyActions = countActions(
+          entries.filter(entry => entry.actor === 'enemy').map(entry => entry.actionName || ''),
+        );
+        const triggers = countActions(
+          entries
+            .filter(entry => entry.source && ['relic', 'ability', 'status'].includes(entry.source.type))
+            .map(
+              entry =>
+                `${entry.source!.type === 'relic' ? '遗物' : entry.source!.type === 'ability' ? '能力' : '状态'}“${entry.source!.name}”`,
+            ),
+        );
+        const decisive = unique(
+          entries
+            .filter(entry => entry.type === 'system' && !/回合(?:开始|结束)|战斗胜利|战斗失败/.test(entry.message))
+            .map(entry => entry.message),
+        );
+        const parts = [`玩家使用：${playerActions.join('、') || '无'}`, `敌人使用：${enemyActions.join('、') || '无'}`];
+        if (triggers.length > 0) parts.push(`触发：${triggers.join('、')}`);
+        if (decisive.length > 0) parts.push(`关键事件：${decisive.join('、')}`);
+        return `- 回合${turn}：${parts.join('；')}`;
       })
       .join('\n');
   }

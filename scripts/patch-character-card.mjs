@@ -5,6 +5,7 @@ import { Buffer } from 'node:buffer';
 import PNGtext from 'png-chunk-text';
 import encode from 'png-chunks-encode';
 import extract from 'png-chunks-extract';
+import { buildMvuCardLoader } from './lib/mvu-card-loader.mjs';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const inputPath = resolve(process.argv[2] || resolve(root, '魔法少女世界.png'));
@@ -12,6 +13,7 @@ const outputPath = resolve(process.argv[3] || inputPath);
 const legacyOutputPath = resolve(root, 'dist/tavern/魔法少女世界-酒馆兼容版.png');
 const interfacePaths = [
   resolve(root, 'dist/tavern/start-interface.json'),
+  resolve(root, 'dist/tavern/update-interface.json'),
   resolve(root, 'dist/tavern/common-interface.json'),
   resolve(root, 'dist/tavern/fish-interface.json'),
 ];
@@ -20,7 +22,6 @@ const worldbookManifestPath = resolve(worldbookRoot, 'manifest.json');
 const worldbookEntryConfigPath = resolve(worldbookRoot, 'entry-config.json');
 const releaseConfigPath = resolve(root, 'release.config.json');
 const characterRuntimePath = resolve(root, 'dist/tavern/character-runtime.js');
-const CHARACTER_RUNTIME_ID = 'magic-girl-world-runtime';
 const RETRYABLE_WRITE_CODES = new Set(['UNKNOWN', 'EBUSY', 'EPERM']);
 
 async function writeFileWithRetry(path, data, attempts = 8, delayMs = 250) {
@@ -70,9 +71,14 @@ const [image, interfaceTexts, worldbookManifestText, worldbookEntryConfigText, r
 const releaseConfig = JSON.parse(releaseConfigText);
 const CARD_VERSION = releaseConfig.cardVersion;
 const CHARACTER_NAME = releaseConfig.characterName || `${releaseConfig.worldbookPrefix} ${CARD_VERSION}`;
+const CHARACTER_RUNTIME_ID = `magic-girl-world-runtime-${CARD_VERSION.replace(/[^a-z0-9]+/gi, '-')}`;
 const WORLDBOOK_NAME = `${releaseConfig.worldbookPrefix}${CARD_VERSION}`;
 const MVU_URL = `https://testingcf.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate@${releaseConfig.mvuVersion}/artifact/bundle.js`;
-const MVU_IMPORT = `(async()=>{const n=${JSON.stringify(WORLDBOOK_NAME)},u=${JSON.stringify(MVU_URL)},k='__MAGIC_GIRL_WORLD_MVU_LOADER__';if(globalThis[k]?.promise)return globalThis[k].promise;const s={status:'waiting',worldbook:n,lastError:''};const p=(async()=>{for(;;){try{if(typeof getLorebookEntries!=='function'){s.status='waiting'}else{await getLorebookEntries(n);const t=globalThis.SillyTavern;if(t?.extensionSettings){const m=t.extensionSettings.mvu_settings??={};const i=m.internal??={};if(i.魔法少女世界额外模型默认!==1){const e=m.额外模型解析配置??={};e.兼容假流式=true;e.模型来源='与插头相同';i.魔法少女世界额外模型默认=1;t.saveSettingsDebounced?.()}}s.status='loading';await import(u);s.status='ready';return true}}catch(e){s.status='waiting';s.lastError=String(e?.message||e)}await new Promise(r=>setTimeout(r,250))}})();globalThis[k]={promise:p,state:s};return p})()`;
+const MVU_IMPORT = buildMvuCardLoader({
+  cardVersion: CARD_VERSION,
+  worldbookName: WORLDBOOK_NAME,
+  mvuUrl: MVU_URL,
+});
 const chunks = extract(new Uint8Array(image));
 const card = decodeCard(chunks);
 const interfacePayloads = interfaceTexts.map(JSON.parse);
@@ -109,6 +115,7 @@ const createWorldbookEntry = entryName => {
   entry.extensions.display_index = entry.id;
   return entry;
 };
+const managedWorldbookEntries = [];
 for (const [entryName, sourceName] of Object.entries(worldbookManifest)) {
   const config = worldbookEntryConfig[entryName] || {};
   const expectedComment = typeof config.comment === 'string' ? config.comment : entryName;
@@ -134,12 +141,17 @@ for (const [entryName, sourceName] of Object.entries(worldbookManifest)) {
   if (config.extensions && typeof config.extensions === 'object') {
     entry.extensions = { ...(entry.extensions || {}), ...structuredClone(config.extensions) };
   }
+  managedWorldbookEntries.push(entry);
 }
+// The source manifest is authoritative. Merely upserting entries leaves removed
+// experiments embedded forever when patching an older release PNG.
+card.data.character_book.entries = managedWorldbookEntries;
 
 for (const payload of interfacePayloads) {
-  const matches = (extensions.regex_scripts || []).filter(script => script.scriptName === payload.scriptName);
+  const acceptedNames = payload.scriptName === '变量更新展示' ? new Set(['变量更新展示', '去除变量']) : new Set([payload.scriptName]);
+  const matches = (extensions.regex_scripts || []).filter(script => acceptedNames.has(script.scriptName));
   if (matches.length !== 1) {
-    throw new Error(`Expected one embedded ${payload.scriptName} regex, found ${matches.length}`);
+    throw new Error(`Expected one embedded ${[...acceptedNames].join('/')} regex, found ${matches.length}`);
   }
   const existingId = matches[0].id;
   Object.assign(matches[0], payload);
@@ -220,6 +232,8 @@ delete extensions.tavern_helper.variables.battle_result;
 card.data.character_version = CARD_VERSION;
 card.name = CHARACTER_NAME;
 card.data.name = CHARACTER_NAME;
+card.data.creator_notes =
+  '剧情模式可直接开始游玩；角色卡已内置世界书、MVU 变量框架与交互界面。爬塔模式暂未开放。';
 // The start regex targets the marker itself. A Markdown fence here is parsed
 // as a second code block by SillyTavern and can turn the replacement HTML into
 // JavaScript, producing `Unexpected token '<'` in the message iframe.

@@ -33,6 +33,14 @@ assert.equal(
   core.formatBattleRewardBudget(core.recommendBattleRewardBudget(null)),
   'cards=3/1 rarity=Common,Uncommon items=1/1 exp=25',
 );
+assert.equal(
+  core.formatBattleRewardBudget(core.recommendBattleRewardBudget(null), { includeExperience: false }),
+  'cards=3/1 rarity=Common,Uncommon items=1/1',
+);
+assert.equal(
+  core.formatBattleRewardChecklist(core.recommendBattleRewardBudget(null)),
+  'reward.card=3项；reward.artifact=[]；reward.item=1项；reward.limits={"cards":1,"items":1}（整对象一次写入，不得添加其他键）；每张 reward.card 固定 quantity=1；经验已由程序结算，禁止修改 battle.exp',
+);
 
 const standardShop = { act: 2, floor: 4, kind: 'shop', danger: 0, floorsPerAct: 10, actCount: 3 };
 assert.deepEqual(core.recommendShopBudget(standardShop), {

@@ -2,9 +2,12 @@ import {
   CARD_RARITY_SET,
   CARD_TYPE_SET,
   compileCompactEffectList,
-  describeCompactCard,
-  describeCompactContent,
+  normalizeChinesePlayerDescription,
+  resolveCompactCardDescription,
+  resolveCompactContentDescription,
   normalizeAbilityTrigger,
+  normalizeCompactNamedEffectInput,
+  resolveTriggerInput,
   RELIC_RARITY_SET,
   type Ability,
   type Card,
@@ -36,11 +39,55 @@ function compileEffects(
   value: Record<string, any>,
   options: { requireTrigger?: boolean; forbidTrigger?: boolean } = {},
 ): EffectProgram | null {
-  if (hasRemovedEffectFields(value) || !Object.prototype.hasOwnProperty.call(value, 'effects')) return null;
-  if (options.forbidTrigger && value.trigger !== undefined) return null;
-  if (options.requireTrigger && !normalizeAbilityTrigger(readText(value, 'trigger'))) return null;
-  const compiled = compileCompactEffectList(value.effects, { creates: value.creates });
+  if (hasRemovedEffectFields(value)) return null;
+  const resolved = resolveTriggerInput(value);
+  if (options.forbidTrigger && resolved.trigger !== undefined) return null;
+  if (options.requireTrigger && !normalizeAbilityTrigger(typeof resolved.trigger === 'string' ? resolved.trigger : '')) return null;
+  if (options.requireTrigger && resolved.structured && resolved.immediateEffects !== undefined) return null;
+  if (resolved.triggeredEffects === undefined) return null;
+  const compiled = compileCompactEffectList(resolved.triggeredEffects, {
+    creates: value.creates,
+    when: resolved.structured ? undefined : value.when,
+  });
   return compiled.ok ? compiled.value : null;
+}
+
+function compileCardEffects(
+  value: Record<string, any>,
+  options: { statusNames?: Readonly<Record<string, string>> } = {},
+): EffectProgram | null {
+  const resolved = resolveTriggerInput(value);
+  if (!resolved.structured) {
+    const compiled = compileCompactEffectList(value.effects, {
+      trigger: value.trigger,
+      when: value.when,
+      creates: value.creates,
+      statusNames: options.statusNames,
+    });
+    return compiled.ok ? compiled.value : null;
+  }
+  const programs: EffectProgram[] = [];
+  if (resolved.immediateEffects !== undefined) {
+    const immediate = compileCompactEffectList(resolved.immediateEffects, {
+      when: value.when,
+      creates: value.creates,
+      statusNames: options.statusNames,
+    });
+    if (!immediate.ok) return null;
+    programs.push(immediate.value);
+  }
+  if (resolved.triggeredEffects !== undefined) {
+    const triggered = compileCompactEffectList(resolved.triggeredEffects, {
+      trigger: resolved.trigger,
+      creates: value.creates,
+      statusNames: options.statusNames,
+    });
+    if (!triggered.ok) return null;
+    programs.push(triggered.value);
+  }
+  return programs.length > 0
+    ? { spec: 'mwg.effect/v1', steps: programs.flatMap(program => program.steps) }
+    : null;
 }
 
 export interface NormalizedCardDefinition extends Omit<Card, 'id'> {
@@ -55,12 +102,8 @@ export function normalizeCardDefinition(
   if (!isContentRecord(value) || hasRemovedEffectFields(value)) return null;
   const id = readText(value, 'id');
   const name = readText(value, 'name');
-  const compiled = compileCompactEffectList(value.effects, {
-    trigger: value.trigger,
-    creates: value.creates,
-    statusNames: options.statusNames,
-  });
-  if (!hasValidId(id) || !name || !compiled.ok) return null;
+  const effectProgram = compileCardEffects(value, options);
+  if (!hasValidId(id) || !name || !effectProgram) return null;
 
   const type = readText(value, 'type', 'Skill');
   const rarity = readText(value, 'rarity', 'Common');
@@ -99,10 +142,11 @@ export function normalizeCardDefinition(
     rarity: rarity as Card['rarity'],
     cost,
     quantity,
-    description:
-      readText(value, 'description') ||
-      describeCompactCard(value, { includeKeywords: false, statusNames: options.statusNames }),
-    effectProgram: compiled.value,
+    description: resolveCompactCardDescription(value, {
+      includeKeywords: false,
+      statusNames: options.statusNames,
+    }),
+    effectProgram,
     ...(discardEffectProgram ? { discardEffectProgram } : {}),
     retain: value.retain === true,
     exhaust: type === 'Power' || value.exhaust === true,
@@ -118,7 +162,8 @@ export function normalizeRelicDefinition(
   if (!isContentRecord(value)) return null;
   const id = readText(value, 'id');
   const name = readText(value, 'name');
-  const trigger = normalizeAbilityTrigger(readText(value, 'trigger'));
+  const resolvedTrigger = resolveTriggerInput(value);
+  const trigger = normalizeAbilityTrigger(typeof resolvedTrigger.trigger === 'string' ? resolvedTrigger.trigger : '');
   const effectProgram = compileEffects(value, { requireTrigger: true });
   const rarity = readText(value, 'rarity', 'Common');
   if (!hasValidId(id) || !name || !trigger || !effectProgram || !RELIC_RARITY_SET.has(rarity)) return null;
@@ -126,7 +171,7 @@ export function normalizeRelicDefinition(
     id,
     name,
     emoji: readText(value, 'emoji', '🔮'),
-    description: readText(value, 'description') || describeCompactContent(value, { statusNames: options.statusNames }),
+    description: resolveCompactContentDescription(value, { statusNames: options.statusNames }),
     effectProgram,
     rarity: rarity as Relic['rarity'],
     trigger,
@@ -147,7 +192,7 @@ export function normalizeItemDefinition(
     id,
     name,
     emoji: readText(value, 'emoji', '🧪'),
-    description: readText(value, 'description') || describeCompactContent(value, { statusNames: options.statusNames }),
+    description: resolveCompactContentDescription(value, { statusNames: options.statusNames }),
     effectProgram,
     count,
   };
@@ -159,14 +204,16 @@ export function normalizeAbilityDefinition(
 ): Ability | null {
   if (!isContentRecord(value)) return null;
   const id = readText(value, 'id');
-  const trigger = normalizeAbilityTrigger(readText(value, 'trigger'));
+  const resolvedTrigger = resolveTriggerInput(value);
+  const trigger = normalizeAbilityTrigger(typeof resolvedTrigger.trigger === 'string' ? resolvedTrigger.trigger : '');
   const effectProgram = compileEffects(value, { requireTrigger: true });
   if (!hasValidId(id) || !trigger || !effectProgram) return null;
   return {
     id,
     name: readText(value, 'name', id),
     emoji: readText(value, 'emoji', '⚡'),
-    description: readText(value, 'description') || describeCompactContent(value, { statusNames: options.statusNames }),
+    description: resolveCompactContentDescription(value, { statusNames: options.statusNames }),
+    source: readText(value, 'source', '剧情获得'),
     trigger,
     effectProgram,
   };
@@ -184,7 +231,7 @@ export function normalizeEnemyAction(
   return {
     name,
     effectProgram,
-    description: readText(value, 'description') || describeCompactContent(value, { statusNames: options.statusNames }) || name,
+    description: resolveCompactContentDescription(value, { statusNames: options.statusNames }),
     weight,
   };
 }
@@ -197,15 +244,16 @@ export interface NormalizedNamedEffect {
 
 export function normalizeNamedEffectDefinition(
   value: unknown,
-  options: { statusNames?: Readonly<Record<string, string>> } = {},
+  options: { statusNames?: Readonly<Record<string, string>>; fallbackName?: string } = {},
 ): NormalizedNamedEffect | null {
-  if (!isContentRecord(value)) return null;
-  const name = readText(value, 'name');
-  const effectProgram = compileEffects(value, { forbidTrigger: true });
+  const normalized = normalizeCompactNamedEffectInput(value, options.fallbackName || '欲望效果');
+  if (!isContentRecord(normalized)) return null;
+  const name = readText(normalized, 'name');
+  const effectProgram = compileEffects(normalized, { forbidTrigger: true });
   if (!name || !effectProgram) return null;
   return {
     name,
-    description: readText(value, 'description') || describeCompactContent(value, { statusNames: options.statusNames }),
+    description: resolveCompactContentDescription(normalized, { statusNames: options.statusNames }),
     effectProgram,
   };
 }
@@ -227,7 +275,9 @@ export function normalizeActiveStatus(
     id,
     name: readText(value, 'name', options.statusNames?.[id] || id),
     emoji: readText(value, 'emoji', '✨'),
-    description: readText(value, 'description', options.statusDescriptions?.[id] || ''),
+    description:
+      normalizeChinesePlayerDescription(value.description) ||
+      normalizeChinesePlayerDescription(options.statusDescriptions?.[id]),
     type: type as StatusEffect['type'],
     stacks: Math.floor(stacks),
   };

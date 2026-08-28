@@ -16,7 +16,7 @@ modifier.addModifierOperation(breakdown, { operator: '-', value: 0.5 });
 modifier.addModifierOperation(breakdown, { operator: '*', value: 1.5 });
 modifier.addModifierOperation(breakdown, { operator: '/', value: 2 });
 modifier.addModifierOperation(breakdown, { operator: '=', value: 99 });
-assert.deepEqual(modifier.roundModifierBreakdown(breakdown), { add: 1.5, mul: 0.8 });
+assert.deepEqual(modifier.roundModifierBreakdown(breakdown), { add: 1.5, mul: 0.75 });
 
 const state = {
   self: { hp: 10, maxHp: 10, lust: 0, maxLust: 100, energy: 3, maxEnergy: 3, block: 2 },

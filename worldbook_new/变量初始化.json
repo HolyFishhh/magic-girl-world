@@ -28,6 +28,7 @@
     "$meta": { "extensible": false },
     "core": {
       "$meta": { "extensible": false },
+      "emoji": "",
       "hp": 100,
       "max_hp": 100,
       "lust": 0,
@@ -84,7 +85,8 @@
     "card": ["$__META_EXTENSIBLE__$"],
     "artifact": ["$__META_EXTENSIBLE__$"],
     "item": ["$__META_EXTENSIBLE__$"],
-    "limits": { "$meta": { "extensible": true } }
+    "limits": { "$meta": { "extensible": true } },
+    "request": null
   },
   "run": null,
   "run_result": null,

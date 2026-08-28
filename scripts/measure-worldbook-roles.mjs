@@ -28,10 +28,42 @@ console.table([
   { scenario: 'update_base', tokens: updateBase },
   {
     scenario: 'update_first_turn',
-    tokens: updateBase + (byName.get('首条消息变量更新') || 0) + (byName.get('战斗内容生成要求') || 0),
+    tokens:
+      updateBase +
+      (byName.get('首条消息变量更新') || 0) +
+      (byName.get('战斗内容生成要求') || 0) +
+      (byName.get('变量数据结构') || 0),
   },
   {
     scenario: 'update_battle_registration',
-    tokens: updateBase + (byName.get('战斗内容生成要求') || 0) + (byName.get('战斗场景生成') || 0),
+    tokens:
+      updateBase +
+      (byName.get('战斗内容生成要求') || 0) +
+      (byName.get('战斗场景生成') || 0) +
+      (byName.get('变量数据结构') || 0),
+  },
+  {
+    scenario: 'update_battle_settlement',
+    tokens:
+      updateBase +
+      (byName.get('战斗内容生成要求') || 0) +
+      (byName.get('变量数据结构') || 0) +
+      (byName.get('战斗结算生成') || 0),
+  },
+  {
+    scenario: 'update_content_growth',
+    tokens:
+      updateBase +
+      (byName.get('战斗内容生成要求') || 0) +
+      (byName.get('变量数据结构') || 0),
+  },
+  {
+    scenario: 'update_battle_scene_repair',
+    tokens:
+      updateBase +
+      (byName.get('战斗内容生成要求') || 0) +
+      (byName.get('战斗场景生成') || 0) +
+      (byName.get('变量数据结构') || 0) +
+      (byName.get('战斗场景修复') || 0),
   },
 ]);

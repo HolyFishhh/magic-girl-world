@@ -1,0 +1,34 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700&family=ZCOOL+KuaiLe&display=swap');
+
+/*
+ * Shared visual tokens for every isolated Tavern view.
+ * These declarations must be compiled into each exported iframe because
+ * Tavern Helper only transports the generated body, styles and scripts.
+ */
+:root,
+html {
+  --mwg-font-display: 'ZCOOL KuaiLe', 'LXGW WenKai', 'STKaiti', 'KaiTi', 'Microsoft YaHei', sans-serif;
+  --mwg-font-body: 'ZCOOL KuaiLe', 'Noto Sans SC', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  --mwg-font-data: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --mwg-paper: #fffaf7;
+  --mwg-paper-raised: #fffefd;
+  --mwg-paper-muted: #f8f3ed;
+  --mwg-paper-line: #f2e4d5;
+  --mwg-paper-line-strong: #d9c4b2;
+  --mwg-ink: #6d5b5b;
+  --mwg-ink-muted: #9f8989;
+  --mwg-pink: #ffd9e2;
+  --mwg-blue: #d4eaff;
+  --mwg-green: #d8f5d8;
+  --mwg-purple: #e9e0ff;
+  --mwg-yellow: #fff9c4;
+  --mwg-rose: #a64c72;
+  --mwg-rose-dark: #873657;
+  --mwg-green-ink: #477761;
+  --mwg-blue-ink: #4f7899;
+  --mwg-shadow: 0 10px 30px rgba(87, 59, 59, 0.15);
+  --mwg-shadow-hover: 0 14px 34px rgba(87, 59, 59, 0.2);
+  --mwg-paper-pattern:
+    linear-gradient(90deg, transparent 0 38px, rgba(230, 145, 158, 0.11) 39px 40px, transparent 41px),
+    repeating-linear-gradient(to bottom, transparent 0 31px, rgba(126, 164, 190, 0.09) 32px);
+}

@@ -46,12 +46,31 @@ export function recommendBattleRewardBudget(route: BattleRouteContext | null): B
   };
 }
 
-export function formatBattleRewardBudget(budget: BattleRewardBudget): string {
+export function formatBattleRewardBudget(
+  budget: BattleRewardBudget,
+  options: { includeExperience?: boolean } = {},
+): string {
   const parts = [`cards=${budget.cards.candidates}/${budget.cards.pick}`, `rarity=${budget.cards.rarities.join(',')}`];
   if (budget.artifacts) parts.push(`artifacts=${budget.artifacts.candidates}/${budget.artifacts.pick}`);
   if (budget.items) parts.push(`items=${budget.items.candidates}/${budget.items.pick}`);
-  parts.push(`exp=${budget.experience}`);
+  if (options.includeExperience !== false) parts.push(`exp=${budget.experience}`);
   return parts.join(' ');
+}
+
+/** Flat, non-formula checklist for the MVU model after a victory. */
+export function formatBattleRewardChecklist(budget: BattleRewardBudget): string {
+  const limits: Record<string, number> = { cards: budget.cards.pick };
+  if (budget.artifacts) limits.artifacts = budget.artifacts.pick;
+  if (budget.items) limits.items = budget.items.pick;
+  const parts = [
+    `reward.card=${budget.cards.candidates}项`,
+    budget.artifacts
+      ? `reward.artifact=${budget.artifacts.candidates}项`
+      : 'reward.artifact=[]',
+    budget.items ? `reward.item=${budget.items.candidates}项` : 'reward.item=[]',
+    `reward.limits=${JSON.stringify(limits)}（整对象一次写入，不得添加其他键）`,
+  ];
+  return `${parts.join('；')}；每张 reward.card 固定 quantity=1；经验已由程序结算，禁止修改 battle.exp`;
 }
 
 export function recommendShopBudget(pacing: RunPacingContext): ShopBudget {

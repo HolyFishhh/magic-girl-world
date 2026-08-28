@@ -53,10 +53,25 @@ export interface Ability {
     name?: string;
     emoji?: string;
     description?: string;
+    /** Player-facing origin, for example the card, relic or status that granted it. */
+    source?: string;
     trigger: string;
     effectProgram: EffectProgram;
 }
+export interface BattleHistoryEntry {
+    turn: number;
+    type: 'info' | 'damage' | 'heal' | 'action' | 'system';
+    message: string;
+    source?: {
+        type: 'card' | 'relic' | 'ability' | 'status';
+        name: string;
+        details?: string;
+    };
+    actor?: 'player' | 'enemy';
+    actionName?: string;
+}
 export interface Player {
+    emoji: string;
     maxHp: number;
     currentHp: number;
     maxLust: number;
@@ -131,6 +146,8 @@ export interface GameState {
     random?: BattleRandomState;
     battleResult: BattleEndResult | 'ongoing';
     battleNarrative: string;
+    /** Compact structured history survives iframe reloads and is summarized at settlement. */
+    battleHistory?: BattleHistoryEntry[];
 }
 export type BattleStateChangeListener = (state: GameState) => void;
 export declare function createEmptyPlayer(): Player;
@@ -150,6 +167,7 @@ export declare class BattleStateStore {
     getEnemy(): Enemy | null;
     getCurrentPhase(): BattlePhase;
     isGameOver(): boolean;
+    setBattleHistory(entries: readonly BattleHistoryEntry[]): void;
     nextRandom(): number;
     updatePlayer(updates: Partial<Player>, _options?: {
         skipAttributeTriggers?: boolean;

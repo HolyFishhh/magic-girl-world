@@ -7,6 +7,7 @@ import {
   resolveStartingHand,
   shuffleCards,
   type BattleRequest,
+  type Ability,
   BattleContentContractError,
   contentPathToBattlePath,
   summarizeBuildBudget,
@@ -30,6 +31,77 @@ import {
 } from './mvuBattleAdapter';
 import { normalizeNamedEffectDefinition } from './battleContentAdapter';
 import { battleRequestToRuntimeData, createBattleRequestFromMvu } from './battleContractAdapter';
+
+type AbilitySourceCandidate = {
+  trigger: string;
+  programKey: string;
+  name: string;
+  source: string;
+  emoji?: string;
+  description?: string;
+};
+
+function effectProgramKey(value: unknown): string {
+  if (!value || typeof value !== 'object') return '';
+  try {
+    return JSON.stringify((value as { steps?: unknown }).steps || []);
+  } catch {
+    return '';
+  }
+}
+
+function collectAbilitySources(
+  entries: ReadonlyArray<{ name?: string; emoji?: string; description?: string; effectProgram?: any }>,
+  kind: string,
+): AbilitySourceCandidate[] {
+  const candidates: AbilitySourceCandidate[] = [];
+  for (const entry of entries) {
+    const name = String(entry?.name || '').trim();
+    if (!name || !Array.isArray(entry.effectProgram?.steps)) continue;
+    for (const step of entry.effectProgram.steps) {
+      if (step?.op !== 'register_trigger' || !Array.isArray(step.effects)) continue;
+      candidates.push({
+        trigger: String(step.trigger || '').trim(),
+        programKey: effectProgramKey({ spec: 'mwg.effect/v1', steps: step.effects }),
+        name,
+        source: `${kind}「${name}」`,
+        emoji: entry.emoji,
+        description: entry.description,
+      });
+    }
+  }
+  return candidates;
+}
+
+function recoverAbilities(abilities: Ability[] | undefined, candidates: AbilitySourceCandidate[]): Ability[] | undefined {
+  if (!Array.isArray(abilities)) return abilities;
+  return abilities.map((ability, index) => {
+    if (ability.name && ability.source) return ability;
+    const key = effectProgramKey(ability.effectProgram);
+    const candidate = candidates.find(value => value.trigger === ability.trigger && value.programKey === key);
+    return {
+      ...ability,
+      name: ability.name || candidate?.name || `临时能力 ${index + 1}`,
+      source: ability.source || candidate?.source || '战斗中获得（旧快照未记录具体来源）',
+      emoji: ability.emoji || candidate?.emoji || '⚡',
+      description: ability.description || candidate?.description || '',
+    };
+  });
+}
+
+/** Backfill ability labels in snapshots saved before source metadata became mandatory. */
+export function recoverRestoredAbilityMetadata(state: GameState): GameState {
+  const playerCandidates = [
+    ...collectAbilitySources(state.player.deck || [], '卡牌'),
+    ...collectAbilitySources(state.player.relics || [], '遗物'),
+  ];
+  state.player.abilities = recoverAbilities(state.player.abilities, playerCandidates);
+  if (state.enemy) {
+    const enemyCandidates = collectAbilitySources(state.enemy.actions || [], '敌方行动');
+    state.enemy.abilities = recoverAbilities(state.enemy.abilities, enemyCandidates);
+  }
+  return state;
+}
 
 export class GameStateManager extends BattleStateStore {
   private static instance: GameStateManager;
@@ -129,7 +201,7 @@ export class GameStateManager extends BattleStateStore {
 
       const restoredState = this.battleSessionStore.prepare(variables, battleRequest);
       if (restoredState) {
-        this.gameState = restoredState;
+        this.gameState = recoverRestoredAbilityMetadata(restoredState);
         try {
           this.notifyListeners('state_loaded');
         } finally {
@@ -240,6 +312,7 @@ export class GameStateManager extends BattleStateStore {
     // 更新玩家状态
     this.gameState.player = {
       ...this.gameState.player,
+      emoji: typeof core['emoji'] === 'string' && core['emoji'].trim() ? core['emoji'].trim() : '✨',
       currentHp: core['hp'] ?? core['max_hp'] ?? 80,
       maxHp: core['max_hp'] ?? 100,
       currentLust: core['lust'] ?? 0,
@@ -282,7 +355,10 @@ export class GameStateManager extends BattleStateStore {
     }
 
     // 设置战斗数据
-    const playerLustEffect = normalizeNamedEffectDefinition(battleData.player_lust_effect, { statusNames });
+    const playerLustEffect = normalizeNamedEffectDefinition(battleData.player_lust_effect, {
+      statusNames,
+      fallbackName: '欲望满溢',
+    });
     this.gameState.battle = {
       player_lust_effect: playerLustEffect || {
         name: '欲望反噬',

@@ -1,9 +1,11 @@
 import { compileCompactEffectList } from './compactEffectDsl';
 import { isCompactEffectList } from './compactEffectContract';
 import { validateEffectProgramPolicy, type EffectProgramPolicyOptions } from './effectProgramPolicy';
+import type { EffectProgram } from './effectDsl';
 import { validateCompactStatusDefinition } from './statusDefinitionValidation';
 import { isContentPack, type ContentDefinition, type ContentPack } from './contentPack';
 import { ABILITY_TRIGGER_SET } from './battleTriggers';
+import { resolveTriggerInput } from './triggerInput';
 import { CARD_RARITY_SET, CARD_TYPE_SET, RELIC_RARITY_SET } from './contentCatalog';
 
 export interface ContentContractIssue {
@@ -64,7 +66,10 @@ function validateEffectSource(
   options: EffectProgramPolicyOptions,
   required: boolean,
 ): void {
-  const hasCompact = hasOwn(value, 'effects') && value.effects !== undefined;
+  const resolvedTrigger = resolveTriggerInput(value);
+  const hasTriggeredEffects = resolvedTrigger.triggeredEffects !== undefined;
+  const hasImmediateEffects = resolvedTrigger.immediateEffects !== undefined;
+  const hasCompact = hasTriggeredEffects || hasImmediateEffects;
   for (const field of ['effect', 'effect_program', 'effectProgram']) {
     if (hasOwn(value, field)) {
       addIssue(issues, `${path}.${field}`, 'REMOVED_EFFECT_FIELD', `${field} is not supported; use shallow effects`);
@@ -75,26 +80,53 @@ function validateEffectSource(
     return;
   }
 
-  const rootTrigger = typeof value.trigger === 'string' ? value.trigger : undefined;
+  const rootTrigger = typeof resolvedTrigger.trigger === 'string' ? resolvedTrigger.trigger : undefined;
   const isOuterLifecycle = rootTrigger === 'battle_start' || rootTrigger === 'passive';
   const compileTrigger = rootTrigger && !isOuterLifecycle ? rootTrigger : undefined;
   const resolvedOptions = isOuterLifecycle ? { ...options, triggerPolicy: 'forbid' as const } : options;
 
-  if (!isCompactEffectList(value.effects)) {
-    addIssue(issues, `${path}.effects`, 'INVALID_EFFECT_SOURCE', 'effects must be a shallow object or array');
+  if (resolvedTrigger.structured) {
+    const triggerObject = value.trigger as Record<string, unknown>;
+    for (const key of Object.keys(triggerObject)) {
+      if (key !== 'on' && key !== 'effects') {
+        addIssue(issues, `${path}.trigger.${key}`, 'UNKNOWN_FIELD', `unsupported trigger field: ${key}`);
+      }
+    }
+  }
+
+  const programs: EffectProgram[] = [];
+  const compileSource = (source: unknown, sourcePath: string, trigger?: string): boolean => {
+    if (!isCompactEffectList(source)) {
+      addIssue(issues, sourcePath, 'INVALID_EFFECT_SOURCE', 'effects must be a shallow object or array');
+      return false;
+    }
+    const compiled = compileCompactEffectList(source, {
+      trigger,
+      when: trigger ? undefined : value.when,
+      creates: value.creates,
+    });
+    if (!compiled.ok) {
+      compiled.issues.forEach(issue =>
+        addIssue(issues, appendProgramIssuePath(sourcePath, issue.path, true, !Array.isArray(source)), issue.code, issue.message),
+      );
+      return false;
+    }
+    programs.push(compiled.value);
+    return true;
+  };
+
+  if (hasImmediateEffects && !compileSource(resolvedTrigger.immediateEffects, `${path}.effects`)) return;
+  const triggeredPath = resolvedTrigger.structured ? `${path}.trigger.effects` : `${path}.effects`;
+  if (hasTriggeredEffects && !compileSource(resolvedTrigger.triggeredEffects, triggeredPath, compileTrigger)) return;
+  const compiledProgram = {
+    spec: 'mwg.effect/v1' as const,
+    steps: programs.flatMap(program => program.steps),
+  };
+  if (programs.length === 0) {
+    if (required) addIssue(issues, path, 'MISSING_EFFECT_SOURCE', 'an executable definition must contain effects');
     return;
   }
-  const compiled = compileCompactEffectList(value.effects, {
-    trigger: compileTrigger,
-    creates: value.creates,
-  });
-  if (!compiled.ok) {
-    compiled.issues.forEach(issue =>
-      addIssue(issues, appendProgramIssuePath(`${path}.effects`, issue.path, true, !Array.isArray(value.effects)), issue.code, issue.message),
-    );
-    return;
-  }
-  const policy = validateEffectProgramPolicy(compiled.value, resolvedOptions);
+  const policy = validateEffectProgramPolicy(compiledProgram, resolvedOptions);
   if (!policy.ok) {
     policy.issues.forEach(issue =>
       addIssue(issues, appendProgramIssuePath(`${path}.effects`, issue.path, true, !Array.isArray(value.effects)), issue.code, issue.message),
@@ -168,13 +200,20 @@ function validateCard(
     );
   }
   const policy: EffectProgramPolicyOptions = {
-    triggerPolicy: type === 'Power' ? 'require_root' : 'forbid',
+    triggerPolicy: type === 'Power' ? 'require_root_or_status' : 'forbid',
     modifierPolicy: 'forbid',
     allowSpentEnergy: value.cost === 'energy',
     allowNarrate: type === 'Event',
     requireSingleNarrate: type === 'Event',
     knownStatusIds,
   };
+  const cardTrigger = resolveTriggerInput(value);
+  if (
+    cardTrigger.trigger !== undefined &&
+    (typeof cardTrigger.trigger !== 'string' || !ABILITY_TRIGGER_SET.has(cardTrigger.trigger) || ['battle_start', 'passive'].includes(cardTrigger.trigger))
+  ) {
+    addIssue(issues, `${path}.trigger${cardTrigger.structured ? '.on' : ''}`, 'INVALID_TRIGGER', `unsupported card trigger: ${String(cardTrigger.trigger)}`);
+  }
   validateEffectSource(value, path, issues, policy, required);
   if (hasOwn(value, 'discard_effect')) {
     addIssue(
@@ -221,10 +260,14 @@ function validateNamedExecutable(
     return;
   }
   if (requirements.requireName) validateRequiredName(value, path, issues);
-  if (value.trigger !== undefined && (typeof value.trigger !== 'string' || !ABILITY_TRIGGER_SET.has(value.trigger))) {
-    addIssue(issues, `${path}.trigger`, 'INVALID_TRIGGER', `unsupported trigger: ${String(value.trigger)}`);
+  const resolvedTrigger = resolveTriggerInput(value);
+  if (requirements.requireModernTrigger && resolvedTrigger.structured && resolvedTrigger.immediateEffects !== undefined) {
+    addIssue(issues, `${path}.effects`, 'UNEXPECTED_IMMEDIATE_EFFECTS', 'structured relic and ability effects belong inside trigger.effects');
   }
-  if (requirements.requireModernTrigger && hasOwn(value, 'effects') && value.trigger === undefined) {
+  if (resolvedTrigger.trigger !== undefined && (typeof resolvedTrigger.trigger !== 'string' || !ABILITY_TRIGGER_SET.has(resolvedTrigger.trigger))) {
+    addIssue(issues, `${path}.trigger${resolvedTrigger.structured ? '.on' : ''}`, 'INVALID_TRIGGER', `unsupported trigger: ${String(resolvedTrigger.trigger)}`);
+  }
+  if (requirements.requireModernTrigger && (hasOwn(value, 'effects') || resolvedTrigger.structured) && resolvedTrigger.trigger === undefined) {
     addIssue(issues, `${path}.trigger`, 'MISSING_TRIGGER', 'modern effects require a trigger');
   }
   validateEffectSource(value, path, issues, options, required);
@@ -241,8 +284,10 @@ function validateStatusList(
     const statusPath = `${path}[${index}]`;
     const validation = validateCompactStatusDefinition(status);
     if (!validation.ok) {
-      const triggerMatch = validation.message.match(/^状态 (apply|stack|tick|remove|hold) /);
-      const trigger = triggerMatch?.[1];
+      const triggerMatch = validation.message.match(
+        /^(?:状态 (apply|stack|tick|remove|hold)\b|triggers\.(apply|stack|tick|remove|hold)\b)/,
+      );
+      const trigger = triggerMatch?.[1] || triggerMatch?.[2];
       const triggerValue = trigger && isRecord(status.triggers) ? status.triggers[trigger] : undefined;
       const triggerPath =
         trigger && Array.isArray(triggerValue)
@@ -285,7 +330,7 @@ export function validateContentPackContract(
       issues,
       {
         triggerPolicy: 'allow',
-        modifierPolicy: relic.trigger === 'passive' ? 'only' : 'forbid',
+        modifierPolicy: resolveTriggerInput(relic).trigger === 'passive' ? 'only' : 'forbid',
         knownStatusIds: statusIds,
       },
       required,
@@ -318,7 +363,7 @@ export function validateContentPackContract(
       issues,
       {
         triggerPolicy: 'allow',
-        modifierPolicy: ability.trigger === 'passive' ? 'only' : 'forbid',
+        modifierPolicy: resolveTriggerInput(ability).trigger === 'passive' ? 'only' : 'forbid',
         knownStatusIds: statusIds,
       },
       required,
@@ -423,8 +468,12 @@ export function formatContentContractIssues(issues: readonly ContentContractIssu
 export function contentPathToBattlePath(path: string): string {
   if (path === 'enemy') return 'battle.enemy';
   if (path.startsWith('enemy.')) return `battle.${path}`;
-  if (path === 'desireEffects.player') return 'battle.player_lust_effect';
-  if (path === 'desireEffects.enemy') return 'battle.enemy.lust_effect';
+  if (path.startsWith('desireEffects.player')) {
+    return `battle.player_lust_effect${path.slice('desireEffects.player'.length)}`;
+  }
+  if (path.startsWith('desireEffects.enemy')) {
+    return `battle.enemy.lust_effect${path.slice('desireEffects.enemy'.length)}`;
+  }
   if (path.startsWith('activeStatuses')) return `battle.player_status_effects${path.slice('activeStatuses'.length)}`;
   if (path.startsWith('relics')) return `battle.artifacts${path.slice('relics'.length)}`;
   if (path.startsWith('abilities')) return `battle.player_abilities${path.slice('abilities'.length)}`;

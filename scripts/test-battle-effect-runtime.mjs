@@ -101,6 +101,25 @@ assert.deepEqual(
 );
 assert.equal(events.filter(event => event.type === 'block_absorbed').length, 1);
 
+const integerStore = fixture();
+integerStore.updateEnemy({ maxHp: 55, currentHp: 55, block: 0 });
+const integerEvents = [];
+const integerRuntime = new BattleEffectRuntime(integerStore, {
+  readModifierSources: (_target, modifier) =>
+    modifier === 'damage_modifier' ? [{ operation: { operator: '*', value: 1.1 }, name: 'Relic' }] : [],
+  dispatchTriggers: async () => {},
+  handleLustOverflow: async () => {},
+  present: event => integerEvents.push(event),
+});
+await integerRuntime.execute({ type: 'damage', target: 'opponent', amount: 8 }, { source: 'player' });
+assert.equal(integerStore.getEnemy().currentHp, 46.2, '8 × 1.1 keeps two-decimal runtime precision before HP mutation');
+assert.ok(
+  integerEvents
+    .filter(event => event.type === 'attribute_changed')
+    .every(event => Number.isInteger(event.previousValue * 100) && Number.isInteger(event.nextValue * 100)),
+  'runtime combat attributes must never expose floating-point residue beyond two decimals',
+);
+
 await runtime.execute({ type: 'heal', target: 'self', amount: 40 }, { source: 'player' });
 assert.equal(store.getPlayer().currentHp, 80, 'healing remains clamped to max HP after modifiers');
 

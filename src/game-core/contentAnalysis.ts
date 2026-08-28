@@ -8,6 +8,7 @@
 
 import { compileCompactEffectList } from './compactEffectDsl';
 import { isOuterLifecycleTrigger, REGISTERABLE_EFFECT_TRIGGER_SET } from './battleTriggers';
+import { resolveTriggerInput } from './triggerInput';
 import { isCompactEffectList, normalizeCompactEffectEntries } from './compactEffectContract';
 import {
   EFFECT_PROGRAM_SPEC,
@@ -310,21 +311,50 @@ export function analyzeEffectProgram(
 }
 
 function analyzeModernEffects(
-  effects: unknown,
+  _effects: unknown,
   definition: Definition,
   options: ContentAnalysisOptions,
 ): ContentAnalysis | null {
-  const definitionTrigger = typeof definition.trigger === 'string' ? definition.trigger : undefined;
+  const resolved = resolveTriggerInput(definition);
+  const definitionTrigger = typeof resolved.trigger === 'string' ? resolved.trigger : undefined;
   const compileTrigger =
     definitionTrigger && REGISTERABLE_EFFECT_TRIGGER_SET.has(definitionTrigger) ? definitionTrigger : undefined;
-  const compiled = compileCompactEffectList(effects, {
-    trigger: compileTrigger,
-    creates: definition.creates,
-  });
-  if (!compiled.ok) return null;
-  const directWeight =
-    definitionTrigger && isOuterLifecycleTrigger(definitionTrigger) ? triggerWeight(definitionTrigger) : 1;
-  return analyzeEffectProgram(compiled.value, options, directWeight);
+  const sources = resolved.structured
+    ? [
+        ...(resolved.immediateEffects === undefined
+          ? []
+          : [{ effects: resolved.immediateEffects, trigger: undefined, weight: 1 }]),
+        ...(resolved.triggeredEffects === undefined
+          ? []
+          : [
+              {
+                effects: resolved.triggeredEffects,
+                trigger: compileTrigger,
+                weight: definitionTrigger && isOuterLifecycleTrigger(definitionTrigger) ? triggerWeight(definitionTrigger) : 1,
+              },
+            ]),
+      ]
+    : [
+        {
+          effects: resolved.triggeredEffects,
+          trigger: compileTrigger,
+          weight: definitionTrigger && isOuterLifecycleTrigger(definitionTrigger) ? triggerWeight(definitionTrigger) : 1,
+        },
+      ];
+  let combined: ContentAnalysis | null = null;
+  for (const source of sources) {
+    const compiled = compileCompactEffectList(source.effects, {
+      trigger: source.trigger,
+      when: source.trigger ? undefined : definition.when,
+      creates: definition.creates,
+    });
+    if (!compiled.ok) return null;
+    const analyzed = analyzeEffectProgram(compiled.value, options, source.weight);
+    if (!analyzed) return null;
+    if (!combined) combined = analyzed;
+    else mergeAnalysis(combined, analyzed);
+  }
+  return combined;
 }
 
 function triggerWeight(value: unknown): number {
@@ -368,7 +398,13 @@ export function analyzeContentDefinition(value: unknown, options: ContentAnalysi
   let lust = 0;
   let damageKnown = true;
   const definition = isRecord(value) ? (value as Definition) : {};
-  const effects = normalizeCompactEffectEntries(definition.effects) || [];
+  const resolvedTrigger = resolveTriggerInput(definition);
+  const effects = resolvedTrigger.structured
+    ? [
+        ...(normalizeCompactEffectEntries(resolvedTrigger.immediateEffects) || []),
+        ...(normalizeCompactEffectEntries(resolvedTrigger.triggeredEffects) || []),
+      ]
+    : normalizeCompactEffectEntries(definition.effects) || [];
 
   for (const rawEffect of effects) {
     if (!isRecord(rawEffect)) continue;
@@ -427,7 +463,7 @@ export function analyzeContentDefinition(value: unknown, options: ContentAnalysi
   }
 
   if (definition.cost === 'energy' || JSON.stringify(definition).includes('spent_energy')) tags.add('X费');
-  if (definition.type === 'Power' || typeof definition.trigger === 'string') tags.add('能力');
+  if (definition.type === 'Power' || resolvedTrigger.trigger !== undefined) tags.add('能力');
   if (definition.retain === true) tags.add('保留');
   if (definition.innate === true) tags.add('固有');
   if (definition.exhaust === true) tags.add('消耗');

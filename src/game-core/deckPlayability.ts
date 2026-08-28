@@ -17,7 +17,6 @@ export interface DeckPlayabilityAssessment {
   deckQuantity: number;
   hasPlayableCard: boolean;
   hasVictoryPressure: boolean;
-  hasDefenseOrRecovery: boolean;
 }
 
 function cardQuantity(value: unknown): number {
@@ -43,20 +42,16 @@ export function assessDeckPlayability(
   options: DeckPlayabilityOptions = {},
 ): DeckPlayabilityAssessment {
   const baseEnergy =
-    typeof options.baseEnergy === 'number' && Number.isFinite(options.baseEnergy)
-      ? Math.max(0, options.baseEnergy)
-      : 3;
+    typeof options.baseEnergy === 'number' && Number.isFinite(options.baseEnergy) ? Math.max(0, options.baseEnergy) : 3;
   let deckQuantity = 0;
   let hasPlayableCard = false;
   let hasVictoryPressure = false;
-  let hasDefenseOrRecovery = false;
 
   for (const card of cards) {
     deckQuantity += cardQuantity(card.quantity);
     hasPlayableCard ||= canPlayAtBaseEnergy(card, baseEnergy);
     hasVictoryPressure ||= card.type === 'Event' || cardHasMetric(card, 'attack');
-    hasDefenseOrRecovery ||= cardHasMetric(card, 'defense') || cardHasMetric(card, 'sustain');
   }
 
-  return { deckQuantity, hasPlayableCard, hasVictoryPressure, hasDefenseOrRecovery };
+  return { deckQuantity, hasPlayableCard, hasVictoryPressure };
 }

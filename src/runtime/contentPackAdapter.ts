@@ -1,5 +1,5 @@
-import { createContentPack, type ContentPack } from '../game-core';
-import { flattenMvuArray } from './mvuArrays';
+import { createContentPack, normalizeCompactNamedEffectInput, type ContentPack } from '../game-core';
+import { flattenMvuArray, normalizeMvuStatusDefinitions } from './mvuArrays';
 
 function isRecord(value: unknown): value is Record<string, any> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -17,7 +17,7 @@ function normalizeMvuEnemy(value: unknown): unknown {
     actions: normalizeMvuList(source.actions),
     abilities: normalizeMvuList(source.abilities),
     status_effects: normalizeMvuList(source.status_effects),
-    lust_effect: source.lust_effect,
+    lust_effect: normalizeCompactNamedEffectInput(source.lust_effect, '欲望爆发'),
   };
 }
 
@@ -26,12 +26,12 @@ export function createContentPackFromMvuBattle(battleData: unknown): ContentPack
   if (!isRecord(battleData)) throw new Error('battle data must be an object');
   return createContentPack({
     cards: normalizeMvuList(battleData.cards),
-    statuses: normalizeMvuList(battleData.statuses),
+    statuses: normalizeMvuStatusDefinitions(battleData.statuses),
     relics: normalizeMvuList(battleData.artifacts),
     items: normalizeMvuList(battleData.items),
     abilities: normalizeMvuList(battleData.player_abilities),
     activeStatuses: normalizeMvuList(battleData.player_status_effects),
     enemy: normalizeMvuEnemy(battleData.enemy),
-    playerDesireEffect: battleData.player_lust_effect,
+    playerDesireEffect: normalizeCompactNamedEffectInput(battleData.player_lust_effect, '欲望满溢'),
   });
 }

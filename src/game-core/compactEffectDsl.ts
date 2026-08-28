@@ -3,6 +3,7 @@ import jsep from 'jsep';
 import { REGISTERABLE_EFFECT_TRIGGER_SET } from './battleTriggers';
 import {
   COMPACT_EFFECT_BUNDLE_OPERATION_SET,
+  COMPACT_EFFECT_SAFE_AUXILIARY_BUNDLE_OPERATION_SET,
   COMPACT_EFFECT_META_KEY_SET,
   compactBundleMetaKeys,
   compactEffectOperationKeys,
@@ -27,7 +28,12 @@ import {
   type NumericExpression,
   validateEffectProgram,
 } from './effectDsl';
-import { describeCompactCard } from './contentDescription';
+import {
+  describeCompactCardWhenNeeded,
+  isMechanicalDescriptionRestatement,
+  needsCompactRuleDescription,
+  normalizeChinesePlayerDescription,
+} from './contentDescription';
 
 export interface CompactEffectValidationIssue {
   path: string;
@@ -40,8 +46,11 @@ export type CompactEffectCompilationResult =
 
 export interface CompactEffectCompilationOptions {
   trigger?: unknown;
+  /** Optional condition shared by every top-level effect in a named definition. */
+  when?: unknown;
   creates?: unknown;
   statusNames?: Readonly<Record<string, string>>;
+  implicitTarget?: EffectTarget;
 }
 
 type FormulaResult =
@@ -89,6 +98,26 @@ function addIssue(issues: CompactEffectValidationIssue[], path: string, code: st
   issues.push({ path, code, message });
 }
 
+function hasAtMostOneAuthoredDecimal(value: number): boolean {
+  return Math.abs(value * 10 - Math.round(value * 10)) < 1e-7;
+}
+
+function validateAuthoredNumber(
+  value: unknown,
+  path: string,
+  issues: CompactEffectValidationIssue[],
+): value is number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    addIssue(issues, path, 'INVALID_NUMBER', 'Number must be finite');
+    return false;
+  }
+  if (!hasAtMostOneAuthoredDecimal(value)) {
+    addIssue(issues, path, 'TOO_MANY_DECIMALS', 'AI-authored numbers may contain at most one decimal place');
+    return false;
+  }
+  return true;
+}
+
 function rejectUnknownEntryKeys(
   value: Record<string, unknown>,
   allowed: string[],
@@ -130,11 +159,7 @@ function compileLiteral(
   issues: CompactEffectValidationIssue[],
 ): NumericExpression | null {
   const value = node.value;
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    addIssue(issues, path, 'INVALID_NUMBER', 'Formula numbers must be finite and safe');
-    return null;
-  }
-  return value;
+  return validateAuthoredNumber(value, path, issues) ? value : null;
 }
 
 function compileNumericAst(
@@ -249,8 +274,7 @@ function parseCel(source: string, path: string, issues: CompactEffectValidationI
 
 function compileFormula(value: unknown, path: string, issues: CompactEffectValidationIssue[]): FormulaResult | null {
   if (typeof value === 'number') {
-    if (!Number.isFinite(value)) addIssue(issues, path, 'INVALID_NUMBER', 'Number must be finite');
-    return Number.isFinite(value) ? { kind: 'number', value } : null;
+    return validateAuthoredNumber(value, path, issues) ? { kind: 'number', value } : null;
   }
   if (typeof value !== 'string') {
     addIssue(issues, path, 'INVALID_FORMULA', 'Effect value must be a number or CEL formula string');
@@ -454,6 +478,7 @@ function compileGeneratedCard(
       'effects',
       'discard_effects',
       'trigger',
+      'when',
       'retain',
       'exhaust',
       'ethereal',
@@ -490,13 +515,13 @@ function compileGeneratedCard(
     addIssue(issues, `${path}.rarity`, 'INVALID_CARD_RARITY', `Unsupported template rarity: ${String(rarity)}`);
     return null;
   }
-  if ((type === 'Power') !== (value.trigger !== undefined)) {
-    addIssue(issues, `${path}.trigger`, 'INVALID_TRIGGER', 'Only Power templates require trigger');
+  if (type !== 'Power' && value.trigger !== undefined) {
+    addIssue(issues, `${path}.trigger`, 'INVALID_TRIGGER', 'Only Power templates can register a trigger');
     return null;
   }
   const nested = compileCompactEffectListInternal(
     value.effects,
-    { trigger: value.trigger, creates: Array.from(templates.values()), statusNames },
+    { trigger: value.trigger, when: value.when, creates: Array.from(templates.values()), statusNames },
     [...templateStack, id],
   );
   if (!nested.ok) {
@@ -542,6 +567,7 @@ function compileGeneratedCard(
       cost = numericCost as number;
     }
   }
+  const authoredDescription = normalizeChinesePlayerDescription(value.description);
   const result: GeneratedCardDefinition = {
     id,
     name: name.trim(),
@@ -550,9 +576,9 @@ function compileGeneratedCard(
     rarity,
     cost,
     description:
-      typeof value.description === 'string' && value.description.trim()
-        ? value.description.trim()
-        : describeCompactCard(value, { includeKeywords: false, statusNames }),
+      authoredDescription && (!isMechanicalDescriptionRestatement(authoredDescription) || needsCompactRuleDescription(value))
+        ? authoredDescription
+        : describeCompactCardWhenNeeded(value, { includeKeywords: false, statusNames }),
     program: nested.value,
     discardProgram,
     retain: value.retain === true || undefined,
@@ -569,6 +595,7 @@ function compileSingleEntry(
   templates: ReadonlyMap<string, Record<string, unknown>>,
   templateStack: readonly string[],
   statusNames?: Readonly<Record<string, string>>,
+  implicitTarget?: EffectTarget,
 ): EffectNode | null {
   if (!isRecord(value)) {
     addIssue(issues, path, 'INVALID_EFFECT', 'Effect must be an object');
@@ -585,14 +612,14 @@ function compileSingleEntry(
   const amountOperation = AMOUNT_OPERATIONS[operation];
   if (amountOperation) {
     rejectUnknownEntryKeys(value, [operation, ...(operation === 'damage' ? ['hits'] : []), 'to', 'when'], path, issues);
-    const target = compileTarget(value.to, amountOperation.target, `${path}.to`, issues);
+    const target = compileTarget(value.to, implicitTarget ?? amountOperation.target, `${path}.to`, issues);
     const formula = compileFormula(value[operation], `${path}.${operation}`, issues);
     if (target && formula) {
       node = lowerFormula(formula, amount => ({ op: amountOperation.op, target, amount }));
     }
   } else if (SET_OPERATIONS[operation]) {
     rejectUnknownEntryKeys(value, [operation, 'to', 'when'], path, issues);
-    const target = compileTarget(value.to, 'self', `${path}.to`, issues);
+    const target = compileTarget(value.to, implicitTarget ?? 'self', `${path}.to`, issues);
     const formula = compileFormula(value[operation], `${path}.${operation}`, issues);
     const stat = SET_OPERATIONS[operation];
     if (target && formula) {
@@ -609,7 +636,7 @@ function compileSingleEntry(
   } else if (operation === 'apply_status') {
     rejectUnknownEntryKeys(value, [operation, 'stacks', 'to', 'when'], path, issues);
     const status = value.apply_status;
-    const target = compileTarget(value.to, 'opponent', `${path}.to`, issues);
+    const target = compileTarget(value.to, implicitTarget ?? 'opponent', `${path}.to`, issues);
     if (typeof status !== 'string' || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(status)) {
       addIssue(issues, `${path}.apply_status`, 'INVALID_STATUS_ID', 'apply_status must be a simple status ID');
     }
@@ -620,7 +647,7 @@ function compileSingleEntry(
   } else if (operation === 'remove_status') {
     rejectUnknownEntryKeys(value, [operation, 'to', 'when'], path, issues);
     const status = value.remove_status;
-    const target = compileTarget(value.to, 'opponent', `${path}.to`, issues);
+    const target = compileTarget(value.to, implicitTarget ?? 'opponent', `${path}.to`, issues);
     if (
       typeof status !== 'string' ||
       (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(status) && !['all', 'buffs', 'debuffs'].includes(status))
@@ -732,7 +759,7 @@ function compileSingleEntry(
     );
     const stat = value.modify;
     const modifierKeys = Array.from(MODIFIER_OPERATORS).filter(key => value[key] !== undefined);
-    const target = compileTarget(value.to, 'self', `${path}.to`, issues);
+    const target = compileTarget(value.to, implicitTarget ?? 'self', `${path}.to`, issues);
     if (typeof stat !== 'string' || !MODIFIER_STATS.has(stat as ModifierStat)) {
       addIssue(issues, `${path}.modify`, 'INVALID_MODIFIER', `Unsupported modifier: ${String(stat)}`);
     }
@@ -778,6 +805,7 @@ function compileEntry(
   templates: ReadonlyMap<string, Record<string, unknown>>,
   templateStack: readonly string[],
   statusNames?: Readonly<Record<string, string>>,
+  implicitTarget?: EffectTarget,
 ): EffectNode[] | null {
   if (!isRecord(value)) {
     addIssue(issues, path, 'INVALID_EFFECT', 'Effect must be an object');
@@ -787,7 +815,7 @@ function compileEntry(
   if (operations.length <= 1) {
     const hits =
       operations[0] === 'damage' && value.hits !== undefined ? compileHitCount(value.hits, `${path}.hits`, issues) : 1;
-    const node = compileSingleEntry(value, path, issues, templates, templateStack, statusNames);
+    const node = compileSingleEntry(value, path, issues, templates, templateStack, statusNames, implicitTarget);
     if (!node || hits === null) return null;
     return operations[0] === 'damage' ? repeatDamageNode(node, hits) : [node];
   }
@@ -796,9 +824,12 @@ function compileEntry(
     addIssue(issues, `${path}.hits`, 'INVALID_EFFECT_BUNDLE', 'hits requires a separate damage effect object');
     return null;
   }
-  if (!operations.every(operation => COMPACT_EFFECT_BUNDLE_OPERATION_SET.has(operation))) {
-    operations
-      .filter(operation => !COMPACT_EFFECT_BUNDLE_OPERATION_SET.has(operation))
+  const auxiliaryOperations = operations.filter(operation => !COMPACT_EFFECT_BUNDLE_OPERATION_SET.has(operation));
+  const hasOneSafeAuxiliary =
+    auxiliaryOperations.length === 1 &&
+    COMPACT_EFFECT_SAFE_AUXILIARY_BUNDLE_OPERATION_SET.has(auxiliaryOperations[0]);
+  if (auxiliaryOperations.length > 0 && !hasOneSafeAuxiliary) {
+    auxiliaryOperations
       .forEach(operation =>
         addIssue(
           issues,
@@ -824,7 +855,11 @@ function compileEntry(
   });
   if (issues.some(issue => issue.path === path || issue.path.startsWith(`${path}.`))) return null;
 
-  const nodes = sortCompactBundleOperations(operations).map(operation =>
+  const orderedOperations = [
+    ...sortCompactBundleOperations(operations.filter(operation => COMPACT_EFFECT_BUNDLE_OPERATION_SET.has(operation))),
+    ...auxiliaryOperations,
+  ];
+  const nodes = orderedOperations.map(operation =>
     compileSingleEntry(
       projectCompactOperation(value, operation, false),
       path,
@@ -832,6 +867,7 @@ function compileEntry(
       templates,
       templateStack,
       statusNames,
+      implicitTarget,
     ),
   );
   if (nodes.some(node => node === null)) return null;
@@ -890,10 +926,23 @@ function compileCompactEffectListInternal(
   }
   const directObject = !Array.isArray(value);
   const steps = entries.map((entry, index) =>
-    compileEntry(entry, directObject ? '$' : `$[${index}]`, issues, templates, templateStack, options.statusNames),
+    compileEntry(
+      entry,
+      directObject ? '$' : `$[${index}]`,
+      issues,
+      templates,
+      templateStack,
+      options.statusNames,
+      options.implicitTarget,
+    ),
   );
   if (steps.some(entry => entry === null) || issues.length > 0) return { ok: false, issues };
   let programSteps = (steps as EffectNode[][]).flat();
+  if (options.when !== undefined) {
+    const condition = compileWhen(options.when, '$.when', issues);
+    if (!condition) return { ok: false, issues };
+    programSteps = [{ op: 'if', condition, then: programSteps }];
+  }
   if (options.trigger !== undefined) {
     if (typeof options.trigger !== 'string' || !REGISTERABLE_EFFECT_TRIGGER_SET.has(options.trigger)) {
       addIssue(issues, '$.trigger', 'INVALID_TRIGGER', `Unsupported card trigger: ${String(options.trigger)}`);

@@ -16,6 +16,11 @@ const shellPresenterPath = resolve('src/fish/ui/battleShellPresenter.ts');
 const hostPath = resolve('src/fish/core/battleEndHost.ts');
 const repairHostPath = resolve('src/fish/core/battleRepairHost.ts');
 const coordinatorPath = resolve('src/fish/index.ts');
+const animationPath = resolve('src/fish/ui/animationManager.ts');
+const battleHtmlPath = resolve('src/fish/index.html');
+const battleStylesPath = resolve('src/fish/index.scss');
+const fullscreenPath = resolve('src/fish/ui/battleFullscreenController.ts');
+const fullscreenFallbackPath = resolve('src/fish/ui/battleFullscreenFallback.ts');
 const [
   executor,
   state,
@@ -31,6 +36,11 @@ const [
   host,
   repairHost,
   coordinator,
+  animation,
+  battleHtml,
+  battleStyles,
+  fullscreen,
+  fullscreenFallback,
 ] = await Promise.all(
   [
     executorPath,
@@ -47,6 +57,11 @@ const [
     hostPath,
     repairHostPath,
     coordinatorPath,
+    animationPath,
+    battleHtmlPath,
+    battleStylesPath,
+    fullscreenPath,
+    fullscreenFallbackPath,
   ].map(path => readFile(path, 'utf8')),
 );
 
@@ -62,6 +77,10 @@ assert.doesNotMatch(
   'effect executor must not own Tavern log storage',
 );
 assert.match(executor, /presentation\.addLog\(/);
+assert.match(
+  executor,
+  /addLog: \(message, type = 'info', source\) => this\.presentation\.addLog\(message, type, source\)/,
+);
 
 for (const forbidden of [
   /AnimationManager/,
@@ -82,7 +101,7 @@ assert.match(presenter, /LustOverflowDisplay\.getInstance\(\)/);
 assert.match(presenter, /from ['"]\.\.\/modules\/battleLog['"]/);
 assert.match(presenter, /public addLog\(/);
 assert.match(presenter, /battle-end-dialog/);
-assert.match(presenter, /await request\.onConfirm\(\)/);
+assert.match(presenter, /await request\.onConfirm\(playerContinuation\)/);
 assert.doesNotMatch(presenter, /settleCurrentMessageBattle|triggerSlash/);
 
 assert.match(cardSystem, /TavernCardInteractionPresenter\.getInstance\(\)/);
@@ -95,23 +114,122 @@ for (const forbidden of [/AnimationManager/, /BattleLog/, /escapeHtml/, /documen
 }
 assert.match(cardPresenter, /AnimationManager\.getInstance\(\)/);
 assert.match(cardPresenter, /card-selection-modal/);
+assert.match(cardPresenter, /EffectProgramDisplay\.getInstance\(\)/);
+assert.match(cardPresenter, /createWrappedEffectTagsHTML/);
 assert.doesNotMatch(cardPresenter, /discard-selection-modal|selectDiscardCards/);
 assert.doesNotMatch(cardPresenter, /GameStateManager|nextRandom|updatePlayer|commitCardZoneOperation/);
 assert.match(cardPlayMode, /pointerdown\.mwgCardPlay/);
 assert.match(cardPlayMode, /pointermove\.mwgPointerCardPlay/);
+assert.match(cardPlayMode, /event\.preventDefault\(\);\s*event\.stopPropagation\(\);/);
 assert.match(cardPlayMode, /card\.trigger\('mwg:play-card'\)/);
+assert.match(cardPlayMode, /document\.body\.appendChild\(element\)/);
+assert.match(cardPlayMode, /requestAnimationFrame\(\(\) =>/);
+assert.match(cardPlayMode, /translate3d/);
+assert.doesNotMatch(cardPlayMode, /clone\(|cardGhost|card-ghost|createCardGhost/);
+assert.match(cardPlayMode, /placeholder\.className = 'card-drag-slot'/);
+assert.match(cardPlayMode, /restoreDraggedElementToSlot\(element, slot\)/);
+assert.match(cardPlayMode, /resolveCardClickAction\(this\.selectedCard\?\.get\(0\), card\.get\(0\)\)/);
+assert.match(cardPlayMode, /resolveCardDropAction\(\{/);
+assert.doesNotMatch(cardPlayMode, /playMode|STORAGE_KEY|toggleMode|animateCardReturn/);
 assert.doesNotMatch(cardPlayMode, /dragstart\.mwgCardPlay|touchstart\.mwgCardPlay/);
 assert.match(battleUi, /window\.addEventListener\('resize'/);
 assert.match(battleUi, /requestAnimationFrame\(\(\) =>/);
+assert.match(battleUi, /\.card-tooltip'\)\.stop\(true, true\)\.remove\(\)/);
+assert.match(battleUi, /public static repositionCardTooltip/);
+assert.match(battleUi, /createWrappedEffectTagsHTML\(triggerTags\)/);
+assert.match(battleUi, /class="status-trigger-group"/);
+assert.match(battleUi, /class="status-detail-effects"/);
+assert.match(battleUi, /showSupportDetails/);
+assert.match(battleUi, /card-title-row/);
+assert.match(battleUi, /bindEnemyIntentDetails/);
 assert.match(cardSelectionHost, /planCardSelection/);
 assert.match(cardSelectionHost, /resolveCardSelection/);
 assert.doesNotMatch(cardSelectionHost, /GameStateManager|commitCardZoneOperation|moveCard/);
 
 assert.match(relicTriggerHost, /RelicEffectPresenter\.getInstance\(\)/);
 assert.match(relicTriggerHost, /presentation\.showTriggered/);
+assert.match(relicTriggerHost, /presentation\.addTriggeredLog\(relic, trigger\)/);
 assert.doesNotMatch(relicTriggerHost, /BattleLog|document\.|\$\(/);
 assert.match(relicPresenter, /BattleLog\.addLog/);
 assert.match(relicPresenter, /relic-triggered/);
+assert.match(relicPresenter, /type: 'relic'/);
+assert.match(await readFile(resolve('src/fish/core/battleTriggerHost.ts'), 'utf8'), /type: 'ability'/);
+assert.match(await readFile(resolve('src/fish/core/battleTriggerHost.ts'), 'utf8'), /type: 'status'/);
+
+assert.match(battleHtml, /id="battle-stage"/);
+assert.match(battleHtml, /id="battle-fullscreen-toggle"/);
+assert.match(battleHtml, /<span class="fullscreen-text">全屏游玩<\/span>/);
+assert.match(battleHtml, /aria-label="全屏游玩：让战斗界面占满当前窗口"/);
+assert.doesNotMatch(battleStyles, /\.phase-indicator,\s*\n\s*\.fullscreen-text\s*\{\s*display:\s*none/);
+assert.doesNotMatch(battleHtml, /id="modeToggle"|点击出牌|拖动出牌/);
+assert.match(battleHtml, /id="stage-player-emoji"/);
+assert.match(battleHtml, /id="stage-enemy-emoji"/);
+assert.doesNotMatch(battleHtml, /stage-action-caption|stage-enemy-name|class="stage-name"/);
+assert.match(battleHtml, /class="compact-support-row" aria-label="我方附加效果"/);
+assert.match(battleHtml, /id="player-status-effects"/);
+assert.match(battleStyles, /\.battle-stage\s*\{/);
+assert.match(battleStyles, /\.stage-action-token\s*\{/);
+assert.doesNotMatch(
+  battleStyles,
+  /\.enemy-action-popup,[\s\S]{0,100}position:\s*fixed/,
+  'enemy actions must stay in the bounded battle stage rather than create a full-screen overlay',
+);
+assert.doesNotMatch(
+  battleStyles,
+  /\.relic-section\s*\{\s*display:\s*none/,
+  'relics must remain visible at narrow Tavern iframe widths',
+);
+assert.doesNotMatch(
+  battleStyles,
+  /\.lust-section\s*\{\s*display:\s*none/,
+  "both sides' lust overflow effects must remain visible at narrow Tavern iframe widths",
+);
+assert.match(battleUi, /aria-label="查看欲望效果：\$\{escapeHtmlAttribute\(lustEffect\.name\)\}"/);
+assert.match(battleUi, /class="lust-effect-label">欲望效果：<\/span>/);
+assert.doesNotMatch(battleUi, /class="lust-effect-toggle support-icon-button"/);
+assert.match(battleUi, /class="status-effect-item support-icon-button clickable"/);
+assert.match(battleUi, /showSupportDetails\(\$\(this\), lustEffect/);
+assert.match(animation, /playCombatAction\(/);
+assert.match(animation, /#stage-player-emoji/);
+assert.match(animation, /#stage-enemy-emoji/);
+assert.match(animation, /stage\.append\(damageText\)/);
+assert.doesNotMatch(animation, /\$\('body'\)\.append\(damageText\)/);
+assert.match(animation, /fire-and-forget/);
+assert.match(animation, /return Promise\.resolve\(\)/);
+assert.match(animation, /resolveCombatAnimationTarget/);
+assert.match(animation, /stage-aura/);
+assert.match(animation, /damageTimer/);
+assert.doesNotMatch(animation, /const duration = 3000|requestAnimationFrame\(animate\)/);
+assert.match(battleStyles, /\.card-game-container\s*\{[^}]*height:\s*640px;[^}]*min-height:\s*640px/s);
+assert.match(battleStyles, /\.battle-main-grid\s*\{[^}]*grid-template-rows:\s*96px minmax\(0, 1fr\) 96px/s);
+assert.match(
+  battleStyles,
+  /\.enemy-card,\s*\.player-card\s*\{[^}]*grid-template-columns:\s*minmax\(228px, 1\.45fr\) minmax\(0, 1fr\)/s,
+);
+assert.doesNotMatch(battleStyles, /height:\s*1040px|height:\s*940px|height:\s*920px/);
+assert.match(battleStyles, /@keyframes moveStars/);
+assert.match(battleStyles, /linear-gradient\(to right, #24243e, #302b63, #0f0c29\)/);
+assert.match(battleStyles, /\.stage-action-token[\s\S]*?border:\s*0/);
+assert.match(battleStyles, /\.status-detail-body\s*\{[^}]*overflow:\s*auto/);
+assert.match(battleStyles, /\.status-detail-effects\s*\{[^}]*max-height:\s*none[^}]*overflow:\s*visible/);
+assert.match(battleStyles, /\.modifier-compare-row\s*\{/);
+assert.match(battleStyles, /\.modifier-display-panel\s*\{[^}]*background:\s*transparent\s*!important/);
+assert.match(battleStyles, /\.card-tooltip\.is-card-attached::after/);
+assert.match(battleStyles, /html\.mwg-fullscreen-active \.card-game-container/);
+assert.match(battleStyles, /\.card-drag-slot\s*\{/);
+assert.match(battleStyles, /\.enhanced-card\.selected:not\(\.dragging\)/);
+assert.doesNotMatch(animation, /<div class="enemy-action-popup">/);
+
+assert.match(fullscreen, /requestFullscreen/);
+assert.match(fullscreen, /exitFullscreen/);
+assert.match(fullscreen, /active \? '退出全屏' : '全屏游玩'/);
+assert.match(fullscreen, /全屏游玩：让战斗界面占满当前窗口/);
+assert.match(fullscreen, /enterBattleFullscreenFallback\(this\.frame, this\.parentDocument\)/);
+assert.match(fullscreen, /exitBattleFullscreenFallback\(this\.frame, this\.parentDocument, this\.fallbackSnapshot\)/);
+assert.match(fullscreen, /event\.key === 'Escape'/);
+assert.match(fullscreenFallback, /frame\.style\.setProperty\(property, value, 'important'\)/);
+assert.match(fullscreenFallback, /parentDocument\.body\.style\.overflow = 'hidden'/);
+assert.match(fullscreenFallback, /frame\.setAttribute\('style', snapshot\.frameStyle\)/);
 
 assert.match(shellPresenter, /class TavernBattleShellPresenter/);
 assert.match(shellPresenter, /watchCurrentMessageUntilHistorical/);
@@ -123,8 +241,11 @@ assert.doesNotMatch(shellPresenter, /triggerSlash/);
 
 assert.match(repairHost, /formatBattleContentRepairPrompt/);
 assert.match(repairHost, /assertCurrentMessageLatest/);
-assert.match(repairHost, /TavernContinuationHost/);
-assert.match(repairHost, /continuationHost\.continueWithPrompt\(\{ prompt \}\)/);
+assert.match(repairHost, /retryCurrentMessageWithExtraModel/);
+assert.match(repairHost, /await retryCurrentMessageWithExtraModel\(prompt,\s*\{/);
+assert.match(repairHost, /validateVariables:/);
+assert.match(repairHost, /preflightBattleContent\(variables\?\.stat_data\?\.battle\)/);
+assert.doesNotMatch(repairHost, /TavernContinuationHost|continueWithPrompt/);
 assert.doesNotMatch(repairHost, /triggerSlash\(`\/send|triggerSlash\('\/send/);
 assert.doesNotMatch(repairHost, /document\.|\$\(|location\./);
 assert.match(coordinator, /TavernBattleShellPresenter\.getInstance\(\)/);

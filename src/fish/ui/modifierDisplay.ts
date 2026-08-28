@@ -5,6 +5,7 @@
 import { UnifiedEffectExecutor } from '../combat/unifiedEffectExecutor';
 import { getAttributeDefinition } from '../combat/effectDefinitions';
 import { GameStateManager } from '../core/gameStateManager';
+import { escapeHtml } from '../shared/html';
 
 export function getModifierDisplayName(modifierType: string): string {
   const detailMatch = modifierType.match(/^(.*)__(add|mul)$/);
@@ -32,26 +33,31 @@ export class ModifierDisplay {
    * 初始化UI
    */
   private initializeUI(): void {
+    $('#modifier-display-panel').remove();
     // 创建修饰符显示面板
     const panelHTML = `
       <div id="modifier-display-panel" class="modifier-display-panel" style="display: none;">
-        <div class="modifier-panel-header">
-          <h3>当前修饰符</h3>
-          <button id="modifier-panel-close" class="close-btn">×</button>
-        </div>
-        <div class="modifier-panel-content">
-          <div id="modifier-list" class="modifier-list">
-            <!-- 修饰符列表将在这里动态生成 -->
+        <div class="modifier-panel-backdrop"></div>
+        <section class="modifier-panel-shell" role="dialog" aria-modal="true" aria-labelledby="modifier-panel-title">
+          <div class="modifier-panel-header">
+            <div class="modifier-panel-heading">
+              <span class="modifier-panel-emblem" aria-hidden="true">✦</span>
+              <div>
+                <small>实时结算预览</small>
+                <h3 id="modifier-panel-title">战斗修饰</h3>
+              </div>
+            </div>
+            <button id="modifier-panel-close" class="close-btn" type="button" aria-label="关闭">×</button>
           </div>
-        </div>
+          <div class="modifier-panel-content">
+            <div id="modifier-list" class="modifier-list"></div>
+          </div>
+        </section>
       </div>
     `;
 
     // 按钮改为由页面模板提供，仅附加面板
     $('body').append(panelHTML);
-
-    // 添加样式
-    this.addStyles();
   }
 
   /**
@@ -68,6 +74,7 @@ export class ModifierDisplay {
     $('#modifier-panel-close').on('click', () => {
       this.hideDisplay();
     });
+    $('.modifier-panel-backdrop').on('click', () => this.hideDisplay());
 
     // 点击面板外部关闭
     $(document).on('click', event => {
@@ -121,69 +128,54 @@ export class ModifierDisplay {
       return;
     }
 
-    let html = '';
-
-    // 显示玩家修饰符
-    if (player) {
-      const playerModifiers = this.getAllEntityModifiers(player);
-      const hasPlayerModifiers = Object.values(playerModifiers).some(v => v !== 0);
-
-      if (hasPlayerModifiers) {
-        html += '<div class="modifier-section"><h4>玩家修饰符</h4>';
-        for (const [modifierType, value] of Object.entries(playerModifiers)) {
-          if (value === 0) continue;
-          const isDetail = modifierType.endsWith('__add') || modifierType.endsWith('__mul');
-          const displayName = getModifierDisplayName(modifierType);
-          const valueText = this.formatModifierValue(value, modifierType.endsWith('__mul'));
-          const colorClass = value > 0 ? 'positive' : 'negative';
-
-          html += `
-            <div class="modifier-item ${colorClass}">
-              <span class="modifier-name">${displayName}${isDetail ? '' : ''}</span>
-              <span class="modifier-value">${valueText}</span>
-            </div>
-          `;
-        }
-        html += '</div>';
-      }
+    const playerMetrics = player ? this.getModifierMetrics('player') : [];
+    const enemyMetrics = enemy ? this.getModifierMetrics('enemy') : [];
+    const attributes = [...new Set([...playerMetrics, ...enemyMetrics].map(metric => metric.attribute))];
+    if (attributes.length === 0) {
+      $('#modifier-list').html('<div class="no-modifiers modifier-empty"><span>✧</span><strong>当前没有数值修饰</strong><small>状态、能力与遗物产生的加算和倍率会显示在这里</small></div>');
+      return;
     }
 
-    // 显示敌人修饰符
-    if (enemy) {
-      const enemyModifiers = this.getAllEntityModifiers(enemy);
-      const hasEnemyModifiers = Object.values(enemyModifiers).some(v => v !== 0);
+    const playerMap = new Map(playerMetrics.map(metric => [metric.attribute, metric]));
+    const enemyMap = new Map(enemyMetrics.map(metric => [metric.attribute, metric]));
+    const rows = attributes.map(attribute => {
+      const playerMetric = playerMap.get(attribute);
+      const enemyMetric = enemyMap.get(attribute);
+      const reference = playerMetric || enemyMetric!;
+      return `<div class="modifier-compare-row">
+        <div class="modifier-compare-value modifier-compare-player">${this.renderMetricValues(playerMetric)}</div>
+        <div class="modifier-compare-label"><span>${reference.icon}</span><strong>${escapeHtml(reference.label)}</strong></div>
+        <div class="modifier-compare-value modifier-compare-enemy">${this.renderMetricValues(enemyMetric)}</div>
+      </div>`;
+    }).join('');
 
-      if (hasEnemyModifiers) {
-        html += '<div class="modifier-section"><h4>敌人修饰符</h4>';
-        for (const [modifierType, value] of Object.entries(enemyModifiers)) {
-          if (value === 0) continue;
-          const isDetail = modifierType.endsWith('__add') || modifierType.endsWith('__mul');
-          const displayName = getModifierDisplayName(modifierType);
-          const valueText = this.formatModifierValue(value, modifierType.endsWith('__mul'));
-          const colorClass = value > 0 ? 'positive' : 'negative';
+    $('#modifier-list').html(`<div class="modifier-compare">
+      <div class="modifier-compare-head">
+        <div><span>${escapeHtml(player?.emoji || '✨')}</span><strong>我方</strong></div>
+        <small>加算 / 倍率</small>
+        <div><strong>敌方</strong><span>${escapeHtml(enemy?.emoji || '👹')}</span></div>
+      </div>
+      <div class="modifier-compare-rows">${rows}</div>
+      <footer><span><i class="modifier-legend-add"></i>加算会直接增加或减少数值</span><span><i class="modifier-legend-mul"></i>倍率在加算后生效</span></footer>
+    </div>`);
+  }
 
-          html += `
-            <div class="modifier-item ${colorClass}">
-              <span class="modifier-name">${displayName}${isDetail ? '' : ''}</span>
-              <span class="modifier-value">${valueText}</span>
-            </div>
-          `;
-        }
-        html += '</div>';
-      }
-    }
-
-    if (html === '') {
-      html = '<div class="no-modifiers">暂无修饰符</div>';
-    }
-
-    $('#modifier-list').html(html);
+  private renderMetricValues(metric: ReturnType<ModifierDisplay['getModifierMetrics']>[number] | undefined): string {
+    if (!metric) return '<span class="modifier-none">—</span>';
+    return [
+      metric.add !== 0
+        ? `<span class="modifier-chip modifier-add"><small>加</small>${this.formatModifierValue(metric.add)}</span>`
+        : '',
+      metric.mul !== 1
+        ? `<span class="modifier-chip modifier-mul"><small>倍</small>${this.formatModifierValue(metric.mul, true)}</span>`
+        : '',
+    ].filter(Boolean).join('');
   }
 
   /**
    * 获取实体的所有修饰符
    */
-  private getAllEntityModifiers(entity: any): { [key: string]: number } {
+  private getAllEntityModifiers(target: 'player' | 'enemy'): { [key: string]: number } {
     const modifierTypes = [
       'damage_modifier',
       'damage_taken_modifier',
@@ -201,12 +193,37 @@ export class ModifierDisplay {
 
     for (const modifierType of modifierTypes) {
       // 仅保留“加减/乘除”的分项，不显示聚合项
-      const detail = (this.effectExecutor as any).analyzeModifierFromStatusEffects(entity, modifierType);
+      const detail = this.effectExecutor.analyzeModifierFromStatusEffects(target, modifierType);
       modifiers[`${modifierType}__add`] = detail.add;
       modifiers[`${modifierType}__mul`] = detail.mul !== 1 ? detail.mul : 0;
     }
 
     return modifiers;
+  }
+
+  private getModifierMetrics(target: 'player' | 'enemy'): Array<{
+    attribute: string;
+    label: string;
+    icon: string;
+    add: number;
+    mul: number;
+  }> {
+    const icons: Record<string, string> = {
+      damage_modifier: '⚔️', damage_taken_modifier: '💥', lust_damage_modifier: '💗',
+      lust_damage_taken_modifier: '💞', block_modifier: '🛡️', heal_modifier: '💚',
+      draw: '🃏', discard: '🗑️', energy_gain: '⚡', card_play_limit: '✋',
+    };
+    const flat = this.getAllEntityModifiers(target);
+    const attributes = new Set(Object.keys(flat).map(key => key.replace(/__(?:add|mul)$/, '')));
+    return [...attributes]
+      .map(attribute => ({
+        attribute,
+        label: getAttributeDefinition(attribute)?.displayName?.replace('修饰符', '') || attribute,
+        icon: icons[attribute] || '✦',
+        add: flat[`${attribute}__add`] || 0,
+        mul: flat[`${attribute}__mul`] || 1,
+      }))
+      .filter(metric => metric.add !== 0 || metric.mul !== 1);
   }
 
   /**
@@ -221,171 +238,6 @@ export class ModifierDisplay {
     }
     const v = round1(value);
     return v > 0 ? `+${v}` : `${v}`;
-  }
-
-  /**
-   * 添加样式
-   */
-  private addStyles(): void {
-    const styles = `
-      <style>
-        .modifier-display-btn {
-          position: fixed;
-          bottom: 20px; /* 挪到战斗日志按钮旁边 */
-          left: 140px;
-          width: 80px;
-          height: 32px;
-          border: 2px solid #667eea;
-          border-radius: 6px;
-          background: rgba(30, 30, 30, 0.9);
-          color: #667eea;
-          font-size: 12px;
-          cursor: pointer;
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-          transition: all 0.3s ease;
-          z-index: 500; /* 降低层级，避免遮挡手牌 */
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        }
-
-        .modifier-display-btn:hover {
-          background: rgba(102, 126, 234, 0.1);
-          border-color: #8b5cf6;
-          color: #8b5cf6;
-          transform: translateY(-2px);
-          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-        }
-
-        .modifier-btn-text {
-          font-weight: 500;
-          letter-spacing: 0.5px;
-        }
-
-        .modifier-display-panel {
-          position: fixed;
-          top: 50%;
-          left: 50%;
-          transform: translate(-50%, -50%);
-          width: 400px;
-          max-height: 500px;
-          background: rgba(30, 30, 30, 0.95);
-          border: 2px solid #667eea;
-          border-radius: 12px;
-          box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-          z-index: 2000;
-          backdrop-filter: blur(10px);
-        }
-
-        .modifier-panel-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          padding: 16px 20px;
-          border-bottom: 1px solid #444;
-        }
-
-        .modifier-panel-header h3 {
-          margin: 0;
-          color: #fff;
-          font-size: 18px;
-        }
-
-        .close-btn {
-          background: none;
-          border: none;
-          color: #ccc;
-          font-size: 24px;
-          cursor: pointer;
-          padding: 0;
-          width: 30px;
-          height: 30px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          border-radius: 50%;
-          transition: all 0.2s ease;
-        }
-
-        .close-btn:hover {
-          background: rgba(255, 255, 255, 0.1);
-          color: #fff;
-        }
-
-        .modifier-panel-content {
-          padding: 20px;
-          max-height: 400px;
-          overflow-y: auto;
-        }
-
-        .modifier-list {
-          display: flex;
-          flex-direction: column;
-          gap: 12px;
-        }
-
-        .modifier-section {
-          border: 1px solid #444;
-          border-radius: 8px;
-          padding: 12px;
-          background: rgba(255, 255, 255, 0.02);
-        }
-
-        .modifier-section h4 {
-          margin: 0 0 8px 0;
-          color: #e5e7eb;
-          font-size: 14px;
-          font-weight: 600;
-          border-bottom: 1px solid #555;
-          padding-bottom: 4px;
-        }
-
-        .modifier-item {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          padding: 12px 16px;
-          border-radius: 8px;
-          background: rgba(255, 255, 255, 0.05);
-          border-left: 4px solid;
-        }
-
-        .modifier-item.positive {
-          border-left-color: #4ade80;
-        }
-
-        .modifier-item.negative {
-          border-left-color: #f87171;
-        }
-
-        .modifier-name {
-          color: #e5e7eb;
-          font-weight: 500;
-        }
-
-        .modifier-value {
-          font-weight: bold;
-          font-size: 16px;
-        }
-
-        .modifier-item.positive .modifier-value {
-          color: #4ade80;
-        }
-
-        .modifier-item.negative .modifier-value {
-          color: #f87171;
-        }
-
-        .no-modifiers {
-          text-align: center;
-          color: #9ca3af;
-          font-style: italic;
-          padding: 20px;
-        }
-      </style>
-    `;
-
-    $('head').append(styles);
   }
 
   /**

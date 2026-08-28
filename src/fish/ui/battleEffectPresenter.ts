@@ -8,7 +8,7 @@ export interface BattleEndDialogRequest {
   result: BattleEndResult;
   battleSummary: string;
   narrativeText?: string;
-  onConfirm(): Promise<void>;
+  onConfirm(playerContinuation: string): Promise<void>;
   onRestart(): Promise<void>;
 }
 
@@ -32,21 +32,11 @@ export class TavernBattleEffectPresenter {
     return TavernBattleEffectPresenter.instance;
   }
 
-  public addLog(
-    message: string,
-    type: BattleEffectLogType = 'info',
-    source?: BattleEffectLogSource,
-  ): void {
+  public addLog(message: string, type: BattleEffectLogType = 'info', source?: BattleEffectLogSource): void {
     BattleLog.addLog(message, type, source);
   }
 
-  public logStatusEffect(
-    target: string,
-    statusName: string,
-    stacks: number,
-    duration: number,
-    isApply = true,
-  ): void {
+  public logStatusEffect(target: string, statusName: string, stacks: number, duration: number, isApply = true): void {
     BattleLog.logStatusEffect(target, statusName, stacks, duration, isApply);
   }
 
@@ -62,12 +52,7 @@ export class TavernBattleEffectPresenter {
     }
   }
 
-  public showHealthChange(
-    target: 'player' | 'enemy',
-    change: number,
-    currentHp: number,
-    maxHp: number,
-  ): void {
+  public showHealthChange(target: 'player' | 'enemy', change: number, currentHp: number, maxHp: number): void {
     try {
       this.animationManager.showDamageNumber(target, Math.abs(change), change < 0 ? 'damage' : 'heal');
       this.animationManager.updateHealthBarWithAnimation(target, currentHp, maxHp);
@@ -80,12 +65,7 @@ export class TavernBattleEffectPresenter {
     }
   }
 
-  public showLustChange(
-    target: 'player' | 'enemy',
-    change: number,
-    currentLust: number,
-    maxLust: number,
-  ): void {
+  public showLustChange(target: 'player' | 'enemy', change: number, currentLust: number, maxLust: number): void {
     try {
       this.animationManager.showDamageNumber(target, Math.abs(change), change > 0 ? 'lust' : 'heal');
       this.animationManager.updateLustBarWithAnimation(target, currentLust, maxLust);
@@ -134,20 +114,28 @@ export class TavernBattleEffectPresenter {
           ? { text: '胜利', emoji: '🎉', color: '#4CAF50' }
           : { text: '失败', emoji: '💀', color: '#f44336' };
     const dialog = $(`
-      <div class="battle-end-dialog" style="position:fixed!important;inset:0!important;background:rgba(0,0,0,.8)!important;display:flex!important;justify-content:center!important;align-items:center!important;z-index:99999!important">
-        <div style="background:white;border-radius:12px;max-width:500px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.3)">
-          <div style="text-align:center;padding:20px">
-            <h2 style="margin-bottom:15px">${presentation.emoji} 战斗结束！</h2>
-            <h3 style="color:${presentation.color};margin-bottom:20px">结果：${presentation.text}</h3>
-            ${request.narrativeText ? '<p class="battle-end-narrative" style="margin:0 auto 20px;padding:10px 12px;max-width:420px;color:#333;background:#f5f5f5;border-left:3px solid #4CAF50;text-align:left;white-space:pre-wrap"></p>' : ''}
-            <p style="margin-bottom:20px;font-size:14px;color:#666">点击确定将发起新的对话来描述后续剧情</p>
-            <p style="margin-bottom:10px;font-size:14px;color:#999">或者点击重新开始按钮重新游戏</p>
+      <div class="battle-end-dialog result-${request.result}" style="--result-color:${presentation.color}" role="dialog" aria-modal="true" aria-label="战斗结束">
+        <div class="battle-end-backdrop"></div>
+        <section class="battle-end-panel">
+          <header class="battle-end-header">
+            <span class="battle-end-emblem" aria-hidden="true">${presentation.emoji}</span>
+            <div>
+              <h2>战斗结束</h2>
+              <div class="battle-end-result">结果：${presentation.text}</div>
+            </div>
+          </header>
+          <div class="battle-end-body">
+            ${request.narrativeText ? '<p class="battle-end-narrative"></p>' : ''}
+            <p class="battle-end-guide">确认后会把回合摘要、最终状态和你的补充一起交给剧情模型。</p>
+            <label class="battle-end-choice-label" for="battle-end-choice">你希望战斗后做什么？<span>可选</span></label>
+            <textarea id="battle-end-choice" class="battle-end-choice" maxlength="500" rows="3" placeholder="例如：先检查战场，再与同伴讨论刚才发现的线索。"></textarea>
+            <div class="battle-end-choice-meta"><span>留空则由剧情自然发展</span><span class="battle-end-choice-count">0/500</span></div>
           </div>
-          <div style="text-align:center;padding:20px;border-top:1px solid #eee">
-            <button class="battle-end-confirm" style="background:#4CAF50;color:white;border:0;padding:12px 24px;border-radius:6px;font-size:16px;cursor:pointer;margin-right:10px">确定</button>
-            <button class="battle-end-restart" style="background:#2196F3;color:white;border:0;padding:12px 24px;border-radius:6px;font-size:16px;cursor:pointer">🔄 重新开始</button>
-          </div>
-        </div>
+          <footer class="battle-end-actions">
+            <button class="battle-end-confirm">继续剧情</button>
+            <button class="battle-end-restart">重新开始</button>
+          </footer>
+        </section>
       </div>
     `);
 
@@ -155,18 +143,26 @@ export class TavernBattleEffectPresenter {
     $('body').append(dialog).css('overflow', 'hidden');
     $('#gameContainer, .game-interface').css('pointer-events', 'none');
 
+    const choice = dialog.find<HTMLTextAreaElement>('.battle-end-choice');
+    choice.on('input', () => {
+      dialog.find('.battle-end-choice-count').text(`${choice.val()?.toString().length || 0}/500`);
+    });
+
     dialog.find('.battle-end-confirm').on('click', async event => {
       const button = $(event.currentTarget);
       const originalText = button.text();
-      button.prop('disabled', true).text('正在生成对话...').css({ background: '#999', cursor: 'not-allowed' });
+      const playerContinuation = choice.val()?.toString().trim() || '';
+      button.prop('disabled', true).text('正在继续剧情...');
+      choice.prop('disabled', true);
       try {
-        await request.onConfirm();
+        await request.onConfirm(playerContinuation);
         dialog.remove();
         $('body').css('overflow', '');
         $('#gameContainer, .game-interface').css('pointer-events', '');
       } catch (error) {
         console.error('触发战斗结束叙事失败:', error);
-        button.prop('disabled', false).text(originalText).css({ background: '#4CAF50', cursor: 'pointer' });
+        choice.prop('disabled', false);
+        button.prop('disabled', false).text(originalText);
       }
     });
 

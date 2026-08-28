@@ -12,20 +12,23 @@ import {
 import { readRunState } from '../runtime/runStateAdapter';
 import { retryCurrentMessageWithExtraModel } from '../runtime/mvuExtraModelRepair';
 import { createContentPackFromMvuBattle } from '../runtime/contentPackAdapter';
-import { flattenMvuArray } from '../runtime/mvuArrays';
+import { flattenMvuArray, normalizeMvuStatusDefinitions } from '../runtime/mvuArrays';
 import {
   canGenerateCompactStatusDescription,
+  compactContentToDisplayTags,
   assessInitialPlayerContent,
   describeCompactCard,
   describeCompactContent,
   describeCompactStatus,
+  normalizeChinesePlayerDescription,
+  resolveCompactCardDescription,
+  resolveCompactContentDescription,
   formatBuildGuidance,
   formatShopBudget,
   formatEnemyBudget,
   formatBuildBudget,
   formatRoutePrompt,
   formatWorldContinuityHint,
-  formatActionPrompt,
   formatPlayerContentReadiness,
   formatPlayerContentRepairPrompt,
   createRunPacingContext,
@@ -37,6 +40,7 @@ import {
   type RunNodeChoice,
   type RunNodeKind,
   type PlayerContentReadiness,
+  type EffectDisplayTag,
 } from '../game-core';
 import { readStatusLocation, readStatusProfession } from './statusAdapter';
 import { TavernCommonActionHost } from './commonActionHost';
@@ -82,45 +86,6 @@ function getStatRootRef(variables: any): any {
 let __isMutating = false; // 防抖标记
 let __USER_MUTATION_PILLS: string[] = [];
 // 持久通知（本页面会话内保持）
-// 自定义行动控件绑定（全局只绑定一次）
-let __customActionBound = false;
-function bindCustomActionControls() {
-  if (__customActionBound) return;
-  const inputEl = document.getElementById('custom-action-input') as HTMLInputElement | null;
-  const sendBtn = document.getElementById('custom-action-send') as HTMLButtonElement | null;
-  if (!inputEl || !sendBtn) return;
-  __customActionBound = true;
-  const doSend = async () => {
-    const text = (inputEl.value || '').trim();
-    if (!text) {
-      if (typeof toastr !== 'undefined') toastr.info('请输入要发送的内容');
-      return;
-    }
-    // 检查是否有奖励待领取，如果有则不允许发送
-    const choiceContainer = document.getElementById('choice-container');
-    if (choiceContainer && choiceContainer.style.display !== 'none') {
-      if (typeof toastr !== 'undefined') toastr.warning('请先领取或跳过奖励');
-      return;
-    }
-
-    if (__IS_SENDING_ACTION) return;
-
-    try {
-      await handleCustomAction(text);
-    } catch (e) {
-      console.error('自定义行动发送失败:', e);
-      if (typeof toastr !== 'undefined') toastr.error('发送失败，请重试');
-    } finally {
-      inputEl.value = '';
-      inputEl.focus();
-    }
-  };
-  sendBtn.onclick = () => void doSend();
-  inputEl.addEventListener('keydown', e => {
-    if ((e as KeyboardEvent).key === 'Enter') void doSend();
-  });
-}
-
 const __PERSIST_PILLS: string[] = [];
 // 取消基于上一轮快照的对比，改为直接读取 delta_data
 
@@ -201,6 +166,7 @@ function currentInitialContentReadiness(): PlayerContentReadiness | null {
   const core = battle?.core;
   return pack
     ? assessInitialPlayerContent(pack, {
+        emoji: core?.emoji,
         hp: core?.hp,
         maxHp: core?.max_hp,
         lust: core?.lust,
@@ -480,6 +446,11 @@ async function applyRewardSelectionsInline(selections: RewardSelections) {
 
 // 渲染通知模块
 function renderNotifyModule() {
+  const notifySection = document.getElementById('notify-section');
+  if (!notifySection) {
+    __USER_MUTATION_PILLS = [];
+    return;
+  }
   const stat = __STAT__ || {};
   const delta = __DELTA__ || {};
 
@@ -509,7 +480,6 @@ function renderNotifyModule() {
 
   // 升级奖励逻辑改为“基于exp自动结算”，不再基于level的delta在此处处理
 
-  const notifySection = document.getElementById('notify-section');
   const changesSection = document.getElementById('changes-section');
   const expSection = document.getElementById('exp-section');
   const changesList = document.getElementById('changes-list');
@@ -648,9 +618,10 @@ function renderChoiceModule() {
           }
           const priceDisplay = isShop ? `价格: ${recommendShopPrice('cards', card, run.act)} 金币` : '';
           const cardDescription =
-            card.description ||
+            normalizeChinesePlayerDescription(card.description) ||
             describeCompactCard(card, { statusNames: contentDescriptionStatusNames(card) }) ||
             '效果见卡牌规则';
+          const effectTags = compactContentEffectTagsHtml(card);
 
           return `
         <label class="option${invalid ? ' option-invalid' : ''}">
@@ -660,6 +631,7 @@ function renderChoiceModule() {
             <div class="name">${escapeHtml(card.name || '未知')}</div>
             ${costDisplay ? `<div class="cost">${escapeHtml(costDisplay)}</div>` : ''}
             ${priceDisplay ? `<div class="cost">${escapeHtml(priceDisplay)}</div>` : ''}
+            ${effectTags}
             <div class="desc">${escapeHtml(cardDescription)}</div>
             ${invalid ? `<div class="reward-validation">不可领取：${escapeHtml(inspection.message)}</div>` : ''}
           </span>
@@ -691,6 +663,7 @@ function renderChoiceModule() {
         .map((artifact, idx) => {
           const inspection = inspections.artifacts[idx];
           const invalid = !inspection?.ok;
+          const effectTags = compactContentEffectTagsHtml(artifact);
           return `
         <label class="option${invalid ? ' option-invalid' : ''}">
           <input type="${inputType}" ${inputName ? `name="${inputName}"` : ''} value="${idx}" ${invalid ? 'disabled' : ''} />
@@ -698,6 +671,7 @@ function renderChoiceModule() {
           <span class="text">
             <div class="name">${escapeHtml(artifact.name || '未知')}</div>
             ${isShop ? `<div class="cost">价格: ${escapeHtml(recommendShopPrice('artifacts', artifact, run.act))} 金币</div>` : ''}
+            ${effectTags}
             <div class="desc">${escapeHtml(contentRuleDescription(artifact, '效果见规则'))}</div>
             ${invalid ? `<div class="reward-validation">不可领取：${escapeHtml(inspection.message)}</div>` : ''}
           </span>
@@ -729,6 +703,7 @@ function renderChoiceModule() {
         .map((item, idx) => {
           const inspection = inspections.items[idx];
           const invalid = !inspection?.ok;
+          const effectTags = compactContentEffectTagsHtml(item);
           return `
         <label class="option${invalid ? ' option-invalid' : ''}">
           <input type="${inputType}" ${inputName ? `name="${inputName}"` : ''} value="${idx}" ${invalid ? 'disabled' : ''} />
@@ -736,6 +711,7 @@ function renderChoiceModule() {
           <span class="text">
             <div class="name">${escapeHtml(item.name || '未知')}</div>
             ${isShop ? `<div class="cost">价格: ${escapeHtml(recommendShopPrice('items', item, run.act))} 金币</div>` : ''}
+            ${effectTags}
             <div class="desc">${escapeHtml(contentRuleDescription(item, '效果见规则'))}</div>
             ${invalid ? `<div class="reward-validation">不可领取：${escapeHtml(inspection.message)}</div>` : ''}
           </span>
@@ -938,25 +914,11 @@ function updateConfirmButtonState(selections: any, cards: any[], artifacts: any[
 function renderRewardInline() {
   if (__isMutating) return; // 防抖
 
-  // 可选奖励存在时，隐藏自定义行动并保留奖励选择界面
-  const selectable = hasSelectableRewards(__STAT__);
-
-  if (selectable) {
-    const customAction = document.querySelector('.custom-action') as HTMLElement;
-    if (customAction) customAction.style.display = 'none';
-  } else {
-    const customAction = document.querySelector('.custom-action') as HTMLElement;
-    if (customAction) customAction.style.display = 'grid';
-  }
-
   // 渲染通知模块
   renderNotifyModule();
 
   // 渲染选择模块
   renderChoiceModule();
-
-  // 绑定自定义行动（确保在元素渲染后绑定）
-  bindCustomActionControls();
 
   // 设置通知模块的关闭事件
   const notifyDismissBtn = document.getElementById('notify-dismiss-btn');
@@ -967,8 +929,6 @@ function renderRewardInline() {
     });
   }
 
-  // 绑定自定义行动发送（统一在独立函数中，避免重复绑定）
-  bindCustomActionControls();
 }
 
 function applyHistoricalReadOnlyMode(): boolean {
@@ -1032,11 +992,36 @@ function contentDescriptionStatusNames(content?: Record<string, any>): Record<st
 }
 
 function contentRuleDescription(content: Record<string, any>, fallback = ''): string {
-  return (
-    (typeof content?.description === 'string' ? content.description.trim() : '') ||
-    describeCompactContent(content, { statusNames: contentDescriptionStatusNames(content) }) ||
-    fallback
+  const options = { statusNames: contentDescriptionStatusNames(content) };
+  const description =
+    typeof content?.type === 'string'
+      ? resolveCompactCardDescription(content, { ...options, includeKeywords: false })
+      : resolveCompactContentDescription(content, options);
+  return description || fallback;
+}
+
+function effectTagsHtml(tags: readonly EffectDisplayTag[]): string {
+  if (tags.length === 0) return '';
+  return `<div class="reward-effect-summary">${tags
+    .map(
+      entry =>
+        `<span class="reward-effect-tag effect-${entry.category}" style="--effect-color:${escapeHtml(entry.color)}"><span aria-hidden="true">${escapeHtml(entry.icon)}</span> ${escapeHtml(entry.text)}</span>`,
+    )
+    .join('')}</div>`;
+}
+
+function compactContentEffectTagsHtml(content: Record<string, any>): string {
+  return effectTagsHtml(
+    compactContentToDisplayTags(content, { statusNames: contentDescriptionStatusNames(content) }),
   );
+}
+
+function compactStatusEffectTagsHtml(status: Record<string, any>): string {
+  const names = contentDescriptionStatusNames(status);
+  const tags = Object.entries(status?.triggers || {}).flatMap(([trigger, effects]) =>
+    compactContentToDisplayTags({ trigger: { on: trigger, effects } }, { statusNames: names }),
+  );
+  return effectTagsHtml(tags);
 }
 
 // 翻译卡牌类型
@@ -1509,9 +1494,17 @@ function renderStatusData(rpgData: any) {
     }
   });
 
-  // 携带物品 - 新的数据结构中持有物是直接的字符串数组
-  let items: string[] = status?.['inventory'] || [];
-  items = items.filter((item: string) => item !== null && item !== undefined && item !== '');
+  const inventory: unknown[] = Array.isArray(status?.['inventory']) ? status.inventory : [];
+  const items: string[] = inventory
+    .map((item: unknown) => {
+      if (typeof item === 'string') return item.trim();
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return '';
+      const value = item as Record<string, unknown>;
+      const name = String(value.name ?? value.title ?? value.id ?? '').trim();
+      const description = String(value.description ?? '').trim();
+      return name && description ? `${name}：${description}` : name || description;
+    })
+    .filter(Boolean);
 
   const itemsContainer = document.getElementById('carried-items');
   if (itemsContainer) {
@@ -1653,25 +1646,27 @@ function renderBattleData(rpgData: any) {
   const artifactsContainer = document.getElementById('battle-artifacts');
   const itemsContainer = document.getElementById('battle-items');
 
-  // 渲染牌库 - 简化显示，不显示详细效果
+  // 普通页面与奖励、战斗页面共享同一个效果解析器，避免出现只有描述、没有实际效果的卡牌。
   if (deckContainer) {
     const deck = flattenMvuArray(cards, { objectsOnly: true });
 
     if (deck.length > 0) {
-      // 创建简化的卡牌内容
       const cardsHtml = deck
-        .map(
-          (card: any) => `
+        .map((card: any) => {
+          const description = contentRuleDescription(card, '');
+          const effectTags = compactContentEffectTagsHtml(card);
+          const cost = card.cost === 'energy' ? '全部能量' : card.cost ?? 0;
+          return `
           <div class="card" data-card-id="${escapeHtml(card.id || '')}">
             <button type="button" class="card-delete-btn" data-card-id="${escapeHtml(card.id || '')}" title="删除一张" style="display: none;">
               🗑️
             </button>
             <div class="card-name">${escapeHtml(card.emoji || '🃏')} ${escapeHtml(card.name || '未知')}</div>
-            <div class="card-cost">消耗: ${escapeHtml(card.cost ?? 0)}</div>
-            <div class="card-type">${escapeHtml(translateCardType(card.type || 'Skill'))}</div>
-            <div class="card-quantity">数量: ${escapeHtml(card.quantity || 1)}</div>
-          </div>`,
-        )
+            <div class="card-meta"><span>消耗 ${escapeHtml(cost)}</span><span>${escapeHtml(translateCardType(card.type || 'Skill'))}</span><span>数量 ${escapeHtml(card.quantity || 1)}</span></div>
+            ${effectTags}
+            ${description ? `<div class="card-description">${escapeHtml(description)}</div>` : ''}
+          </div>`;
+        })
         .join('');
 
       deckContainer.innerHTML = cardsHtml;
@@ -1688,30 +1683,35 @@ function renderBattleData(rpgData: any) {
     const filteredArtifacts = flattenMvuArray(artifacts, { objectsOnly: true });
     if (filteredArtifacts.length > 0) {
       artifactsContainer.innerHTML = filteredArtifacts
-        .map(
-          (artifact: any) => `
-          <div class="info-item">
-            <span class="value">${escapeHtml(artifact.emoji || '💎')} ${escapeHtml(artifact.name || '未知')}: ${escapeHtml(contentRuleDescription(artifact, '效果见规则'))}</span>
-          </div>`,
-        )
+        .map((artifact: any) => {
+          const description = contentRuleDescription(artifact, '');
+          return `
+          <article class="battle-resource-card">
+            <div class="battle-resource-name">${escapeHtml(artifact.emoji || '💎')} ${escapeHtml(artifact.name || '未知')}</div>
+            ${compactContentEffectTagsHtml(artifact)}
+            ${description ? `<div class="item-description">${escapeHtml(description)}</div>` : ''}
+          </article>`;
+        })
         .join('');
     } else {
       artifactsContainer.innerHTML = '<div class="value">无遗物</div>';
     }
   }
 
-  // 渲染道具 - 简化显示，不提供使用功能
+  // 道具在普通页面只读展示，但仍显示真实效果。
   if (itemsContainer) {
     const filteredItems = flattenMvuArray(items, { objectsOnly: true });
     if (filteredItems.length > 0) {
       itemsContainer.innerHTML = filteredItems
-        .map(
-          (item: any) => `
-          <div class="info-item">
-            <span class="value">${escapeHtml(item.emoji || '🧪')} ${escapeHtml(item.name || '未知')} x${escapeHtml(item.count || 1)}</span>
-            <div class="item-description">${escapeHtml(contentRuleDescription(item, '效果见规则'))}</div>
-          </div>`,
-        )
+        .map((item: any) => {
+          const description = contentRuleDescription(item, '');
+          return `
+          <article class="battle-resource-card">
+            <div class="battle-resource-name">${escapeHtml(item.emoji || '🧪')} ${escapeHtml(item.name || '未知')} <span class="battle-resource-count">×${escapeHtml(item.count || 1)}</span></div>
+            ${compactContentEffectTagsHtml(item)}
+            ${description ? `<div class="item-description">${escapeHtml(description)}</div>` : ''}
+          </article>`;
+        })
         .join('');
     } else {
       itemsContainer.innerHTML = '<div class="value">无道具</div>';
@@ -1812,7 +1812,6 @@ function renderActionArea() {
   const actionSection = document.querySelector('.action-section') as HTMLElement | null;
   if (!actionSection) return;
   setSendingState(false);
-  bindCustomActionControls();
   actionSection.style.display = '';
   renderRewardInline();
 }
@@ -1822,57 +1821,6 @@ let __IS_SENDING_ACTION = false;
 
 function setSendingState(value: boolean) {
   __IS_SENDING_ACTION = value;
-}
-
-// 处理普通自定义行动
-async function handleCustomAction(actionText: string) {
-  // 防止重复点击
-  if (__IS_SENDING_ACTION) return;
-
-  setSendingState(true);
-
-  // 禁用所有行动按钮和自定义输入
-  const allButtons = document.querySelectorAll('.option-btn, .battle-action-btn');
-  const customInput = document.getElementById('custom-action-input') as HTMLInputElement;
-  const customSendBtn = document.getElementById('custom-action-send') as HTMLButtonElement;
-
-  allButtons.forEach(btn => {
-    (btn as HTMLButtonElement).disabled = true;
-    btn.classList.add('disabled');
-  });
-
-  if (customInput) customInput.disabled = true;
-  if (customSendBtn) customSendBtn.disabled = true;
-
-  try {
-    // 将奖励摘要绑定到本次发送（若有）
-    const activeRun = readRunState(__STAT__);
-    const message = formatActionPrompt({
-      actionText,
-      battle: false,
-      node: activeRun?.phase === 'in_node' ? activeRun.currentNode : null,
-      pending: pendingRunText(),
-    });
-    await commonActionHost.continueWithPrompt({ prompt: message });
-  } catch (error) {
-    console.error('发送行动失败', error);
-    alert('发送行动失败，请重试');
-
-    // 出错时重新启用按钮
-    setSendingState(false);
-    allButtons.forEach(btn => {
-      (btn as HTMLButtonElement).disabled = false;
-      btn.classList.remove('disabled');
-    });
-    if (customInput) customInput.disabled = false;
-    if (customSendBtn) customSendBtn.disabled = false;
-  } finally {
-    // 清空已使用的奖励摘要
-    __PENDING_REWARD_SUMMARY = null;
-    __PENDING_RUN_SUMMARY = null;
-    // 无论成功还是失败，都重置发送状态（成功后由页面刷新处理按钮状态）
-    setSendingState(false);
-  }
 }
 
 // 渲染九宫格阵营
@@ -2049,7 +1997,7 @@ function renderBattleBookContent() {
   }
 
   const playerStatusEffects = flattenMvuArray<Record<string, any>>(data.playerStatusEffects, { objectsOnly: true });
-  const allStatuses = flattenMvuArray<Record<string, any>>(data.statuses, { objectsOnly: true });
+  const allStatuses = normalizeMvuStatusDefinitions(data.statuses);
   const statusNames: Record<string, string> = Object.fromEntries(
     allStatuses
       .filter((status: any) => typeof status?.id === 'string' && typeof status?.name === 'string' && status.name.trim())
@@ -2081,6 +2029,7 @@ function renderBattleBookContent() {
       const definition = statusDefinitions.get(status.id) as Record<string, any> | undefined;
       const name = status.name || definition?.name || status.id || '未知状态';
       const description = status.description || definition?.description || '无描述';
+      const effectTags = definition ? compactStatusEffectTagsHtml(definition) : '';
       html += `
         <div class="status-effect-item">
           <div class="status-header">
@@ -2090,6 +2039,7 @@ function renderBattleBookContent() {
             ${status.duration ? `<span class="status-duration">(${escapeHtml(status.duration)}回合)</span>` : ''}
           </div>
           <div class="status-description">${escapeHtml(description)}</div>
+          ${effectTags}
         </div>
       `;
     });
@@ -2105,6 +2055,7 @@ function renderBattleBookContent() {
         (typeof status.description === 'string' && status.description.trim()) ||
         (canGenerateCompactStatusDescription(status) ? describeCompactStatus(status, { statusNames }) : '') ||
         '无描述';
+      const effectTags = compactStatusEffectTagsHtml(status);
       html += `
         <div class="status-effect-item">
           <div class="status-header">
@@ -2113,6 +2064,7 @@ function renderBattleBookContent() {
             <span class="status-type ${statusType}">${statusType === 'buff' ? 'BUFF' : statusType === 'debuff' ? 'DEBUFF' : 'NEUTRAL'}</span>
           </div>
           <div class="status-description">${escapeHtml(description)}</div>
+          ${effectTags}
         </div>
       `;
     });

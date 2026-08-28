@@ -63,7 +63,7 @@ function containsModifier(node: EffectNode): boolean {
 }
 
 function compileTrigger(value: unknown): CompactEffectCompilationResult | null {
-  return compileCompactEffectList(value);
+  return compileCompactEffectList(value, { implicitTarget: 'self' });
 }
 
 /** Validate the only supported AI-facing shallow status format. */

@@ -36,6 +36,7 @@ export function createBattleRequestFromMvu(variables: unknown, battleData: unkno
   return createBattleRequest({
     content,
     player: {
+      emoji: core.emoji,
       hp: core.hp,
       maxHp: core.max_hp,
       lust: core.lust,
@@ -52,6 +53,7 @@ export function battleRequestToRuntimeData(request: BattleRequest): Record<strin
   const pack = request.content;
   return {
     core: {
+      emoji: request.player.emoji,
       hp: request.player.hp,
       max_hp: request.player.maxHp,
       lust: request.player.lust,

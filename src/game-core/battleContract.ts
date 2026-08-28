@@ -3,6 +3,7 @@ import { formatContentContractIssues, validateContentPackContract, type ContentC
 import { stableHash32 } from './deterministicRandom';
 import type { BattleEndResult } from './battleTerminal';
 import { normalizeRunPacingContext, type RunPacingContext } from './runPacing';
+import { roundBattleValue } from './battleMath';
 
 export const BATTLE_REQUEST_SCHEMA_VERSION = 1 as const;
 export const BATTLE_RESULT_SCHEMA_VERSION = 1 as const;
@@ -15,6 +16,7 @@ export interface BattleRequest {
   schemaVersion: typeof BATTLE_REQUEST_SCHEMA_VERSION;
   content: ContentPack;
   player: {
+    emoji?: string;
     hp: number;
     maxHp: number;
     lust: number;
@@ -75,8 +77,8 @@ export function createBattleRequest(input: {
   if (!isContentPack(input.content)) throw new Error('battle content pack is invalid');
   const contentContract = validateContentPackContract(input.content, { requireEnemy: true, requireExecutable: true });
   if (!contentContract.ok) throw new BattleContentContractError(contentContract.issues);
-  const maxHp = Math.max(1, finite(input.player.maxHp, 1));
-  const maxLust = Math.max(1, finite(input.player.maxLust, 1));
+  const maxHp = Math.max(1, roundBattleValue(finite(input.player.maxHp, 1)));
+  const maxLust = Math.max(1, roundBattleValue(finite(input.player.maxLust, 1)));
   const route = normalizeRoute(input.route);
   const seed = input.seed === undefined ? deriveBattleSeed(input.content, route, input.runSeed) : input.seed;
   if (!Number.isInteger(seed) || seed < 0 || seed > 0xffffffff) throw new Error('battle seed is invalid');
@@ -84,9 +86,13 @@ export function createBattleRequest(input: {
     schemaVersion: BATTLE_REQUEST_SCHEMA_VERSION,
     content: input.content,
     player: {
-      hp: Math.min(maxHp, Math.max(0, finite(input.player.hp, maxHp))),
+      emoji:
+        typeof input.player.emoji === 'string' && input.player.emoji.trim()
+          ? input.player.emoji.trim().slice(0, 16)
+          : '✨',
+      hp: roundBattleValue(Math.min(maxHp, Math.max(0, finite(input.player.hp, maxHp)))),
       maxHp,
-      lust: Math.min(maxLust, Math.max(0, finite(input.player.lust, 0))),
+      lust: roundBattleValue(Math.min(maxLust, Math.max(0, finite(input.player.lust, 0)))),
       maxLust,
       level: positiveInteger(input.player.level, 1),
     },
@@ -109,8 +115,8 @@ export function createBattleResult(input: {
     schemaVersion: BATTLE_RESULT_SCHEMA_VERSION,
     outcome,
     player: {
-      hp: Math.min(input.request.player.maxHp, Math.max(0, finite(input.player.hp, 0))),
-      lust: Math.min(input.request.player.maxLust, Math.max(0, finite(input.player.lust, 0))),
+      hp: roundBattleValue(Math.min(input.request.player.maxHp, Math.max(0, finite(input.player.hp, 0)))),
+      lust: roundBattleValue(Math.min(input.request.player.maxLust, Math.max(0, finite(input.player.lust, 0)))),
     },
     items: (input.items || [])
       .filter(item => typeof item.id === 'string' && item.id.length > 0 && Number.isInteger(item.count))

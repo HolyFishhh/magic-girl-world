@@ -28,7 +28,11 @@ export interface BattleTriggerHostPorts {
     context: BattleTriggerExecutionContext,
   ): Promise<void>;
   runRelic(trigger: AbilityTrigger, context: Readonly<Record<string, unknown>>): Promise<void>;
-  addLog(message: string, type?: 'info' | 'damage' | 'heal' | 'action' | 'system'): void;
+  addLog(
+    message: string,
+    type?: 'info' | 'damage' | 'heal' | 'action' | 'system',
+    source?: { type: 'card' | 'relic' | 'ability' | 'status'; name: string; details?: string },
+  ): void;
   logStatusEffect(targetName: string, statusName: string, stacks: number, duration: number, isApply: boolean): void;
 }
 
@@ -71,7 +75,14 @@ export class TavernBattleTriggerHost {
 
   public async registerAbility(
     targetType: 'player' | 'enemy',
-    definition: { trigger: string; effectProgram: EffectProgram },
+    definition: {
+      trigger: string;
+      effectProgram: EffectProgram;
+      name?: string;
+      emoji?: string;
+      description?: string;
+      source?: string;
+    },
   ): Promise<void> {
     const entity = this.getEntity(targetType);
     if (!entity) return;
@@ -141,7 +152,16 @@ export class TavernBattleTriggerHost {
     );
     if (result.status === 'rolled_back') {
       this.ports.addLog(`${ability.name || ability.id}的${trigger}效果执行失败，战斗状态已回滚。`, 'system');
+      return;
     }
+
+    const abilityName = ability.name || ability.id;
+    const details = [ability.source ? `来源：${ability.source}` : '', `触发：${trigger}`].filter(Boolean).join('；');
+    this.ports.addLog(`能力触发：${abilityName}`, 'action', {
+      type: 'ability',
+      name: abilityName,
+      details,
+    });
   }
 
   private presentStatusEvent(event: StatusLifecycleEvent): void {
@@ -160,7 +180,11 @@ export class TavernBattleTriggerHost {
       return;
     }
     if (event.type === 'trigger_started') {
-      this.ports.addLog(`${event.status.name}触发${event.trigger}效果`, 'action');
+      this.ports.addLog(`${event.status.name}触发${event.trigger}效果`, 'action', {
+        type: 'status',
+        name: event.status.name,
+        details: `触发：${event.trigger}`,
+      });
       return;
     }
     if (event.type === 'status_removed') {

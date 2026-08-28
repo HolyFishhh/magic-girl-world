@@ -25,7 +25,6 @@ assert.deepEqual(
     deckQuantity: 8,
     hasPlayableCard: true,
     hasVictoryPressure: true,
-    hasDefenseOrRecovery: true,
   },
 );
 
@@ -48,7 +47,8 @@ assert.equal(
 const preflight = await readFile(resolve('src/fish/core/battleContentPreflight.ts'), 'utf8');
 assert.match(preflight, /assessDeckPlayability\(/);
 assert.match(preflight, /hasContentMetric\(/);
-assert.doesNotMatch(preflight, /let\s+(?:deckQuantity|hasPlayableCard|hasVictoryPressure|hasDefenseOrRecovery)\s*=/);
+assert.doesNotMatch(preflight, /let\s+(?:deckQuantity|hasPlayableCard|hasVictoryPressure)\s*=/);
+assert.doesNotMatch(preflight, /NO_DEFENSE|SMALL_DECK|格挡或治疗|构筑容错/);
 
 const enemyBudget = await readFile(resolve('src/game-core/enemyBudget.ts'), 'utf8');
 assert.match(enemyBudget, /hasContentMetric\(/);

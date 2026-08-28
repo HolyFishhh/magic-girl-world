@@ -58,11 +58,25 @@ const power = core.analyzeContentDefinition(
 assert.equal(power.metrics.defense, 3);
 assert.equal(power.dynamicMetrics.has('defense'), true);
 
+const structuredPower = core.analyzeContentDefinition({
+  type: 'Power',
+  effects: { block: 4 },
+  trigger: { on: 'deal_damage', effects: { apply_status: 'mark', stacks: 1, to: 'opponent' } },
+});
+assert.equal(structuredPower.metrics.defense, 4, 'structured Power keeps its immediate effect in build analysis');
+assert.ok(structuredPower.tags.includes('能力'));
+assert.ok(structuredPower.tags.includes('状态:mark'));
+
 const passiveModifier = core.analyzeContentDefinition({
   trigger: 'passive',
   effects: [{ modify: 'damage', add: 2 }],
 });
 assert.deepEqual(passiveModifier.modifiers, [{ target: 'self', stat: 'damage', operator: 'add', value: 2 }]);
+
+const structuredPassiveModifier = core.analyzeContentDefinition({
+  trigger: { on: 'passive', effects: [{ modify: 'block', add: 1 }] },
+});
+assert.deepEqual(structuredPassiveModifier.modifiers, [{ target: 'self', stat: 'block', operator: 'add', value: 1 }]);
 
 const status = core.analyzeStatusDefinition(
   {

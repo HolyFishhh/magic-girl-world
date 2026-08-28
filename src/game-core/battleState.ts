@@ -19,12 +19,7 @@ import { createBattleRandomState, drawBattleRandom, type BattleRandomState } fro
 import type { EffectProgram } from './effectDsl';
 import { allocateRuntimeId } from './runtimeIds';
 import { transitionToBattleEnd, type BattleEndResult } from './battleTerminal';
-import {
-  advanceTurnCounter,
-  beginEnemyTurn,
-  beginPlayerTurn,
-  type CoreBattlePhase,
-} from './turnState';
+import { advanceTurnCounter, beginEnemyTurn, beginPlayerTurn, type CoreBattlePhase } from './turnState';
 
 export interface Card {
   id: string;
@@ -78,11 +73,23 @@ export interface Ability {
   name?: string;
   emoji?: string;
   description?: string;
+  /** Player-facing origin, for example the card, relic or status that granted it. */
+  source?: string;
   trigger: string;
   effectProgram: EffectProgram;
 }
 
+export interface BattleHistoryEntry {
+  turn: number;
+  type: 'info' | 'damage' | 'heal' | 'action' | 'system';
+  message: string;
+  source?: { type: 'card' | 'relic' | 'ability' | 'status'; name: string; details?: string };
+  actor?: 'player' | 'enemy';
+  actionName?: string;
+}
+
 export interface Player {
+  emoji: string;
   maxHp: number;
   currentHp: number;
   maxLust: number;
@@ -162,6 +169,8 @@ export interface GameState {
   random?: BattleRandomState;
   battleResult: BattleEndResult | 'ongoing';
   battleNarrative: string;
+  /** Compact structured history survives iframe reloads and is summarized at settlement. */
+  battleHistory?: BattleHistoryEntry[];
 }
 
 export type BattleStateChangeListener = (state: GameState) => void;
@@ -172,6 +181,7 @@ function cloneState<T>(value: T): T {
 
 export function createEmptyPlayer(): Player {
   return {
+    emoji: '✨',
     maxHp: 80,
     currentHp: 80,
     maxLust: 100,
@@ -202,6 +212,7 @@ export function createEmptyBattleState(): GameState {
     isGameOver: false,
     battleResult: 'ongoing',
     battleNarrative: '',
+    battleHistory: [],
   };
 }
 
@@ -248,6 +259,11 @@ export class BattleStateStore {
 
   public isGameOver(): boolean {
     return this.gameState.isGameOver;
+  }
+
+  public setBattleHistory(entries: readonly BattleHistoryEntry[]): void {
+    this.gameState.battleHistory = cloneState(entries.slice(-600));
+    this.notifyListeners('battle_history_updated');
   }
 
   public nextRandom(): number {
@@ -384,7 +400,12 @@ export class BattleStateStore {
   }
 
   public moveOwnedCardsToExhaust(cardIds: readonly string[]): Card[] {
-    const result = moveCardsBetweenZones(this.getCardZones(), cardIds, ['hand', 'drawPile', 'discardPile'], 'exhaustPile');
+    const result = moveCardsBetweenZones(
+      this.getCardZones(),
+      cardIds,
+      ['hand', 'drawPile', 'discardPile'],
+      'exhaustPile',
+    );
     this.applyCardZones(result.zones);
     if (result.moved.length > 0) this.notifyListeners('exhaust_updated');
     return result.moved;
@@ -446,7 +467,9 @@ export class BattleStateStore {
   public createRuntimeCardId(sourceId: string): string {
     const player = this.gameState.player;
     const existingIds = new Set(
-      [...player.deck, ...player.hand, ...player.drawPile, ...player.discardPile, ...player.exhaustPile].map(card => card.id),
+      [...player.deck, ...player.hand, ...player.drawPile, ...player.discardPile, ...player.exhaustPile].map(
+        card => card.id,
+      ),
     );
     return allocateRuntimeId(sourceId, existingIds);
   }

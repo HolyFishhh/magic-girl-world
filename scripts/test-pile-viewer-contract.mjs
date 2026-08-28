@@ -11,22 +11,29 @@ assert.doesNotMatch(coordinator, /PileViewer|requestPileData/);
 
 const viewer = await readFile(resolve('src/fish/ui/pileViewer.ts'), 'utf8');
 assert.match(viewer, /showPileByType\(pileType/);
+assert.match(viewer, /\.deck-stat\[data-pile="deck"\]/);
 assert.match(viewer, /\.deck-stat\[data-pile="draw"\]/);
 assert.match(viewer, /\.deck-stat\[data-pile="discard"\]/);
 assert.match(viewer, /\.deck-stat\[data-pile="exhaust"\]/);
 assert.match(viewer, /pile-viewer-overlay/);
 assert.match(viewer, /牌堆为空/);
 assert.match(viewer, /card\.innate/);
+assert.match(viewer, /card\.discardEffectProgram/);
+assert.match(viewer, /此牌被战斗效果弃掉后/);
 
 const battleUi = await readFile(resolve('src/fish/ui/battleUI.ts'), 'utf8');
 assert.match(battleUi, /cardData\.innate/);
 assert.match(battleUi, /固有/);
+assert.match(battleUi, /此牌被战斗效果弃掉后/);
 
 const styles = await readFile(resolve('src/fish/index.scss'), 'utf8');
 assert.match(styles, /\.card-keywords/);
 assert.match(styles, /&\.innate/);
+assert.match(styles, /\.pile-viewer \.enhanced-card\s*\{[^}]*position:\s*relative/s);
+assert.match(styles, /\.pile-viewer-body\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fill/s);
 
 const html = await readFile(resolve('src/fish/index.html'), 'utf8');
 assert.doesNotMatch(html, /id="pile-viewer"|onclick="closePileViewer\(\)"/);
+for (const label of ['牌组', '抽牌', '弃牌', '消耗']) assert.match(html, new RegExp(`class="pile-label">${label}<`));
 
 console.log('Pile viewer buttons are wired to the existing modal viewer.');

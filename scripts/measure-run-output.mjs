@@ -74,7 +74,7 @@ const brokenInitial = core.assessInitialPlayerContent(
     ],
     statuses: [],
   }),
-  { hp: 80, maxHp: 80, lust: 0, maxLust: 100, level: 1, exp: 0 },
+  { emoji: '', hp: 80, maxHp: 80, lust: 0, maxLust: 100, level: 1, exp: 0 },
 );
 const initialRepairPrompt = core.formatPlayerContentRepairPrompt(brokenInitial);
 const battleRepairPrompt = core.formatBoundedContentRepairPrompt('[战斗场景修复]', [

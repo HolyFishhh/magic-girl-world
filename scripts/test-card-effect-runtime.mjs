@@ -7,6 +7,7 @@ process.env.TS_NODE_COMPILER_OPTIONS = JSON.stringify({ module: 'CommonJS', modu
 require('ts-node/register/transpile-only');
 const core = require(resolve('src/game-core/index.ts'));
 const { ReferenceBattleRuntimeHost } = require(resolve('src/adapters/referenceBattleRuntimeHost.ts'));
+const { normalizeEnemyAction } = require(resolve('src/fish/core/battleContentAdapter.ts'));
 
 const emptyProgram = { spec: 'mwg.effect/v1', steps: [{ op: 'gain_block', target: 'self', amount: 1 }] };
 const card = (id, cost = 1, type = 'Skill') => ({
@@ -115,6 +116,41 @@ const generated = host.getPlayer().drawPile.filter(entry => entry.originalId ===
 assert.equal(generated.length, 2);
 assert.equal(new Set(generated.map(entry => entry.id)).size, 2);
 assert.ok(generated.every(entry => entry.effectProgram?.spec === 'mwg.effect/v1'));
+
+// Full enemy-content path: compact MVU JSON -> compiled enemy action -> command
+// runtime -> the player's draw pile. This protects the enemy card-insertion
+// feature from being documented but disconnected in Tavern combat.
+const enemyInsertion = normalizeEnemyAction({
+  name: '侵蚀牌库',
+  weight: 1,
+  effects: { add_card: 'enemy_curse', to: 'deck', count: 2 },
+  creates: [{
+    id: 'enemy_curse',
+    name: '侵蚀残片',
+    emoji: '🕸️',
+    type: 'Curse',
+    rarity: 'Corrupt',
+    effects: { damage: 3, to: 'self' },
+    ethereal: true,
+  }],
+});
+assert.ok(enemyInsertion?.effectProgram);
+const beforeEnemyInsertion = host.getPlayer().drawPile.length;
+await core.runEffectCommandProgram(
+  enemyInsertion.effectProgram,
+  { spentEnergy: 0 },
+  {
+    readState: () => ({
+      self: { hp: 10, maxHp: 10, lust: 0, maxLust: 100, energy: 0, maxEnergy: 0, block: 0 },
+      opponent: { hp: 10, maxHp: 10, lust: 0, maxLust: 100, energy: 3, maxEnergy: 3, block: 0 },
+    }),
+    execute: command => runtime.execute(command),
+  },
+);
+const insertedByEnemy = host.getPlayer().drawPile.filter(entry => entry.originalId === 'enemy_curse');
+assert.equal(host.getPlayer().drawPile.length, beforeEnemyInsertion + 2);
+assert.equal(insertedByEnemy.length, 2);
+assert.ok(insertedByEnemy.every(entry => entry.type === 'Curse'));
 
 const rollbackState = host.getGameState();
 const rollbackHost = new ReferenceBattleRuntimeHost(rollbackState);

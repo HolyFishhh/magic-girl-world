@@ -6,6 +6,8 @@ import type { Card } from '../../game-core';
 import { escapeHtml, escapeHtmlAttribute } from '../shared/html';
 import { EffectProgramDisplay } from './effectProgramDisplay';
 
+export type BattlePileType = 'deck' | 'draw' | 'discard' | 'exhaust';
+
 export class PileViewer {
   private static instance: PileViewer;
   private static effectDisplay = EffectProgramDisplay.getInstance();
@@ -22,7 +24,7 @@ export class PileViewer {
   /**
    * 显示牌堆内容
    */
-  showPile(pileType: 'draw' | 'discard' | 'exhaust', cards: Card[], title?: string): void {
+  showPile(pileType: BattlePileType, cards: Card[], title?: string): void {
     // 移除已存在的查看器
     this.closePileViewer();
 
@@ -87,6 +89,14 @@ export class PileViewer {
   private createCardHTML(card: Card): string {
     const effectTags = PileViewer.effectDisplay.programToTags(card.effectProgram);
     const compactTagsHTML = PileViewer.effectDisplay.createCompactEffectTagsHTML(effectTags);
+    const discardEffectTags = PileViewer.effectDisplay.programToTags(card.discardEffectProgram).map(entry => ({
+      ...entry,
+      text: `此牌被战斗效果弃掉后：${entry.text}`,
+      icon: '🗑️',
+      color: '#4b5563',
+      category: 'special' as const,
+    }));
+    const compactDiscardTagsHTML = PileViewer.effectDisplay.createCompactEffectTagsHTML(discardEffectTags);
 
     const displayCost =
       card.type === 'Curse' || card.cost === undefined ? '—' : card.cost === 'energy' ? 'X' : card.cost;
@@ -107,19 +117,29 @@ export class PileViewer {
           </div>
         </div>
         <div class="card-body">
-          <div class="card-name">${escapeHtml(card.name)}</div>
-          <div class="card-description">${escapeHtml(card.description)}</div>
+          <div class="card-title-row">
+            <div class="card-name">${escapeHtml(card.name)}</div>
+            <div class="card-type-indicator">${escapeHtml(this.translateCardType(card.type))}</div>
+          </div>
+          ${card.description ? `<div class="card-description">${escapeHtml(card.description)}</div>` : ''}
           ${compactTagsHTML}
+          ${compactDiscardTagsHTML}
         </div>
       </div>
     `;
   }
 
+  private translateCardType(type: Card['type']): string {
+    return { Attack: '攻击', Skill: '技能', Power: '能力', Curse: '诅咒', Event: '事件' }[type] || String(type);
+  }
+
   /**
    * 获取牌堆标题
    */
-  private getPileTitle(pileType: 'draw' | 'discard' | 'exhaust'): string {
+  private getPileTitle(pileType: BattlePileType): string {
     switch (pileType) {
+      case 'deck':
+        return '完整牌组';
       case 'draw':
         return '抽牌堆';
       case 'discard':
@@ -135,6 +155,10 @@ export class PileViewer {
    * 设置牌堆点击事件
    */
   setupPileClickEvents(): void {
+    $(document).on('click', '.deck-stat[data-pile="deck"]', e => {
+      e.preventDefault();
+      this.handlePileClick('deck');
+    });
     // 抽牌堆点击事件
     $(document).on('click', '.deck-stat[data-pile="draw"], .draw-pile-indicator', e => {
       e.preventDefault();
@@ -152,13 +176,12 @@ export class PileViewer {
       e.preventDefault();
       this.handlePileClick('exhaust');
     });
-
   }
 
   /**
    * 处理牌堆点击
    */
-  private handlePileClick(pileType: 'draw' | 'discard' | 'exhaust'): void {
+  private handlePileClick(pileType: BattlePileType): void {
     // 这里需要从GameStateManager获取牌堆数据
     // 为了避免循环依赖，我们通过事件系统来获取数据
     const event = new CustomEvent('requestPileData', {
@@ -171,7 +194,7 @@ export class PileViewer {
   /**
    * 显示指定的牌堆（由外部调用）
    */
-  showPileByType(pileType: 'draw' | 'discard' | 'exhaust', gameStateManager: any): void {
+  showPileByType(pileType: BattlePileType, gameStateManager: any): void {
     const player = gameStateManager.getPlayer();
     if (!player) {
       console.warn('无法获取玩家数据');
@@ -182,6 +205,10 @@ export class PileViewer {
     let title = '';
 
     switch (pileType) {
+      case 'deck':
+        cards = player.deck || [];
+        title = '完整牌组';
+        break;
       case 'draw':
         cards = player.drawPile || [];
         title = '抽牌堆';
@@ -207,7 +234,8 @@ export class PileStatsDisplay {
   /**
    * 更新牌堆统计显示
    */
-  static updatePileStats(drawCount: number, discardCount: number, exhaustCount: number = 0): void {
+  static updatePileStats(drawCount: number, discardCount: number, exhaustCount: number = 0, deckCount = 0): void {
+    $('.deck-stat[data-pile="deck"] .deck-count, #deck-pile-count').text(deckCount);
     // 更新抽牌堆数量
     $('.deck-stat[data-pile="draw"] .deck-count, .draw-pile-count').text(drawCount);
 
@@ -221,7 +249,7 @@ export class PileStatsDisplay {
     $('.deck-stat[data-pile="draw"]').toggleClass('clickable', drawCount > 0);
     $('.deck-stat[data-pile="discard"]').toggleClass('clickable', discardCount > 0);
     $('.deck-stat[data-pile="exhaust"]').toggleClass('clickable', exhaustCount > 0);
-
+    $('.deck-stat[data-pile="deck"]').toggleClass('clickable', deckCount > 0);
   }
 
   /**
@@ -230,6 +258,11 @@ export class PileStatsDisplay {
   static createPileStatsHTML(): string {
     return `
       <div class="deck-info">
+        <div class="deck-stat clickable" data-pile="deck" title="点击查看完整牌组">
+          <div class="deck-icon">🃏</div>
+          <div class="deck-label">牌组</div>
+          <div class="deck-count">0</div>
+        </div>
         <div class="deck-stat clickable" data-pile="draw" title="点击查看抽牌堆">
           <div class="deck-icon">🃏</div>
           <div class="deck-label">抽牌堆</div>

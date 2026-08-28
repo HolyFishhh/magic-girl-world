@@ -7,6 +7,15 @@ process.env.TS_NODE_COMPILER_OPTIONS = JSON.stringify({ module: 'CommonJS', modu
 require('ts-node/register/transpile-only');
 const core = require(resolve('src/game-core/index.ts'));
 
+assert.equal(
+  core.contentPathToBattlePath('desireEffects.player.effects[1].status'),
+  'battle.player_lust_effect.effects[1].status',
+);
+assert.equal(
+  core.contentPathToBattlePath('desireEffects.enemy.effects[0].status'),
+  'battle.enemy.lust_effect.effects[0].status',
+);
+
 const content = core.createContentPack({
   cards: [{ id: 'strike', name: '斩击', type: 'Attack', rarity: 'Common', cost: 1, quantity: 5, effects: [{ damage: 8 }] }],
   statuses: [{ id: 'focus', name: '专注', emoji: '✦', type: 'buff', triggers: { hold: [{ modify: 'block', add: 'stacks' }] } }],

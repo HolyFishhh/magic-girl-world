@@ -39,7 +39,6 @@ export class BattleManager {
 
   // 战斗初始化
   public async initializeBattle(enemy: Enemy): Promise<void> {
-
     // 设置敌人
     this.gameStateManager.setEnemy(enemy);
 
@@ -78,7 +77,6 @@ export class BattleManager {
         beginEnemyTurn: () => this.gameStateManager.beginEnemyTurn(),
         executeTurnStep: step => this.executeTurnFlowStep(step),
       });
-
     } catch (error) {
       console.error('结束回合流程失败，已回滚到玩家回合:', error);
       this.enemyIntentPresenter.addLog('结束回合流程失败，战斗状态已回滚。', 'system');
@@ -205,11 +203,11 @@ export class BattleManager {
 
     // 默认攻击行为
     const damage = rollDefaultEnemyAttackDamage(() => this.gameStateManager.nextRandom());
+    this.enemyIntentPresenter.logAction('默认攻击', `造成${damage}点伤害`);
     await this.executeEnemyEffect(
       { spec: 'mwg.effect/v1', steps: [{ op: 'damage', target: 'opponent', amount: damage }] },
       '默认攻击',
     );
-
   }
 
   /** Tavern execution bridge; the outer battle-session transaction owns rollback. */

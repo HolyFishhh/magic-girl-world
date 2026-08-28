@@ -11,6 +11,7 @@ export interface BattleRequest {
     schemaVersion: typeof BATTLE_REQUEST_SCHEMA_VERSION;
     content: ContentPack;
     player: {
+        emoji?: string;
         hp: number;
         maxHp: number;
         lust: number;

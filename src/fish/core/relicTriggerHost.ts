@@ -67,7 +67,9 @@ export class TavernRelicTriggerHost {
       'recover-and-continue',
     );
 
-    if (result.status === 'rolled_back') {
+    if (result.status === 'completed') {
+      this.presentation.addTriggeredLog(relic, trigger);
+    } else {
       console.error(`遗物效果执行失败，已回滚: ${relic.name}`, result.cause);
       this.presentation.addLog(`${relic.name}的${trigger}效果执行失败，战斗状态已回滚。`, 'system');
     }
