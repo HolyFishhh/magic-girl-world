@@ -1,9 +1,13 @@
 import {
   addModifierOperation,
+  createBattleRandomState,
+  createCombatantCollection,
   BattleEffectRuntime,
   resolvePassiveModifierOperations,
-  resolvePendingBattleEnd,
+  resolvePassiveCardPlayRules,
+  resolveEnemyTargets,
   resolveStatusHoldModifierOperations,
+  resolveStatusHoldCardPlayRules,
   roundBattleDisplayValue,
   roundBattleValue,
   roundModifierBreakdown,
@@ -11,10 +15,13 @@ import {
   type BattleEffectRuntimeEvent,
   type BattleEndResult,
   type BattleEntityType,
+  type CardPlayRuleEvent,
+  type Card,
   type BattleTriggerDispatch,
   type CoreEffectState,
   type EffectCommand,
   type EffectProgram,
+  type EnemyTargetSelector,
   type Enemy,
   type ModifierOperation,
   type Player,
@@ -39,6 +46,7 @@ export interface ModernEffectExecutionContext {
   statusContext?: any;
   spentEnergy?: number;
   abilityContext?: any;
+  setCardDestination?: (destination: import('../../game-core').PlayedCardDestination) => void;
 }
 
 /** Tavern coordinator for the modern typed effect pipeline. */
@@ -54,8 +62,9 @@ export class UnifiedEffectExecutor {
   private readonly triggerHost: TavernBattleTriggerHost;
   private _cardSystem?: CardSystem;
   private executionContext: ModernEffectExecutionContext & { sourceIsPlayer: boolean } = { sourceIsPlayer: false };
-  private pendingDeaths = new Set<'player' | 'enemy'>();
+  private pendingDeaths = new Set<string>();
   private readonly activeLustOverflows = new Set<'player' | 'enemy'>();
+  private currentResolvedEnemyId: string | null = null;
 
   private constructor() {
     this.relicTriggerHost.configureExecutionPorts({
@@ -71,12 +80,29 @@ export class UnifiedEffectExecutor {
       readState: sourceIsPlayer => this.createCoreEffectState(sourceIsPlayer),
       isTerminal: () => this.gameStateManager.isGameOver(),
       executeCardCommand: async command => {
+        const sourceValue = this.executionContext.cardContext || this.executionContext.relicContext || this.executionContext.statusContext || this.executionContext.abilityContext;
+        const sourceKind = this.executionContext.cardContext
+          ? 'card'
+          : this.executionContext.relicContext
+            ? 'relic'
+            : this.executionContext.statusContext
+              ? 'status'
+              : this.executionContext.abilityContext
+                ? 'ability'
+                : 'system';
         await this.cardSystem.executeCardEffectCommand(command, {
           currentCardId: this.executionContext.cardContext?.id,
+          currentTurn: this.gameStateManager.getGameState().currentTurn,
+          source: {
+            kind: sourceKind,
+            id: String(sourceValue?.templateId || sourceValue?.originalId || sourceValue?.id || sourceValue?.name || 'effect'),
+            ...(sourceValue?.name ? { name: sourceValue.name } : {}),
+          },
         });
       },
       presentCommand: command => this.presentModernCommand(command),
       executeBattleCommand: (command, sourceIsPlayer) => this.executeModernBattleCommand(command, sourceIsPlayer),
+      forEachEnemyTarget: (selector, execute) => this.forEachEnemyTarget(selector, execute),
       applyStatus: (target, status, stacks) => this.triggerHost.applyStatus(target, status, stacks),
       removeStatuses: (target, selection) => this.triggerHost.removeStatuses(target, selection),
       registerAbility: (target, definition) => {
@@ -94,6 +120,12 @@ export class UnifiedEffectExecutor {
           ...(sourceValue?.emoji ? { emoji: sourceValue.emoji } : {}),
           ...(sourceValue?.description ? { description: sourceValue.description } : {}),
         });
+      },
+      scheduleEffect: (command, sourceIsPlayer) => this.scheduleEffectCommand(command, sourceIsPlayer),
+      setCardDestination: async destination => {
+        if (!this.executionContext.setCardDestination)
+          throw new Error('card destination override is only valid while resolving a card');
+        this.executionContext.setCardDestination(destination);
       },
       narrate: text => this.triggerNarrative(text),
     });
@@ -145,6 +177,51 @@ export class UnifiedEffectExecutor {
     );
   }
 
+  /** Read-only portable state for cost, selection, history and UI formula evaluation. */
+  public getCoreEffectState(sourceIsPlayer = true): CoreEffectState {
+    return this.createCoreEffectState(sourceIsPlayer);
+  }
+
+  private async scheduleEffectCommand(
+    command: Extract<EffectCommand, { type: 'schedule_effect' }>,
+    sourceIsPlayer: boolean,
+  ): Promise<void> {
+    const state = this.gameStateManager.getGameState();
+    const contextSource =
+      this.executionContext.cardContext ||
+      this.executionContext.relicContext ||
+      this.executionContext.statusContext ||
+      this.executionContext.abilityContext ||
+      this.executionContext.battleContext?.intent;
+    const sourceId = contextSource?.templateId || contextSource?.originalId || contextSource?.id || contextSource?.name || 'effect';
+    const sourceKind = this.executionContext.cardContext
+      ? 'card'
+      : this.executionContext.relicContext
+        ? 'relic'
+        : this.executionContext.statusContext
+          ? 'status'
+          : this.executionContext.abilityContext
+            ? 'ability'
+            : this.executionContext.battleContext?.intent
+              ? 'enemy_action'
+              : 'effect';
+    this.gameStateManager.scheduleEffect({
+      source: { kind: sourceKind, id: String(sourceId), ...(contextSource?.name ? { name: contextSource.name } : {}) },
+      owner: sourceIsPlayer ? 'player' : 'enemy',
+      createdTurn: state.currentTurn,
+      dueTurn: state.currentTurn + command.afterTurns,
+      phase: command.phase,
+      priority: command.priority,
+      ...(command.repeatEvery !== undefined ? { repeatEvery: command.repeatEvery } : {}),
+      ...(command.repeats !== undefined ? { remainingRepeats: command.repeats } : {}),
+      payload: {
+        type: 'effect_program',
+        program: { spec: 'mwg.effect/v1', steps: structuredClone(command.effects) },
+        sourceIsPlayer,
+      },
+    });
+  }
+
   public getModifierBreakdown(target: BattleEntityType, modifier: string): { add: number; mul: number } {
     const result = { add: 0, mul: 1 };
     for (const source of this.getDeclarativeModifierOperations(target, modifier)) {
@@ -160,6 +237,46 @@ export class UnifiedEffectExecutor {
     return this.getModifierBreakdown(target, modifier);
   }
 
+  /** Collect continuous card-play rules from passive abilities, relics, and status hold programs. */
+  public getCardPlayRules(target: BattleEntityType): CardPlayRuleEvent[] {
+    const state = this.gameStateManager.getGameState();
+    const result: CardPlayRuleEvent[] = [];
+    const addPassive = (sources: any[] | undefined, owner: BattleEntityType): void => {
+      result.push(
+        ...resolvePassiveCardPlayRules(
+          sources,
+          owner,
+          target,
+          this.createCoreEffectState(owner === 'player'),
+        ).map(entry => entry.rule),
+      );
+    };
+    addPassive(state.player.abilities, 'player');
+    addPassive(state.enemy?.abilities, 'enemy');
+    addPassive(state.player.relics, 'player');
+
+    const addStatuses = (holder: Player | Enemy | null, holderType: BattleEntityType): void => {
+      if (!holder) return;
+      const coreState = this.createCoreEffectState(holderType === 'player');
+      for (const status of holder.statusEffects) {
+        const definition = this.dynamicStatusManager.getStatusDefinition(status.id);
+        if (!definition) continue;
+        result.push(
+          ...resolveStatusHoldCardPlayRules(
+            definition.triggers.hold,
+            holderType,
+            target,
+            coreState,
+            status.stacks,
+          ),
+        );
+      }
+    };
+    addStatuses(state.player, 'player');
+    addStatuses(state.enemy, 'enemy');
+    return result;
+  }
+
   public async processStatusEffectsAtTurnEnd(target: 'player' | 'enemy'): Promise<void> {
     await this.triggerHost.processStatusEffectsAtTurnEnd(target);
   }
@@ -169,14 +286,77 @@ export class UnifiedEffectExecutor {
   }
 
   private async executeModernBattleCommand(command: BattleEffectCommand, sourceIsPlayer: boolean): Promise<void> {
-    const result = await this.battleEffectRuntime.execute(command, { source: sourceIsPlayer ? 'player' : 'enemy' });
+    const damageKind = this.executionContext.cardContext?.type === 'Attack'
+      ? 'attack'
+      : this.executionContext.triggerType === 'tick'
+        ? 'damage_over_time'
+        : 'effect';
+    const source = sourceIsPlayer ? 'player' : 'enemy';
+    const target = command.target === 'self' ? source : source === 'player' ? 'enemy' : 'player';
+    const resolvedEnemyId = target === 'enemy'
+      ? this.gameStateManager.getGameState().activeEnemyId || this.gameStateManager.getEnemy()?.id || null
+      : null;
+    const previousResolvedEnemyId = this.currentResolvedEnemyId;
+    if (resolvedEnemyId) this.currentResolvedEnemyId = resolvedEnemyId;
+    let result;
+    try {
+      result = await this.battleEffectRuntime.execute(command, { source, damageKind });
+    } finally {
+      // Event presentation happens synchronously inside execute and can read the
+      // exact target even when the active alias advances after a lethal hit.
+      this.currentResolvedEnemyId = previousResolvedEnemyId;
+    }
     if (!result.applied) {
       this.presentation.addLog(`目标实体不存在: ${result.target || 'unknown'}`, 'system');
       return;
     }
     if (result.target && result.pendingDeath !== undefined) {
-      if (result.pendingDeath) this.pendingDeaths.add(result.target);
-      else this.pendingDeaths.delete(result.target);
+      const targetId = result.target === 'enemy'
+        ? resolvedEnemyId || 'enemy'
+        : 'player';
+      if (result.pendingDeath) this.pendingDeaths.add(targetId);
+      else this.pendingDeaths.delete(targetId);
+    }
+  }
+
+  private async forEachEnemyTarget(selector: EnemyTargetSelector, execute: () => Promise<void>): Promise<void> {
+    const previous = this.gameStateManager.getGameState().activeEnemyId;
+    const executeTarget = async (enemyId: string): Promise<void> => {
+      const enemy = this.gameStateManager.getEnemyById(enemyId);
+      if (!enemy || enemy.currentHp <= 0 || !this.gameStateManager.setActiveEnemy(enemyId)) return;
+      await execute();
+    };
+    try {
+      if (selector.mode === 'random_n' && selector.retarget === 'each_hit') {
+        const selected = new Set<string>();
+        for (let hit = 0; hit < selector.count; hit += 1) {
+          const living = this.gameStateManager.getEnemies({ livingOnly: true })
+            .filter(enemy => selector.allowRepeat || !selected.has(enemy.id));
+          if (living.length === 0) break;
+          const state = this.gameStateManager.getGameState();
+          const resolved = resolveEnemyTargets(
+            createCombatantCollection(living, state.activeEnemyId),
+            { mode: 'random' },
+            state.random || createBattleRandomState(0),
+          );
+          this.gameStateManager.setRandomState(resolved.random);
+          const target = resolved.targets[0];
+          if (!target) break;
+          selected.add(target.id);
+          await executeTarget(target.id);
+        }
+        return;
+      }
+      const state = this.gameStateManager.getGameState();
+      const resolved = resolveEnemyTargets(
+        createCombatantCollection(this.gameStateManager.getEnemies(), state.activeEnemyId),
+        selector,
+        state.random || createBattleRandomState(0),
+      );
+      this.gameStateManager.setRandomState(resolved.random);
+      for (const target of resolved.targets) await executeTarget(target.id);
+    } finally {
+      if (previous) this.gameStateManager.setActiveEnemy(previous);
     }
   }
 
@@ -191,6 +371,67 @@ export class UnifiedEffectExecutor {
   }
 
   private presentBattleEffectRuntimeEvent(event: BattleEffectRuntimeEvent): void {
+    if (event.type === 'damage_resolved' || event.type === 'heal_resolved') {
+      const contextSource =
+        this.executionContext.cardContext ||
+        this.executionContext.relicContext ||
+        this.executionContext.statusContext ||
+        this.executionContext.abilityContext ||
+        this.executionContext.battleContext?.intent;
+      const sourceKind = this.executionContext.cardContext
+        ? 'card'
+        : this.executionContext.relicContext
+          ? 'relic'
+          : this.executionContext.statusContext
+            ? 'status'
+            : this.executionContext.abilityContext
+              ? 'ability'
+              : this.executionContext.battleContext?.intent
+                ? 'enemy_action'
+                : 'system';
+      const sourceId = contextSource?.templateId || contextSource?.originalId || contextSource?.id || contextSource?.name || 'effect';
+      const state = this.gameStateManager.getGameState();
+      const actorId = event.source === 'player'
+        ? 'player'
+        : this.executionContext.battleContext?.enemyId || state.activeEnemyId || state.enemy?.id || 'enemy';
+      const targetId = event.target === 'player'
+        ? 'player'
+        : this.currentResolvedEnemyId || state.activeEnemyId || state.enemy?.id || 'enemy';
+      const cause = { source: { kind: sourceKind, id: String(sourceId), name: contextSource?.name, ownerId: actorId } } as const;
+      if (event.type === 'damage_resolved') {
+        const target = event.target === 'player'
+          ? state.player
+          : this.currentResolvedEnemyId
+            ? this.gameStateManager.getEnemyById(this.currentResolvedEnemyId)
+            : state.enemy;
+        this.gameStateManager.recordBattleEvent({
+          turn: state.currentTurn,
+          phase: 'after',
+          kind: 'damage_resolved',
+          cause,
+          actorId,
+          targetId,
+          damageKind: event.damageKind,
+          requested: event.requested,
+          modified: event.modified,
+          blocked: event.blocked,
+          hpLost: event.hpLost,
+          fatal: Boolean(target && target.currentHp <= 0),
+        });
+      } else {
+        this.gameStateManager.recordBattleEvent({
+          turn: state.currentTurn,
+          phase: 'after',
+          kind: 'heal_resolved',
+          cause,
+          actorId,
+          targetId,
+          requested: event.requested,
+          hpGained: event.hpGained,
+        });
+      }
+      return;
+    }
     if (event.type === 'block_absorbed') {
       this.presentation.showBlockAbsorption(event.target, event.amount);
       return;
@@ -214,7 +455,9 @@ export class UnifiedEffectExecutor {
       return;
     }
     if (event.type === 'attribute_changed') {
-      const entity = this.getEntity(event.target);
+      const entity = event.target === 'enemy' && this.currentResolvedEnemyId
+        ? this.gameStateManager.getEnemyById(this.currentResolvedEnemyId)
+        : this.getEntity(event.target);
       if (!entity) return;
       const change = roundBattleValue(event.nextValue - event.previousValue);
       if (event.attribute === 'hp' && change !== 0) {
@@ -336,6 +579,23 @@ export class UnifiedEffectExecutor {
     });
     const player = toCore(state.player, true);
     const enemy = toCore(state.enemy, false);
+    const cardView = (card: Card) => ({
+      id: card.id,
+      type: card.type,
+      rarity: card.rarity,
+      cost: card.cost,
+      tags: card.tags,
+      originalId: card.originalId,
+      templateId: card.templateId,
+      runInstanceId: card.runInstanceId,
+      combatInstanceId: card.combatInstanceId,
+      origin: card.origin,
+      upgraded: card.upgraded,
+      upgradeLevel: card.upgradeLevel,
+    });
+    const lastDamage = state.eventJournal?.lastDamage;
+    const lastHeal = [...(state.eventJournal?.events || [])].reverse().find(event => event.kind === 'heal_resolved');
+    const lastResource = [...(state.eventJournal?.events || [])].reverse().find(event => event.kind === 'resource_spent');
     return {
       self: sourceIsPlayer ? player : enemy,
       opponent: sourceIsPlayer ? enemy : player,
@@ -343,6 +603,19 @@ export class UnifiedEffectExecutor {
       cardsPlayedThisTurn: state.cardsPlayedThisTurn,
       attacksPlayedThisTurn: state.attacksPlayedThisTurn,
       skillsPlayedThisTurn: state.skillsPlayedThisTurn,
+      cardZones: {
+        hand: state.player.hand.map(cardView),
+        draw: state.player.drawPile.map(cardView),
+        discard: state.player.discardPile.map(cardView),
+        exhaust: state.player.exhaustPile.map(cardView),
+      },
+      history: {
+        lastDamage: lastDamage?.modified || 0,
+        lastHpLoss: state.eventJournal?.lastActualHpLoss?.hpLost || 0,
+        lastHeal: lastHeal && 'hpGained' in lastHeal ? lastHeal.hpGained : 0,
+        lastResourceSpent: lastResource && 'spent' in lastResource ? lastResource.spent : 0,
+      },
+      enemyIntentValue: state.enemy?.intent?.value || 0,
     };
   }
 
@@ -351,7 +624,19 @@ export class UnifiedEffectExecutor {
       this.pendingDeaths.clear();
       return;
     }
-    const result = resolvePendingBattleEnd(this.pendingDeaths);
+    if (this.pendingDeaths.has('player')) {
+      this.pendingDeaths.clear();
+      await this.completeBattleEnd('defeat');
+      return;
+    }
+    for (const enemyId of this.pendingDeaths) {
+      const enemy = this.gameStateManager.getEnemyById(enemyId);
+      if (enemy && enemy.currentHp <= 0) this.gameStateManager.updateEnemyById(enemyId, { currentHp: 0 });
+    }
+    this.gameStateManager.removeDefeatedEnemies();
+    const result = this.gameStateManager.getEnemies({ livingOnly: true }).length === 0 && this.pendingDeaths.size > 0
+      ? 'victory'
+      : null;
     this.pendingDeaths.clear();
     if (result) await this.completeBattleEnd(result);
   }

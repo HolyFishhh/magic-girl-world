@@ -24,6 +24,8 @@ export interface ContentPack {
   abilities: ContentDefinition[];
   activeStatuses: ContentDefinition[];
   enemy: ContentDefinition | null;
+  /** Ordered enemy party. enemy remains the first-entry compatibility alias. */
+  enemies?: ContentDefinition[];
   desireEffects: {
     player: ContentDefinition | null;
     enemy: ContentDefinition | null;
@@ -38,6 +40,7 @@ export interface CreateContentPackInput {
   abilities?: unknown;
   activeStatuses?: unknown;
   enemy?: unknown;
+  enemies?: unknown;
   playerDesireEffect?: unknown;
 }
 
@@ -73,7 +76,15 @@ function normalizeEnemy(value: unknown): ContentDefinition | null {
 
 /** Copy AI content into a host-neutral JSON package before runtime conversion. */
 export function createContentPack(input: CreateContentPackInput): ContentPack {
-  const enemy = normalizeEnemy(input.enemy);
+  let enemies = (input.enemies === undefined ? [] : Array.isArray(input.enemies) ? input.enemies : [input.enemies])
+    .map(normalizeEnemy)
+    .filter((value): value is ContentDefinition => value !== null);
+  const explicitEnemy = normalizeEnemy(input.enemy);
+  if (explicitEnemy) {
+    if (enemies.length === 0) enemies = [explicitEnemy];
+    else if (stableSerialize(enemies[0]) !== stableSerialize(explicitEnemy)) enemies = [explicitEnemy, ...enemies.slice(1)];
+  }
+  const enemy = enemies[0] || null;
   return {
     schemaVersion: CONTENT_PACK_SCHEMA_VERSION,
     cards: definitionList(input.cards),
@@ -83,6 +94,7 @@ export function createContentPack(input: CreateContentPackInput): ContentPack {
     abilities: definitionList(input.abilities),
     activeStatuses: definitionList(input.activeStatuses),
     enemy,
+    enemies,
     desireEffects: {
       player: cloneDefinition(input.playerDesireEffect),
       enemy: cloneDefinition(enemy?.lust_effect),
@@ -97,6 +109,7 @@ export function isContentPack(value: unknown): value is ContentPack {
     pack.schemaVersion === CONTENT_PACK_SCHEMA_VERSION &&
     ['cards', 'statuses', 'relics', 'items', 'abilities', 'activeStatuses'].every(key => Array.isArray(pack[key])) &&
     (pack.enemy === null || (!!pack.enemy && typeof pack.enemy === 'object' && !Array.isArray(pack.enemy))) &&
+    (pack.enemies === undefined || Array.isArray(pack.enemies)) &&
     !!pack.desireEffects &&
     typeof pack.desireEffects === 'object'
   );

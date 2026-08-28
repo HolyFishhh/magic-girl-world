@@ -16,6 +16,7 @@ assert.deepEqual(flow.BATTLE_TURN_FLOW_STEPS, [
   'player_relics_end',
   'player_abilities_end',
   'player_statuses_end',
+  'scheduled_turn_end',
   'advance_turn',
   'enemy_block_reset',
   'enemy_abilities_start',
@@ -25,9 +26,12 @@ assert.deepEqual(flow.BATTLE_TURN_FLOW_STEPS, [
   'enemy_statuses_end',
   'temporary_modifiers_clear',
   'player_begin',
+  'scheduled_turn_start',
   'player_block_reset',
   'player_energy_reset',
+  'scheduled_before_draw',
   'player_draw',
+  'scheduled_after_draw',
   'player_abilities_start',
   'player_relics_start',
 ]);
@@ -50,7 +54,10 @@ const stopped = await flow.runBattleTurnFlow({
 });
 assert.equal(stopped.completed, false);
 assert.equal(stopped.stoppedAfter, 'enemy_action');
-assert.deepEqual(stopped.executedSteps, flow.BATTLE_TURN_FLOW_STEPS.slice(0, 8));
+assert.deepEqual(
+  stopped.executedSteps,
+  flow.BATTLE_TURN_FLOW_STEPS.slice(0, flow.BATTLE_TURN_FLOW_STEPS.indexOf('enemy_action') + 1),
+);
 
 let touched = false;
 assert.deepEqual(

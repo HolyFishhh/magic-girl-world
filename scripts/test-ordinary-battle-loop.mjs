@@ -104,7 +104,8 @@ assert.deepEqual(variables.stat_data.battle.player_status_effects, []);
 // Experience was already settled by the battle runtime; MVU only creates candidates.
 variables.stat_data.reward.card = [rewardCard];
 variables.stat_data.reward.limits = { cards: 1 };
-assert.match(prompt.promptedBattleSummary, /^请根据以下战斗日志，生成后续的剧情/);
+assert.match(prompt.promptedBattleSummary, /^请根据以下按回合战斗摘要/);
+assert.match(prompt.promptedBattleSummary, /必须覆盖摘要中的每个回合/);
 assert.doesNotMatch(prompt.promptedBattleSummary, /\[战斗后续\]|\[战斗结算\]|\[奖励预算\]|\[剧情模型要求\]/);
 assert.doesNotMatch(prompt.promptedBattleSummary, /<Options>|<Option>/);
 assert.equal(rewards.hasSelectableRewards(variables.stat_data), true, 'rewards temporarily gate custom actions');

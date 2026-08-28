@@ -102,6 +102,9 @@ export function settleTavernBattleVariables(
   for (const root of roots) {
     settleBattleRoot(root, input, battleResult, itemCounts);
     if (root.enemy && typeof root.enemy === 'object') clearEnemy(root.enemy);
+    if (Array.isArray(root.enemies)) root.enemies.forEach(enemy => {
+      if (enemy && typeof enemy === 'object' && !Array.isArray(enemy)) clearEnemy(enemy);
+    });
   }
   return variables;
 }

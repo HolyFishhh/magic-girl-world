@@ -45,7 +45,7 @@ const executeEnemyAction = readClassMethod(
   'BattleManager',
   'executeEnemyAction',
 );
-assert.match(executeEnemyAction, /executeEnemyEffect\(action\.effectProgram, action\.name\)/);
+assert.match(executeEnemyAction, /executeEnemyEffect\(action\.effectProgram, action\.name, entry\.enemyId\)/);
 assert.doesNotMatch(executeEnemyAction, /catch \(error\)/, 'enemy action errors must reach the session coordinator');
 
 const executeDefaultEnemyAction = readClassMethod(

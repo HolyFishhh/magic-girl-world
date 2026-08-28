@@ -1,5 +1,6 @@
 import {
   allocateRuntimeId,
+  ensureCardIdentity,
   normalizeChinesePlayerDescription,
   roundBattleValue,
   selectEnemyAction,
@@ -65,6 +66,7 @@ export function convertMvuCards(
 ): Card[] {
   const cards: Card[] = [];
   const usedIds = new Set(options.existingIds || []);
+  const usedRunIds = new Set<string>();
   let cardIndex = 0;
 
   for (const card of normalizeMvuArray(mvuCards)) {
@@ -76,11 +78,19 @@ export function convertMvuCards(
         : options.createId?.(normalized.id, cardIndex) || allocateRuntimeId(normalized.id, usedIds);
       if (usedIds.has(runtimeId)) runtimeId = allocateRuntimeId(normalized.id, usedIds);
       usedIds.add(runtimeId);
-      cards.push({
+      const identified = ensureCardIdentity({
         ...normalized,
         id: runtimeId,
         originalId: normalized.id,
-      } as Card & { originalId: string });
+      }, {
+        templateId: normalized.id,
+        origin: 'deck',
+        existingCombatIds: new Set([...usedIds].filter(id => id !== runtimeId)),
+        existingRunIds: usedRunIds,
+        combatInstanceId: runtimeId,
+      });
+      usedRunIds.add(identified.runInstanceId);
+      cards.push(identified as Card);
       cardIndex += 1;
     }
   }
@@ -180,7 +190,7 @@ export function convertMvuEnemy(
   };
 
   return {
-    id: source.name,
+    id: typeof source.id === 'string' && source.id.trim() ? source.id.trim() : source.name,
     name: source.name,
     emoji: source.emoji || '👹',
     maxHp: Math.max(1, roundBattleValue(source.max_hp ?? 100)),
@@ -203,5 +213,20 @@ export function convertMvuEnemy(
     actionConfig,
     _sequenceIndex: selection.state.sequenceIndex,
     _sequenceDoneOnce: selection.state.sequenceDoneOnce,
+    speed: Number.isFinite(source.speed) ? Number(source.speed) : 0,
+    actionPriority: Number.isFinite(source.action_priority) ? Number(source.action_priority) : 0,
   } as Enemy & { actionMode: string; actionConfig: Record<string, any> };
+}
+
+export function convertMvuEnemies(
+  value: unknown,
+  random: () => number = () => 0,
+  options: {
+    statusNames?: Readonly<Record<string, string>>;
+    statusDescriptions?: Readonly<Record<string, string>>;
+  } = {},
+): Enemy[] {
+  return normalizeMvuArray(value)
+    .map(entry => convertMvuEnemy(entry, random, options))
+    .filter((entry): entry is Enemy => entry !== null);
 }

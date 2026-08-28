@@ -1,21 +1,26 @@
-import { type CardSelector, type CoreEffectState, type EffectExecutionContext, type EffectModifierOperator, type EffectNode, type EffectTarget, type EffectTrigger, type GeneratedCardDefinition, type ModifierStat, type RecoverCardZone } from './effectDsl';
+import { type CardSelector, type CardPlayRuleKind, type CardValueOperator, type CardValueStat, type CoreEffectState, type EffectExecutionContext, type EffectCardPatch, type EffectSchedulePhase, type EffectCardPileZone, type EffectModifierOperator, type EffectNode, type EffectTarget, type EffectTrigger, type GeneratedCardDefinition, type ModifierStat, type RecoverCardZone } from './effectDsl';
+import type { EnemyTargetSelector } from './combatantCollection';
 export type EffectCommand = {
     type: 'damage' | 'heal' | 'gain_block' | 'gain_energy' | 'gain_lust';
     target: EffectTarget;
+    targetSelector?: EnemyTargetSelector;
     amount: number;
 } | {
     type: 'set_stat';
     target: EffectTarget;
+    targetSelector?: EnemyTargetSelector;
     stat: 'hp' | 'lust' | 'energy' | 'block';
     value: number;
 } | {
     type: 'apply_status';
     target: EffectTarget;
+    targetSelector?: EnemyTargetSelector;
     status: string;
     stacks: number;
 } | {
     type: 'remove_status';
     target: EffectTarget;
+    targetSelector?: EnemyTargetSelector;
     status: string;
 } | {
     type: 'draw_cards';
@@ -41,11 +46,42 @@ export type EffectCommand = {
     selector: CardSelector;
     amount: number;
 } | {
+    type: 'modify_card_value';
+    selector: CardSelector;
+    stat: CardValueStat;
+    operator: CardValueOperator;
+    value: number;
+} | {
     type: 'copy_cards';
     selector: CardSelector;
 } | {
     type: 'double_card_effect';
     selector: CardSelector;
+} | {
+    type: 'auto_play_cards';
+    selector: CardSelector;
+    free: boolean;
+} | {
+    type: 'set_card_destination';
+    destination: import('./cardRules').PlayedCardDestination;
+} | {
+    type: 'move_cards';
+    selector: CardSelector;
+    amount: number;
+    destination: EffectCardPileZone;
+    position: 'top' | 'bottom';
+} | {
+    type: 'remove_cards';
+    selector: CardSelector;
+    amount: number;
+} | {
+    type: 'transform_cards';
+    selector: CardSelector;
+    replacement: GeneratedCardDefinition;
+} | {
+    type: 'apply_card_patch';
+    selector: CardSelector;
+    patch: EffectCardPatch;
 } | {
     type: 'add_card';
     zone: 'hand' | 'draw';
@@ -54,13 +90,28 @@ export type EffectCommand = {
 } | {
     type: 'modify';
     target: EffectTarget;
+    targetSelector?: EnemyTargetSelector;
     stat: ModifierStat;
     operator: EffectModifierOperator;
     value: number;
 } | {
+    type: 'card_play_rule';
+    target: EffectTarget;
+    rule: CardPlayRuleKind;
+    limit: number | 'all';
+    extra: number;
+} | {
     type: 'register_trigger';
     target: EffectTarget;
     trigger: EffectTrigger;
+    effects: EffectNode[];
+} | {
+    type: 'schedule_effect';
+    afterTurns: number;
+    phase: EffectSchedulePhase;
+    priority: number;
+    repeatEvery?: number;
+    repeats?: number;
     effects: EffectNode[];
 } | {
     type: 'narration';

@@ -79,10 +79,19 @@ function visitNumber(
     }
     return;
   }
-  if (expression.op === 'negate') {
+  if (expression.op === 'negate' || expression.op === 'floor' || expression.op === 'ceil' || expression.op === 'abs') {
     visitNumber(expression.value, `${path}.value`, policy, issues);
     return;
   }
+  if (expression.op === 'clamp_min') {
+    visitNumber(expression.value, `${path}.value`, policy, issues);
+    return;
+  }
+  if (expression.op === 'min' || expression.op === 'max') {
+    expression.values.forEach((entry, index) => visitNumber(entry, `${path}.values[${index}]`, policy, issues));
+    return;
+  }
+  if (expression.op === 'count_cards' || expression.op === 'count_statuses' || expression.op === 'history' || expression.op === 'intent_value') return;
   visitNumber(expression.left, `${path}.left`, policy, issues);
   visitNumber(expression.right, `${path}.right`, policy, issues);
 }
@@ -230,15 +239,28 @@ function visitNode(
     }
     return;
   }
-  if (node.op === 'modify') {
-    if (policy.modifierPolicy === 'forbid') {
-      addIssue(issues, path, 'MODIFIER_NOT_ALLOWED', 'modify 只允许用于 passive 或状态 hold');
+  if (node.op === 'apply_card_patch') {
+    if (node.patch.kind === 'numeric' || node.patch.kind === 'cost' || node.patch.kind === 'x_value' || node.patch.kind === 'dynamic_cost') {
+      visitNumber(node.patch.value, `${path}.patch.value`, policy, issues);
+    } else if (node.patch.kind === 'replay') {
+      visitNumber(node.patch.extra, `${path}.patch.extra`, policy, issues);
     }
-    visitNumber(node.value, `${path}.value`, policy, issues);
+    return;
+  }
+  if (node.op === 'modify' || node.op === 'card_play_rule') {
+    if (policy.modifierPolicy === 'forbid') {
+      addIssue(issues, path, 'MODIFIER_NOT_ALLOWED', '持续规则只允许用于 passive 或状态 hold');
+    }
+    if (node.op === 'modify') {
+      visitNumber(node.value, `${path}.value`, policy, issues);
+    } else {
+      if (node.limit !== 'all') visitNumber(node.limit, `${path}.limit`, policy, issues);
+      if (node.extra !== undefined) visitNumber(node.extra, `${path}.extra`, policy, issues);
+    }
     return;
   }
   if (policy.modifierPolicy === 'only') {
-    addIssue(issues, path, 'ONLY_MODIFIERS_ALLOWED', 'passive 与状态 hold 只能包含持续修饰符');
+    addIssue(issues, path, 'ONLY_MODIFIERS_ALLOWED', 'passive 与状态 hold 只能包含持续修饰或出牌规则');
   }
   if (node.op === 'apply_status' || node.op === 'remove_status') {
     if (

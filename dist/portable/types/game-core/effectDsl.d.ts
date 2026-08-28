@@ -1,23 +1,82 @@
 import { type RegisterableEffectTrigger } from './battleTriggers';
+import type { CardOrigin } from './cardIdentity';
+import type { PlayedCardDestination } from './cardRules';
+import type { CardCostOperator, CardKeyword, CardPatchScope } from './cardPatch';
+import type { EnemyTargetSelector } from './combatantCollection';
 export declare const EFFECT_PROGRAM_SPEC: "mwg.effect/v1";
 export type EffectTarget = 'self' | 'opponent';
-export type CardZone = 'hand' | 'draw' | 'discard' | 'all';
-export type CardPick = 'random' | 'choose' | 'left' | 'right' | 'all';
+export type CardZone = 'hand' | 'draw' | 'discard' | 'exhaust' | 'all';
+export type CardPick = 'random' | 'choose' | 'left' | 'right' | 'top' | 'bottom' | 'all';
+export type CardType = 'Attack' | 'Skill' | 'Power' | 'Event' | 'Curse';
+export type CardRarity = 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary' | 'Corrupt';
 export type RecoverCardZone = 'draw' | 'discard' | 'exhaust';
+export type EffectCardPileZone = 'hand' | 'drawPile' | 'discardPile' | 'exhaustPile';
 export type ModifierStat = 'damage' | 'damage_taken' | 'lust' | 'lust_taken' | 'heal' | 'block';
 export type EffectModifierOperator = 'add' | 'subtract' | 'multiply' | 'divide' | 'set';
+export type CardValueStat = 'damage' | 'block' | 'lust' | 'stacks';
+export type CardValueOperator = 'add' | 'subtract' | 'multiply' | 'divide';
+export type CardPlayRuleKind = 'replay' | 'free';
 export type EffectTrigger = RegisterableEffectTrigger;
+export type EffectSchedulePhase = 'turn_start' | 'before_draw' | 'after_draw' | 'turn_end';
 export interface CardSelector {
     zone: CardZone;
     pick: CardPick;
     count?: number;
+    filter?: CardSelectorFilter;
 }
+export interface CardSelectorFilter {
+    types?: CardType[];
+    rarities?: CardRarity[];
+    cost?: number | 'energy';
+    minCost?: number;
+    maxCost?: number;
+    tags?: string[];
+    templateId?: string;
+    runInstanceId?: string;
+    combatInstanceId?: string;
+    origin?: CardOrigin;
+    upgraded?: boolean;
+}
+export type CardPatchMatch = 'instance' | 'run_instance' | 'template' | 'filter';
+interface EffectCardPatchBase {
+    scope: CardPatchScope;
+    match?: CardPatchMatch;
+    includeFutureCopies?: boolean;
+}
+export type EffectCardPatch = (EffectCardPatchBase & {
+    kind: 'numeric';
+    stat: CardValueStat;
+    operator: CardValueOperator;
+    value: NumericExpression;
+}) | (EffectCardPatchBase & {
+    kind: 'cost';
+    operator: CardCostOperator;
+    value: NumericExpression;
+}) | (EffectCardPatchBase & {
+    kind: 'keyword';
+    keyword: CardKeyword;
+    enabled: boolean;
+}) | (EffectCardPatchBase & {
+    kind: 'replay';
+    extra: NumericExpression;
+}) | (EffectCardPatchBase & {
+    kind: 'x_value';
+    operator: CardCostOperator;
+    value: NumericExpression;
+}) | (EffectCardPatchBase & {
+    kind: 'dynamic_cost';
+    timing: 'on_draw' | 'while_in_hand' | 'on_play';
+    operator: CardCostOperator;
+    value: NumericExpression;
+    minimum?: number;
+    maximum?: number;
+});
 export interface GeneratedCardDefinition {
     id: string;
     name: string;
     emoji: string;
-    type: 'Attack' | 'Skill' | 'Power' | 'Event' | 'Curse';
-    rarity: 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary' | 'Corrupt';
+    type: CardType;
+    rarity: CardRarity;
     cost?: number | 'energy';
     description: string;
     program: EffectProgram;
@@ -29,15 +88,41 @@ export interface GeneratedCardDefinition {
 export type NumericExpression = number | {
     op: 'var';
     path: string;
-} | BinaryNumericExpression | {
-    op: 'negate';
+} | BinaryNumericExpression | UnaryNumericExpression | {
+    op: 'clamp_min';
     value: NumericExpression;
+    minimum: number;
+} | AggregateNumericExpression | {
+    op: 'count_cards';
+    selector: CardSelector;
+} | {
+    op: 'count_statuses';
+    target: EffectTarget;
+} | {
+    op: 'history';
+    metric: 'last_damage' | 'last_hp_loss' | 'last_heal' | 'last_resource_spent';
+} | {
+    op: 'intent_value';
 };
-export interface BinaryNumericExpression {
-    op: 'add' | 'subtract' | 'multiply' | 'divide';
-    left: NumericExpression;
-    right: NumericExpression;
-}
+export type BinaryNumericExpression = {
+    [TOperator in 'add' | 'subtract' | 'multiply' | 'divide']: {
+        op: TOperator;
+        left: NumericExpression;
+        right: NumericExpression;
+    };
+}['add' | 'subtract' | 'multiply' | 'divide'];
+export type UnaryNumericExpression = {
+    [TOperator in 'negate' | 'floor' | 'ceil' | 'abs']: {
+        op: TOperator;
+        value: NumericExpression;
+    };
+}['negate' | 'floor' | 'ceil' | 'abs'];
+export type AggregateNumericExpression = {
+    [TOperator in 'min' | 'max']: {
+        op: TOperator;
+        values: NumericExpression[];
+    };
+}['min' | 'max'];
 export type ConditionExpression = ComparisonCondition | {
     op: 'all' | 'any';
     conditions: ConditionExpression[];
@@ -54,36 +139,44 @@ export interface ComparisonCondition {
 export type EffectNode = {
     op: 'damage';
     target: EffectTarget;
+    targetSelector?: EnemyTargetSelector;
     amount: NumericExpression;
 } | {
     op: 'heal';
     target: EffectTarget;
+    targetSelector?: EnemyTargetSelector;
     amount: NumericExpression;
 } | {
     op: 'gain_block';
     target: EffectTarget;
+    targetSelector?: EnemyTargetSelector;
     amount: NumericExpression;
 } | {
     op: 'gain_energy';
     target: EffectTarget;
+    targetSelector?: EnemyTargetSelector;
     amount: NumericExpression;
 } | {
     op: 'gain_lust';
     target: EffectTarget;
+    targetSelector?: EnemyTargetSelector;
     amount: NumericExpression;
 } | {
     op: 'set_stat';
     target: EffectTarget;
+    targetSelector?: EnemyTargetSelector;
     stat: 'hp' | 'lust' | 'energy' | 'block';
     value: NumericExpression;
 } | {
     op: 'apply_status';
     target: EffectTarget;
+    targetSelector?: EnemyTargetSelector;
     status: string;
     stacks: NumericExpression;
 } | {
     op: 'remove_status';
     target: EffectTarget;
+    targetSelector?: EnemyTargetSelector;
     status: string;
 } | {
     op: 'draw_cards';
@@ -109,11 +202,42 @@ export type EffectNode = {
     selector: CardSelector;
     amount: NumericExpression;
 } | {
+    op: 'modify_card_value';
+    selector: CardSelector;
+    stat: CardValueStat;
+    operator: CardValueOperator;
+    value: NumericExpression;
+} | {
     op: 'copy_cards';
     selector: CardSelector;
 } | {
     op: 'double_card_effect';
     selector: CardSelector;
+} | {
+    op: 'auto_play_cards';
+    selector: CardSelector;
+    free: boolean;
+} | {
+    op: 'set_card_destination';
+    destination: PlayedCardDestination;
+} | {
+    op: 'move_cards';
+    selector: CardSelector;
+    amount: number;
+    destination: EffectCardPileZone;
+    position: 'top' | 'bottom';
+} | {
+    op: 'remove_cards';
+    selector: CardSelector;
+    amount: number;
+} | {
+    op: 'transform_cards';
+    selector: CardSelector;
+    replacement: GeneratedCardDefinition;
+} | {
+    op: 'apply_card_patch';
+    selector: CardSelector;
+    patch: EffectCardPatch;
 } | {
     op: 'add_card';
     zone: 'hand' | 'draw';
@@ -122,13 +246,28 @@ export type EffectNode = {
 } | {
     op: 'modify';
     target: EffectTarget;
+    targetSelector?: EnemyTargetSelector;
     stat: ModifierStat;
     operator: EffectModifierOperator;
     value: NumericExpression;
 } | {
+    op: 'card_play_rule';
+    target: EffectTarget;
+    rule: CardPlayRuleKind;
+    limit: NumericExpression | 'all';
+    extra?: NumericExpression;
+} | {
     op: 'register_trigger';
     target: EffectTarget;
     trigger: EffectTrigger;
+    effects: EffectNode[];
+} | {
+    op: 'schedule_effect';
+    afterTurns: number;
+    phase: EffectSchedulePhase;
+    priority?: number;
+    repeatEvery?: number;
+    repeats?: number;
     effects: EffectNode[];
 } | {
     op: 'if';
@@ -164,9 +303,37 @@ export interface CoreEffectState {
     cardsPlayedThisTurn: number;
     attacksPlayedThisTurn: number;
     skillsPlayedThisTurn: number;
+    cardZones?: {
+        hand: CoreCardView[];
+        draw: CoreCardView[];
+        discard: CoreCardView[];
+        exhaust: CoreCardView[];
+    };
+    history?: {
+        lastDamage?: number;
+        lastHpLoss?: number;
+        lastHeal?: number;
+        lastResourceSpent?: number;
+    };
+    enemyIntentValue?: number;
+}
+export interface CoreCardView {
+    id: string;
+    type?: CardType;
+    rarity?: CardRarity;
+    cost?: number | 'energy';
+    tags?: string[];
+    originalId?: string;
+    templateId?: string;
+    runInstanceId?: string;
+    combatInstanceId?: string;
+    origin?: CardOrigin;
+    upgraded?: boolean;
+    upgradeLevel?: number;
 }
 export interface EffectExecutionContext {
     spentEnergy: number;
+    xValue?: number;
     statusStacks?: number;
 }
 export interface EffectValidationIssue {
@@ -238,8 +405,39 @@ export type CoreEffectEvent = {
     selector: CardSelector;
     amount: number;
 } | {
+    type: 'modify_card_value';
+    selector: CardSelector;
+    stat: CardValueStat;
+    operator: CardValueOperator;
+    value: number;
+} | {
     type: 'copy_cards' | 'double_card_effect';
     selector: CardSelector;
+} | {
+    type: 'auto_play_cards';
+    selector: CardSelector;
+    free: boolean;
+} | {
+    type: 'set_card_destination';
+    destination: PlayedCardDestination;
+} | {
+    type: 'move_cards';
+    selector: CardSelector;
+    amount: number;
+    destination: EffectCardPileZone;
+    position: 'top' | 'bottom';
+} | {
+    type: 'remove_cards';
+    selector: CardSelector;
+    amount: number;
+} | {
+    type: 'transform_cards';
+    selector: CardSelector;
+    replacement: GeneratedCardDefinition;
+} | {
+    type: 'apply_card_patch';
+    selector: CardSelector;
+    patch: EffectCardPatch;
 } | {
     type: 'add_card';
     zone: 'hand' | 'draw';
@@ -252,9 +450,23 @@ export type CoreEffectEvent = {
     operator: EffectModifierOperator;
     value: number;
 } | {
+    type: 'card_play_rule';
+    target: EffectTarget;
+    rule: CardPlayRuleKind;
+    limit: number | 'all';
+    extra: number;
+} | {
     type: 'register_trigger';
     target: EffectTarget;
     trigger: EffectTrigger;
+    effects: EffectNode[];
+} | {
+    type: 'schedule_effect';
+    afterTurns: number;
+    phase: EffectSchedulePhase;
+    priority: number;
+    repeatEvery?: number;
+    repeats?: number;
     effects: EffectNode[];
 } | {
     type: 'narration';
@@ -281,3 +493,4 @@ export declare function resolveNumericVariable(path: string, state: CoreEffectSt
 export declare function evaluateNumericExpression(expression: NumericExpression, state: CoreEffectState, context: EffectExecutionContext, path?: string): number;
 export declare function evaluateConditionExpression(condition: ConditionExpression, state: CoreEffectState, context: EffectExecutionContext, path?: string): boolean;
 export declare function executeEffectProgram(value: unknown, inputState: CoreEffectState, context: EffectExecutionContext): EffectExecutionResult;
+export {};

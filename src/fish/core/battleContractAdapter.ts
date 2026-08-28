@@ -68,5 +68,6 @@ export function battleRequestToRuntimeData(request: BattleRequest): Record<strin
     player_status_effects: pack.activeStatuses,
     player_lust_effect: pack.desireEffects.player,
     enemy: pack.enemy,
+    enemies: pack.enemies,
   };
 }

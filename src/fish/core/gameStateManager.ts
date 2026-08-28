@@ -21,7 +21,7 @@ import { BattleSessionStore } from './battleSessionStore';
 import {
   buildMvuStatusDisplayContext,
   convertMvuCards,
-  convertMvuEnemy,
+  convertMvuEnemies,
   convertMvuAbilities,
   convertMvuActiveStatuses,
   convertMvuItems,
@@ -96,9 +96,10 @@ export function recoverRestoredAbilityMetadata(state: GameState): GameState {
     ...collectAbilitySources(state.player.relics || [], '遗物'),
   ];
   state.player.abilities = recoverAbilities(state.player.abilities, playerCandidates);
-  if (state.enemy) {
-    const enemyCandidates = collectAbilitySources(state.enemy.actions || [], '敌方行动');
-    state.enemy.abilities = recoverAbilities(state.enemy.abilities, enemyCandidates);
+  const enemies = state.enemies?.length ? state.enemies : state.enemy ? [state.enemy] : [];
+  for (const enemy of enemies) {
+    const enemyCandidates = collectAbilitySources(enemy.actions || [], '敌方行动');
+    enemy.abilities = recoverAbilities(enemy.abilities, enemyCandidates);
   }
   return state;
 }
@@ -136,12 +137,16 @@ export class GameStateManager extends BattleStateStore {
       const variables = getCurrentMessageVariables();
       const battleContract = readBattleDataContract(variables);
       const battleData = battleContract?.data;
-      const mvuEnemy = battleData?.enemy || null;
+      const mvuEnemies = Array.isArray(battleData?.enemies) && battleData.enemies.length > 0
+        ? battleData.enemies
+        : battleData?.enemy
+          ? [battleData.enemy]
+          : [];
       const statusContext = buildMvuStatusDisplayContext(battleData?.statuses);
-      const restoredEnemy = convertMvuEnemy(mvuEnemy, () => this.nextRandom(), statusContext);
-      if (!restoredEnemy) return null;
-      this.gameState.enemy = restoredEnemy;
-      return { ...restoredEnemy };
+      const restoredEnemies = convertMvuEnemies(mvuEnemies, () => this.nextRandom(), statusContext);
+      if (restoredEnemies.length === 0) return null;
+      this.setEnemies(restoredEnemies, restoredEnemies[0].id);
+      return super.getEnemy();
     } catch (error) {
       console.error('从MVU变量恢复敌人数据失败:', error);
       return null;
@@ -202,6 +207,7 @@ export class GameStateManager extends BattleStateStore {
       const restoredState = this.battleSessionStore.prepare(variables, battleRequest);
       if (restoredState) {
         this.gameState = recoverRestoredAbilityMetadata(restoredState);
+        this.normalizeEnemyCollection();
         try {
           this.notifyListeners('state_loaded');
         } finally {
@@ -292,7 +298,11 @@ export class GameStateManager extends BattleStateStore {
   private convertMVUToGameState(request: BattleRequest): void {
     const battleData = battleRequestToRuntimeData(request);
     const core = battleData.core || {};
-    const enemy = battleData.enemy || null;
+    const enemies = Array.isArray(battleData.enemies) && battleData.enemies.length > 0
+      ? battleData.enemies
+      : battleData.enemy
+        ? [battleData.enemy]
+        : [];
 
     // battleData 已由 readBattleDataContract 选定唯一来源。
     const cards = mergeMvuCards(battleData.cards);
@@ -346,9 +356,9 @@ export class GameStateManager extends BattleStateStore {
     this.gameState.player.drawPile = opening.drawPile;
 
     // 更新敌人状态
-    const convertedEnemy = convertMvuEnemy(enemy, () => this.nextRandom(), statusContext);
-    if (convertedEnemy) {
-      this.gameState.enemy = convertedEnemy;
+    const convertedEnemies = convertMvuEnemies(enemies, () => this.nextRandom(), statusContext);
+    if (convertedEnemies.length > 0) {
+      this.setEnemies(convertedEnemies, convertedEnemies[0].id);
     } else {
       console.error('❌ 无法读取敌人数据！battle.enemy 变量未正确设置');
       throw new Error('敌人数据未找到或无效。请确保AI已正确生成敌人信息。');

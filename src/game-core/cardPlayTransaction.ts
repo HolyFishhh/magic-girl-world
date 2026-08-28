@@ -1,7 +1,11 @@
 import { resolveCardEnergyPayment, resolvePlayedCardDestination, type CardEnergyPayment, type CardRuleCard, type PlayedCardDestination } from './cardRules';
+import { resolveActiveCardPlayRules, type CardPlayRuleEvent } from './cardPlayRuleRuntime';
+import { resolveDynamicCardCostAtPlay, type DynamicCardCostRule } from './dynamicCardCost';
+import type { CoreEffectState, EffectExecutionContext } from './effectDsl';
 
 export interface CardPlayCard extends CardRuleCard {
   doubleEffect?: boolean;
+  replayCount?: number;
 }
 
 export interface CardPlayState<TCard extends CardPlayCard> {
@@ -10,10 +14,15 @@ export interface CardPlayState<TCard extends CardPlayCard> {
   hand: readonly TCard[];
   energy: number;
   cardsPlayedThisTurn: number;
+  cardRuleUsesThisTurn?: number;
   attacksPlayedThisTurn?: number;
   skillsPlayedThisTurn?: number;
   stunned?: boolean;
   statusIds?: Iterable<string>;
+  cardPlayRules?: readonly CardPlayRuleEvent[];
+  dynamicCostRules?: readonly DynamicCardCostRule[];
+  dynamicCostState?: CoreEffectState;
+  dynamicCostContext?: EffectExecutionContext;
 }
 
 export type CardPlayFailureCode =
@@ -38,13 +47,14 @@ export interface PreparedCardPlay<TCard extends CardPlayCard> {
   card: TCard;
   payment: CardEnergyPayment;
   destination: PlayedCardDestination;
-  repeatCount: 1 | 2;
+  repeatCount: number;
 }
 
 export interface CommittedCardPlay<TCard extends CardPlayCard> extends PreparedCardPlay<TCard> {
   hand: TCard[];
   energy: number;
   cardsPlayedThisTurn: number;
+  cardRuleUsesThisTurn: number;
   attacksPlayedThisTurn: number;
   skillsPlayedThisTurn: number;
 }
@@ -74,7 +84,24 @@ function inspectCardPlay<TCard extends CardPlayCard>(
   if (card.type === 'Attack' && statuses.has('dominated')) return { ok: false, code: 'DOMINATED_ATTACK' };
   if (card.type === 'Skill' && statuses.has('silenced')) return { ok: false, code: 'SILENCED_SKILL' };
 
-  const payment = resolveCardEnergyPayment(card, state.energy);
+  const activeRules = resolveActiveCardPlayRules(
+    state.cardPlayRules || [],
+    state.cardRuleUsesThisTurn ?? state.cardsPlayedThisTurn,
+  );
+  const effectiveCost = state.dynamicCostState
+    ? resolveDynamicCardCostAtPlay(card as CardPlayCard & any, state.dynamicCostRules || [], {
+        state: state.dynamicCostState,
+        effect: state.dynamicCostContext || { spentEnergy: 0 },
+      })
+    : card.cost;
+  const effectiveCard = effectiveCost === card.cost ? card : ({ ...card, cost: effectiveCost } as TCard);
+  const payment = activeRules.free
+    ? {
+        requiredEnergy: 0,
+        spentEnergy: 0,
+        xValue: effectiveCard.cost === 'energy' ? Math.max(0, Math.floor(effectiveCard.xValueBonus || 0)) : 0,
+      }
+    : resolveCardEnergyPayment(effectiveCard, state.energy);
   if (state.energy < payment.requiredEnergy) {
     return {
       ok: false,
@@ -85,10 +112,10 @@ function inspectCardPlay<TCard extends CardPlayCard>(
   }
   return {
     ok: true,
-    card,
+    card: effectiveCard,
     payment,
-    destination: resolvePlayedCardDestination(card),
-    repeatCount: card.doubleEffect ? 2 : 1,
+    destination: resolvePlayedCardDestination(effectiveCard),
+    repeatCount: 1 + Math.min(20, normalizedCounter(effectiveCard.replayCount ?? (effectiveCard.doubleEffect ? 1 : 0))) + activeRules.extraReplays,
   };
 }
 
@@ -113,6 +140,7 @@ export function commitCardPlay<TCard extends CardPlayCard>(
     hand: latest.hand.filter(card => card.id !== cardId),
     energy: latest.energy - inspected.payment.spentEnergy,
     cardsPlayedThisTurn: normalizedCounter(latest.cardsPlayedThisTurn) + 1,
+    cardRuleUsesThisTurn: normalizedCounter(latest.cardRuleUsesThisTurn ?? latest.cardsPlayedThisTurn) + 1,
     attacksPlayedThisTurn: normalizedCounter(latest.attacksPlayedThisTurn) + (inspected.card.type === 'Attack' ? 1 : 0),
     skillsPlayedThisTurn: normalizedCounter(latest.skillsPlayedThisTurn) + (inspected.card.type === 'Skill' ? 1 : 0),
   };

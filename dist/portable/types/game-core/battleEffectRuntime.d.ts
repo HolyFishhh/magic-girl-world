@@ -24,6 +24,22 @@ export type BattleEffectRuntimeEvent = {
     target: BattleSide;
     amount: number;
 } | {
+    type: 'damage_resolved';
+    source: BattleSide;
+    target: BattleSide;
+    requested: number;
+    modified: number;
+    blocked: number;
+    hpLost: number;
+    damageKind: import('./battleEventJournal').DamageKind;
+} | {
+    type: 'heal_resolved';
+    source: BattleSide;
+    target: BattleSide;
+    requested: number;
+    modified: number;
+    hpGained: number;
+} | {
     type: 'attribute_changed';
     target: BattleSide;
     attribute: BattleEffectAttribute;
@@ -46,8 +62,10 @@ export type BattleEffectRuntimeEvent = {
 export interface BattleEffectStatePort {
     getPlayer(): Player;
     getEnemy(): Enemy | null;
+    getEnemyById?(enemyId: string): Enemy | null;
     updatePlayer(updates: Partial<Player>): void;
     updateEnemy(updates: Partial<Enemy>): void;
+    updateEnemyById?(enemyId: string, updates: Partial<Enemy>): void;
 }
 export interface BattleEffectRuntimePorts {
     readModifierSources(target: BattleSide, modifier: BattleModifierAttribute): readonly BattleModifierSource[];
@@ -57,6 +75,7 @@ export interface BattleEffectRuntimePorts {
 }
 export interface BattleEffectRuntimeContext {
     source: BattleSide;
+    damageKind?: import('./battleEventJournal').DamageKind;
 }
 export interface BattleEffectRuntimeResult {
     applied: boolean;

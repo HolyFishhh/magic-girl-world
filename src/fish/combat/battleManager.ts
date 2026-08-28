@@ -1,8 +1,13 @@
 import {
   advanceBattleSessionTurn,
+  createBattleRandomState,
+  prepareEnemyActionQueue,
   rollDefaultEnemyAttackDamage,
+  runScheduledPhaseAtomically,
+  runEnemyActionQueue,
   resolveEnemyTurnAction,
   type BattleTurnFlowStep,
+  type EnemyActionQueueEntry,
   type EffectProgram,
 } from '../../game-core';
 import { GameStateManager } from '../core/gameStateManager';
@@ -38,9 +43,11 @@ export class BattleManager {
   }
 
   // 战斗初始化
-  public async initializeBattle(enemy: Enemy): Promise<void> {
+  public async initializeBattle(enemy: Enemy | readonly Enemy[]): Promise<void> {
     // 设置敌人
-    this.gameStateManager.setEnemy(enemy);
+    const enemies = Array.isArray(enemy) ? [...enemy] : [enemy as Enemy];
+    if (enemies.length === 0) throw new Error('battle requires at least one enemy');
+    this.gameStateManager.setEnemies(enemies, enemies[0].id);
 
     // 重置玩家状态
     const player = this.gameStateManager.getPlayer();
@@ -54,8 +61,7 @@ export class BattleManager {
     this.cardSystem.drawStartingHand();
 
     // 设置敌人首次行动（第一回合敌人不执行，只生成意图）
-    if (enemy.nextAction) this.enemyIntentPresenter.render(enemy);
-    else this.setEnemyNextAction();
+    this.setEnemyNextActions();
 
     // 战斗开始时的效果现在由主初始化流程统一管理
     // 这里不再重复触发
@@ -97,34 +103,39 @@ export class BattleManager {
       case 'player_statuses_end':
         await UnifiedEffectExecutor.getInstance().processStatusEffectsAtTurnEnd('player');
         return;
+      case 'scheduled_turn_end':
+        await this.executeScheduledPhase('turn_end');
+        return;
       case 'advance_turn':
         this.gameStateManager.incrementTurn();
         return;
       case 'enemy_block_reset':
-        if (this.gameStateManager.getEnemy()) {
-          this.gameStateManager.updateEnemy({ block: 0 }, { skipAttributeTriggers: true });
-        }
+        for (const enemy of this.gameStateManager.getEnemies({ livingOnly: true }))
+          this.gameStateManager.updateEnemyById(enemy.id, { block: 0 }, { skipAttributeTriggers: true });
         return;
       case 'enemy_abilities_start':
-        await UnifiedEffectExecutor.getInstance().processAbilitiesByTrigger('enemy', 'turn_start');
+        await this.forEachLivingEnemy(() => UnifiedEffectExecutor.getInstance().processAbilitiesByTrigger('enemy', 'turn_start'));
         return;
       case 'enemy_action':
         await this.executeEnemyTurnAction();
         return;
       case 'enemy_next_intent':
-        this.setEnemyNextAction();
+        this.setEnemyNextActions();
         return;
       case 'enemy_abilities_end':
-        await UnifiedEffectExecutor.getInstance().processAbilitiesByTrigger('enemy', 'turn_end');
+        await this.forEachLivingEnemy(() => UnifiedEffectExecutor.getInstance().processAbilitiesByTrigger('enemy', 'turn_end'));
         return;
       case 'enemy_statuses_end':
-        await UnifiedEffectExecutor.getInstance().processStatusEffectsAtTurnEnd('enemy');
+        await this.forEachLivingEnemy(() => UnifiedEffectExecutor.getInstance().processStatusEffectsAtTurnEnd('enemy'));
         return;
       case 'temporary_modifiers_clear':
         this.gameStateManager.clearTemporaryModifiers();
         return;
       case 'player_begin':
         this.gameStateManager.beginPlayerTurn();
+        return;
+      case 'scheduled_turn_start':
+        await this.executeScheduledPhase('turn_start');
         return;
       case 'player_block_reset':
         this.gameStateManager.updatePlayer({ block: 0 }, { skipAttributeTriggers: true });
@@ -134,8 +145,14 @@ export class BattleManager {
         this.gameStateManager.updatePlayer({ energy: player.maxEnergy });
         return;
       }
+      case 'scheduled_before_draw':
+        await this.executeScheduledPhase('before_draw');
+        return;
       case 'player_draw':
         await this.cardSystem.onTurnStart();
+        return;
+      case 'scheduled_after_draw':
+        await this.executeScheduledPhase('after_draw');
         return;
       case 'player_abilities_start':
         await UnifiedEffectExecutor.getInstance().processAbilitiesByTrigger('player', 'turn_start');
@@ -150,45 +167,62 @@ export class BattleManager {
     }
   }
 
+  private async executeScheduledPhase(
+    phase: 'turn_start' | 'before_draw' | 'after_draw' | 'turn_end',
+  ): Promise<void> {
+    const before = this.gameStateManager.readEffectScheduler();
+    const turn = this.gameStateManager.getGameState().currentTurn;
+    const result = await runScheduledPhaseAtomically(before, turn, phase, null, value => value);
+    for (const scheduled of result.executed) {
+      if (scheduled.payload.type !== 'effect_program')
+        throw new Error(`unsupported scheduled payload: ${scheduled.payload.type}`);
+      await UnifiedEffectExecutor.getInstance().executeEffectProgram(
+        scheduled.payload.program,
+        scheduled.payload.sourceIsPlayer,
+        { triggerType: 'scheduled', abilityContext: { id: scheduled.source.id, name: scheduled.source.name || '预约效果' } },
+      );
+    }
+    this.gameStateManager.writeEffectScheduler(result.state);
+  }
+
   private async executeEnemyTurnAction(): Promise<void> {
+    const entries = this.prepareCurrentEnemyQueue();
+    await runEnemyActionQueue(entries, {
+      isAlive: enemyId => (this.gameStateManager.getEnemyById(enemyId)?.currentHp || 0) > 0,
+      isTerminal: () => this.gameStateManager.isGameOver(),
+      execute: entry => this.executeEnemyQueueEntry(entry),
+      afterEach: () => { this.gameStateManager.removeDefeatedEnemies(); },
+    });
+  }
+
+  private async executeEnemyQueueEntry(entry: EnemyActionQueueEntry): Promise<void> {
+    if (!this.gameStateManager.setActiveEnemy(entry.enemyId)) return;
     const enemy = this.gameStateManager.getEnemy();
+    if (!enemy) return;
     const decision = resolveEnemyTurnAction({
-      hasEnemy: Boolean(enemy),
+      hasEnemy: true,
       stunned: UnifiedEffectExecutor.getInstance().isStunned('enemy'),
       currentTurn: this.gameStateManager.getGameState().currentTurn,
-      hasPreparedAction: Boolean(enemy?.nextAction),
-      actionCount: enemy?.actions?.length || 0,
+      hasPreparedAction: true,
+      actionCount: enemy.actions?.length || 0,
     });
-
-    if (decision === 'none') return;
     if (decision === 'stunned') {
-      this.enemyIntentPresenter.showStunned(enemy!.name);
+      this.enemyIntentPresenter.showStunned(enemy.name);
       return;
     }
-    if (decision === 'select_and_execute') {
-      this.setEnemyNextAction();
-      if (this.gameStateManager.getEnemy()?.nextAction) await this.executeEnemyAction();
-      else await this.executeDefaultEnemyAction();
-      return;
-    }
-    if (decision === 'execute_prepared') {
-      await this.executeEnemyAction();
-      return;
-    }
-    await this.executeDefaultEnemyAction();
+    await this.executeEnemyAction(entry);
   }
 
   // 敌人行动执行
-  private async executeEnemyAction(): Promise<void> {
-    const enemy = this.gameStateManager.getEnemy();
-    if (!enemy || !enemy.nextAction) return;
-
-    const action = enemy.nextAction;
+  private async executeEnemyAction(entry: EnemyActionQueueEntry): Promise<void> {
+    const enemy = this.gameStateManager.getEnemyById(entry.enemyId);
+    if (!enemy) return;
+    const action = entry.action as import('../../game-core').EnemyAction;
 
     // 显示敌人行动动画
     this.enemyIntentPresenter.showAction(action);
 
-    await this.executeEnemyEffect(action.effectProgram, action.name);
+    await this.executeEnemyEffect(action.effectProgram, action.name, entry.enemyId);
 
     // 移除延迟以提高出牌速度
     // await this.delay(1500);
@@ -211,18 +245,41 @@ export class BattleManager {
   }
 
   /** Tavern execution bridge; the outer battle-session transaction owns rollback. */
-  private async executeEnemyEffect(effectProgram: EffectProgram, actionName: string): Promise<void> {
+  private async executeEnemyEffect(effectProgram: EffectProgram, actionName: string, enemyId?: string): Promise<void> {
     await UnifiedEffectExecutor.getInstance().executeEffectProgram(effectProgram, false, {
       targetType: 'player',
-      battleContext: { intent: { name: actionName } },
+      battleContext: { intent: { name: actionName }, enemyId },
     });
   }
 
   // Persist through the state host, then refresh the Tavern presentation.
-  private setEnemyNextAction(): void {
-    const action = prepareNextEnemyAction(this.gameStateManager);
-    if (!action) return;
-    this.enemyIntentPresenter.render(this.gameStateManager.getEnemy());
+  private prepareCurrentEnemyQueue(): EnemyActionQueueEntry[] {
+    const state = this.gameStateManager.getGameState();
+    const plan = prepareEnemyActionQueue(
+      this.gameStateManager.getEnemies({ livingOnly: true }),
+      state.random || createBattleRandomState(0),
+    );
+    this.gameStateManager.setRandomState(plan.random);
+    this.gameStateManager.setEnemies(plan.enemies as Enemy[], state.activeEnemyId);
+    return plan.entries;
+  }
+
+  private setEnemyNextActions(): void {
+    for (const enemy of this.gameStateManager.getEnemies({ livingOnly: true }))
+      this.gameStateManager.updateEnemyById(enemy.id, { nextAction: null });
+    this.prepareCurrentEnemyQueue();
+    const active = this.gameStateManager.getEnemy();
+    if (active) this.enemyIntentPresenter.render(active);
+  }
+
+  private async forEachLivingEnemy(callback: (enemy: Enemy) => void | Promise<void>): Promise<void> {
+    const previous = this.gameStateManager.getGameState().activeEnemyId;
+    for (const enemy of this.gameStateManager.getEnemies({ livingOnly: true })) {
+      if (this.gameStateManager.isGameOver()) break;
+      if (!this.gameStateManager.setActiveEnemy(enemy.id)) continue;
+      await callback(enemy);
+    }
+    if (previous) this.gameStateManager.setActiveEnemy(previous);
   }
 
   // 战斗重置
@@ -273,6 +330,7 @@ export class BattleManager {
       result: state.battleResult,
       player: state.player,
       enemy: state.enemy,
+      enemies: state.enemies,
       playableCardsCount: playableCards.length,
       canPlayerAct: this.canPlayerAct(),
     };

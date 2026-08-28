@@ -21,6 +21,21 @@ assert.equal(core.validateCompactStatusDefinition({ ...bleed, triggers: { tick: 
 assert.equal(core.validateCompactStatusDefinition({ ...bleed, max_stacks: 12 }).ok, false);
 assert.equal(core.validateCompactStatusDefinition({ ...bleed, triggers: { hold: { damage: 1 } } }).ok, false);
 
+const echoState = {
+  id: 'echo_state',
+  name: '回响状态',
+  emoji: '🔁',
+  type: 'buff',
+  stacks_change: 'keep',
+  triggers: { hold: { card_rule: 'replay', limit: 'stacks', extra: 1 } },
+};
+assert.equal(core.validateCompactStatusDefinition(echoState).ok, true);
+assert.equal(
+  core.validateCompactStatusDefinition({ ...echoState, triggers: { tick: echoState.triggers.hold } }).ok,
+  false,
+  'card play rules are continuous hold effects, not tick effects',
+);
+
 const registry = new core.StatusDefinitionRegistry();
 const loaded = registry.replace([bleed]);
 assert.deepEqual(loaded.rejected, []);

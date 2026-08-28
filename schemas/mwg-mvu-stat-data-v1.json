@@ -141,6 +141,15 @@
       "ai_operations": ["set", "assign"]
     },
     {
+      "id": "enemy_roster",
+      "paths": ["battle.enemies"],
+      "shape": "array",
+      "owner": "ai",
+      "lifecycle": "battle-temporary",
+      "writers": ["ai:battle-scene", "program:battle-settlement"],
+      "ai_operations": ["set", "assign"]
+    },
+    {
       "id": "enemy_action_config",
       "paths": ["battle.enemy.action_config"],
       "shape": "object",

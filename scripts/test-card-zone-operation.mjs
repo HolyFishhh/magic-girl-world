@@ -1,20 +1,11 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
-import ts from 'typescript';
 
-const source = await readFile(resolve('src/game-core/cardZoneOperation.ts'), 'utf8');
-const output = ts.transpileModule(source, {
-  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
-}).outputText;
-const reducerSource = await readFile(resolve('src/game-core/cardZoneReducer.ts'), 'utf8');
-const reducerOutput = ts.transpileModule(reducerSource, {
-  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
-}).outputText;
-const reducerUrl = `data:text/javascript;base64,${Buffer.from(reducerOutput).toString('base64')}`;
-const operation = await import(
-  `data:text/javascript;base64,${Buffer.from(output.replace("from './cardZoneReducer'", `from '${reducerUrl}'`)).toString('base64')}`,
-);
+const require = createRequire(import.meta.url);
+process.env.TS_NODE_COMPILER_OPTIONS = JSON.stringify({ module: 'CommonJS', moduleResolution: 'node' });
+require('ts-node/register/transpile-only');
+const operation = require(resolve('src/game-core/cardZoneOperation.ts'));
 
 const card = id => ({ id, name: id });
 const zones = {
@@ -63,5 +54,45 @@ const duplicate = operation.planCardZoneOperation(
   { type: 'scry_cards', amount: 1 },
 );
 assert.deepEqual(duplicate, { ok: false, code: 'DUPLICATE_CARD_ID' });
+
+const richZones = {
+  hand: [
+    { id: 'attack-low', type: 'Attack', rarity: 'Common', cost: 0, tags: ['strike'], templateId: 'attack', origin: 'deck' },
+    { id: 'skill', type: 'Skill', rarity: 'Rare', cost: 1, tags: ['guard'], templateId: 'guard', origin: 'deck', upgraded: true },
+  ],
+  drawPile: [
+    { id: 'bottom', type: 'Attack', rarity: 'Common', cost: 1, templateId: 'attack', origin: 'deck' },
+    { id: 'middle', type: 'Attack', rarity: 'Uncommon', cost: 2, templateId: 'attack', origin: 'generated' },
+    { id: 'top', type: 'Power', rarity: 'Rare', cost: 3, templateId: 'power', origin: 'deck' },
+  ],
+  discardPile: [],
+  exhaustPile: [{ id: 'exhausted', type: 'Curse', rarity: 'Corrupt', cost: 0, origin: 'generated' }],
+};
+const drawTop = operation.planCardZoneOperation(richZones, {
+  type: 'exhaust_cards',
+  amount: 2,
+  selector: { zone: 'draw', pick: 'top', count: 2 },
+});
+assert.equal(drawTop.ok, true);
+assert.deepEqual(drawTop.selection.cardIds, ['top', 'middle']);
+const drawBottom = operation.planCardZoneOperation(richZones, {
+  type: 'discard_cards',
+  amount: 1,
+  selector: { zone: 'draw', pick: 'bottom', count: 1 },
+});
+assert.deepEqual(drawBottom.selection.cardIds, ['bottom']);
+const filtered = operation.planCardZoneOperation(richZones, {
+  type: 'discard_cards',
+  amount: 1,
+  selector: { zone: 'hand', pick: 'choose', count: 1, filter: { types: ['Skill'], rarities: ['Rare'], upgraded: true } },
+});
+assert.deepEqual(filtered.candidateCardIds, ['skill']);
+const explicitExhaust = operation.planCardZoneOperation(richZones, {
+  type: 'discard_cards',
+  amount: 1,
+  selector: { zone: 'exhaust', pick: 'top', count: 1, filter: { origin: 'generated' } },
+});
+assert.deepEqual(explicitExhaust.candidateCardIds, ['exhausted']);
+assert.deepEqual(explicitExhaust.selection.cardIds, ['exhausted']);
 
 console.log('Portable card-zone plans validate candidates, hand limits, ordering, stale hosts, and atomic commits.');

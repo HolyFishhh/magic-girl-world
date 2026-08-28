@@ -87,7 +87,7 @@ assert.doesNotMatch(mvuLoaderSource, /MAGIC_GIRL_WORLD_GENERATE_RAW_MONITOR|g\.g
 assert.match(mvuLoaderSource, /随机头部=false/);
 assert.match(mvuLoaderSource, /max_chat_history=2/);
 assert.match(mvuLoaderSource, /请求次数=2/);
-assert.match(mvuLoaderSource, /最大回复token数=2600/);
+assert.match(mvuLoaderSource, /最大回复token数=20000/);
 assert.match(mvuLoaderSource, /世界书条目白名单正则/);
 assert.match(mvuLoaderSource, /已开启默认不兼容假流式=true/);
 assert.match(mvuLoaderSource, /额外模型解析中=true/);

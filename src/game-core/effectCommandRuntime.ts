@@ -4,8 +4,14 @@ import {
   evaluateNumericExpression,
   validateEffectProgram,
   type CardSelector,
+  type CardPlayRuleKind,
+  type CardValueOperator,
+  type CardValueStat,
   type CoreEffectState,
   type EffectExecutionContext,
+  type EffectCardPatch,
+  type EffectSchedulePhase,
+  type EffectCardPileZone,
   type EffectModifierOperator,
   type EffectNode,
   type EffectProgram,
@@ -16,30 +22,61 @@ import {
   type NumericExpression,
   type RecoverCardZone,
 } from './effectDsl';
+import type { EnemyTargetSelector } from './combatantCollection';
 import { roundBattleValue } from './battleMath';
 
 export type EffectCommand =
-  | { type: 'damage' | 'heal' | 'gain_block' | 'gain_energy' | 'gain_lust'; target: EffectTarget; amount: number }
-  | { type: 'set_stat'; target: EffectTarget; stat: 'hp' | 'lust' | 'energy' | 'block'; value: number }
-  | { type: 'apply_status'; target: EffectTarget; status: string; stacks: number }
-  | { type: 'remove_status'; target: EffectTarget; status: string }
+  | { type: 'damage' | 'heal' | 'gain_block' | 'gain_energy' | 'gain_lust'; target: EffectTarget; targetSelector?: EnemyTargetSelector; amount: number }
+  | { type: 'set_stat'; target: EffectTarget; targetSelector?: EnemyTargetSelector; stat: 'hp' | 'lust' | 'energy' | 'block'; value: number }
+  | { type: 'apply_status'; target: EffectTarget; targetSelector?: EnemyTargetSelector; status: string; stacks: number }
+  | { type: 'remove_status'; target: EffectTarget; targetSelector?: EnemyTargetSelector; status: string }
   | { type: 'draw_cards'; amount: number }
   | { type: 'scry_cards'; amount: number }
   | { type: 'discard_cards'; selector: CardSelector; amount: number }
   | { type: 'exhaust_cards'; selector: CardSelector; amount: number }
   | { type: 'recover_cards'; source: RecoverCardZone; pick: 'random' | 'choose' | 'all'; amount: number }
   | { type: 'reduce_card_cost'; selector: CardSelector; amount: number }
+  | {
+      type: 'modify_card_value';
+      selector: CardSelector;
+      stat: CardValueStat;
+      operator: CardValueOperator;
+      value: number;
+    }
   | { type: 'copy_cards'; selector: CardSelector }
   | { type: 'double_card_effect'; selector: CardSelector }
+  | { type: 'auto_play_cards'; selector: CardSelector; free: boolean }
+  | { type: 'set_card_destination'; destination: import('./cardRules').PlayedCardDestination }
+  | { type: 'move_cards'; selector: CardSelector; amount: number; destination: EffectCardPileZone; position: 'top' | 'bottom' }
+  | { type: 'remove_cards'; selector: CardSelector; amount: number }
+  | { type: 'transform_cards'; selector: CardSelector; replacement: GeneratedCardDefinition }
+  | { type: 'apply_card_patch'; selector: CardSelector; patch: EffectCardPatch }
   | { type: 'add_card'; zone: 'hand' | 'draw'; card: GeneratedCardDefinition; count: number }
   | {
       type: 'modify';
       target: EffectTarget;
+      targetSelector?: EnemyTargetSelector;
       stat: ModifierStat;
       operator: EffectModifierOperator;
       value: number;
     }
+  | {
+      type: 'card_play_rule';
+      target: EffectTarget;
+      rule: CardPlayRuleKind;
+      limit: number | 'all';
+      extra: number;
+    }
   | { type: 'register_trigger'; target: EffectTarget; trigger: EffectTrigger; effects: EffectNode[] }
+  | {
+      type: 'schedule_effect';
+      afterTurns: number;
+      phase: EffectSchedulePhase;
+      priority: number;
+      repeatEvery?: number;
+      repeats?: number;
+      effects: EffectNode[];
+    }
   | { type: 'narration'; text: string };
 
 export interface EffectCommandRuntimePorts {
@@ -103,8 +140,44 @@ function createCommand(
       amount: readAmount(node.amount, state, context, `${path}.amount`, true),
     };
   }
+  if (node.op === 'modify_card_value') {
+    return {
+      type: 'modify_card_value',
+      selector: clone(node.selector),
+      stat: node.stat,
+      operator: node.operator,
+      value: roundBattleValue(evaluateNumericExpression(node.value, state, context, `${path}.value`)),
+    };
+  }
   if (node.op === 'copy_cards' || node.op === 'double_card_effect') {
     return { type: node.op, selector: clone(node.selector) };
+  }
+  if (node.op === 'auto_play_cards') {
+    return { type: 'auto_play_cards', selector: clone(node.selector), free: node.free };
+  }
+  if (node.op === 'set_card_destination') {
+    return { type: 'set_card_destination', destination: node.destination };
+  }
+  if (node.op === 'move_cards') {
+    return {
+      type: 'move_cards', selector: clone(node.selector), amount: node.amount,
+      destination: node.destination, position: node.position,
+    };
+  }
+  if (node.op === 'remove_cards') {
+    return { type: 'remove_cards', selector: clone(node.selector), amount: node.amount };
+  }
+  if (node.op === 'transform_cards') {
+    return { type: 'transform_cards', selector: clone(node.selector), replacement: clone(node.replacement) };
+  }
+  if (node.op === 'apply_card_patch') {
+    const patch = clone(node.patch);
+    if (patch.kind === 'numeric' || patch.kind === 'cost' || patch.kind === 'x_value') {
+      patch.value = roundBattleValue(evaluateNumericExpression(patch.value, state, context, `${path}.patch.value`));
+    } else if (patch.kind === 'replay') {
+      patch.extra = Math.max(1, Math.floor(evaluateNumericExpression(patch.extra, state, context, `${path}.patch.extra`)));
+    }
+    return { type: 'apply_card_patch', selector: clone(node.selector), patch };
   }
   if (node.op === 'add_card') {
     return { type: 'add_card', zone: node.zone, card: clone(node.card), count: node.count };
@@ -113,9 +186,25 @@ function createCommand(
     return {
       type: 'modify',
       target: node.target,
+      ...(node.targetSelector ? { targetSelector: clone(node.targetSelector) } : {}),
       stat: node.stat,
       operator: node.operator,
       value: roundBattleValue(evaluateNumericExpression(node.value, state, context, `${path}.value`)),
+    };
+  }
+  if (node.op === 'card_play_rule') {
+    return {
+      type: 'card_play_rule',
+      target: node.target,
+      rule: node.rule,
+      limit:
+        node.limit === 'all'
+          ? 'all'
+          : Math.max(1, Math.floor(evaluateNumericExpression(node.limit, state, context, `${path}.limit`))),
+      extra:
+        node.rule === 'replay' && node.extra !== undefined
+          ? Math.max(1, Math.floor(evaluateNumericExpression(node.extra, state, context, `${path}.extra`)))
+          : 0,
     };
   }
   if (node.op === 'register_trigger') {
@@ -126,21 +215,34 @@ function createCommand(
       effects: clone(node.effects),
     };
   }
+  if (node.op === 'schedule_effect') {
+    return {
+      type: 'schedule_effect',
+      afterTurns: node.afterTurns,
+      phase: node.phase,
+      priority: node.priority || 0,
+      ...(node.repeatEvery !== undefined ? { repeatEvery: node.repeatEvery } : {}),
+      ...(node.repeats !== undefined ? { repeats: node.repeats } : {}),
+      effects: clone(node.effects),
+    };
+  }
   if (node.op === 'apply_status') {
     return {
       type: 'apply_status',
       target: node.target,
+      ...(node.targetSelector ? { targetSelector: clone(node.targetSelector) } : {}),
       status: node.status,
       stacks: readAmount(node.stacks, state, context, `${path}.stacks`, true),
     };
   }
   if (node.op === 'remove_status') {
-    return { type: 'remove_status', target: node.target, status: node.status };
+    return { type: 'remove_status', target: node.target, ...(node.targetSelector ? { targetSelector: clone(node.targetSelector) } : {}), status: node.status };
   }
   if (node.op === 'set_stat') {
     return {
       type: 'set_stat',
       target: node.target,
+      ...(node.targetSelector ? { targetSelector: clone(node.targetSelector) } : {}),
       stat: node.stat,
       value:
         node.stat === 'energy'
@@ -151,6 +253,7 @@ function createCommand(
   return {
     type: node.op,
     target: node.target,
+    ...(node.targetSelector ? { targetSelector: clone(node.targetSelector) } : {}),
     amount: readAmount(node.amount, state, context, `${path}.amount`, node.op === 'gain_energy'),
   };
 }

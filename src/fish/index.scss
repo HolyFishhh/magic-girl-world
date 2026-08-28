@@ -111,7 +111,7 @@ button:focus-visible,
 
 .top-info-bar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: auto auto minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -253,11 +253,15 @@ button:disabled,
 
 .battle-main-grid {
   display: grid;
-  grid-template-rows: 96px minmax(0, 1fr) 96px;
+  grid-template-rows: 108px minmax(0, 1fr) 96px;
   gap: 4px;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+}
+
+.battle-main-grid.multi-enemy-battle {
+  grid-template-rows: minmax(184px, 26vh) minmax(0, 1fr) 96px;
 }
 
 .enemy-section,
@@ -272,6 +276,85 @@ button:disabled,
   border-radius: 10px;
   background: rgba(255, 254, 253, 0.9);
   backdrop-filter: blur(5px);
+}
+
+.enemy-section {
+  grid-template-rows: 43px minmax(0, 1fr);
+}
+
+.enemy-section.is-multi-enemy {
+  grid-template-rows: 43px auto minmax(0, 1fr);
+}
+
+.enemy-roster {
+  display: none;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 3px;
+  min-width: 0;
+  padding: 3px 6px;
+  border-bottom: 1px solid rgba(219, 167, 184, 0.28);
+}
+
+.enemy-section.is-multi-enemy .enemy-roster {
+  display: grid;
+}
+
+.enemy-roster-unit {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px;
+  overflow: hidden;
+  border: 1px solid rgba(177, 116, 143, 0.28);
+  border-radius: 8px;
+  background: rgba(255, 250, 253, 0.72);
+  color: var(--ink);
+  font-family: var(--mwg-font-body);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+}
+
+.enemy-roster-unit:hover,
+.enemy-roster-unit:focus-visible {
+  border-color: var(--rose);
+  background: rgba(255, 235, 244, 0.95);
+  transform: translateY(-1px);
+  outline: none;
+}
+
+.enemy-roster-unit.is-active {
+  border-color: var(--mwg-rose-dark);
+  background: linear-gradient(135deg, rgba(255, 220, 232, 0.98), rgba(240, 225, 248, 0.94));
+  box-shadow: 0 0 0 1px rgba(177, 80, 122, 0.14);
+}
+
+.enemy-roster-emoji {
+  flex: 0 0 auto;
+  font-size: 19px;
+}
+
+.enemy-roster-copy {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.enemy-roster-copy b,
+.enemy-roster-copy small {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.enemy-roster-copy b {
+  font: 600 12px/1.1 var(--mwg-font-display);
+}
+
+.enemy-roster-copy small {
+  opacity: 0.78;
+  font: 500 9px/1.15 var(--mwg-font-data);
 }
 
 .enemy-section {
@@ -308,6 +391,45 @@ button:disabled,
   line-height: 1;
 }
 
+.enemy-avatar-stack {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-rows: 15px 21px;
+  min-width: 34px;
+  align-items: center;
+  justify-items: center;
+}
+
+.enemy-intent-summary {
+  display: flex;
+  z-index: 1;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  white-space: nowrap;
+}
+
+.intent-badge {
+  display: inline-flex;
+  min-width: 17px;
+  height: 15px;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  padding: 0 2px;
+  border: 1px solid rgba(94, 72, 94, 0.2);
+  border-radius: 7px;
+  background: rgba(255, 254, 253, 0.84);
+  color: var(--ink);
+  font: 700 9px/1 var(--mwg-font-data);
+  box-shadow: 0 1px 3px rgba(74, 53, 82, 0.14);
+}
+
+.intent-badge b {
+  font: inherit;
+}
+
 .player-emblem {
   color: var(--green);
 }
@@ -321,6 +443,10 @@ button:disabled,
   font-size: clamp(13px, 2vw, 17px);
   font-weight: 400;
   overflow-wrap: anywhere;
+}
+
+.enemy-title-bar .enemy-name {
+  flex: 0 1 32%;
 }
 
 .player-name {
@@ -358,11 +484,13 @@ button:disabled,
 }
 
 .compact-support-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   grid-column: auto;
   grid-row: auto;
   align-items: center;
-  gap: 7px;
+  column-gap: 7px;
+  row-gap: 3px;
   min-height: 0;
   overflow: hidden;
   padding-left: 6px;
@@ -385,14 +513,16 @@ button:disabled,
 
 .enemy-intent {
   display: flex;
-  flex: 0 1 min(48%, 300px);
+  flex: 1 1 430px;
+  max-width: 640px;
   align-items: center;
-  gap: 5px;
+  column-gap: 6px;
+  row-gap: 1px;
   margin-left: auto;
-  padding: 2px 7px;
+  padding: 3px 8px;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 999px;
+  border-radius: 10px;
   background: rgba(9, 12, 34, 0.28);
   cursor: pointer;
 }
@@ -402,20 +532,17 @@ button:disabled,
   outline-offset: 2px;
 }
 
-.intent-icon {
-  flex: 0 0 auto;
-  font-size: 15px;
-}
-
 .intent-text,
 .intent-description {
   min-width: 0;
   overflow: hidden;
-  font-size: 11px;
-  display: -webkit-box;
-  line-height: 1.3;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 1;
+  font-size: 14px;
+  font-weight: 800;
+  display: block;
+  width: 100%;
+  line-height: 1.2;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .stat-item {
@@ -719,15 +846,51 @@ button:disabled,
 .lust-effect-display,
 .lust-effect-container {
   flex-wrap: nowrap;
+  min-width: 0;
+  max-width: 100%;
   max-height: none;
   overflow: visible;
 }
 
 .lust-effect-container {
   display: flex;
+  width: 100%;
   min-width: 0;
   align-items: center;
   gap: 2px;
+}
+
+.status-section {
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
+.status-section .status-effects {
+  flex-wrap: nowrap;
+  max-height: none;
+  overflow: visible;
+}
+
+.lust-section {
+  min-width: 0;
+  overflow: visible;
+}
+
+.lust-section .lust-effect-display {
+  width: 100%;
+}
+
+.lust-section .lust-effect-toggle {
+  flex: 1 1 auto;
+  max-width: 100%;
+  justify-content: flex-start;
+}
+
+.abilities-section,
+.relic-section {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .lust-effect-label {
@@ -1014,7 +1177,9 @@ button:disabled,
   background: var(--card-type-soft, #f3e8e9);
   color: var(--card-type-ink, var(--ink-muted));
   font-size: 8px;
+  font-weight: 800;
   line-height: 1.25;
+  text-shadow: none;
 }
 
 .card-rarity-badge {
@@ -1602,7 +1767,8 @@ button:disabled,
   width: min(390px, calc(100vw - 16px));
   max-height: calc(100vh - 16px);
   padding: 9px 10px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   border: 1px solid var(--line-strong);
   border-radius: 7px;
   background: var(--paper-raised);
@@ -1623,6 +1789,22 @@ button:disabled,
 
 .card-tooltip .effect-tag {
   font: 500 10px/1.35 var(--mwg-font-body);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.card-tooltip > *,
+.card-tooltip .tooltip-effects,
+.card-tooltip .effect-tags-container {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.card-tooltip .tooltip-header,
+.card-tooltip .tooltip-description,
+.card-tooltip .tooltip-keywords {
+  overflow-wrap: anywhere;
 }
 
 .pile-viewer-content {
@@ -1906,6 +2088,7 @@ html.is-history {
   }
 
   .top-info-bar {
+    grid-template-columns: auto auto minmax(0, 1fr);
     gap: 4px;
     padding: 3px 5px;
   }
@@ -1922,6 +2105,7 @@ html.is-history {
   }
 
   .deck-stat {
+    flex: 1 1 0;
     min-width: 43px;
     gap: 2px;
     padding: 2px 3px;
@@ -1929,7 +2113,7 @@ html.is-history {
   }
 
   .battle-main-grid {
-    grid-template-rows: 96px minmax(0, 1fr) 96px;
+    grid-template-rows: 108px minmax(0, 1fr) 96px;
     gap: 4px;
   }
 
@@ -1937,6 +2121,10 @@ html.is-history {
   .player-section {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: 31px minmax(0, 1fr);
+  }
+
+  .enemy-section {
+    grid-template-rows: 43px minmax(0, 1fr);
   }
 
   .enemy-title-bar,
@@ -2036,8 +2224,11 @@ html:fullscreen .center-battle-area {
 }
 
 html.mwg-fullscreen-active .enemy-section,
+html:fullscreen .enemy-section {
+  grid-template-rows: 46px minmax(0, 1fr);
+}
+
 html.mwg-fullscreen-active .player-section,
-html:fullscreen .enemy-section,
 html:fullscreen .player-section {
   grid-template-rows: 38px minmax(0, 1fr);
 }
@@ -2064,7 +2255,7 @@ html:fullscreen .fullscreen-toggle-btn {
 
   html.mwg-fullscreen-active .battle-main-grid,
   html:fullscreen .battle-main-grid {
-    grid-template-rows: 96px minmax(0, 1fr) 96px;
+    grid-template-rows: 108px minmax(0, 1fr) 96px;
     gap: 4px;
   }
 
@@ -2222,6 +2413,13 @@ body {
   background: rgba(41, 46, 86, 0.72);
 }
 
+.intent-badge {
+  border-color: rgba(203, 208, 255, 0.3);
+  background: rgba(20, 24, 56, 0.9);
+  color: #fff9fc;
+  box-shadow: 0 1px 4px rgba(2, 3, 16, 0.34);
+}
+
 .effect-section,
 .abilities-section,
 .relic-section {
@@ -2277,6 +2475,60 @@ body {
     0 0 10px color-mix(in srgb, var(--rarity-accent, #8d96bd) 20%, transparent);
 }
 
+/* Rarity is a visual tier, not just a text badge.  The restrained surfaces
+ * preserve card readability while restoring the old border/glow hierarchy. */
+.enhanced-card.rarity-Common {
+  --rarity-accent: #a8b1c7;
+  background:
+    radial-gradient(circle at 82% 12%, rgba(168, 177, 199, 0.14), transparent 34%),
+    linear-gradient(145deg, #343b57, #222840);
+}
+
+.enhanced-card.rarity-Uncommon {
+  --rarity-accent: #4fc3a1;
+  background:
+    radial-gradient(circle at 82% 12%, rgba(79, 195, 161, 0.22), transparent 36%),
+    linear-gradient(145deg, #274b52, #202e43);
+}
+
+.enhanced-card.rarity-Rare {
+  --rarity-accent: #a986ed;
+  background:
+    radial-gradient(circle at 82% 12%, rgba(169, 134, 237, 0.28), transparent 38%),
+    linear-gradient(145deg, #49366d, #262745);
+}
+
+.enhanced-card.rarity-Epic {
+  --rarity-accent: #f06778;
+  background:
+    radial-gradient(circle at 82% 12%, rgba(240, 103, 120, 0.3), transparent 40%),
+    linear-gradient(145deg, #653244, #2f233e);
+}
+
+.enhanced-card.rarity-Legendary {
+  --rarity-accent: #ffc85a;
+  background:
+    radial-gradient(circle at 78% 10%, rgba(255, 214, 112, 0.34), transparent 42%),
+    linear-gradient(145deg, #675125, #302c43);
+}
+
+.enhanced-card.rarity-Corrupt {
+  --rarity-accent: #e04a72;
+  background:
+    radial-gradient(circle at 82% 12%, rgba(224, 74, 114, 0.24), transparent 38%),
+    linear-gradient(145deg, #4b172d, #190f25);
+}
+
+.enhanced-card .card-glow {
+  background: linear-gradient(
+    115deg,
+    transparent 22%,
+    color-mix(in srgb, var(--rarity-accent, #a8b1c7) 24%, transparent) 48%,
+    transparent 72%
+  );
+  box-shadow: inset 0 0 24px color-mix(in srgb, var(--rarity-accent, #a8b1c7) 26%, transparent);
+}
+
 .enhanced-card .card-header {
   border-bottom-color: rgba(255, 255, 255, 0.12);
   background: linear-gradient(90deg, color-mix(in srgb, var(--card-type-ink, #7685bd) 44%, #202743), #29304d);
@@ -2292,8 +2544,10 @@ body {
 .card-description {
   color: #c8c3df;
 }
-.card-type-indicator {
-  color: #fff;
+.enhanced-card .card-type-indicator {
+  border-color: color-mix(in srgb, var(--card-type-ink, #765) 64%, transparent);
+  background: color-mix(in srgb, var(--card-type-soft, #f3e8e9) 88%, #fff);
+  color: color-mix(in srgb, var(--card-type-ink, #54384a) 86%, #111);
 }
 
 .card-tooltip,
@@ -2625,4 +2879,266 @@ html body .modifier-panel-content {
 }
 .player-hand {
   overscroll-behavior: contain;
+}
+
+/* Final geometry layer: keep the hand only as tall as its cards.  Any extra
+ * room belongs to the stage instead of becoming a blank strip above cards. */
+.center-battle-area {
+  grid-template-rows: minmax(72px, 1fr) 190px;
+}
+
+@media (max-width: 760px) {
+  html,
+  body {
+    min-height: clamp(660px, 165vw, 760px);
+  }
+
+  .card-game-container {
+    height: clamp(660px, 165vw, 760px);
+    min-height: clamp(660px, 165vw, 760px);
+  }
+
+  #battle-scene {
+    grid-template-rows: 36px minmax(0, 1fr) 38px;
+    gap: 4px;
+    padding: 4px;
+  }
+
+  .battle-main-grid {
+    grid-template-rows: 104px minmax(0, 1fr) 92px;
+    gap: 4px;
+  }
+
+  .enemy-section {
+    grid-template-rows: 38px minmax(0, 1fr);
+  }
+
+  .player-section {
+    grid-template-rows: 30px minmax(0, 1fr);
+  }
+
+  .enemy-title-bar,
+  .player-title-bar {
+    gap: 5px;
+    padding: 3px 6px;
+  }
+
+  .enemy-emoji,
+  .player-emblem {
+    font-size: 18px;
+  }
+
+  .enemy-name,
+  .player-name {
+    flex: 0 1 auto;
+    font-size: 13px;
+    line-height: 1.15;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .enemy-title-bar .enemy-name {
+    flex-basis: auto;
+    max-width: 34%;
+  }
+
+  .enemy-intent {
+    min-width: 0;
+    max-width: none;
+    padding: 2px 5px;
+    column-gap: 4px;
+  }
+
+  .intent-text,
+  .intent-description {
+    font-size: 11px;
+  }
+
+  .enemy-card,
+  .player-card {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(28px, 1fr) 27px;
+    gap: 2px;
+    padding: 2px 5px;
+  }
+
+  .character-stats {
+    gap: 6px;
+  }
+
+  .stat-icon {
+    font-size: 15px;
+  }
+
+  .stat-bar-container {
+    min-width: 52px;
+    height: 24px;
+  }
+
+  .stat-text {
+    font-size: 11px;
+    line-height: 24px;
+  }
+
+  .block-stat,
+  .energy-display {
+    padding: 2px 4px;
+  }
+
+  .compact-support-row {
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    column-gap: 4px;
+    height: 27px;
+    max-height: 27px;
+    padding: 2px 0 0;
+    border-top: 1px solid rgba(194, 199, 255, 0.12);
+    border-left: 0;
+  }
+
+  .compact-support-row > *,
+  .compact-support-row .status-effects,
+  .compact-support-row .abilities-grid,
+  .compact-support-row .relic-grid,
+  .compact-support-row .lust-effect-display {
+    max-height: 24px;
+  }
+
+  .effect-label,
+  .abilities-label,
+  .relic-label,
+  .lust-effect-label {
+    font-size: 8px;
+    white-space: nowrap;
+  }
+
+  .support-icon-button,
+  .ability-item,
+  .relic-toggle {
+    width: 24px;
+    height: 24px;
+    min-width: 24px;
+    min-height: 24px;
+    max-width: 24px;
+  }
+
+  .status-effect-emoji {
+    font-size: 16px;
+  }
+
+  .lust-effect-toggle {
+    min-height: 21px;
+    padding: 1px 5px;
+    font-size: 9px;
+  }
+
+  .center-battle-area {
+    grid-template-rows: minmax(72px, 1fr) 155px;
+    gap: 4px;
+  }
+
+  .battle-stage {
+    grid-template-columns: minmax(54px, 0.75fr) minmax(84px, 2.5fr) minmax(54px, 0.75fr);
+  }
+
+  .stage-emoji {
+    font-size: clamp(27px, 9vw, 38px);
+  }
+
+  .hand-section {
+    grid-template-rows: 27px minmax(0, 1fr);
+  }
+
+  .hand-header {
+    padding: 2px 6px;
+  }
+
+  .enhanced-card:hover:not(.dragging),
+  .enhanced-card.card-hover:not(.dragging),
+  .enhanced-card:focus-visible:not(.dragging) {
+    transform: translateY(-8px) scale(1.025);
+  }
+
+  .enhanced-card.selected:not(.dragging) {
+    transform: translateY(-10px) scale(1.03);
+  }
+
+  .card-header {
+    min-height: 21px;
+  }
+
+  .card-cost {
+    width: 19px;
+    height: 19px;
+    font-size: 10px;
+  }
+
+  .card-rarity-badge,
+  .card-type-indicator {
+    font-size: 7px;
+  }
+
+  .card-artwork {
+    height: 38%;
+  }
+
+  .card-emoji {
+    font-size: clamp(20px, 7vw, 29px);
+  }
+
+  .card-body {
+    padding: 3px 4px;
+  }
+
+  .card-name {
+    font-size: 10px;
+  }
+
+  .card-description {
+    font-size: 7px;
+    line-height: 1.2;
+    -webkit-line-clamp: 2;
+  }
+
+  html.mwg-fullscreen-active .battle-main-grid,
+  html:fullscreen .battle-main-grid {
+    grid-template-rows: 104px minmax(0, 1fr) 92px;
+  }
+
+  html.mwg-fullscreen-active .center-battle-area,
+  html:fullscreen .center-battle-area {
+    grid-template-rows: minmax(88px, 1fr) 178px;
+  }
+}
+
+@media (max-width: 390px) {
+  .top-info-bar {
+    grid-template-columns: auto auto minmax(0, 1fr);
+    gap: 3px;
+  }
+
+  .turn-counter {
+    font-size: 10px;
+  }
+
+  .fullscreen-toggle-btn {
+    min-width: 66px;
+    padding-inline: 4px;
+  }
+
+  .deck-info {
+    gap: 3px;
+  }
+
+  .deck-stat {
+    min-width: 0;
+    padding-inline: 2px;
+  }
+
+  .pile-label {
+    font-size: 8px;
+  }
+
+  .battle-controls {
+    gap: 2px;
+  }
 }

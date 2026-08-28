@@ -88,6 +88,147 @@ await runtime.execute({
 assert.equal(host.getPlayer().discardPile.find(entry => entry.id === 'discard_a__1').cost, 1);
 assert.equal(events.at(-1).type, 'card_cost_reduced');
 
+choose = request => [request.candidates[0].id];
+await runtime.execute(
+  {
+    type: 'apply_card_patch',
+    selector: { zone: 'discard', pick: 'choose', count: 1, filter: { templateId: 'discard_a' } },
+    patch: { kind: 'keyword', keyword: 'retain', enabled: true, scope: 'run', match: 'template', includeFutureCopies: true },
+  },
+  { currentTurn: 1, source: { kind: 'card', id: 'lesson' } },
+);
+assert.equal(host.getPlayer().discardPile.find(entry => entry.id === 'discard_a__1').retain, true);
+await runtime.execute({
+  type: 'add_card',
+  zone: 'hand',
+  count: 1,
+  card: {
+    id: 'discard_a',
+    name: '未来同模板牌',
+    emoji: '🃏',
+    type: 'Skill',
+    rarity: 'Common',
+    cost: 1,
+    description: '用于验证未来副本继承。',
+    program: emptyProgram,
+  },
+});
+assert.equal(host.getPlayer().hand.find(entry => entry.originalId === 'discard_a').retain, true);
+
+// Value transforms use the same zone selectors as other card operations. They
+// rewrite executable card programs while preserving hit count, targets, and
+// control-flow structure.
+const valueState = core.createEmptyBattleState();
+valueState.random = core.createBattleRandomState(917);
+const valueCard = (id, damage) => ({
+  ...card(id),
+  effectProgram: {
+    spec: 'mwg.effect/v1',
+    steps: [
+      { op: 'damage', target: 'opponent', amount: damage, hits: 2 },
+      { op: 'gain_block', target: 'self', amount: 4 },
+      { op: 'gain_lust', target: 'opponent', amount: 3 },
+      { op: 'apply_status', target: 'opponent', status: 'runtime_mark', stacks: 2 },
+      {
+        op: 'if',
+        condition: { op: 'compare', comparator: '>=', left: 1, right: 1 },
+        then: [{ op: 'damage', target: 'opponent', amount: 5 }],
+      },
+      {
+        op: 'register_trigger',
+        target: 'self',
+        trigger: 'turn_start',
+        effects: [{ op: 'damage', target: 'opponent', amount: 2 }],
+      },
+    ],
+  },
+});
+valueState.player.hand = [valueCard('value_left__1', 6), valueCard('value_middle__1', 10), valueCard('value_right__1', 20)];
+valueState.player.drawPile = [valueCard('value_draw__1', 30)];
+valueState.player.discardPile = [valueCard('value_discard__1', 40)];
+const valueHost = new ReferenceBattleRuntimeHost(valueState);
+const valueEvents = [];
+let valueChoose = candidates => [candidates[0].id];
+const valueRuntime = valueHost.createCardEffectRuntime({
+  drawCards: async () => undefined,
+  chooseCards: async candidates => valueChoose(candidates),
+  onCardDiscarded: async () => undefined,
+  onCardExhausted: async () => undefined,
+  present: event => valueEvents.push(event),
+});
+
+valueChoose = candidates => [candidates.find(entry => entry.id === 'value_left__1').id];
+await valueRuntime.execute({
+  type: 'modify_card_value',
+  selector: { zone: 'hand', pick: 'choose', count: 1 },
+  stat: 'damage',
+  operator: 'add',
+  value: 2,
+});
+let transformed = valueHost.getPlayer().hand[0].effectProgram;
+assert.equal(transformed.steps[0].amount, 8);
+assert.equal(transformed.steps[0].hits, 2, 'modifying damage must not modify hits');
+assert.equal(transformed.steps[1].amount, 4);
+assert.equal(transformed.steps[4].then[0].amount, 7);
+assert.equal(transformed.steps[5].effects[0].amount, 4);
+
+await valueRuntime.execute({
+  type: 'modify_card_value',
+  selector: { zone: 'hand', pick: 'left', count: 1 },
+  stat: 'block',
+  operator: 'multiply',
+  value: 1.5,
+});
+transformed = valueHost.getPlayer().hand[0].effectProgram;
+assert.equal(transformed.steps[1].amount, 6);
+
+await valueRuntime.execute({
+  type: 'modify_card_value',
+  selector: { zone: 'hand', pick: 'right', count: 1 },
+  stat: 'damage',
+  operator: 'subtract',
+  value: 5,
+});
+assert.equal(valueHost.getPlayer().hand[2].effectProgram.steps[0].amount, 15);
+
+const beforeRandom = valueHost.getPlayer().hand.map(entry => entry.effectProgram.steps[0].amount);
+await valueRuntime.execute({
+  type: 'modify_card_value',
+  selector: { zone: 'hand', pick: 'random', count: 1 },
+  stat: 'damage',
+  operator: 'add',
+  value: 1,
+});
+const afterRandom = valueHost.getPlayer().hand.map(entry => entry.effectProgram.steps[0].amount);
+assert.equal(afterRandom.filter((amount, index) => amount !== beforeRandom[index]).length, 1);
+
+await valueRuntime.execute({
+  type: 'modify_card_value',
+  selector: { zone: 'all', pick: 'all' },
+  stat: 'damage',
+  operator: 'multiply',
+  value: 2,
+});
+assert.deepEqual(
+  [
+    ...valueHost.getPlayer().hand,
+    ...valueHost.getPlayer().drawPile,
+    ...valueHost.getPlayer().discardPile,
+  ].map(entry => entry.effectProgram.steps[0].amount),
+  afterRandom.map(amount => amount * 2).concat([60, 80]),
+);
+
+valueChoose = candidates => [candidates.find(entry => entry.id === 'value_left__1').id];
+await valueRuntime.execute({
+  type: 'modify_card_value',
+  selector: { zone: 'hand', pick: 'choose', count: 1 },
+  stat: 'stacks',
+  operator: 'divide',
+  value: 2,
+});
+assert.equal(valueHost.getPlayer().hand[0].effectProgram.steps[3].stacks, 1);
+assert.equal(valueEvents.filter(event => event.type === 'card_value_modified').length, 10);
+
 const handBeforeCopy = host.getPlayer().hand.length;
 await runtime.execute({ type: 'copy_cards', selector: { zone: 'hand', pick: 'left' } });
 assert.equal(host.getPlayer().hand.length, handBeforeCopy + 1);

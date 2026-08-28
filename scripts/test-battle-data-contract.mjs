@@ -93,7 +93,8 @@ assert.match(gameStateSource, /const battleData = readBattleDataContract\(variab
 assert.match(gameStateSource, /const rawCards = battleData\?\.cards/);
 assert.match(gameStateSource, /buildMvuStatusDisplayContext\(battleData\?\.statuses\)/);
 assert.match(gameStateSource, /const battleData = battleContract\?\.data/);
-assert.match(gameStateSource, /const mvuEnemy = battleData\?\.enemy \|\| null/);
+assert.match(gameStateSource, /const mvuEnemies = Array\.isArray\(battleData\?\.enemies\)/);
+assert.match(gameStateSource, /convertMvuEnemies\(mvuEnemies/);
 assert.equal(
   (gameStateSource.match(/buildMvuStatusDisplayContext\(battleData\?\.statuses\)/g) || []).length,
   2,

@@ -102,7 +102,7 @@ function formatAssets(assets: readonly BattleEndPromptAsset[] | undefined): stri
 export function formatBattleEndPrompt(input: BattleEndPromptInput): BattleEndPrompt {
   const resultText = formatBattleEndResult(input.result);
   const summary: string[] = [
-    '请根据以下战斗日志，生成后续的剧情。战斗结果已经确定；可以适当丰富动作衔接，但不得改写胜负、最终状态或玩家明确指定的后续行动。\n',
+    '请根据以下按回合战斗摘要，先把本场战斗从开端到结果完整剧情化，再自然衔接后续剧情。必须覆盖摘要中的每个回合，避免从开战直接跳到结算；同一回合的事件可以组织为连贯场景。摘要只记录关键事件，因此可以合理补充招式细节、动作衔接、场景反馈与角色反应，但不得改写既定胜负、回合中的关键行动、最终状态或玩家明确指定的后续行动。正文不要机械复述日志或逐条报数。\n',
     `【战斗结果】${resultText}\n`,
   ];
 

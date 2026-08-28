@@ -68,44 +68,47 @@ export function assessEnemyBudget(request: BattleRequest, build: BuildBudget): E
   const danger = request.route?.danger ?? 1;
   const budget = recommendEnemyBudget(build, danger, request.route?.act ?? 1);
   const warnings: string[] = [];
-  const enemy = request.content.enemy;
-  if (!enemy) return { budget, warnings: ['敌人内容为空'] };
+  const enemies = request.content.enemies?.length
+    ? request.content.enemies
+    : request.content.enemy
+      ? [request.content.enemy]
+      : [];
+  if (enemies.length === 0) return { budget, warnings: ['敌人内容为空'] };
 
-  const maxHp = Number(enemy.max_hp);
-  if (Number.isFinite(maxHp) && maxHp > budget.hpMax * 1.5) {
-    warnings.push(`敌人生命 ${maxHp} 明显高于建议上限 ${budget.hpMax}，可能形成拖长战斗`);
-  } else if (Number.isFinite(maxHp) && maxHp < budget.hpMin * 0.5) {
-    warnings.push(`敌人生命 ${maxHp} 明显低于建议下限 ${budget.hpMin}，可能缺少战斗压力`);
+  const totalMaxHp = enemies.reduce((sum, enemy) => {
+    const value = Number(enemy.max_hp);
+    return sum + (Number.isFinite(value) ? Math.max(0, value) : 0);
+  }, 0);
+  if (totalMaxHp > budget.hpMax * 1.5) {
+    warnings.push(`敌方总生命 ${totalMaxHp} 明显高于建议上限 ${budget.hpMax}，可能形成拖长战斗`);
+  } else if (totalMaxHp < budget.hpMin * 0.5) {
+    warnings.push(`敌方总生命 ${totalMaxHp} 明显低于建议下限 ${budget.hpMin}，可能缺少战斗压力`);
   }
 
-  const actions = Array.isArray(enemy.actions)
-    ? enemy.actions.filter(
+  for (const enemy of enemies) {
+    const enemyLabel = String(enemy.name || enemy.id || '敌人');
+    const actions = Array.isArray(enemy.actions)
+      ? enemy.actions.filter(
         (action): action is ContentDefinition => !!action && typeof action === 'object' && !Array.isArray(action),
       )
-    : [];
-  const analyses = actions.map(analyzeEnemyEffect);
-  const damages = analyses.map(numericActionDamage);
-  const estimatedPeaks = actions.map(estimatedPeakDamage);
-  const knownDamages = damages.filter((value): value is number => value !== null);
-  const desireEffect = enemy.lust_effect;
-  const desireAnalysis =
-    desireEffect && typeof desireEffect === 'object' && !Array.isArray(desireEffect)
+      : [];
+    const analyses = actions.map(analyzeEnemyEffect);
+    const damages = analyses.map(numericActionDamage);
+    const estimatedPeaks = actions.map(estimatedPeakDamage);
+    const knownDamages = damages.filter((value): value is number => value !== null);
+    const desireEffect = enemy.lust_effect;
+    const desireAnalysis = desireEffect && typeof desireEffect === 'object' && !Array.isArray(desireEffect)
       ? analyzeEnemyEffect(desireEffect as ContentDefinition)
       : null;
-  const pressureFromActions = analyses.some(analysis => hasContentMetric(analysis, 'attack'));
-  const pressureFromDesire = desireAnalysis ? hasContentMetric(desireAnalysis, 'attack') : false;
-  if (
-    knownDamages.length === actions.length &&
-    actions.length > 0 &&
-    knownDamages.every(value => value <= 0) &&
-    !pressureFromActions &&
-    !pressureFromDesire
-  ) {
-    warnings.push('敌人所有行动均未发现生命伤害，若无欲望或状态压力可能形成无风险战斗');
-  }
-  const peakDamage = Math.max(knownDamages.length > 0 ? Math.max(...knownDamages) : 0, ...estimatedPeaks);
-  if (peakDamage > budget.hitMax * 2) {
-    warnings.push(`敌人单次估计伤害 ${Math.round(peakDamage)} 明显高于建议行动上限 ${budget.hitMax}，可能造成无解爆发`);
+    const pressureFromActions = analyses.some(analysis => hasContentMetric(analysis, 'attack'));
+    const pressureFromDesire = desireAnalysis ? hasContentMetric(desireAnalysis, 'attack') : false;
+    if (knownDamages.length === actions.length && actions.length > 0 && knownDamages.every(value => value <= 0) && !pressureFromActions && !pressureFromDesire) {
+      warnings.push(`${enemyLabel}的所有行动均未发现生命伤害，若无欲望或状态压力可能形成无风险战斗`);
+    }
+    const peakDamage = Math.max(knownDamages.length > 0 ? Math.max(...knownDamages) : 0, ...estimatedPeaks);
+    if (peakDamage > budget.hitMax * 2) {
+      warnings.push(`${enemyLabel}的单次估计伤害 ${Math.round(peakDamage)} 明显高于建议行动上限 ${budget.hitMax}，可能造成无解爆发`);
+    }
   }
   return { budget, warnings };
 }

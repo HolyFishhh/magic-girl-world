@@ -64,7 +64,15 @@ export interface BattleSessionCardPlayPorts<TCard extends CardPlayCard, TToken> 
     endCardTransit(card: TCard): MaybePromise<void>;
     executeCardEffect(card: TCard, payment: CardEnergyPayment, repeatIndex: number): MaybePromise<void>;
     movePlayedCard(card: TCard, destination: PlayedCardDestination): MaybePromise<void>;
+    resolvePlayedCardDestination?(card: TCard, defaultDestination: PlayedCardDestination): PlayedCardDestination;
     triggerPostCardPlay(card: TCard): MaybePromise<void>;
+    recordCardPlayEvent?(card: TCard, payment: CardEnergyPayment, event: {
+        phase: 'before' | 'after';
+        replayIndex: number;
+        automatic: boolean;
+    }): MaybePromise<void>;
+    recordCardResourceSpent?(card: TCard, payment: CardEnergyPayment): MaybePromise<void>;
+    recordPlayedCardMoved?(card: TCard, destination: PlayedCardDestination): MaybePromise<void>;
 }
 export type BattleSessionCardPlayResult<TCard extends CardPlayCard> = {
     status: 'busy';

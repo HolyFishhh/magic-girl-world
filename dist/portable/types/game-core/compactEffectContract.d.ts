@@ -1,4 +1,4 @@
-export declare const COMPACT_EFFECT_META_KEYS: readonly ["to", "when", "on", "stacks", "hits", "from", "pick", "count", "add", "subtract", "multiply", "divide", "set"];
+export declare const COMPACT_EFFECT_META_KEYS: readonly ["to", "targets", "when", "on", "stacks", "hits", "from", "pick", "count", "add", "subtract", "multiply", "divide", "set", "limit", "extra", "scope", "match", "future_copies", "enabled", "min", "max", "card_type", "rarity", "cost", "min_cost", "max_cost", "tag", "template_id", "run_instance_id", "combat_instance_id", "origin", "upgraded", "phase", "priority", "repeat_every", "repeats", "effects", "free", "destination", "position"];
 export declare const COMPACT_EFFECT_META_KEY_SET: Set<string>;
 /**
  * Stable expansion order for an unordered JSON effect bundle.

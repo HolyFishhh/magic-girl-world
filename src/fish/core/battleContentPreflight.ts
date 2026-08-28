@@ -82,25 +82,27 @@ function collectDescriptionWarnings(battle: Record<string, any>, warnings: Battl
   for (const [values, path] of groups) {
     normalizeMvuArray(values).forEach((value, index) => addDescriptionWarnings(warnings, value, `${path}[${index}]`));
   }
-  const enemy = isRecord(battle.enemy) ? battle.enemy : null;
-  normalizeMvuArray(enemy?.actions).forEach((value, index) =>
-    addDescriptionWarnings(warnings, value, `battle.enemy.actions[${index}]`),
-  );
-  normalizeMvuArray(enemy?.abilities).forEach((value, index) =>
-    addDescriptionWarnings(warnings, value, `battle.enemy.abilities[${index}]`),
-  );
-  if (enemy?.lust_effect) {
-    addDescriptionWarnings(warnings, enemy.lust_effect, 'battle.enemy.lust_effect');
-  }
+  const enemies = Array.isArray(battle.enemies) && battle.enemies.length > 0 ? battle.enemies : [battle.enemy];
+  enemies.forEach((enemy, enemyIndex) => {
+    if (!isRecord(enemy)) return;
+    const enemyPath = Array.isArray(battle.enemies) ? `battle.enemies[${enemyIndex}]` : 'battle.enemy';
+    normalizeMvuArray(enemy.actions).forEach((value, index) =>
+      addDescriptionWarnings(warnings, value, `${enemyPath}.actions[${index}]`),
+    );
+    normalizeMvuArray(enemy.abilities).forEach((value, index) =>
+      addDescriptionWarnings(warnings, value, `${enemyPath}.abilities[${index}]`),
+    );
+    if (enemy.lust_effect) addDescriptionWarnings(warnings, enemy.lust_effect, `${enemyPath}.lust_effect`);
+  });
   if (battle.player_lust_effect)
     addDescriptionWarnings(warnings, battle.player_lust_effect, 'battle.player_lust_effect');
 }
 
-function validateEnemyActionConfig(enemy: Record<string, any>, issues: BattleContentIssue[]): void {
+function validateEnemyActionConfig(enemy: Record<string, any>, issues: BattleContentIssue[], path = 'battle.enemy'): void {
   const mode = String(enemy.action_mode || 'random');
   if (!ENEMY_ACTION_MODES.has(mode)) {
     issues.push({
-      path: 'battle.enemy.action_mode',
+      path: `${path}.action_mode`,
       code: 'INVALID_ACTION_MODE',
       message: `不支持的行动模式: ${mode}`,
     });
@@ -113,14 +115,14 @@ function validateEnemyActionConfig(enemy: Record<string, any>, issues: BattleCon
   );
   const root = enemy.action_config || {};
   if (!isRecord(root)) {
-    issues.push({ path: 'battle.enemy.action_config', code: 'INVALID_ACTION_CONFIG', message: '行动配置必须是对象' });
+    issues.push({ path: `${path}.action_config`, code: 'INVALID_ACTION_CONFIG', message: '行动配置必须是对象' });
     return;
   }
   const config = isRecord(root[mode]) ? root[mode] : root;
   if (mode === 'sequence' || mode === 'sequence_then_probability') {
     if (!Array.isArray(config.sequence) || config.sequence.length === 0) {
       issues.push({
-        path: 'battle.enemy.action_config.sequence',
+        path: `${path}.action_config.sequence`,
         code: 'INVALID_SEQUENCE',
         message: '序列模式必须提供非空 sequence',
       });
@@ -128,7 +130,7 @@ function validateEnemyActionConfig(enemy: Record<string, any>, issues: BattleCon
       config.sequence.forEach((name: unknown, index: number) => {
         if (typeof name !== 'string' || !names.has(name)) {
           issues.push({
-            path: `battle.enemy.action_config.sequence[${index}]`,
+            path: `${path}.action_config.sequence[${index}]`,
             code: 'UNKNOWN_ACTION',
             message: '序列引用了不存在的行动',
           });
@@ -140,7 +142,7 @@ function validateEnemyActionConfig(enemy: Record<string, any>, issues: BattleCon
     const probability = isRecord(config.probability) ? config.probability : mode === 'probability' ? config : null;
     if (!probability) {
       issues.push({
-        path: 'battle.enemy.action_config.probability',
+        path: `${path}.action_config.probability`,
         code: 'INVALID_PROBABILITY',
         message: '概率模式必须提供 probability 对象',
       });
@@ -148,7 +150,7 @@ function validateEnemyActionConfig(enemy: Record<string, any>, issues: BattleCon
       for (const [name, weight] of Object.entries(probability)) {
         if (!names.has(name) || typeof weight !== 'number' || !Number.isFinite(weight) || weight <= 0) {
           issues.push({
-            path: `battle.enemy.action_config.probability.${name}`,
+            path: `${path}.action_config.probability.${name}`,
             code: 'INVALID_PROBABILITY',
             message: '行动概率必须引用现有行动并使用正数权重',
           });
@@ -175,17 +177,21 @@ function addPlayabilityWarnings(battle: Record<string, any>, warnings: BattleCon
       message: '未发现直接生命/欲望伤害或 Event，战斗可能无法结束',
     });
 
-  const enemyActions = normalizeMvuArray(battle.enemy?.actions);
-  const enemyHasPressure = enemyActions.some(action => {
-    const analysis: ContentAnalysis = analyzeContentDefinition(action);
-    return hasContentMetric(analysis, 'attack');
-  });
-  if (!enemyHasPressure)
-    warnings.push({
-      path: 'battle.enemy.actions',
-      code: 'NO_ENEMY_PRESSURE',
-      message: '敌人没有直接生命/欲望压力，可能形成无风险无限战斗',
+  const enemies = Array.isArray(battle.enemies) && battle.enemies.length > 0 ? battle.enemies : [battle.enemy];
+  enemies.forEach((enemy, index) => {
+    if (!isRecord(enemy)) return;
+    const path = Array.isArray(battle.enemies) ? `battle.enemies[${index}]` : 'battle.enemy';
+    const enemyHasPressure = normalizeMvuArray(enemy.actions).some(action => {
+      const analysis: ContentAnalysis = analyzeContentDefinition(action);
+      return hasContentMetric(analysis, 'attack');
     });
+    if (!enemyHasPressure)
+      warnings.push({
+        path: `${path}.actions`,
+        code: 'NO_ENEMY_PRESSURE',
+        message: '敌人没有直接生命/欲望压力，可能形成无风险无限战斗',
+      });
+  });
 }
 
 /** Validate the strict shallow-JSON contract before a battle mutates MUV state. */
@@ -206,10 +212,13 @@ export function preflightBattleContent(battleData: unknown): BattleContentPrefli
   if (typeof playerEmoji !== 'string' || !playerEmoji.trim()) {
     issues.push({ path: 'battle.core.emoji', code: 'MISSING_PLAYER_EMOJI', message: '玩家战斗形象不能为空' });
   }
-  if (isRecord(battleData.enemy)) {
-    validateEntityNumbers(battleData.enemy, 'battle.enemy', issues);
-    validateEnemyActionConfig(battleData.enemy, issues);
-  }
+  const enemies = Array.isArray(battleData.enemies) && battleData.enemies.length > 0 ? battleData.enemies : [battleData.enemy];
+  enemies.forEach((enemy, index) => {
+    if (!isRecord(enemy)) return;
+    const path = Array.isArray(battleData.enemies) ? `battle.enemies[${index}]` : 'battle.enemy';
+    validateEntityNumbers(enemy, path, issues);
+    validateEnemyActionConfig(enemy, issues, path);
+  });
   collectDescriptionWarnings(battleData, warnings);
   addPlayabilityWarnings(battleData, warnings);
   return { ok: issues.length === 0, issues, warnings };

@@ -65,6 +65,7 @@
         "$meta": { "extensible": true }
       }
     },
+    "enemies": ["$__META_EXTENSIBLE__$"],
     "player_lust_effect": {
       "$meta": { "extensible": true },
       "name": "",

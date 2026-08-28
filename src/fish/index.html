@@ -62,13 +62,19 @@
           <div class="enemy-section">
             <!-- 敌人标题 - 始终显示 -->
             <div class="enemy-title-bar">
-              <div class="enemy-emoji">👹</div>
+              <div class="enemy-avatar-stack">
+                <div class="enemy-intent-summary" id="enemy-intent-summary" aria-label="敌方下一轮效果">
+                  <span class="intent-badge" title="准备行动">❓</span>
+                </div>
+                <div class="enemy-emoji">👹</div>
+              </div>
               <div class="enemy-name" id="enemy-name">正在恢复战斗...</div>
               <div class="enemy-intent" role="button" aria-label="查看敌方下一步行动">
-                <div class="intent-icon">❓</div>
                 <div class="intent-text">准备行动</div>
               </div>
             </div>
+
+            <div class="enemy-roster" id="enemy-roster" aria-label="敌方单位列表"></div>
 
             <!-- 敌人信息卡 - 可滚动部分 -->
             <div class="enemy-card">

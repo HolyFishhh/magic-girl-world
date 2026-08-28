@@ -249,6 +249,23 @@ function describeSingleOperation(
     case 'reduce_cost':
       text = `使${selectionText(value, 'choose', value.count ?? 1, options)}费用降低${amount}`;
       break;
+    case 'modify_card': {
+      const stats: Record<string, string> = {
+        damage: '伤害',
+        block: '格挡',
+        lust: '欲望',
+        stacks: '状态层数',
+      };
+      const operator = ['add', 'subtract', 'multiply', 'divide'].find(key => value[key] !== undefined) || 'add';
+      const verbs: Record<string, string> = {
+        add: '增加',
+        subtract: '减少',
+        multiply: '乘以',
+        divide: '除以',
+      };
+      text = `使${selectionText(value, 'choose', value.count ?? 1, options)}的${stats[String(value.modify_card)] || '数值'}${verbs[operator]}${formula(value[operator], options)}`;
+      break;
+    }
     case 'copy':
       text = `复制${selectionText(value, 'choose', value.copy, options)}到手牌`;
       break;
@@ -280,6 +297,14 @@ function describeSingleOperation(
         set: '设为',
       };
       text = `${subjects[String(value.modify)] || `${target}的未知属性`}${verbs[operator]}${formula(value[operator], options)}`;
+      break;
+    }
+    case 'card_rule': {
+      const scope = value.limit === 'all' ? '所有牌' : `前${formula(value.limit, options)}张牌`;
+      text =
+        value.card_rule === 'free'
+          ? `每回合${scope}不消耗能量`
+          : `每回合${scope}额外结算${formula(value.extra ?? 1, options)}次`;
       break;
     }
   }

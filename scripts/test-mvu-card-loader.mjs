@@ -51,7 +51,7 @@ assert.equal(extra.应答格式, '聊天消息');
 assert.equal(extra.请求方式, '依次请求，失败后重试');
 assert.equal(extra.请求次数, 2);
 assert.equal(extra.max_chat_history, 2);
-assert.equal(extra.最大回复token数, 2600);
+assert.equal(extra.最大回复token数, 20000);
 assert.equal(extra.世界书条目白名单正则, '^\\[mvu_update\\]');
 assert.equal(settings.internal.已开启默认不兼容假流式, true);
 assert.equal(settings.internal.魔法少女世界额外模型默认版本, cardVersion);

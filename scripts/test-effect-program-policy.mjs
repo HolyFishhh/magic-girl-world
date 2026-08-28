@@ -69,6 +69,17 @@ assert.ok(
   ),
 );
 
+const cardRule = compile([{ card_rule: 'replay', limit: 1, extra: 1 }]);
+assert.equal(validateEffectProgramPolicy(cardRule, { modifierPolicy: 'only' }).ok, true);
+assert.ok(codes(validateEffectProgramPolicy(cardRule, { modifierPolicy: 'forbid' })).includes('MODIFIER_NOT_ALLOWED'));
+const cardValueChange = compile([{ modify_card: 'damage', add: 2, pick: 'choose' }]);
+assert.ok(
+  codes(validateEffectProgramPolicy(cardValueChange, { modifierPolicy: 'only' })).includes(
+    'ONLY_MODIFIERS_ALLOWED',
+  ),
+  'one-shot card changes cannot be smuggled into passive or hold programs',
+);
+
 const knownStatus = compile([{ apply_status: 'bleed', stacks: 2 }]);
 assert.equal(validateEffectProgramPolicy(knownStatus, { knownStatusIds: new Set(['bleed']) }).ok, true);
 assert.ok(

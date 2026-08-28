@@ -32,6 +32,7 @@ export function createContentPackFromMvuBattle(battleData: unknown): ContentPack
     abilities: normalizeMvuList(battleData.player_abilities),
     activeStatuses: normalizeMvuList(battleData.player_status_effects),
     enemy: normalizeMvuEnemy(battleData.enemy),
+    enemies: normalizeMvuList(battleData.enemies).map(normalizeMvuEnemy),
     playerDesireEffect: normalizeCompactNamedEffectInput(battleData.player_lust_effect, '欲望满溢'),
   });
 }

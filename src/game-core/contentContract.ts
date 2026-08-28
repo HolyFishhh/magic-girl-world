@@ -455,6 +455,28 @@ export function validateContentPackContract(
       { requireName: true },
     );
 
+  // Validate every additional enemy with the same executable contract while
+  // preserving the legacy first enemy path for existing diagnostics.
+  for (let index = 1; index < (pack.enemies || []).length; index += 1) {
+    const enemy = pack.enemies![index];
+    const nested = validateContentPackContract(
+      {
+        ...pack,
+        enemy,
+        enemies: undefined,
+        desireEffects: { ...pack.desireEffects, enemy: isRecord(enemy) && isRecord(enemy.lust_effect) ? enemy.lust_effect : null },
+      },
+      options,
+    );
+    if (!nested.ok) {
+      for (const issue of nested.issues) {
+        if (issue.path === 'enemy' || issue.path.startsWith('enemy.')) {
+          issues.push({ ...issue, path: `enemies[${index}]${issue.path.slice('enemy'.length)}` });
+        }
+      }
+    }
+  }
+
   return issues.length > 0 ? { ok: false, issues } : { ok: true, value: pack };
 }
 
@@ -466,6 +488,8 @@ export function formatContentContractIssues(issues: readonly ContentContractIssu
 
 /** Project a portable content path onto the canonical MUV battle root. */
 export function contentPathToBattlePath(path: string): string {
+  if (path === 'enemies') return 'battle.enemies';
+  if (path.startsWith('enemies[')) return `battle.${path}`;
   if (path === 'enemy') return 'battle.enemy';
   if (path.startsWith('enemy.')) return `battle.${path}`;
   if (path.startsWith('desireEffects.player')) {

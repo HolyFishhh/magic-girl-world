@@ -12,7 +12,7 @@ const configure=()=>{
     e.兼容假流式=true;e.关闭thinking=true;e.随机头部=false;
     e.模型来源='与插头相同';e.破限方案='使用内置破限';e.其他预设名称='';
     e.应答格式='聊天消息';e.启用自动请求=true;q.额外模型解析中=true;
-    e.请求方式='依次请求，失败后重试';e.请求次数=2;e.max_chat_history=2;e.最大回复token数=2600;
+    e.请求方式='依次请求，失败后重试';e.请求次数=2;e.max_chat_history=2;e.最大回复token数=20000;
     e.世界书条目白名单正则='^\\\\[mvu_update\\\\]';
     i.已开启默认不兼容假流式=true;i.魔法少女世界额外模型默认版本=v;
     t.saveSettingsDebounced?.();

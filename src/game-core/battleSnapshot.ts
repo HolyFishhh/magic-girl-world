@@ -71,8 +71,12 @@ function hasValidRuntimeContent(state: Record<string, any>): boolean {
     return false;
   }
 
-  const enemy = state.enemy;
-  if (enemy) {
+  const enemies = Array.isArray(state.enemies) && state.enemies.length > 0
+    ? state.enemies
+    : state.enemy
+      ? [state.enemy]
+      : [];
+  for (const enemy of enemies) {
     if ([...(enemy.actions || []), ...(enemy.abilities || [])].some(value => !hasValidRuntimeProgram(value))) {
       return false;
     }
@@ -141,12 +145,21 @@ export function readBattleSessionSnapshot(value: unknown): BattleSessionSnapshot
     }
   }
   if (state.random !== undefined && !isBattleRandomState(state.random)) return null;
-  if (state.enemy !== null) {
-    if (!isRecord(state.enemy) || !hasValidCombatNumbers(state.enemy)) return null;
-    if (typeof state.enemy.id !== 'string' || typeof state.enemy.name !== 'string') return null;
-    if (!Array.isArray(state.enemy.statusEffects) || !Array.isArray(state.enemy.actions)) return null;
-    if (state.enemy.abilities !== undefined && !Array.isArray(state.enemy.abilities)) return null;
+  if (state.enemies !== undefined && !Array.isArray(state.enemies)) return null;
+  const enemies = Array.isArray(state.enemies) && state.enemies.length > 0
+    ? state.enemies
+    : state.enemy
+      ? [state.enemy]
+      : [];
+  const enemyIds = new Set<string>();
+  for (const enemy of enemies) {
+    if (!isRecord(enemy) || !hasValidCombatNumbers(enemy)) return null;
+    if (typeof enemy.id !== 'string' || typeof enemy.name !== 'string' || enemyIds.has(enemy.id)) return null;
+    enemyIds.add(enemy.id);
+    if (!Array.isArray(enemy.statusEffects) || !Array.isArray(enemy.actions)) return null;
+    if (enemy.abilities !== undefined && !Array.isArray(enemy.abilities)) return null;
   }
+  if (state.activeEnemyId !== undefined && state.activeEnemyId !== null && !enemyIds.has(state.activeEnemyId)) return null;
   if (!hasValidRuntimeContent(state)) return null;
 
   return value as unknown as BattleSessionSnapshot;

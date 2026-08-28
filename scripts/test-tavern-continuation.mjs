@@ -232,7 +232,8 @@ async function captureBattleEndPrompt(route) {
 }
 
 for (const prompt of [await captureBattleEndPrompt(null), await captureBattleEndPrompt({ nodeId: 'node-1' })]) {
-  assert.match(prompt, /^请根据以下战斗日志/);
+  assert.match(prompt, /^请根据以下按回合战斗摘要/);
+  assert.match(prompt, /必须覆盖摘要中的每个回合/);
   assert.doesNotMatch(prompt, /\[战斗后续\]|\[战斗结算\]|\[战败惩罚\]|\[剧情模型要求\]/);
 }
 

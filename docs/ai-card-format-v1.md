@@ -163,6 +163,7 @@ X 费示例：
 | `{ "reduce_cost": 1, "count": 2, "pick": "choose" }` | 选择 2 张手牌，各减 1 费            |
 | `{ "copy": 1, "from": "draw", "pick": "random" }`    | 随机复制 1 张抽牌堆卡牌到手牌       |
 | `{ "double": 1, "pick": "choose" }`                  | 选择 1 张手牌，使下次主效果执行两次 |
+| `{ "modify_card": "damage", "add": 2, "pick": "choose" }` | 选择 1 张手牌，使其中每段伤害增加 2 |
 
 `from` 可用 `hand/draw/discard/all`，默认 `hand`。`pick` 可用 `random/choose/left/right/all`；`left/right`
 只适用于手牌，`from: "all"` 必须配 `pick: "all"`。要操作多个牌区时写多条效果，不生成旧式组合选择器。
@@ -172,6 +173,10 @@ X 费示例：
 `recover` 单独使用 `from: "discard" | "exhaust"` 和 `pick: "random" | "choose" | "all"`；取回只移动原卡，不算抽牌、不触发 `on_draw`，并受 10 张手牌上限约束。
 
 `scry` 单独使用，值为查看数量或公式；不搭配 `from/pick/count`。玩家可从实际牌库顶候选中选择 0 到 N 张置入弃牌堆，剩余卡牌保持原顺序；这个移动不触发 `on_draw/on_discard`。
+
+`modify_card` 的值只用 `damage/block/lust/stacks`，并且恰好搭配 `add/subtract/multiply/divide` 中一个。它复用相同的 `from/pick/count` 选择器，修改选中卡牌中对应数值通道的所有步骤；不会修改 `hits`、费用、目标、触发器或卡牌类型。公式运算后的对应数值最低为 0。
+
+每回合范围型出牌规则只放在 `passive` 能力/遗物或状态 `hold`。`card_rule:"replay"` 表示完整效果额外结算，`extra` 是额外次数；`card_rule:"free"` 表示不消耗能量且不能写 `extra`。两者都必须写 `limit`，其值为正数或 `"all"`。免费打出的 X 费牌按使用 0 能量结算，规则不会改写卡牌原始费用。
 
 ## Power 触发器
 

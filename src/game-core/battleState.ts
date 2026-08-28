@@ -1,4 +1,5 @@
 import type { BattleRequest } from './battleContract';
+import type { PlayedCardDestination } from './cardRules';
 import { getCardSourceId } from './cardRules';
 import {
   appendCardToZone,
@@ -15,13 +16,36 @@ import {
   type CardZoneOperationPlan,
   type CommitCardZoneOperationResult,
 } from './cardZoneOperation';
+import {
+  commitAdvancedCardZoneTransaction,
+  type AdvancedCardZoneCommit,
+  type AdvancedCardZonePlan,
+  type AdvancedCardZoneFailureCode,
+} from './advancedCardZoneTransaction';
 import { createBattleRandomState, drawBattleRandom, type BattleRandomState } from './deterministicRandom';
 import type { EffectProgram } from './effectDsl';
 import { allocateRuntimeId } from './runtimeIds';
+import type { CardIdentity, CardOrigin } from './cardIdentity';
+import type { CardPatch, CardPatchBaseSnapshot, CardPatchLedger } from './cardPatch';
+import { clearCardPatches, createCardPatchLedger, type CardPatchCleanupReason } from './cardPatch';
 import { transitionToBattleEnd, type BattleEndResult } from './battleTerminal';
 import { advanceTurnCounter, beginEnemyTurn, beginPlayerTurn, type CoreBattlePhase } from './turnState';
+import {
+  createEffectSchedulerState,
+  scheduleEffect as appendScheduledEffect,
+  type EffectSchedulerState,
+  type ScheduleEffectDraft,
+  type ScheduledEffect,
+} from './effectScheduler';
+import {
+  appendBattleEvent,
+  createBattleEventJournal,
+  type AppendBattleEventResult,
+  type BattleEventDraft,
+  type BattleEventJournalState,
+} from './battleEventJournal';
 
-export interface Card {
+export interface Card extends Partial<CardIdentity> {
   id: string;
   originalId?: string;
   name: string;
@@ -37,6 +61,14 @@ export interface Card {
   ethereal?: boolean;
   innate?: boolean;
   doubleEffect?: boolean;
+  origin?: CardOrigin;
+  tags?: string[];
+  upgraded?: boolean;
+  upgradeLevel?: number;
+  patchBase?: CardPatchBaseSnapshot;
+  patches?: CardPatch[];
+  replayCount?: number;
+  xValueBonus?: number;
 }
 
 export interface StatusEffect {
@@ -151,17 +183,27 @@ export interface Enemy {
   actionConfig?: Record<string, any>;
   _sequenceIndex?: number;
   _sequenceDoneOnce?: boolean;
+  /** Higher priority acts first; speed breaks equal-priority ties. */
+  actionPriority?: number;
+  speed?: number;
 }
 
 export type BattlePhase = CoreBattlePhase;
 
 export interface GameState {
   player: Player;
+  /** Ordered living/defeated enemy entities. New code uses this collection. */
+  enemies?: Enemy[];
+  /** Player-selected or compatibility opponent. */
+  activeEnemyId?: string | null;
+  /** Legacy active-opponent alias; kept synchronized with enemies. */
   enemy: Enemy | null;
   currentTurn: number;
   cardsPlayedThisTurn: number;
   attacksPlayedThisTurn: number;
   skillsPlayedThisTurn: number;
+  /** Player-initiated plays consume per-turn free/Replay windows; automatic plays do not. */
+  cardRuleUsesThisTurn?: number;
   phase: BattlePhase;
   isGameOver: boolean;
   battle?: Record<string, any>;
@@ -171,12 +213,17 @@ export interface GameState {
   battleNarrative: string;
   /** Compact structured history survives iframe reloads and is summarized at settlement. */
   battleHistory?: BattleHistoryEntry[];
+  /** Structured causal history for counters, triggers, save/restore and complete battle reports. */
+  eventJournal?: BattleEventJournalState;
+  /** Template/future-copy patches are persisted separately from concrete card instances. */
+  cardPatchLedger?: CardPatchLedger;
+  effectScheduler?: EffectSchedulerState;
 }
 
 export type BattleStateChangeListener = (state: GameState) => void;
 
 function cloneState<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
+  return structuredClone(value);
 }
 
 export function createEmptyPlayer(): Player {
@@ -203,16 +250,22 @@ export function createEmptyPlayer(): Player {
 export function createEmptyBattleState(): GameState {
   return {
     player: createEmptyPlayer(),
+    enemies: [],
+    activeEnemyId: null,
     enemy: null,
     currentTurn: 0,
     cardsPlayedThisTurn: 0,
     attacksPlayedThisTurn: 0,
     skillsPlayedThisTurn: 0,
+    cardRuleUsesThisTurn: 0,
     phase: 'setup',
     isGameOver: false,
     battleResult: 'ongoing',
     battleNarrative: '',
     battleHistory: [],
+    eventJournal: createBattleEventJournal(),
+    cardPatchLedger: createCardPatchLedger(),
+    effectScheduler: createEffectSchedulerState(),
   };
 }
 
@@ -226,6 +279,48 @@ export class BattleStateStore {
 
   public constructor(initialState: GameState = createEmptyBattleState()) {
     this.gameState = cloneState(initialState);
+    this.normalizeEnemyCollection();
+    this.gameState.eventJournal = initialState.eventJournal
+      ? createBattleEventJournal(initialState.eventJournal.events || [])
+      : createBattleEventJournal();
+    this.gameState.cardPatchLedger = initialState.cardPatchLedger
+      ? createCardPatchLedger(initialState.cardPatchLedger.patches)
+      : createCardPatchLedger();
+    this.gameState.effectScheduler = initialState.effectScheduler
+      ? createEffectSchedulerState(initialState.effectScheduler.queue)
+      : createEffectSchedulerState();
+    this.gameState.cardRuleUsesThisTurn = Math.max(
+      0,
+      Math.trunc(initialState.cardRuleUsesThisTurn ?? initialState.cardsPlayedThisTurn ?? 0),
+    );
+  }
+
+  protected normalizeEnemyCollection(): void {
+    const source = Array.isArray(this.gameState.enemies) && this.gameState.enemies.length > 0
+      ? this.gameState.enemies
+      : this.gameState.enemy
+        ? [this.gameState.enemy]
+        : [];
+    const seen = new Set<string>();
+    this.gameState.enemies = source.filter(enemy => {
+      if (!enemy?.id || seen.has(enemy.id)) return false;
+      seen.add(enemy.id);
+      return true;
+    });
+    const requested = this.gameState.activeEnemyId;
+    this.gameState.activeEnemyId = requested && this.gameState.enemies.some(enemy => enemy.id === requested)
+      ? requested
+      : this.gameState.enemies.find(enemy => enemy.currentHp > 0)?.id || this.gameState.enemies[0]?.id || null;
+    this.syncLegacyEnemyAlias();
+  }
+
+  private syncLegacyEnemyAlias(): void {
+    const requested = this.gameState.enemies?.find(enemy => enemy.id === this.gameState.activeEnemyId) || null;
+    const active = (requested?.currentHp || 0) > 0
+      ? requested
+      : this.gameState.enemies?.find(enemy => enemy.currentHp > 0) || requested;
+    this.gameState.activeEnemyId = active?.id || null;
+    this.gameState.enemy = active ? cloneState(active) : null;
   }
 
   protected stateDidChange(_event: string, _state: GameState): void {}
@@ -238,6 +333,7 @@ export class BattleStateStore {
 
   public replaceState(state: GameState, event = 'state_replaced'): void {
     this.gameState = cloneState(state);
+    this.normalizeEnemyCollection();
     this.notifyListeners(event);
   }
 
@@ -249,8 +345,60 @@ export class BattleStateStore {
     return { ...this.gameState.player };
   }
 
+  public recordBattleEvent(draft: BattleEventDraft): AppendBattleEventResult {
+    const result = appendBattleEvent(this.gameState.eventJournal || createBattleEventJournal(), draft);
+    if (result.ok) {
+      this.gameState.eventJournal = result.state;
+      this.notifyListeners('battle_event_recorded');
+    }
+    return result;
+  }
+
+  public readEffectScheduler(): EffectSchedulerState {
+    return cloneState(this.gameState.effectScheduler || createEffectSchedulerState());
+  }
+
+  public writeEffectScheduler(scheduler: EffectSchedulerState): void {
+    this.gameState.effectScheduler = cloneState(scheduler);
+    this.notifyListeners('effect_scheduler_updated');
+  }
+
+  public scheduleEffect(draft: ScheduleEffectDraft): ScheduledEffect {
+    const result = appendScheduledEffect(this.readEffectScheduler(), draft);
+    this.writeEffectScheduler(result.state);
+    return cloneState(result.scheduled);
+  }
+
+  public readCardPatchLedger(): CardPatchLedger {
+    return cloneState(this.gameState.cardPatchLedger || createCardPatchLedger());
+  }
+
+  public writeCardPatchLedger(ledger: CardPatchLedger): void {
+    this.gameState.cardPatchLedger = cloneState(ledger);
+    this.notifyListeners('card_patch_ledger_updated');
+  }
+
   public getEnemy(): Enemy | null {
-    return this.gameState.enemy ? { ...this.gameState.enemy } : null;
+    this.syncLegacyEnemyAlias();
+    return this.gameState.enemy ? cloneState(this.gameState.enemy) : null;
+  }
+
+  public getEnemies(options: { livingOnly?: boolean } = {}): Enemy[] {
+    return cloneState((this.gameState.enemies || []).filter(enemy => !options.livingOnly || enemy.currentHp > 0));
+  }
+
+  public getEnemyById(enemyId: string): Enemy | null {
+    const enemy = this.gameState.enemies?.find(entry => entry.id === enemyId);
+    return enemy ? cloneState(enemy) : null;
+  }
+
+  public setActiveEnemy(enemyId: string): boolean {
+    const enemy = this.gameState.enemies?.find(entry => entry.id === enemyId && entry.currentHp > 0);
+    if (!enemy) return false;
+    this.gameState.activeEnemyId = enemyId;
+    this.syncLegacyEnemyAlias();
+    this.notifyListeners('active_enemy_changed');
+    return true;
   }
 
   public getCurrentPhase(): BattlePhase {
@@ -273,20 +421,56 @@ export class BattleStateStore {
     return draw.value;
   }
 
+  public setRandomState(random: BattleRandomState): void {
+    this.gameState.random = cloneState(random);
+    this.notifyListeners('random_updated');
+  }
+
   public updatePlayer(updates: Partial<Player>, _options?: { skipAttributeTriggers?: boolean }): void {
     this.gameState.player = { ...this.gameState.player, ...updates };
     this.notifyListeners('player_updated');
   }
 
   public updateEnemy(updates: Partial<Enemy>, _options?: { skipAttributeTriggers?: boolean }): void {
-    if (!this.gameState.enemy) return;
-    this.gameState.enemy = { ...this.gameState.enemy, ...updates };
+    const enemyId = this.gameState.activeEnemyId || this.gameState.enemy?.id;
+    if (!enemyId) return;
+    this.updateEnemyById(enemyId, updates, _options);
+  }
+
+  public updateEnemyById(
+    enemyId: string,
+    updates: Partial<Enemy>,
+    _options?: { skipAttributeTriggers?: boolean },
+  ): void {
+    const index = this.gameState.enemies?.findIndex(enemy => enemy.id === enemyId) ?? -1;
+    if (index < 0 || !this.gameState.enemies) return;
+    if (updates.id !== undefined && updates.id !== enemyId) throw new Error('enemy id is immutable');
+    this.gameState.enemies[index] = { ...this.gameState.enemies[index], ...cloneState(updates), id: enemyId };
+    this.syncLegacyEnemyAlias();
     this.notifyListeners('enemy_updated');
   }
 
   public setEnemy(enemy: Enemy): void {
-    this.gameState.enemy = enemy;
+    this.setEnemies([enemy], enemy.id);
+  }
+
+  public setEnemies(enemies: readonly Enemy[], activeEnemyId?: string | null): void {
+    const ids = enemies.map(enemy => enemy.id);
+    if (ids.some(id => !id) || new Set(ids).size !== ids.length) throw new Error('enemy ids must be non-empty and unique');
+    this.gameState.enemies = [...cloneState(enemies)];
+    this.gameState.activeEnemyId = activeEnemyId ?? enemies.find(enemy => enemy.currentHp > 0)?.id ?? null;
+    this.syncLegacyEnemyAlias();
     this.notifyListeners('enemy_set');
+  }
+
+  public removeDefeatedEnemies(): Enemy[] {
+    const removed = (this.gameState.enemies || []).filter(enemy => enemy.currentHp <= 0);
+    if (removed.length === 0) return [];
+    const removedIds = new Set(removed.map(enemy => enemy.id));
+    this.gameState.enemies = (this.gameState.enemies || []).filter(enemy => !removedIds.has(enemy.id));
+    this.syncLegacyEnemyAlias();
+    this.notifyListeners('enemies_removed');
+    return cloneState(removed);
   }
 
   public setPhase(phase: BattlePhase): void {
@@ -313,6 +497,7 @@ export class BattleStateStore {
     this.gameState.cardsPlayedThisTurn = next.cardsPlayedThisTurn;
     this.gameState.attacksPlayedThisTurn = next.attacksPlayedThisTurn;
     this.gameState.skillsPlayedThisTurn = next.skillsPlayedThisTurn;
+    this.gameState.cardRuleUsesThisTurn = 0;
     this.notifyListeners('phase_changed');
     this.notifyListeners('cards_played_reset');
   }
@@ -326,10 +511,15 @@ export class BattleStateStore {
     cardsPlayedThisTurn: number;
     attacksPlayedThisTurn: number;
     skillsPlayedThisTurn: number;
+    cardRuleUsesThisTurn?: number;
   }): void {
     this.gameState.cardsPlayedThisTurn = Math.max(0, Math.trunc(counters.cardsPlayedThisTurn));
     this.gameState.attacksPlayedThisTurn = Math.max(0, Math.trunc(counters.attacksPlayedThisTurn));
     this.gameState.skillsPlayedThisTurn = Math.max(0, Math.trunc(counters.skillsPlayedThisTurn));
+    this.gameState.cardRuleUsesThisTurn = Math.max(
+      0,
+      Math.trunc(counters.cardRuleUsesThisTurn ?? counters.cardsPlayedThisTurn),
+    );
     this.notifyListeners('card_played_count_changed');
   }
 
@@ -389,6 +579,14 @@ export class BattleStateStore {
     return result.card;
   }
 
+  public removeOwnedCardFromZone(cardId: string, zone: CardPileZone): Card | null {
+    const result = removeCardFromZone(this.getCardZones(), zone, cardId);
+    if (!result.card) return null;
+    this.applyCardZones(result.zones);
+    this.notifyListeners('card_removed_from_zone');
+    return result.card;
+  }
+
   public moveCardToDiscard(card: Card): void {
     this.applyCardZones(appendCardToZone(this.getCardZones(), 'discardPile', card));
     this.notifyListeners('discard_updated');
@@ -397,6 +595,30 @@ export class BattleStateStore {
   public moveCardToExhaust(card: Card): void {
     this.applyCardZones(appendCardToZone(this.getCardZones(), 'exhaustPile', card));
     this.notifyListeners('exhaust_updated');
+  }
+
+  public placeResolvedCard(card: Card, destination: PlayedCardDestination): PlayedCardDestination {
+    if (destination === 'remove') {
+      this.notifyListeners('card_removed_after_play');
+      return destination;
+    }
+    if (destination === 'discard') {
+      this.moveCardToDiscard(card);
+      return destination;
+    }
+    if (destination === 'exhaust') {
+      this.moveCardToExhaust(card);
+      return destination;
+    }
+    if (destination === 'hand') {
+      if (this.addCardToHand(card)) return destination;
+      this.moveCardToDiscard(card);
+      return 'discard';
+    }
+    const index = destination === 'draw_bottom' ? 0 : this.gameState.player.drawPile.length;
+    this.applyCardZones(insertCardIntoZone(this.getCardZones(), 'drawPile', card, index));
+    this.notifyListeners('card_returned_to_draw');
+    return destination;
   }
 
   public moveOwnedCardsToExhaust(cardIds: readonly string[]): Card[] {
@@ -437,6 +659,20 @@ export class BattleStateStore {
     return result.updated;
   }
 
+  public clearOwnedCardPatches(reason: CardPatchCleanupReason): Card[] {
+    const zones = this.getCardZones();
+    const ids = [...zones.hand, ...zones.drawPile, ...zones.discardPile, ...zones.exhaustPile]
+      .filter(card => (card.patches || []).some(patch => patch.removeOn === reason))
+      .map(card => card.id);
+    if (ids.length === 0) return [];
+    return this.updateOwnedCards(ids, card => clearCardPatches(card, reason), [
+      'hand',
+      'drawPile',
+      'discardPile',
+      'exhaustPile',
+    ]);
+  }
+
   public replaceCardZones(zones: CardZoneState<Card>, event: 'draw' | 'shuffle'): void {
     this.applyCardZones(zones);
     this.notifyListeners(event === 'shuffle' ? 'deck_shuffled' : 'cards_drawn');
@@ -460,6 +696,18 @@ export class BattleStateStore {
     if (result.ok) {
       this.applyCardZones(result.zones);
       this.notifyListeners('card_zones_updated');
+    }
+    return result;
+  }
+
+  public commitAdvancedCardZoneTransaction(
+    plan: AdvancedCardZonePlan,
+    selectedIds?: readonly string[],
+  ): AdvancedCardZoneCommit<Card> | { ok: false; code: AdvancedCardZoneFailureCode } {
+    const result = commitAdvancedCardZoneTransaction(this.getCardZones(), plan, selectedIds);
+    if (result.ok) {
+      this.applyCardZones(result.zones);
+      this.notifyListeners('advanced_card_zones_updated');
     }
     return result;
   }
@@ -534,6 +782,7 @@ export class BattleStateStore {
     const snapshot = this.snapshots.get(name);
     if (!snapshot) return false;
     this.gameState = cloneState(snapshot);
+    this.normalizeEnemyCollection();
     this.notifyListeners('snapshot_restored');
     return true;
   }
@@ -551,11 +800,10 @@ export class BattleStateStore {
         ),
       });
     }
-    if (this.gameState.enemy?.modifiers) {
-      this.updateEnemy({
-        modifiers: Object.fromEntries(
-          Object.entries(this.gameState.enemy.modifiers).filter(([key]) => !temporary.has(key)),
-        ),
+    for (const enemy of this.getEnemies()) {
+      if (!enemy.modifiers) continue;
+      this.updateEnemyById(enemy.id, {
+        modifiers: Object.fromEntries(Object.entries(enemy.modifiers).filter(([key]) => !temporary.has(key))),
       });
     }
   }

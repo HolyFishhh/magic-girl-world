@@ -63,8 +63,17 @@ export class BattleUI {
         return;
       }
 
-      const enemy = gameState.enemy;
+      const enemies = Array.isArray(gameState.enemies) && gameState.enemies.length > 0
+        ? gameState.enemies
+        : gameState.enemy
+          ? [gameState.enemy]
+          : [];
+      const enemy = enemies.find((entry: any) => entry.id === gameState.activeEnemyId && entry.currentHp > 0)
+        || enemies.find((entry: any) => entry.currentHp > 0)
+        || null;
       const player = gameState.player;
+
+      this.updateEnemyRoster(enemies, enemy?.id || null);
 
       // 更新敌人信息
       if (enemy) {
@@ -97,7 +106,7 @@ export class BattleUI {
       this.updateDeckCounts(gameState);
 
       // 更新能力显示
-      this.updateAbilitiesDisplay(gameState.player.abilities || [], gameState.enemy?.abilities || []);
+      this.updateAbilitiesDisplay(gameState.player.abilities || [], enemy?.abilities || []);
     } catch (error) {
       console.error('❌ 刷新战斗UI失败:', error);
     }
@@ -140,6 +149,34 @@ export class BattleUI {
 
     // 更新敌人欲望效果显示
     this.updateLustEffectDisplay('enemy', enemy.lustEffect);
+  }
+
+  private static updateEnemyRoster(enemies: any[], activeEnemyId: string | null): void {
+    const living = enemies.filter(enemy => enemy && enemy.currentHp > 0);
+    const multi = living.length > 1;
+    $('.battle-main-grid').toggleClass('multi-enemy-battle', multi);
+    $('.enemy-section').toggleClass('is-multi-enemy', multi);
+    const roster = $('#enemy-roster');
+    if (!multi) {
+      roster.empty().hide();
+      return;
+    }
+    roster
+      .html(living.map(enemy => {
+        const hp = this.displayBattleValue(enemy.currentHp);
+        const maxHp = this.displayBattleValue(enemy.maxHp, 1);
+        const intent = enemy.nextAction?.name || enemy.intent?.description || '准备行动';
+        return `<button class="enemy-roster-unit${enemy.id === activeEnemyId ? ' is-active' : ''}" data-enemy-id="${escapeHtmlAttribute(String(enemy.id))}" type="button" aria-pressed="${enemy.id === activeEnemyId ? 'true' : 'false'}" title="${escapeHtmlAttribute(String(intent))}">
+          <span class="enemy-roster-emoji">${escapeHtml(String(enemy.emoji || '👹'))}</span>
+          <span class="enemy-roster-copy"><b>${escapeHtml(String(enemy.name || enemy.id))}</b><small>生命 ${hp}/${maxHp} · ${escapeHtml(String(intent))}</small></span>
+        </button>`;
+      }).join(''))
+      .show();
+    roster.off('click.mwg-enemy-target').on('click.mwg-enemy-target', '.enemy-roster-unit', event => {
+      const enemyId = String($(event.currentTarget).attr('data-enemy-id') || '');
+      if (!enemyId || !GameStateManager.getInstance().setActiveEnemy(enemyId)) return;
+      void this.refreshBattleUI(GameStateManager.getInstance().getGameState());
+    });
   }
 
   /**
@@ -283,11 +320,23 @@ export class BattleUI {
       const count = cards.length;
       const handContainerWidth = handContainer.width() || 0;
       const handContainerHeight = handContainer.height() || 180;
-      const maxCardWidth = document.documentElement.classList.contains('mwg-fullscreen-active') ? 150 : 116;
-      const cardWidth = Math.max(70, Math.min(maxCardWidth, Math.floor((handContainerHeight - 8) * 0.75)));
-      const normalOffset = cardWidth + 8;
+      const isFullscreen = document.documentElement.classList.contains('mwg-fullscreen-active');
+      const isCompactHand = handContainerWidth > 0 && handContainerWidth <= 560;
+      const maxCardWidth = isCompactHand ? (isFullscreen ? 104 : 92) : isFullscreen ? 150 : 116;
+      const minCardWidth = isCompactHand ? 76 : 70;
+      const cardGap = isCompactHand ? 4 : 8;
+      const heightBound = Math.floor((handContainerHeight - 8) * 0.75);
+      const widthBound =
+        count > 0 && count <= 5
+          ? Math.max(
+              minCardWidth,
+              Math.floor((handContainerWidth - 8 - cardGap * Math.max(0, count - 1)) / count),
+            )
+          : maxCardWidth;
+      const cardWidth = Math.max(minCardWidth, Math.min(maxCardWidth, heightBound, widthBound));
+      const normalOffset = cardWidth + cardGap;
       const fitOffset = count <= 1 ? 0 : (handContainerWidth - cardWidth - 8) / (count - 1);
-      const offset = count <= 1 ? 0 : Math.max(14, Math.min(normalOffset, fitOffset));
+      const offset = count <= 1 ? 0 : Math.max(isCompactHand ? 12 : 14, Math.min(normalOffset, fitOffset));
       const totalContentWidth = count === 0 ? 0 : cardWidth + (count - 1) * offset;
       const start = Math.max(4, (handContainerWidth - totalContentWidth) / 2);
 

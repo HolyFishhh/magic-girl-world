@@ -9,6 +9,8 @@ export interface ContentPack {
     abilities: ContentDefinition[];
     activeStatuses: ContentDefinition[];
     enemy: ContentDefinition | null;
+    /** Ordered enemy party. enemy remains the first-entry compatibility alias. */
+    enemies?: ContentDefinition[];
     desireEffects: {
         player: ContentDefinition | null;
         enemy: ContentDefinition | null;
@@ -22,6 +24,7 @@ export interface CreateContentPackInput {
     abilities?: unknown;
     activeStatuses?: unknown;
     enemy?: unknown;
+    enemies?: unknown;
     playerDesireEffect?: unknown;
 }
 /** Copy AI content into a host-neutral JSON package before runtime conversion. */

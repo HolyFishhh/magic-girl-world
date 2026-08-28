@@ -1,4 +1,5 @@
 import type { CardSelector, RecoverCardZone } from './effectDsl';
+import { type SelectableCard } from './cardSelectorRuntime';
 import { type CardPileZone, type CardZoneCard, type CardZoneState } from './cardZoneReducer';
 export type CardZoneOperationRequest = {
     type: 'scry_cards';
@@ -46,7 +47,7 @@ export interface CommittedCardZoneOperation<TCard extends CardZoneCard> {
 export type PlanCardZoneOperationResult = CardZoneOperationPlan | CardZoneOperationFailure;
 export type CommitCardZoneOperationResult<TCard extends CardZoneCard> = CommittedCardZoneOperation<TCard> | CardZoneOperationFailure;
 /** Build stable candidates and selection limits before a host opens any UI. */
-export declare function planCardZoneOperation<TCard extends CardZoneCard>(zones: CardZoneState<TCard>, request: CardZoneOperationRequest, options?: {
+export declare function planCardZoneOperation<TCard extends SelectableCard>(zones: CardZoneState<TCard>, request: CardZoneOperationRequest, options?: {
     handLimit?: number;
     random?: () => number;
     excludeCardIds?: ReadonlySet<string>;

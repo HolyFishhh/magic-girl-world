@@ -5,18 +5,25 @@ export interface CardRuleCard {
   type: string;
   effectProgram: unknown;
   originalId?: string;
+  templateId?: string;
+  runInstanceId?: string;
+  combatInstanceId?: string;
   retain?: boolean;
   exhaust?: boolean;
   ethereal?: boolean;
   innate?: boolean;
+  /** Added after paying an X-cost card; does not consume extra energy. */
+  xValueBonus?: number;
 }
 
 export interface CardEnergyPayment {
   requiredEnergy: number;
   spentEnergy: number;
+  /** Value used by X formulas; equals spent energy for ordinary X cards. */
+  xValue: number;
 }
 
-export type PlayedCardDestination = 'discard' | 'exhaust';
+export type PlayedCardDestination = 'discard' | 'exhaust' | 'draw_top' | 'draw_bottom' | 'hand' | 'remove';
 
 export interface TurnEndHandDisposition<TCard extends CardRuleCard> {
   exhaust: TCard[];
@@ -58,16 +65,20 @@ export function resolveStartingHand<TCard extends CardRuleCard>(
 
 /** Resolve affordability and the immutable payment context for one card play. */
 export function resolveCardEnergyPayment(
-  card: Pick<CardRuleCard, 'cost'>,
+  card: Pick<CardRuleCard, 'cost' | 'xValueBonus'>,
   availableEnergy: number,
 ): CardEnergyPayment {
   const energy = Number.isFinite(availableEnergy) ? Math.max(0, availableEnergy) : 0;
   if (card.cost === 'energy') {
-    return { requiredEnergy: 0, spentEnergy: energy };
+    return {
+      requiredEnergy: 0,
+      spentEnergy: energy,
+      xValue: energy + Math.max(0, Math.floor(card.xValueBonus || 0)),
+    };
   }
 
   const cost = typeof card.cost === 'number' && Number.isFinite(card.cost) ? Math.max(0, card.cost) : 0;
-  return { requiredEnergy: cost, spentEnergy: cost };
+  return { requiredEnergy: cost, spentEnergy: cost, xValue: 0 };
 }
 
 /** Power cards are one-shot ability registrations even if generated content omits exhaust. */
@@ -99,13 +110,13 @@ export function resolveTurnEndHandDisposition<TCard extends CardRuleCard>(
   return { exhaust, discard, keep };
 }
 
-export function getCardSourceId(card: Pick<CardRuleCard, 'id' | 'name' | 'originalId'>): string {
-  return card.originalId || card.id || card.name;
+export function getCardSourceId(card: Pick<CardRuleCard, 'id' | 'name' | 'originalId' | 'templateId'>): string {
+  return card.templateId || card.originalId || card.id || card.name;
 }
 
 /** Count cards owned across persistent piles plus cards temporarily in a play transaction. */
 export function countCardOwnership(
-  cards: ReadonlyArray<Pick<CardRuleCard, 'id' | 'name' | 'originalId'>>,
+  cards: ReadonlyArray<Pick<CardRuleCard, 'id' | 'name' | 'originalId' | 'templateId'>>,
   inFlightCounts: ReadonlyMap<string, number> = new Map(),
 ): Map<string, number> {
   const counts = new Map<string, number>();

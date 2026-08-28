@@ -1,5 +1,6 @@
 export const COMPACT_EFFECT_META_KEYS = [
   'to',
+  'targets',
   'when',
   'on',
   'stacks',
@@ -12,6 +13,36 @@ export const COMPACT_EFFECT_META_KEYS = [
   'multiply',
   'divide',
   'set',
+  'limit',
+  'extra',
+  'scope',
+  'match',
+  'future_copies',
+  'timing',
+  'minimum',
+  'maximum',
+  'enabled',
+  'min',
+  'max',
+  'card_type',
+  'rarity',
+  'cost',
+  'min_cost',
+  'max_cost',
+  'tag',
+  'template_id',
+  'run_instance_id',
+  'combat_instance_id',
+  'origin',
+  'upgraded',
+  'phase',
+  'priority',
+  'repeat_every',
+  'repeats',
+  'effects',
+  'free',
+  'destination',
+  'position',
 ] as const;
 
 export const COMPACT_EFFECT_META_KEY_SET = new Set<string>(COMPACT_EFFECT_META_KEYS);
@@ -58,7 +89,7 @@ function normalizeNestedStatusInput(value: unknown): unknown {
   for (const operation of ['apply_status', 'remove_status'] as const) {
     const nested = value[operation];
     if (!isRecord(nested) || typeof nested.id !== 'string') continue;
-    const transferable = operation === 'apply_status' ? ['stacks', 'to'] : ['to'];
+    const transferable = operation === 'apply_status' ? ['stacks', 'to', 'targets'] : ['to', 'targets'];
     const allowed = new Set(['id', ...transferable]);
     if (Object.keys(nested).some(key => !allowed.has(key))) continue;
     if (
@@ -115,29 +146,38 @@ export function normalizeCompactNamedEffectInput(value: unknown, fallbackName: s
 }
 
 const OPERATION_META_KEYS: Readonly<Record<string, readonly string[]>> = {
-  damage: ['hits', 'to', 'when', 'on'],
-  heal: ['to', 'when', 'on'],
-  block: ['to', 'when', 'on'],
-  energy: ['to', 'when', 'on'],
-  lust: ['to', 'when', 'on'],
-  set_hp: ['to', 'when', 'on'],
-  set_lust: ['to', 'when', 'on'],
-  set_energy: ['to', 'when', 'on'],
-  set_block: ['to', 'when', 'on'],
+  damage: ['hits', 'to', 'targets', 'when', 'on'],
+  heal: ['to', 'targets', 'when', 'on'],
+  block: ['to', 'targets', 'when', 'on'],
+  energy: ['to', 'targets', 'when', 'on'],
+  lust: ['to', 'targets', 'when', 'on'],
+  set_hp: ['to', 'targets', 'when', 'on'],
+  set_lust: ['to', 'targets', 'when', 'on'],
+  set_energy: ['to', 'targets', 'when', 'on'],
+  set_block: ['to', 'targets', 'when', 'on'],
   narrate: ['when', 'on'],
-  apply_status: ['stacks', 'to', 'when', 'on'],
-  remove_status: ['to', 'when', 'on'],
+  apply_status: ['stacks', 'to', 'targets', 'when', 'on'],
+  remove_status: ['to', 'targets', 'when', 'on'],
   draw: ['when', 'on'],
   scry: ['when', 'on'],
   seek: ['when', 'on'],
-  discard: ['from', 'pick', 'when', 'on'],
-  exhaust: ['from', 'pick', 'when', 'on'],
+  discard: ['from', 'pick', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when', 'on'],
+  exhaust: ['from', 'pick', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when', 'on'],
   recover: ['from', 'pick', 'when', 'on'],
-  reduce_cost: ['from', 'pick', 'count', 'when', 'on'],
-  copy: ['from', 'pick', 'when', 'on'],
-  double: ['from', 'pick', 'when', 'on'],
+  reduce_cost: ['from', 'pick', 'count', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when', 'on'],
+  modify_card: ['from', 'pick', 'count', 'add', 'subtract', 'multiply', 'divide', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when', 'on'],
+  patch_card: ['from', 'pick', 'count', 'add', 'subtract', 'multiply', 'divide', 'set', 'min', 'max', 'extra', 'enabled', 'scope', 'match', 'future_copies', 'timing', 'minimum', 'maximum', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when', 'on'],
+  copy: ['from', 'pick', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when', 'on'],
+  double: ['from', 'pick', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when', 'on'],
   add_card: ['to', 'count', 'when', 'on'],
-  modify: ['add', 'subtract', 'multiply', 'divide', 'set', 'to'],
+  modify: ['add', 'subtract', 'multiply', 'divide', 'set', 'to', 'targets'],
+  card_rule: ['limit', 'extra', 'to'],
+  schedule: ['phase', 'priority', 'repeat_every', 'repeats', 'effects', 'when'],
+  auto_play: ['from', 'pick', 'count', 'free', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when'],
+  card_destination: ['when'],
+  move_card: ['from', 'pick', 'count', 'destination', 'position', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when'],
+  remove_card: ['from', 'pick', 'count', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when'],
+  transform_card: ['from', 'pick', 'count', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when'],
 };
 
 export function compactEffectOperationKeys(value: Readonly<Record<string, unknown>>): string[] {

@@ -1,4 +1,5 @@
 import type { CardSelector, RecoverCardZone } from './effectDsl';
+import { orderedCardsForSelector, selectorZones, type SelectableCard } from './cardSelectorRuntime';
 import {
   moveCardsBetweenZones,
   shuffleCards,
@@ -84,13 +85,6 @@ function normalizedCount(value: number): number {
   return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
 }
 
-function selectorSources(zone: CardSelector['zone']): CardPileZone[] {
-  if (zone === 'hand') return ['hand'];
-  if (zone === 'draw') return ['drawPile'];
-  if (zone === 'discard') return ['discardPile'];
-  return ['hand', 'drawPile', 'discardPile'];
-}
-
 function recoverSource(source: RecoverCardZone): CardPileZone {
   if (source === 'draw') return 'drawPile';
   if (source === 'discard') return 'discardPile';
@@ -120,11 +114,12 @@ function buildSelection(
     return { kind: 'automatic', cardIds: shuffleCards(candidateCardIds, random).slice(0, maximum) };
   }
   if (pick === 'right') return { kind: 'automatic', cardIds: candidateCardIds.slice(-maximum) };
+  if (pick === 'top') return { kind: 'automatic', cardIds: candidateCardIds.slice(-maximum).reverse() };
   return { kind: 'automatic', cardIds: candidateCardIds.slice(0, maximum) };
 }
 
 /** Build stable candidates and selection limits before a host opens any UI. */
-export function planCardZoneOperation<TCard extends CardZoneCard>(
+export function planCardZoneOperation<TCard extends SelectableCard>(
   zones: CardZoneState<TCard>,
   request: CardZoneOperationRequest,
   options: { handLimit?: number; random?: () => number; excludeCardIds?: ReadonlySet<string> } = {},
@@ -162,10 +157,11 @@ export function planCardZoneOperation<TCard extends CardZoneCard>(
     selection = buildSelection(candidateCardIds, request.pick, requested, options.random);
   } else {
     destination = request.type === 'discard_cards' ? 'discardPile' : 'exhaustPile';
-    sources = selectorSources(request.selector.zone);
-    candidateCardIds = cardsFromSources(zones, sources, destination)
-      .map(card => card.id)
-      .filter(id => !options.excludeCardIds?.has(id));
+    sources = selectorZones(request.selector.zone);
+    candidateCardIds = orderedCardsForSelector(zones, request.selector, {
+      destination,
+      excludeCardIds: options.excludeCardIds,
+    }).map(card => card.id);
     const requested = request.selector.pick === 'all' ? candidateCardIds.length : (request.selector.count ?? request.amount);
     selection = buildSelection(candidateCardIds, request.selector.pick, requested, options.random);
   }

@@ -1,21 +1,19 @@
 import { BattleLog } from '../modules/battleLog';
 import { escapeHtml, escapeHtmlAttribute } from '../shared/html';
-import type { Enemy, EnemyAction } from '../../game-core';
+import { roundBattleDisplayValue, type EffectNode, type Enemy, type EnemyAction } from '../../game-core';
+import { DynamicStatusManager } from '../combat/dynamicStatusManager';
 import { AnimationManager } from './animationManager';
-import { EffectProgramDisplay, summarizeEffectProgram, type IntentType } from './effectProgramDisplay';
+import { summarizeEffectProgram, type IntentType } from './effectProgramDisplay';
 
-type IntentPresentation = {
-  type: IntentType;
-  description: string;
-  damage?: number;
-  lustDamage?: number;
-  block?: number;
+type IntentBadge = {
+  icon: string;
+  value: string;
+  label: string;
 };
 
 /** Owns enemy-intent DOM, battle-log messages, and enemy action animation. */
 export class EnemyIntentPresenter {
   private static instance: EnemyIntentPresenter;
-  private readonly effectDisplay = EffectProgramDisplay.getInstance();
   private readonly animationManager = AnimationManager.getInstance();
 
   static getInstance(): EnemyIntentPresenter {
@@ -63,57 +61,125 @@ export class EnemyIntentPresenter {
     try {
       const model = this.createDisplayModel(enemy);
       const intentElement = $('.enemy-intent');
+      const summaryElement = $('#enemy-intent-summary');
       if (intentElement.length > 0) {
         intentElement.html(`
-          <div class="intent-icon">${escapeHtml(model.icon)}</div>
-          <div class="intent-description" title="${escapeHtmlAttribute(model.details)}">${escapeHtml(model.description)}</div>
-          ${model.effectTagsHtml ? `<div class="intent-effects">${model.effectTagsHtml}</div>` : ''}
+          <div class="intent-description" title="点击查看完整行动">${escapeHtml(model.description)}</div>
         `);
       } else {
-        $('.intent-icon').text(model.icon);
         $('.intent-text').text(model.description);
       }
+      summaryElement.html(
+        model.badges
+          .map(
+            badge =>
+              `<span class="intent-badge" title="${escapeHtmlAttribute(badge.label)}"><span aria-hidden="true">${escapeHtml(badge.icon)}</span>${badge.value ? `<b>${escapeHtml(badge.value)}</b>` : ''}</span>`,
+          )
+          .join(''),
+      );
+      summaryElement.attr('aria-label', model.badges.map(badge => badge.label).join('，') || '敌方下一轮效果');
     } catch (error) {
       console.warn('更新敌人意图显示失败:', error);
     }
   }
 
   private createDisplayModel(enemy: Enemy): {
-    icon: string;
     description: string;
-    details: string;
-    effectTagsHtml: string;
+    badges: IntentBadge[];
   } {
     const action = enemy.nextAction || this.firstAction(enemy.actions);
     if (action) {
-      const parsed = this.parseAction(action);
       return {
-        icon: this.iconFor(parsed.type),
         description: action.name || '未知行动',
-        details: parsed.description,
-        effectTagsHtml: this.effectDisplay.createEffectTagsHTML(
-          this.effectDisplay.programToTags(action.effectProgram, { selfLabel: '敌方', opponentLabel: '我方' }),
-        ),
+        badges: this.createIntentBadges(action),
       };
     }
 
     if (enemy.intent) {
       return {
-        icon: enemy.intent.emoji || '？',
         description: enemy.intent.description || '准备行动',
-        details: enemy.intent.description || '准备行动',
-        effectTagsHtml: '',
+        badges: [{ icon: enemy.intent.emoji || '？', value: '', label: enemy.intent.description || '准备行动' }],
       };
     }
-    return { icon: '？', description: '准备行动', details: '准备行动', effectTagsHtml: '' };
+    return {
+      description: '准备行动',
+      badges: [{ icon: '？', value: '', label: '准备行动' }],
+    };
   }
 
-  private parseAction(action: EnemyAction): IntentPresentation {
+  private createIntentBadges(action: EnemyAction): IntentBadge[] {
     const summary = summarizeEffectProgram(action.effectProgram);
-    return {
-      ...summary,
-      description: action.description || action.name || '未知行动',
+    const badges: IntentBadge[] = [];
+    const add = (icon: string, value: number | string | undefined, label: string): void => {
+      const displayed = typeof value === 'number' ? String(roundBattleDisplayValue(value)) : value || '';
+      badges.push({ icon, value: displayed, label });
     };
+    if (summary.damage) add('⚔️', summary.damage, `造成${roundBattleDisplayValue(summary.damage)}点伤害`);
+    if (summary.lustDamage)
+      add('💖', summary.lustDamage, `增加${roundBattleDisplayValue(summary.lustDamage)}点欲望`);
+    if (summary.block) add('🛡️', summary.block, `获得${roundBattleDisplayValue(summary.block)}点格挡`);
+
+    const statusTotals = new Map<string, { icon: string; value: number | null; label: string }>();
+    const directTotals = new Map<string, number | null>();
+    const recordDirect = (key: string, amount: unknown): void => {
+      const value = typeof amount === 'number' ? amount : null;
+      const previous = directTotals.get(key);
+      directTotals.set(key, previous !== undefined && previous !== null && value !== null ? previous + value : value);
+    };
+    const visit = (nodes: EffectNode[]): void => {
+      for (const node of nodes) {
+        if (node.op === 'apply_status') {
+          const definition = DynamicStatusManager.getInstance().getStatusDefinition(node.status);
+          const key = `${node.target}:${node.status}`;
+          const stacks = typeof node.stacks === 'number' ? node.stacks : null;
+          const existing = statusTotals.get(key);
+          statusTotals.set(key, {
+            icon: definition?.emoji || (node.target === 'opponent' ? '🌀' : '✨'),
+            value: existing?.value !== null && stacks !== null ? (existing?.value || 0) + stacks : null,
+            label: `${node.target === 'opponent' ? '施加' : '获得'}${definition?.name || node.status}`,
+          });
+        } else if (node.op === 'heal') {
+          recordDirect('heal', node.amount);
+        } else if (node.op === 'gain_energy') {
+          recordDirect('energy', node.amount);
+        } else if (node.op === 'draw_cards') {
+          recordDirect('draw', node.amount);
+        } else if (node.op === 'discard_cards') {
+          recordDirect('discard', node.amount);
+        } else if (node.op === 'exhaust_cards') {
+          recordDirect('exhaust', node.amount);
+        } else if (node.op === 'if') {
+          visit([...node.then, ...(node.else || [])]);
+        } else if (node.op === 'register_trigger') {
+          visit(node.effects);
+        }
+      }
+    };
+    visit(action.effectProgram.steps);
+    for (const status of statusTotals.values()) {
+      const value = status.value === null ? '?' : roundBattleDisplayValue(status.value);
+      add(status.icon, value, `${status.label}${value === '?' ? '' : `${value}层`}`);
+    }
+
+    const directBadgeDefinitions: Record<string, { icon: string; label: string }> = {
+      heal: { icon: '💚', label: '回复生命' },
+      energy: { icon: '⚡', label: '获得能量' },
+      draw: { icon: '🃏', label: '抽牌' },
+      discard: { icon: '🗑️', label: '弃牌' },
+      exhaust: { icon: '🔥', label: '消耗卡牌' },
+    };
+    for (const [key, amount] of directTotals) {
+      const definition = directBadgeDefinitions[key];
+      const value = amount === null ? '?' : roundBattleDisplayValue(amount);
+      add(definition.icon, value, `${definition.label}${value === '?' ? '' : value}`);
+    }
+
+    if (badges.length === 0) add(this.iconFor(summary.type), '', action.description || action.name || '特殊行动');
+    if (badges.length <= 5) return badges;
+    return [
+      ...badges.slice(0, 5),
+      { icon: '＋', value: String(badges.length - 5), label: `另有${badges.length - 5}项效果` },
+    ];
   }
 
   private firstAction(actions: EnemyAction[]): EnemyAction | null {

@@ -53,13 +53,13 @@ function nestedNodes(node: EffectNode): EffectNode[] {
 }
 
 function everyLeafIsModifier(node: EffectNode): boolean {
-  if (node.op === 'modify') return true;
+  if (node.op === 'modify' || node.op === 'card_play_rule') return true;
   const nested = nestedNodes(node);
   return nested.length > 0 && nested.every(everyLeafIsModifier);
 }
 
 function containsModifier(node: EffectNode): boolean {
-  return node.op === 'modify' || nestedNodes(node).some(containsModifier);
+  return node.op === 'modify' || node.op === 'card_play_rule' || nestedNodes(node).some(containsModifier);
 }
 
 function compileTrigger(value: unknown): CompactEffectCompilationResult | null {
@@ -99,10 +99,10 @@ export function validateCompactStatusDefinition(value: unknown): CompactStatusVa
       return failure(`triggers.${trigger}${issue.path.slice(1)}: ${issue.message}`);
     }
     if (trigger === 'hold' && !compiled.value.steps.every(everyLeafIsModifier)) {
-      return failure('状态 hold 只能包含 modify');
+      return failure('状态 hold 只能包含持续修饰或出牌规则');
     }
     if (trigger !== 'hold' && compiled.value.steps.some(containsModifier)) {
-      return failure(`状态 ${trigger} 不能包含 modify`);
+      return failure(`状态 ${trigger} 不能包含持续修饰或出牌规则`);
     }
   }
   return { ok: true };

@@ -43,6 +43,24 @@ export type BattleEffectRuntimeEvent =
     }
   | { type: 'block_absorbed'; target: BattleSide; amount: number }
   | {
+      type: 'damage_resolved';
+      source: BattleSide;
+      target: BattleSide;
+      requested: number;
+      modified: number;
+      blocked: number;
+      hpLost: number;
+      damageKind: import('./battleEventJournal').DamageKind;
+    }
+  | {
+      type: 'heal_resolved';
+      source: BattleSide;
+      target: BattleSide;
+      requested: number;
+      modified: number;
+      hpGained: number;
+    }
+  | {
       type: 'attribute_changed';
       target: BattleSide;
       attribute: BattleEffectAttribute;
@@ -68,8 +86,10 @@ export type BattleEffectRuntimeEvent =
 export interface BattleEffectStatePort {
   getPlayer(): Player;
   getEnemy(): Enemy | null;
+  getEnemyById?(enemyId: string): Enemy | null;
   updatePlayer(updates: Partial<Player>): void;
   updateEnemy(updates: Partial<Enemy>): void;
+  updateEnemyById?(enemyId: string, updates: Partial<Enemy>): void;
 }
 
 export interface BattleEffectRuntimePorts {
@@ -81,6 +101,7 @@ export interface BattleEffectRuntimePorts {
 
 export interface BattleEffectRuntimeContext {
   source: BattleSide;
+  damageKind?: import('./battleEventJournal').DamageKind;
 }
 
 export interface BattleEffectRuntimeResult {
@@ -135,7 +156,7 @@ export class BattleEffectRuntime {
 
     const target = resolveBattleEffectTarget(command.target, context.source);
     if (command.type === 'set_stat') {
-      return this.executeAttribute(target, context.source, command.stat, '=', command.value, []);
+      return this.executeAttribute(target, context.source, command.stat, '=', command.value, [], context);
     }
 
     const definitions = {
@@ -175,15 +196,18 @@ export class BattleEffectRuntime {
       definition.operator,
       command.amount,
       definition.modifiers,
+      context,
     );
   }
 
-  private getEntity(target: BattleSide): Player | Enemy | null {
-    return target === 'player' ? this.state.getPlayer() : this.state.getEnemy();
+  private getEntity(target: BattleSide, enemyId?: string): Player | Enemy | null {
+    if (target === 'player') return this.state.getPlayer();
+    return enemyId && this.state.getEnemyById ? this.state.getEnemyById(enemyId) : this.state.getEnemy();
   }
 
-  private updateEntity(target: BattleSide, updates: Partial<Player> & Partial<Enemy>): void {
+  private updateEntity(target: BattleSide, updates: Partial<Player> & Partial<Enemy>, enemyId?: string): void {
     if (target === 'player') this.state.updatePlayer(updates);
+    else if (enemyId && this.state.updateEnemyById) this.state.updateEnemyById(enemyId, updates);
     else this.state.updateEnemy(updates);
   }
 
@@ -225,17 +249,23 @@ export class BattleEffectRuntime {
     operator: '+' | '-' | '=',
     requestedValue: number,
     modifiers: readonly { target: BattleSide; attribute: BattleModifierAttribute }[],
+    context: BattleEffectRuntimeContext,
   ): Promise<BattleEffectRuntimeResult> {
-    let entity = this.getEntity(target);
+    const enemyId = target === 'enemy' ? this.state.getEnemy()?.id : undefined;
+    let entity = this.getEntity(target, enemyId);
     if (!entity) return { applied: false, target };
 
+    const baseRequested = roundBattleValue(Number.isFinite(requestedValue) ? requestedValue : 0);
     let value = roundBattleValue(
       this.applyModifiers(Number.isFinite(requestedValue) ? requestedValue : 0, modifiers),
     );
+    const modifiedRequested = value;
+    let blocked = 0;
     if (attribute === 'hp' && operator === '-') {
       const absorption = absorbDamageWithBlock(value, entity.block);
       if (absorption.blockUsed > 0) {
-        this.updateEntity(target, { block: absorption.remainingBlock });
+        blocked = absorption.blockUsed;
+        this.updateEntity(target, { block: absorption.remainingBlock }, enemyId);
         this.ports.present?.({ type: 'block_absorbed', target, amount: absorption.blockUsed });
         await this.ports.dispatchTriggers(
           resolveAttributeTriggerDispatch({
@@ -245,13 +275,13 @@ export class BattleEffectRuntime {
             source,
           }),
         );
-        entity = this.getEntity(target);
+        entity = this.getEntity(target, enemyId);
         if (!entity) return { applied: false, target };
       }
       value = absorption.damage;
     }
 
-    entity = this.getEntity(target);
+    entity = this.getEntity(target, enemyId);
     if (!entity) return { applied: false, target };
     const previousValue = readAttribute(entity, attribute);
     const calculated = applyNumericOperator(previousValue, operator, value);
@@ -260,7 +290,7 @@ export class BattleEffectRuntime {
       maxLust: entity.maxLust,
     });
     const nextValue = roundBattleValue(clamped);
-    this.updateEntity(target, attributeUpdate(attribute, nextValue));
+    this.updateEntity(target, attributeUpdate(attribute, nextValue), enemyId);
     this.ports.present?.({ type: 'attribute_changed', target, attribute, previousValue, nextValue });
 
     const change = roundBattleValue(nextValue - previousValue);
@@ -269,15 +299,37 @@ export class BattleEffectRuntime {
     );
 
     if (attribute === 'lust') {
-      const finalEntity = this.getEntity(target);
+      const finalEntity = this.getEntity(target, enemyId);
       if (finalEntity && finalEntity.currentLust >= finalEntity.maxLust) {
         await this.ports.handleLustOverflow(target);
       }
     }
     this.ports.present?.({ type: 'attribute_logged', target, attribute, previousValue, nextValue });
 
+    if (attribute === 'hp' && operator === '-') {
+      this.ports.present?.({
+        type: 'damage_resolved',
+        source,
+        target,
+        requested: baseRequested,
+        modified: modifiedRequested,
+        blocked,
+        hpLost: Math.max(0, -change),
+        damageKind: context.damageKind || 'effect',
+      });
+    } else if (attribute === 'hp' && operator === '+') {
+      this.ports.present?.({
+        type: 'heal_resolved',
+        source,
+        target,
+        requested: baseRequested,
+        modified: modifiedRequested,
+        hpGained: Math.max(0, change),
+      });
+    }
+
     if (attribute !== 'hp') return { applied: true, target };
-    const finalEntity = this.getEntity(target);
+    const finalEntity = this.getEntity(target, enemyId);
     return { applied: true, target, pendingDeath: Boolean(finalEntity && finalEntity.currentHp <= 0) };
   }
 

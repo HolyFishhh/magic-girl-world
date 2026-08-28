@@ -203,7 +203,7 @@ const malformedReferencedStatus = {
 };
 assert.throws(
   () => rewards.applyRewardSelectionsToStat(malformedReferencedStatus, { cards: [0], artifacts: [], items: [] }),
-  /状态 broken_hex 无效: 状态 hold 只能包含 modify/,
+  /状态 broken_hex 无效: 状态 hold 只能包含持续修饰或出牌规则/,
 );
 
 const validReferencedStatus = structuredClone(malformedReferencedStatus);
@@ -298,7 +298,7 @@ invalidBundledStatus.reward.card = [
 const invalidBundledStatusBefore = structuredClone(invalidBundledStatus);
 assert.throws(
   () => rewards.applyRewardSelectionsToStat(invalidBundledStatus, { cards: [0], artifacts: [], items: [] }),
-  /候选 status 无效: 状态 hold 只能包含 modify/,
+  /候选 status 无效: 状态 hold 只能包含持续修饰或出牌规则/,
 );
 assert.deepEqual(
   invalidBundledStatus,

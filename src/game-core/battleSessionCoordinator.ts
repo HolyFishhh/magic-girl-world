@@ -8,6 +8,8 @@ import {
   type PreparedCardPlay,
 } from './cardPlayTransaction';
 import type { CardEnergyPayment, PlayedCardDestination } from './cardRules';
+import { clearCardPatches, type PatchableCard } from './cardPatch';
+import { clearDynamicCardCostAfterPlay } from './dynamicCardCost';
 import {
   runBattleStartFlow,
   runBattleTurnFlow,
@@ -170,7 +172,15 @@ export interface BattleSessionCardPlayPorts<TCard extends CardPlayCard, TToken>
   endCardTransit(card: TCard): MaybePromise<void>;
   executeCardEffect(card: TCard, payment: CardEnergyPayment, repeatIndex: number): MaybePromise<void>;
   movePlayedCard(card: TCard, destination: PlayedCardDestination): MaybePromise<void>;
+  resolvePlayedCardDestination?(card: TCard, defaultDestination: PlayedCardDestination): PlayedCardDestination;
   triggerPostCardPlay(card: TCard): MaybePromise<void>;
+  recordCardPlayEvent?(
+    card: TCard,
+    payment: CardEnergyPayment,
+    event: { phase: 'before' | 'after'; replayIndex: number; automatic: boolean },
+  ): MaybePromise<void>;
+  recordCardResourceSpent?(card: TCard, payment: CardEnergyPayment): MaybePromise<void>;
+  recordPlayedCardMoved?(card: TCard, destination: PlayedCardDestination): MaybePromise<void>;
 }
 
 export type BattleSessionCardPlayResult<TCard extends CardPlayCard> =
@@ -212,17 +222,33 @@ export async function playBattleSessionCard<TCard extends CardPlayCard, TToken>(
       await ports.beginCardTransit(committed.card);
       transitStarted = true;
       await ports.applyCardPlayCommit(committed);
+      await ports.recordCardResourceSpent?.(committed.card, committed.payment);
 
       let repeatsExecuted = 0;
       for (let index = 0; index < committed.repeatCount; index += 1) {
         if (ports.isTerminal()) break;
+        await ports.recordCardPlayEvent?.(committed.card, committed.payment, {
+          phase: 'before',
+          replayIndex: index,
+          automatic: index > 0,
+        });
         await ports.executeCardEffect(committed.card, committed.payment, index);
+        await ports.recordCardPlayEvent?.(committed.card, committed.payment, {
+          phase: 'after',
+          replayIndex: index,
+          automatic: index > 0,
+        });
         repeatsExecuted += 1;
       }
 
-      const playedCard = { ...committed.card };
-      delete playedCard.doubleEffect;
-      await ports.movePlayedCard(playedCard, committed.destination);
+      const playedCard = clearDynamicCardCostAfterPlay((
+        'patchBase' in committed.card || 'patches' in committed.card
+          ? clearCardPatches(committed.card as TCard & PatchableCard, 'played')
+          : { ...committed.card, doubleEffect: undefined, replayCount: 0 }
+      ) as TCard & PatchableCard) as TCard;
+      const destination = ports.resolvePlayedCardDestination?.(playedCard, committed.destination) ?? committed.destination;
+      await ports.movePlayedCard(playedCard, destination);
+      await ports.recordPlayedCardMoved?.(playedCard, destination);
       await ports.endCardTransit(committed.card);
       transitStarted = false;
 
@@ -231,7 +257,7 @@ export async function playBattleSessionCard<TCard extends CardPlayCard, TToken>(
       return {
         status: 'completed',
         card: playedCard,
-        destination: committed.destination,
+        destination,
         repeatsExecuted,
         terminal: ports.isTerminal(),
       };

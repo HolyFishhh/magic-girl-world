@@ -160,6 +160,41 @@ assert.deepEqual(core.executeEffectProgram(scryProgram, state, { spentEnergy: 0 
 assert.equal(schema.$defs.scryEffect.properties.op.const, 'scry_cards');
 assert.equal(energyResult.state.self.energy, 5, 'maxEnergy is a turn refill value, not a temporary gain cap');
 
+const richState = {
+  ...state,
+  self: { ...state.self, statusStacks: { focus: 2 } },
+  cardZones: {
+    hand: [
+      { id: 'a', type: 'Attack', rarity: 'Common', cost: 1, tags: ['combo'], templateId: 'strike', origin: 'deck' },
+      { id: 'b', type: 'Skill', rarity: 'Rare', cost: 2, tags: ['guard'], templateId: 'guard', origin: 'deck', upgraded: true },
+    ],
+    draw: [{ id: 'c', type: 'Attack', rarity: 'Uncommon', cost: 2, tags: ['combo'], templateId: 'strike', origin: 'generated' }],
+    discard: [],
+    exhaust: [],
+  },
+  history: { lastDamage: 9.5, lastHpLoss: 7, lastHeal: 4, lastResourceSpent: 3 },
+  enemyIntentValue: 11,
+};
+const advancedFormula = {
+  op: 'max',
+  values: [
+    { op: 'floor', value: { op: 'history', metric: 'last_damage' } },
+    {
+      op: 'multiply',
+      left: {
+        op: 'count_cards',
+        selector: { zone: 'all', pick: 'all', filter: { types: ['Attack'], tags: ['combo'] } },
+      },
+      right: 4,
+    },
+    { op: 'intent_value' },
+  ],
+};
+assert.equal(core.evaluateNumericExpression(advancedFormula, richState, { spentEnergy: 0 }), 11);
+assert.equal(core.evaluateNumericExpression({ op: 'count_statuses', target: 'self' }, richState, { spentEnergy: 0 }), 1);
+assert.equal(core.evaluateNumericExpression({ op: 'ceil', value: 2.1 }, richState, { spentEnergy: 0 }), 3);
+assert.equal(core.validateEffectProgram({ spec: 'mwg.effect/v1', steps: [{ op: 'damage', target: 'opponent', amount: advancedFormula }] }).ok, true);
+
 const source = await readFile(resolve('src/game-core/effectDsl.ts'), 'utf8');
 assert.doesNotMatch(source, /from ['"].*(runtime|ui|tavern|messageVariables|jquery)/i);
 assert.doesNotMatch(source, /\b(document|window|localStorage|eval|Function)\b/);

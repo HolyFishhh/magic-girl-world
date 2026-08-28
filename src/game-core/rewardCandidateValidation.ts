@@ -135,8 +135,15 @@ function validateEffects(
   const combined: EffectProgram = { spec: 'mwg.effect/v1', steps: programs.flatMap(program => program.steps) };
   const encoded = JSON.stringify(combined);
   if (encoded.includes('context.status_stacks')) return failure('stacks 只允许用于状态 triggers');
-  if (!options.allowModifiers && encoded.includes('"op":"modify"')) {
-    return failure('modify 只允许用于 passive 或状态 hold');
+  if (
+    !options.allowModifiers &&
+    (encoded.includes('"op":"modify"') || encoded.includes('"op":"card_play_rule"'))
+  ) {
+    return failure('持续修饰或出牌规则只允许用于 passive 或状态 hold');
+  }
+  if (options.allowModifiers) {
+    const policy = validateEffectProgramPolicy(combined, { modifierPolicy: 'only' });
+    if (!policy.ok) return failure(`${policy.issues[0].path}: ${policy.issues[0].message}`);
   }
   if (options.power) {
     const policy = validateEffectProgramPolicy(combined, {

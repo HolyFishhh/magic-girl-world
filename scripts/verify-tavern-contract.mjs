@@ -445,7 +445,7 @@ assert.ok(
     patchedMvuScripts[0].content.includes("e.请求方式='依次请求，失败后重试'") &&
     patchedMvuScripts[0].content.includes('e.max_chat_history=2') &&
     patchedMvuScripts[0].content.includes('e.请求次数=2') &&
-    patchedMvuScripts[0].content.includes('e.最大回复token数=2600') &&
+    patchedMvuScripts[0].content.includes('e.最大回复token数=20000') &&
     patchedMvuScripts[0].content.includes("e.世界书条目白名单正则='^\\\\[mvu_update\\\\]'") &&
     patchedMvuScripts[0].content.includes('已开启默认不兼容假流式=true') &&
     patchedMvuScripts[0].content.includes('魔法少女世界额外模型默认版本'),

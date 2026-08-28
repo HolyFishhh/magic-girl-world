@@ -6,7 +6,12 @@ import { resolve } from 'node:path';
 const require = createRequire(import.meta.url);
 process.env.TS_NODE_COMPILER_OPTIONS = JSON.stringify({ module: 'CommonJS', moduleResolution: 'node' });
 require('ts-node/register/transpile-only');
-const { COMPACT_EFFECT_BUNDLE_OPERATIONS, compileCompactEffectList, executeEffectProgram } = require(
+const {
+  COMPACT_EFFECT_BUNDLE_OPERATIONS,
+  compileCompactEffectList,
+  executeEffectProgram,
+  transformCardEffectProgram,
+} = require(
   resolve('src/game-core/index.ts'),
 );
 
@@ -94,6 +99,33 @@ const multiHitResult = executeEffectProgram(multiHit.value, blockedState, { spen
 assert.equal(multiHitResult.state.opponent.block, 0);
 assert.equal(multiHitResult.state.opponent.hp, 26, 'each hit consumes block independently');
 assert.equal(multiHitResult.events.filter(event => event.type === 'damage').length, 3);
+
+const strengthenedMultiHit = transformCardEffectProgram(multiHit.value, {
+  stat: 'damage',
+  operator: 'add',
+  value: 2,
+});
+assert.equal(strengthenedMultiHit.steps.length, 3, 'card value changes cannot add or remove hits');
+assert.deepEqual(
+  strengthenedMultiHit.steps.map(step => step.amount),
+  [5, 5, 5],
+  'damage changes apply to each existing hit without mutating hit count',
+);
+
+const dynamicDamage = compileCompactEffectList({ damage: 'self.block + 1' });
+assert.equal(dynamicDamage.ok, true);
+const reducedDynamicDamage = transformCardEffectProgram(dynamicDamage.value, {
+  stat: 'damage',
+  operator: 'subtract',
+  value: 5,
+});
+const dynamicState = structuredClone(state);
+dynamicState.self.block = 2;
+assert.equal(
+  executeEffectProgram(reducedDynamicDamage, dynamicState, { spentEnergy: 0 }).state.opponent.hp,
+  30,
+  'dynamic card values clamp at zero after subtraction',
+);
 
 const triggeredMultiHit = compileCompactEffectList({ damage: 2, hits: 3, on: 'take_damage' });
 assert.equal(triggeredMultiHit.ok, true);
@@ -238,6 +270,67 @@ assert.deepEqual(
   ['recover_cards', 'draw_cards', 'scry_cards', 'discard_cards', 'exhaust_cards', 'recover_cards', 'reduce_card_cost', 'copy_cards', 'double_card_effect'],
 );
 
+const cardValueOperations = compileCompactEffectList([
+  { modify_card: 'damage', add: 2, from: 'hand', pick: 'random', count: 2 },
+  { modify_card: 'block', multiply: 1.5, pick: 'left' },
+  { modify_card: 'lust', subtract: 1, pick: 'right' },
+  { modify_card: 'stacks', divide: 2, from: 'all', pick: 'all' },
+]);
+assert.equal(cardValueOperations.ok, true, JSON.stringify(cardValueOperations.issues));
+assert.deepEqual(
+  cardValueOperations.value.steps.map(step => ({
+    op: step.op,
+    selector: step.selector,
+    stat: step.stat,
+    operator: step.operator,
+    value: step.value,
+  })),
+  [
+    {
+      op: 'modify_card_value',
+      selector: { zone: 'hand', pick: 'random', count: 2 },
+      stat: 'damage',
+      operator: 'add',
+      value: 2,
+    },
+    {
+      op: 'modify_card_value',
+      selector: { zone: 'hand', pick: 'left', count: 1 },
+      stat: 'block',
+      operator: 'multiply',
+      value: 1.5,
+    },
+    {
+      op: 'modify_card_value',
+      selector: { zone: 'hand', pick: 'right', count: 1 },
+      stat: 'lust',
+      operator: 'subtract',
+      value: 1,
+    },
+    {
+      op: 'modify_card_value',
+      selector: { zone: 'all', pick: 'all' },
+      stat: 'stacks',
+      operator: 'divide',
+      value: 2,
+    },
+  ],
+);
+
+const cardPlayRules = compileCompactEffectList([
+  { card_rule: 'replay', limit: 2, extra: 1 },
+  { card_rule: 'free', limit: 'all' },
+]);
+assert.equal(cardPlayRules.ok, true, JSON.stringify(cardPlayRules.issues));
+assert.deepEqual(cardPlayRules.value.steps, [
+  { op: 'card_play_rule', target: 'self', rule: 'replay', limit: 2, extra: 1 },
+  { op: 'card_play_rule', target: 'self', rule: 'free', limit: 'all' },
+]);
+assert.deepEqual(executeEffectProgram(cardPlayRules.value, state, { spentEnergy: 0 }).events, [
+  { type: 'card_play_rule', target: 'self', rule: 'replay', limit: 2, extra: 1 },
+  { type: 'card_play_rule', target: 'self', rule: 'free', limit: 'all', extra: 0 },
+]);
+
 const triggered = compileCompactEffectList([{ block: 2 }, { draw: 1 }], { trigger: 'turn_start' });
 assert.equal(triggered.ok, true);
 assert.deepEqual(triggered.value.steps, [
@@ -327,12 +420,17 @@ for (const [effects, code] of [
   [[{ damage: 'self.foo + 1' }], 'UNKNOWN_VARIABLE'],
   [[{ damage: 1.25 }], 'TOO_MANY_DECIMALS'],
   [[{ damage: 'self.hp * 0.25' }], 'TOO_MANY_DECIMALS'],
-  [[{ damage: 1, extra: true }], 'INVALID_EFFECT_BUNDLE'],
+  [[{ damage: 1, extra: true }], 'UNKNOWN_FIELD'],
   [[{ damage: 1, to: 'everyone' }], 'INVALID_TARGET'],
   [[{ apply_status: 'bad-id' }], 'INVALID_STATUS_ID'],
   [[{ discard: 1, from: 'draw', pick: 'left' }], 'INVALID_CARD_PICK'],
   [[{ copy: 0 }], 'INVALID_CARD_COUNT'],
   [[{ reduce_cost: 1, count: 'two' }], 'INVALID_CARD_COUNT'],
+  [[{ modify_card: 'hits', add: 1 }], 'INVALID_CARD_VALUE_STAT'],
+  [[{ modify_card: 'damage', add: 1, multiply: 2 }], 'INVALID_CARD_VALUE_OPERATOR'],
+  [[{ modify_card: 'damage', divide: 0 }], 'DIVISION_BY_ZERO'],
+  [[{ card_rule: 'free', limit: 1, extra: 1 }], 'UNEXPECTED_CARD_REPLAY_COUNT'],
+  [[{ card_rule: 'replay' }], 'MISSING_CARD_RULE_LIMIT'],
   [[{ modify: 'speed', add: 1 }], 'INVALID_MODIFIER'],
   [[{ modify: 'damage', add: 1, multiply: 2 }], 'INVALID_MODIFIER_OPERATOR'],
   [[{ modify: 'damage', add: 'self.hp' }], 'INVALID_MODIFIER_FORMULA'],
@@ -361,7 +459,7 @@ assert.doesNotMatch(source, /\b(document|window|localStorage|eval|Function)\b/);
 
 const compactSchema = JSON.parse(await readFile(resolve('schemas/mwg-card-effects-v1.schema.json'), 'utf8'));
 const schemaBundleOperations = Object.keys(compactSchema.$defs.bundleEffect.properties).filter(
-  key => !['stacks', 'to', 'when', 'on'].includes(key),
+  key => !['stacks', 'to', 'targets', 'when', 'on'].includes(key),
 );
 assert.deepEqual(
   schemaBundleOperations,
@@ -380,5 +478,83 @@ assert.equal(compactSchema.$defs.seekEffect.properties.seek.$ref, '#/$defs/formu
 for (const trigger of ['attack_played', 'skill_played', 'power_played']) {
   assert.equal(compactSchema.$defs.trigger.enum.includes(trigger), true);
 }
+
+const richSelector = compileCompactEffectList([
+  {
+    modify_card: 'damage',
+    multiply: 2,
+    from: 'draw',
+    pick: 'top',
+    count: 2,
+    card_type: ['Attack'],
+    rarity: ['Uncommon', 'Rare'],
+    min_cost: 1,
+    tag: ['combo'],
+    origin: 'deck',
+    upgraded: true,
+  },
+]);
+assert.equal(richSelector.ok, true);
+assert.deepEqual(richSelector.value.steps[0].selector, {
+  zone: 'draw',
+  pick: 'top',
+  count: 2,
+  filter: {
+    types: ['Attack'],
+    rarities: ['Uncommon', 'Rare'],
+    minCost: 1,
+    tags: ['combo'],
+    origin: 'deck',
+    upgraded: true,
+  },
+});
+const exhaustSelector = compileCompactEffectList([
+  { modify_card: 'block', add: 1, from: 'exhaust', pick: 'bottom', count: 1 },
+]);
+assert.equal(exhaustSelector.ok, true);
+const durablePatch = compileCompactEffectList([
+  {
+    patch_card: 'retain',
+    enabled: true,
+    scope: 'run',
+    match: 'template',
+    future_copies: true,
+    from: 'hand',
+    pick: 'choose',
+    count: 1,
+    card_type: 'Skill',
+  },
+  {
+    patch_card: 'cost',
+    set: 0,
+    scope: 'until_played',
+    from: 'hand',
+    pick: 'left',
+    count: 1,
+  },
+]);
+assert.equal(durablePatch.ok, true, JSON.stringify(durablePatch.issues));
+assert.equal(durablePatch.value.steps[0].op, 'apply_card_patch');
+assert.deepEqual(durablePatch.value.steps[0].patch, {
+  kind: 'keyword',
+  keyword: 'retain',
+  enabled: true,
+  scope: 'run',
+  match: 'template',
+  includeFutureCopies: true,
+});
+assert.equal(durablePatch.value.steps[1].patch.operator, 'set');
+
+const dynamicCostPatch = compileCompactEffectList([
+  { patch_card: 'dynamic_cost', from: 'hand', pick: 'choose', timing: 'on_draw', subtract: 'turn_number', minimum: 0, scope: 'permanent' },
+  { patch_card: 'x_value', from: 'hand', pick: 'choose', add: 2, scope: 'combat' },
+]);
+assert.equal(dynamicCostPatch.ok, true, JSON.stringify(dynamicCostPatch.issues));
+assert.equal(dynamicCostPatch.value.steps[0].patch.kind, 'dynamic_cost');
+assert.deepEqual(dynamicCostPatch.value.steps[0].patch.value, { op: 'var', path: 'battle.turn_number' });
+assert.equal(dynamicCostPatch.value.steps[1].patch.kind, 'x_value');
+const xFormula = compileCompactEffectList({ damage: 'x_value * 4' });
+assert.equal(xFormula.ok, true);
+assert.deepEqual(xFormula.value.steps[0].amount.left, { op: 'var', path: 'context.x_value' });
 
 console.log('Compact AI effects compile through restricted CEL into the portable AST.');

@@ -9,6 +9,7 @@ const cardSystemPath = resolve('src/fish/combat/cardSystem.ts');
 const cardPresenterPath = resolve('src/fish/ui/cardInteractionPresenter.ts');
 const cardPlayModePath = resolve('src/fish/ui/cardPlayMode.ts');
 const battleUiPath = resolve('src/fish/ui/battleUI.ts');
+const enemyIntentPresenterPath = resolve('src/fish/ui/enemyIntentPresenter.ts');
 const cardSelectionHostPath = resolve('src/fish/core/cardSelectionHost.ts');
 const relicHostPath = resolve('src/fish/core/relicTriggerHost.ts');
 const relicPresenterPath = resolve('src/fish/ui/relicEffectPresenter.ts');
@@ -29,6 +30,7 @@ const [
   cardPresenter,
   cardPlayMode,
   battleUi,
+  enemyIntentPresenter,
   cardSelectionHost,
   relicTriggerHost,
   relicPresenter,
@@ -50,6 +52,7 @@ const [
     cardPresenterPath,
     cardPlayModePath,
     battleUiPath,
+    enemyIntentPresenterPath,
     cardSelectionHostPath,
     relicHostPath,
     relicPresenterPath,
@@ -142,6 +145,10 @@ assert.match(battleUi, /class="status-detail-effects"/);
 assert.match(battleUi, /showSupportDetails/);
 assert.match(battleUi, /card-title-row/);
 assert.match(battleUi, /bindEnemyIntentDetails/);
+assert.match(enemyIntentPresenter, /#enemy-intent-summary/);
+assert.match(enemyIntentPresenter, /class="intent-badge"/);
+assert.match(enemyIntentPresenter, /DynamicStatusManager\.getInstance\(\)\.getStatusDefinition/);
+assert.doesNotMatch(enemyIntentPresenter, /class="intent-effects"|createEffectTagsHTML/);
 assert.match(cardSelectionHost, /planCardSelection/);
 assert.match(cardSelectionHost, /resolveCardSelection/);
 assert.doesNotMatch(cardSelectionHost, /GameStateManager|commitCardZoneOperation|moveCard/);
@@ -164,10 +171,16 @@ assert.doesNotMatch(battleStyles, /\.phase-indicator,\s*\n\s*\.fullscreen-text\s
 assert.doesNotMatch(battleHtml, /id="modeToggle"|点击出牌|拖动出牌/);
 assert.match(battleHtml, /id="stage-player-emoji"/);
 assert.match(battleHtml, /id="stage-enemy-emoji"/);
+assert.match(battleHtml, /class="enemy-avatar-stack"/);
+assert.match(battleHtml, /id="enemy-intent-summary"/);
+assert.doesNotMatch(battleHtml, /class="intent-icon"|class="intent-effects"/);
 assert.doesNotMatch(battleHtml, /stage-action-caption|stage-enemy-name|class="stage-name"/);
 assert.match(battleHtml, /class="compact-support-row" aria-label="我方附加效果"/);
 assert.match(battleHtml, /id="player-status-effects"/);
 assert.match(battleStyles, /\.battle-stage\s*\{/);
+assert.match(battleStyles, /\.top-info-bar\s*\{[^}]*grid-template-columns:\s*auto auto minmax\(0, 1fr\)/s);
+assert.match(battleStyles, /\.enemy-intent-summary\s*\{/);
+assert.match(battleStyles, /\.intent-badge\s*\{/);
 assert.match(battleStyles, /\.stage-action-token\s*\{/);
 assert.doesNotMatch(
   battleStyles,
@@ -209,6 +222,10 @@ assert.match(
 assert.doesNotMatch(battleStyles, /height:\s*1040px|height:\s*940px|height:\s*920px/);
 assert.match(battleStyles, /@keyframes moveStars/);
 assert.match(battleStyles, /linear-gradient\(to right, #24243e, #302b63, #0f0c29\)/);
+for (const rarity of ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Corrupt']) {
+  assert.match(battleStyles, new RegExp(`\\.enhanced-card\\.rarity-${rarity}\\s*\\{`));
+}
+assert.match(battleStyles, /Rarity is a visual tier, not just a text badge/);
 assert.match(battleStyles, /\.stage-action-token[\s\S]*?border:\s*0/);
 assert.match(battleStyles, /\.status-detail-body\s*\{[^}]*overflow:\s*auto/);
 assert.match(battleStyles, /\.status-detail-effects\s*\{[^}]*max-height:\s*none[^}]*overflow:\s*visible/);

@@ -68,4 +68,49 @@ assert.equal(skillCommit.cardsPlayedThisTurn, 1);
 assert.equal(skillCommit.attacksPlayedThisTurn, 0);
 assert.equal(skillCommit.skillsPlayedThisTurn, 1);
 
+const replayRule = { type: 'card_play_rule', target: 'self', rule: 'replay', limit: 1, extra: 2 };
+const firstReplay = core.prepareCardPlay('attack', { ...base, cardPlayRules: [replayRule] });
+assert.equal(firstReplay.ok, true);
+assert.equal(firstReplay.repeatCount, 3, 'the first card resolves once plus two extra replays');
+const laterReplay = core.prepareCardPlay('attack', {
+  ...base,
+  cardsPlayedThisTurn: 1,
+  cardPlayRules: [replayRule],
+});
+assert.equal(laterReplay.ok, true);
+assert.equal(laterReplay.repeatCount, 1, 'a limited replay rule stops after the first card');
+
+const freeRule = { type: 'card_play_rule', target: 'self', rule: 'free', limit: 2, extra: 0 };
+const firstFree = core.prepareCardPlay('attack', { ...base, energy: 0, cardPlayRules: [freeRule] });
+assert.equal(firstFree.ok, true);
+assert.equal(firstFree.payment.spentEnergy, 0);
+const thirdPaid = core.prepareCardPlay('attack', {
+  ...base,
+  energy: 0,
+  cardsPlayedThisTurn: 2,
+  cardPlayRules: [freeRule],
+});
+assert.equal(thirdPaid.ok, false);
+assert.equal(thirdPaid.code, 'INSUFFICIENT_ENERGY');
+
+const freeX = core.prepareCardPlay('x', {
+  ...base,
+  hand: [xCard],
+  energy: 4,
+  cardPlayRules: [{ ...freeRule, limit: 'all' }],
+});
+assert.equal(freeX.ok, true);
+assert.equal(freeX.payment.spentEnergy, 0, 'a free X-cost card resolves with zero spent energy');
+assert.equal(freeX.repeatCount, 2, 'free payment does not remove an existing one-shot double effect');
+
+const stackedRules = core.resolveActiveCardPlayRules(
+  [
+    { ...replayRule, limit: 'all', extra: 12 },
+    { ...replayRule, limit: 'all', extra: 12 },
+    { ...freeRule, limit: 'all' },
+  ],
+  99,
+);
+assert.deepEqual(stackedRules, { free: true, extraReplays: 20 }, 'replays stack but keep the safety cap');
+
 console.log('Portable card play transactions re-read host state and preserve atomic intent.');

@@ -66,6 +66,8 @@ assert.match(prompt.battleSummary, /每回合抽牌：3张/);
 assert.match(prompt.battleSummary, /能量1\/3/);
 assert.match(prompt.battleSummary, /【叙事卡牌使用】[\s\S]*破门：改变了战场。/);
 assert.match(prompt.battleSummary, /【按回合战斗摘要】/);
+assert.match(prompt.battleSummary, /必须覆盖摘要中的每个回合/);
+assert.match(prompt.battleSummary, /先把本场战斗从开端到结果完整剧情化/);
 assert.match(prompt.battleSummary, /〔星击〕玩家造成6点伤害/);
 assert.match(prompt.battleSummary, /卡牌：星击×2（造成6点伤害。）/);
 assert.match(prompt.battleSummary, /遗物：星环（首次出牌时获得格挡。）/);

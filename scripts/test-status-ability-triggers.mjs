@@ -55,15 +55,18 @@ assert.doesNotMatch(
   /resolveStatusApplication|resolveStatusStacksChange|executeStatusTriggerTransaction|applyStatusStacksDecay|clearDirectModifiers|substituteLegacyStacks/,
 );
 
-const executorApplyStatus = readClassMethod(executorSource, executorPath, 'UnifiedEffectExecutor', 'applyStatusEffect');
-assert.match(executorApplyStatus, /this\.triggerHost\.applyStatus\(targetType, statusId, stacks\)/);
-const executorRemoveStatus = readClassMethod(
-  executorSource,
-  executorPath,
-  'UnifiedEffectExecutor',
-  'removeStatusEffect',
+const effectCommandHostPath = resolve('src/fish/core/effectCommandHost.ts');
+const effectCommandHostSource = await readFile(effectCommandHostPath, 'utf8');
+const routeEffectCommand = readClassMethod(
+  effectCommandHostSource,
+  effectCommandHostPath,
+  'TavernEffectCommandHost',
+  'executeCommand',
 );
-assert.match(executorRemoveStatus, /this\.triggerHost\.removeStatuses\(targetType, statusId\)/);
+assert.match(routeEffectCommand, /ports\.applyStatus\(commandTarget\(command\.target, sourceIsPlayer\), command\.status, command\.stacks\)/);
+assert.match(routeEffectCommand, /ports\.removeStatuses\(/);
+assert.match(executorSource, /applyStatus: \(target, status, stacks\) => this\.triggerHost\.applyStatus\(target, status, stacks\)/);
+assert.match(executorSource, /removeStatuses: \(target, selection\) => this\.triggerHost\.removeStatuses\(target, selection\)/);
 assert.doesNotMatch(executorSource, /processStatusOwnershipAbilityTriggers|applyStatusStacksDecay/);
 
 console.log('Status gain/loss abilities are wired for holders and their opponents.');

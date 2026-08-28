@@ -50,21 +50,23 @@ assert.match(hostDispatch, /processAbilitiesByTrigger\(target, trigger, context\
 assert.match(hostDispatch, /ports\.runRelic\(trigger, context\)/);
 assert.match(executorSource, /relicTriggerHost\.triggerRelics\(trigger/);
 
+const battleEffectPath = resolve('src/game-core/battleEffectRuntime.ts');
+const battleEffectSource = await readFile(battleEffectPath, 'utf8');
 const basicAttribute = readClassMethod(
-  executorSource,
-  executorPath,
-  'UnifiedEffectExecutor',
-  'executeBasicAttributeEffect',
+  battleEffectSource,
+  battleEffectPath,
+  'BattleEffectRuntime',
+  'executeAttribute',
 );
 assert.match(basicAttribute, /resolveAttributeTriggerDispatch\(\{/);
 assert.match(basicAttribute, /change: -absorption\.blockUsed/);
 assert.match(
   basicAttribute,
-  /dispatchBattleTriggers\([\s\S]*entity = this\.getEntity\(targetType\)[\s\S]*currentValue = this\.getCurrentAttributeValue\(entity, attribute\)[\s\S]*modifiedValue = absorption\.damage/,
+  /ports\.dispatchTriggers\([\s\S]*entity = this\.getEntity\(target\)[\s\S]*value = absorption\.damage/,
 );
 assert.ok(
-  basicAttribute.indexOf('currentValue = this.getCurrentAttributeValue(entity, attribute)', 500) <
-    basicAttribute.indexOf('const newValue = applyNumericOperator(currentValue, operator, modifiedValue)'),
+  basicAttribute.indexOf('entity = this.getEntity(target)', 500) <
+    basicAttribute.indexOf('const calculated = applyNumericOperator(previousValue, operator, value)'),
   'damage must use the HP baseline after block-loss triggers finish',
 );
 
@@ -106,7 +108,7 @@ assert.ok(
   'ability-gain abilities must run before player relics',
 );
 
-const executorRegister = readClassMethod(executorSource, executorPath, 'UnifiedEffectExecutor', 'registerAbility');
-assert.match(executorRegister, /this\.triggerHost\.registerAbility\(targetType, definition\)/);
+assert.match(executorSource, /registerAbility: \(target, definition\) => \{/);
+assert.match(executorSource, /return this\.triggerHost\.registerAbility\(target, \{/);
 
 console.log('Relics share a guarded trigger path for the complete runtime event matrix.');

@@ -744,6 +744,13 @@ function summarizeMvuUpdate(result: unknown): string[] {
     return typeof definition.name === 'string' && !!definition.name.trim() && actions.length > 0;
   };
 
+  const playableEnemies = (battle: unknown): Record<string, any>[] => {
+    if (!battle || typeof battle !== 'object' || Array.isArray(battle)) return [];
+    const source = battle as Record<string, any>;
+    const entries = Array.isArray(source.enemies) && source.enemies.length > 0 ? source.enemies : [source.enemy];
+    return entries.filter(isPlayableEnemy);
+  };
+
   const recoverMisplacedCards = (variables: Record<string, any> | undefined): number => {
     const battle = variables?.stat_data?.battle;
     if (!battle || typeof battle !== 'object') return 0;
@@ -919,13 +926,13 @@ function summarizeMvuUpdate(result: unknown): string[] {
             fullInitializationContexts.add(variables);
           }
           recoverMisplacedCards(variables);
-          const previousEnemy = variablesBeforeUpdate?.stat_data?.battle?.enemy;
-          const currentEnemy = variables?.stat_data?.battle?.enemy;
+          const previousEnemies = playableEnemies(variablesBeforeUpdate?.stat_data?.battle);
+          const currentEnemies = playableEnemies(variables?.stat_data?.battle);
           if (
             variables &&
             typeof variables === 'object' &&
-            !isPlayableEnemy(previousEnemy) &&
-            isPlayableEnemy(currentEnemy)
+            previousEnemies.length === 0 &&
+            currentEnemies.length > 0
           ) {
             inferredBattleStartContexts.add(variables);
           }
@@ -972,8 +979,8 @@ function summarizeMvuUpdate(result: unknown): string[] {
         return;
       }
 
-      const enemy = context?.variables?.stat_data?.battle?.enemy;
-      if (!isPlayableEnemy(enemy)) {
+      const enemies = playableEnemies(context?.variables?.stat_data?.battle);
+      if (enemies.length === 0) {
         console.error('[MagicGirlWorld] 敌人数据未注册完成，已阻止战斗页面提前启动');
         return;
       }

@@ -66,14 +66,24 @@ export function inspectBattleDataContract(variables: unknown): BattleDataContrac
     }
   }
 
-  const enemy = data.enemy;
-  if (!isRecord(enemy)) return failure('INVALID_TYPE', 'battle.enemy', '必须是对象');
-  if (typeof enemy.name !== 'string' || enemy.name.trim() === '') {
-    return failure('MISSING_VALUE', 'battle.enemy.name', '名称不能为空');
-  }
-  for (const field of ['hp', 'max_hp', 'lust', 'max_lust'] as const) {
-    if (!hasBattlePrecision(enemy[field])) {
-      return failure('INVALID_TYPE', `battle.enemy.${field}`, '必须是最多两位小数的有限数值');
+  const enemies = Array.isArray(data.enemies) && data.enemies.length > 0 ? data.enemies : [data.enemy];
+  if (enemies.length === 0 || enemies.length > 12)
+    return failure('INVALID_TYPE', 'battle.enemies', '必须包含 1 到 12 个敌人');
+  const enemyIds = new Set<string>();
+  for (let index = 0; index < enemies.length; index += 1) {
+    const enemy = enemies[index];
+    const path = Array.isArray(data.enemies) ? `battle.enemies[${index}]` : 'battle.enemy';
+    if (!isRecord(enemy)) return failure('INVALID_TYPE', path, '必须是对象');
+    if (typeof enemy.name !== 'string' || enemy.name.trim() === '') {
+      return failure('MISSING_VALUE', `${path}.name`, '名称不能为空');
+    }
+    const id = typeof enemy.id === 'string' && enemy.id.trim() ? enemy.id.trim() : enemy.name.trim();
+    if (enemyIds.has(id)) return failure('INVALID_TYPE', `${path}.id`, `敌人 ID 重复：${id}`);
+    enemyIds.add(id);
+    for (const field of ['hp', 'max_hp', 'lust', 'max_lust'] as const) {
+      if (!hasBattlePrecision(enemy[field])) {
+        return failure('INVALID_TYPE', `${path}.${field}`, '必须是最多两位小数的有限数值');
+      }
     }
   }
   if (!Array.isArray(data.cards)) return failure('INVALID_TYPE', 'battle.cards', '必须是数组');

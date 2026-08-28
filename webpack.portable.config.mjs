@@ -31,6 +31,10 @@ export default {
   resolve: { extensions: ['.ts', '.js'] },
   optimization: {
     minimize: true,
+    // Keep cross-runtime core modules as explicit module boundaries. The game
+    // core intentionally has type-only cycles; scope hoisting can otherwise
+    // elide a live named export that another portable entry still consumes.
+    concatenateModules: false,
     splitChunks: false,
     runtimeChunk: false,
     minimizer: [new TerserPlugin({ extractComments: false })],
