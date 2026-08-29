@@ -28,6 +28,7 @@ BattleLog.entries = [
   { turn: 1, type: 'action', message: '玩家卡牌: 使用了卡牌星击', actor: 'player', actionName: '星击' },
   { turn: 1, type: 'damage', message: '星击造成6点伤害' },
   { turn: 1, type: 'action', message: '敌人使用了挥砍', actor: 'enemy', actionName: '挥砍' },
+  { turn: 1, type: 'action', message: '后排术士使用了咒击', actor: 'enemy', actorId: 'rear_mage', actorName: '后排术士', actionName: '咒击' },
   { turn: 1, type: 'action', message: '遗物触发：星环', source: { type: 'relic', name: '星环' } },
   { turn: 1, type: 'action', message: '能力触发：追击', source: { type: 'ability', name: '追击' } },
   { turn: 1, type: 'action', message: '能力触发：追击', source: { type: 'ability', name: '追击' } },
@@ -35,7 +36,7 @@ BattleLog.entries = [
   { turn: 2, type: 'action', message: '玩家卡牌: 使用了卡牌终结', actor: 'player', actionName: '终结' },
 ];
 const turns = BattleLog.buildTurnSummaryReport();
-assert.match(turns, /回合1：玩家使用：星击×2；敌人使用：挥砍；触发：遗物“星环”、能力“追击”×2、状态“燃烧”/);
+assert.match(turns, /回合1：玩家使用：星击×2；敌人使用：挥砍、后排术士：咒击；触发：遗物“星环”、能力“追击”×2、状态“燃烧”/);
 assert.match(turns, /回合2：玩家使用：终结；敌人使用：无/);
 assert.doesNotMatch(turns, /6点伤害/);
 

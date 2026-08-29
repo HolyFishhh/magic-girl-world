@@ -47,6 +47,22 @@ function hasValidCombatNumbers(entity: Record<string, any>): boolean {
   );
 }
 
+function hasValidCombatResources(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!isRecord(value) || Object.keys(value).length > 16) return false;
+  return Object.entries(value).every(([id, raw]) => {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(id) || id === 'energy' || !isRecord(raw)) return false;
+    return (
+      raw.id === id &&
+      typeof raw.name === 'string' && raw.name.trim().length > 0 &&
+      typeof raw.emoji === 'string' && raw.emoji.trim().length > 0 &&
+      Number.isInteger(raw.current) && raw.current >= 0 &&
+      Number.isInteger(raw.max) && raw.max > 0 && raw.current <= raw.max &&
+      (raw.refresh === 'reset' || raw.refresh === 'retain')
+    );
+  });
+}
+
 function hasValidRuntimeProgram(value: unknown, required = true): boolean {
   if (!isRecord(value)) return !required && (value === null || value === undefined);
   if (required && value.effectProgram === undefined) return false;
@@ -71,11 +87,12 @@ function hasValidRuntimeContent(state: Record<string, any>): boolean {
     return false;
   }
 
-  const enemies = Array.isArray(state.enemies) && state.enemies.length > 0
+  const livingEnemies = Array.isArray(state.enemies) && state.enemies.length > 0
     ? state.enemies
     : state.enemy
       ? [state.enemy]
       : [];
+  const enemies = [...livingEnemies, ...(Array.isArray(state.defeatedEnemies) ? state.defeatedEnemies : [])];
   for (const enemy of enemies) {
     if ([...(enemy.actions || []), ...(enemy.abilities || [])].some(value => !hasValidRuntimeProgram(value))) {
       return false;
@@ -119,6 +136,7 @@ export function readBattleSessionSnapshot(value: unknown): BattleSessionSnapshot
   const state = value.state;
   if (!isRecord(state) || !isRecord(state.player)) return null;
   if (!hasValidCombatNumbers(state.player)) return null;
+  if (!hasValidCombatResources(state.player.resources)) return null;
   if (!isFiniteNumber(state.player.drawPerTurn) || state.player.drawPerTurn < 0) return null;
   if (!Array.isArray(state.player.deck)) return null;
   if (!Array.isArray(state.player.hand) || !Array.isArray(state.player.drawPile)) return null;
@@ -146,6 +164,7 @@ export function readBattleSessionSnapshot(value: unknown): BattleSessionSnapshot
   }
   if (state.random !== undefined && !isBattleRandomState(state.random)) return null;
   if (state.enemies !== undefined && !Array.isArray(state.enemies)) return null;
+  if (state.defeatedEnemies !== undefined && !Array.isArray(state.defeatedEnemies)) return null;
   const enemies = Array.isArray(state.enemies) && state.enemies.length > 0
     ? state.enemies
     : state.enemy
@@ -154,12 +173,22 @@ export function readBattleSessionSnapshot(value: unknown): BattleSessionSnapshot
   const enemyIds = new Set<string>();
   for (const enemy of enemies) {
     if (!isRecord(enemy) || !hasValidCombatNumbers(enemy)) return null;
+    if (!hasValidCombatResources(enemy.resources)) return null;
     if (typeof enemy.id !== 'string' || typeof enemy.name !== 'string' || enemyIds.has(enemy.id)) return null;
     enemyIds.add(enemy.id);
     if (!Array.isArray(enemy.statusEffects) || !Array.isArray(enemy.actions)) return null;
     if (enemy.abilities !== undefined && !Array.isArray(enemy.abilities)) return null;
   }
-  if (state.activeEnemyId !== undefined && state.activeEnemyId !== null && !enemyIds.has(state.activeEnemyId)) return null;
+  const activeEnemyIds = new Set(enemyIds);
+  for (const enemy of state.defeatedEnemies || []) {
+    if (!isRecord(enemy) || !hasValidCombatNumbers(enemy) || enemy.currentHp > 0) return null;
+    if (!hasValidCombatResources(enemy.resources)) return null;
+    if (typeof enemy.id !== 'string' || typeof enemy.name !== 'string' || enemyIds.has(enemy.id)) return null;
+    enemyIds.add(enemy.id);
+    if (!Array.isArray(enemy.statusEffects) || !Array.isArray(enemy.actions)) return null;
+    if (enemy.abilities !== undefined && !Array.isArray(enemy.abilities)) return null;
+  }
+  if (state.activeEnemyId !== undefined && state.activeEnemyId !== null && !activeEnemyIds.has(state.activeEnemyId)) return null;
   if (!hasValidRuntimeContent(state)) return null;
 
   return value as unknown as BattleSessionSnapshot;

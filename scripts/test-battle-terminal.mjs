@@ -42,6 +42,7 @@ const prompt = core.formatBattleEndPrompt({
     maxLust: 100,
     energy: 4,
     maxEnergy: 5,
+    resources: [{ name: '星能', emoji: '⭐', current: 2, max: 5 }],
     drawPerTurn: 3,
     statuses: [{ name: '祝福', stacks: 2, duration: 2, description: '提高下一次攻击的威力。' }],
     handCount: 1,
@@ -50,7 +51,10 @@ const prompt = core.formatBattleEndPrompt({
     cards: [{ name: '星击', count: 2, description: '造成6点伤害。' }],
     relics: [{ name: '星环', description: '首次出牌时获得格挡。' }],
   },
-  enemy: { name: '校验体', hp: 0, maxHp: 10, lust: 0, maxLust: 100, energy: 1, maxEnergy: 3, statuses: [] },
+  enemies: [
+    { name: '校验体甲', hp: 0, maxHp: 10, lust: 0, maxLust: 100, energy: 1, maxEnergy: 3, resources: [{ name: '怒气', emoji: '🔥', current: 1, max: 4 }], statuses: [] },
+    { name: '校验体乙', hp: 0, maxHp: 12, lust: 5, maxLust: 100, energy: 0, maxEnergy: 2, statuses: [] },
+  ],
   turns: 2,
   playerContinuation: '先检查敌人遗留的法杖，再询问同伴是否受伤。',
   narrativeCards: [{ name: '破门', description: '改变了战场。' }],
@@ -62,16 +66,19 @@ assert.equal(prompt.resultText, '胜利');
 assert.match(prompt.battleSummary, /祝福2层/);
 assert.match(prompt.battleSummary, /祝福2层（剩余2回合；提高下一次攻击的威力。）/);
 assert.match(prompt.battleSummary, /剩余能量：4\/5/);
-assert.match(prompt.battleSummary, /每回合抽牌：3张/);
 assert.match(prompt.battleSummary, /能量1\/3/);
-assert.match(prompt.battleSummary, /【叙事卡牌使用】[\s\S]*破门：改变了战场。/);
+assert.match(prompt.battleSummary, /校验体甲：生命值0\/10/);
+assert.match(prompt.battleSummary, /校验体乙：生命值0\/12/);
 assert.match(prompt.battleSummary, /【按回合战斗摘要】/);
 assert.match(prompt.battleSummary, /必须覆盖摘要中的每个回合/);
 assert.match(prompt.battleSummary, /先把本场战斗从开端到结果完整剧情化/);
 assert.match(prompt.battleSummary, /〔星击〕玩家造成6点伤害/);
-assert.match(prompt.battleSummary, /卡牌：星击×2（造成6点伤害。）/);
-assert.match(prompt.battleSummary, /遗物：星环（首次出牌时获得格挡。）/);
 assert.match(prompt.battleSummary, /【玩家指定的战后行动】先检查敌人遗留的法杖，再询问同伴是否受伤。/);
+assert.doesNotMatch(
+  prompt.battleSummary,
+  /【本局构筑与资源】|【叙事卡牌使用】|卡牌：|遗物：|能力：|道具：|特殊资源：|每回合抽牌：|手牌：|抽牌堆：|弃牌堆：|消耗堆：/,
+);
+assert.doesNotMatch(prompt.battleSummary, /破门：改变了战场。|星环（首次出牌时获得格挡。）|⭐星能2\/5|🔥怒气1\/4/);
 assert.equal(prompt.promptedBattleSummary, prompt.battleSummary);
 assert.doesNotMatch(prompt.promptedBattleSummary, /\[战斗后续\]|\[战斗结算\]|\[奖励预算\]|\[剧情模型要求\]/);
 assert.doesNotMatch(prompt.promptedBattleSummary, /随后运行的 MVU|另一个奖励模型|第三个奖励模型/);

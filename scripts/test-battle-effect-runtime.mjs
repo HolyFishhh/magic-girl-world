@@ -80,7 +80,7 @@ const damage = await runtime.execute(
   { type: 'damage', target: 'opponent', amount: 10 },
   { source: 'player' },
 );
-assert.deepEqual(damage, { applied: true, target: 'enemy', pendingDeath: false });
+assert.deepEqual(damage, { applied: true, target: 'enemy', pendingDeath: false, blocked: 5, hpLost: 19 });
 assert.equal(store.getEnemy().block, 0);
 assert.equal(
   store.getEnemy().currentHp,
@@ -100,6 +100,119 @@ assert.deepEqual(
   [12, 24],
 );
 assert.equal(events.filter(event => event.type === 'block_absorbed').length, 1);
+
+const independentSourceStore = fixture();
+independentSourceStore.updatePlayer({ modifiers: { damage_modifier: 50 } });
+independentSourceStore.updateEnemy({ currentHp: 40, block: 0 });
+const independentSourceRuntime = new BattleEffectRuntime(independentSourceStore, {
+  readModifierSources: (target, modifier) => modifierSources.get(`${target}:${modifier}`) || [],
+  dispatchTriggers: async () => {},
+  handleLustOverflow: async () => {},
+});
+await independentSourceRuntime.execute(
+  { type: 'damage', target: 'opponent', amount: 10, damageKind: 'attack' },
+  {
+    source: 'player',
+    damageKind: 'attack',
+    sourceModifierSources: {
+      damage_modifier: [{ operation: { operator: '+', value: 3 }, name: 'Independent summon' }],
+    },
+  },
+);
+assert.equal(
+  independentSourceStore.getEnemy().currentHp,
+  14,
+  'an independent summon uses its own +3 outgoing modifier, then the target x2 modifier, without inheriting owner modifiers',
+);
+
+const interceptStore = fixture();
+interceptStore.updatePlayer({ currentHp: 40, block: 3 });
+interceptStore.spawnSummons('player', {
+  id: 'interceptor', name: 'Interceptor', emoji: 'I', maxHp: 5, block: 1,
+  intercept: { mode: 'unblocked_attack' },
+}, 1);
+const interceptEvents = [];
+const interceptRuntime = new BattleEffectRuntime(interceptStore, {
+  readModifierSources: () => [],
+  dispatchTriggers: async () => {},
+  handleLustOverflow: async () => {},
+  interceptDamage: async request => interceptStore.interceptDamageWithSummons(request.target, request.amount),
+  present: event => interceptEvents.push(event),
+});
+const interceptedAttack = await interceptRuntime.execute(
+  { type: 'damage', target: 'opponent', amount: 11, damageKind: 'attack' },
+  { source: 'enemy', damageKind: 'attack' },
+);
+assert.equal(interceptedAttack.blocked, 3, 'protected combatant block resolves before summon interception');
+assert.equal(interceptedAttack.hpLost, 2, 'summon overkill returns to the protected combatant');
+assert.equal(interceptStore.getPlayer().currentHp, 38);
+assert.equal(interceptStore.getSummons('player').length, 0);
+assert.equal(interceptEvents.find(event => event.type === 'summon_intercepted').intercepted, 6);
+
+interceptStore.spawnSummons('player', {
+  id: 'interceptor', name: 'Interceptor', emoji: 'I', maxHp: 5,
+  intercept: { mode: 'unblocked_attack' },
+}, 1);
+await interceptRuntime.execute(
+  { type: 'damage', target: 'opponent', amount: 2, damageKind: 'hp_loss' },
+  { source: 'enemy', damageKind: 'hp_loss' },
+);
+assert.equal(interceptStore.getPlayer().currentHp, 36, 'direct HP loss bypasses summon interception');
+assert.equal(interceptStore.getSummons('player').length, 1);
+
+const typedStore = fixture();
+typedStore.updateEnemy({ currentHp: 20, block: 9 });
+typedStore.updatePlayer({ currentHp: 30, maxHp: 80 });
+const typedEvents = [];
+const typedRuntime = new BattleEffectRuntime(typedStore, {
+  readModifierSources: (target, modifier) => modifierSources.get(`${target}:${modifier}`) || [],
+  dispatchTriggers: async () => {},
+  handleLustOverflow: async () => {},
+  present: event => typedEvents.push(event),
+});
+const hpLoss = await typedRuntime.execute(
+  { type: 'damage', target: 'opponent', amount: 8, damageKind: 'hp_loss', lifesteal: 0.5 },
+  { source: 'player', damageKind: 'attack' },
+);
+assert.equal(hpLoss.blocked, 0, 'direct HP loss bypasses block');
+assert.equal(hpLoss.hpLost, 8);
+assert.equal(typedStore.getEnemy().block, 9, 'direct HP loss leaves block untouched');
+assert.equal(typedStore.getEnemy().currentHp, 12, 'direct HP loss skips outgoing and incoming damage modifiers');
+assert.equal(typedStore.getPlayer().currentHp, 39, 'lifesteal heals from actual HP loss and then uses heal modifiers');
+assert.equal(
+  typedEvents.find(event => event.type === 'damage_resolved').damageKind,
+  'hp_loss',
+  'an explicit damage kind must not be overwritten by the card context',
+);
+
+const executeStore = fixture();
+executeStore.updateEnemy({ currentHp: 18, maxHp: 40, block: 12, tags: ['elite'] });
+const executeEvents = [];
+const executeDispatches = [];
+const executeRuntime = new BattleEffectRuntime(executeStore, {
+  readModifierSources: () => [],
+  dispatchTriggers: async entries => executeDispatches.push(...entries),
+  handleLustOverflow: async () => {},
+  present: event => executeEvents.push(event),
+});
+const excludedExecute = await executeRuntime.execute(
+  { type: 'execute', target: 'opponent', threshold: 50, thresholdMode: 'hp_percent', excludeTags: ['elite'], triggerFatal: true },
+  { source: 'player' },
+);
+assert.equal(excludedExecute.defeated, false);
+assert.equal(excludedExecute.excludedBy, 'elite');
+assert.equal(executeStore.getEnemy().currentHp, 18);
+const executed = await executeRuntime.execute(
+  { type: 'execute', target: 'opponent', threshold: 50, thresholdMode: 'hp_percent', triggerFatal: true },
+  { source: 'player' },
+);
+assert.equal(executed.defeated, true);
+assert.equal(executed.pendingDeath, true);
+assert.equal(executed.fatal, true);
+assert.equal(executeStore.getEnemy().currentHp, 0);
+assert.equal(executeStore.getEnemy().block, 12, 'execute never consumes block');
+assert.deepEqual(executeDispatches, [], 'execute does not emit take-damage or deal-damage triggers');
+assert.equal(executeEvents.at(-1).type, 'defeat_resolved');
 
 const integerStore = fixture();
 integerStore.updateEnemy({ maxHp: 55, currentHp: 55, block: 0 });
@@ -149,6 +262,38 @@ store.updateEnemy({ currentHp: 1, block: 0 });
 const lethal = await runtime.execute({ type: 'damage', target: 'opponent', amount: 99 }, { source: 'player' });
 assert.equal(lethal.pendingDeath, true);
 assert.equal(store.getEnemy().currentHp, 0);
+
+const targetedState = createEmptyBattleState();
+const targetedStore = new BattleStateStore(targetedState);
+const targetedEvents = [];
+const charge = current => ({
+  charge: { id: 'charge', name: 'Charge', emoji: 'C', current, max: 9, refresh: 'reset' },
+});
+targetedStore.setEnemies([
+  enemy({ id: 'front', currentHp: 20, resources: charge(1) }),
+  enemy({ id: 'back', currentHp: 20, resources: charge(4) }),
+], 'front');
+const targetedRuntime = new BattleEffectRuntime(targetedStore, {
+  readModifierSources: () => [],
+  dispatchTriggers: async () => {},
+  handleLustOverflow: async () => {},
+  present: event => targetedEvents.push(event),
+});
+await targetedRuntime.execute(
+  { type: 'gain_resource', target: 'opponent', resource: 'charge', amount: 2 },
+  { source: 'player', targetEnemyId: 'back' },
+);
+assert.equal(targetedStore.getEnemyById('front').resources.charge.current, 1);
+assert.equal(targetedStore.getEnemyById('back').resources.charge.current, 6);
+assert.equal(targetedEvents.at(-1).change, 'gain');
+assert.equal(targetedStore.getEnemy().id, 'front', 'an explicit resource target does not mutate the active enemy alias');
+await targetedRuntime.execute(
+  { type: 'set_resource', target: 'self', resource: 'charge', value: 3 },
+  { source: 'enemy', sourceEnemyId: 'back', targetEnemyId: 'back' },
+);
+assert.equal(targetedStore.getEnemyById('back').resources.charge.current, 3);
+assert.equal(targetedStore.getEnemyById('front').resources.charge.current, 1);
+assert.equal(targetedEvents.at(-1).change, 'set');
 
 const noTargetState = createEmptyBattleState();
 const noTargetStore = new BattleStateStore(noTargetState);

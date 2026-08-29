@@ -25,10 +25,26 @@ assert.deepEqual(randomLockedA.targets.map(value => value.id), randomLockedB.tar
 assert.equal(new Set(randomLockedA.targets.map(value => value.id)).size, 2, 'random_n does not repeat by default');
 const repeated = core.resolveEnemyTargets(collection, { mode: 'random_n', count: 8, allowRepeat: true }, core.createBattleRandomState(9));
 assert.equal(repeated.targets.length, 8, 'random multi-hit may explicitly repeat targets');
+assert.equal(repeated.resolution.complete, true);
+const insufficient = core.resolveEnemyTargets(collection, { mode: 'random_n', count: 8 }, core.createBattleRandomState(9));
+assert.deepEqual(
+  insufficient.resolution,
+  { requestedCount: 8, availableCount: 3, resolvedCount: 3, complete: false, code: 'INSUFFICIENT_TARGETS' },
+  'target shortage must be explicit instead of silently shrinking random_n',
+);
 
 collection = core.updateCombatant(collection, 'a', { currentHp: 0 });
 assert.equal(core.getActiveCombatant(collection).id, 'b', 'active target advances immediately after death');
-assert.equal(core.resolveEnemyTargets(collection, { mode: 'by_id', id: 'a' }, core.createBattleRandomState(1)).targets.length, 0);
+const defeatedById = core.resolveEnemyTargets(collection, { mode: 'by_id', id: 'a' }, core.createBattleRandomState(1));
+assert.equal(defeatedById.targets.length, 0);
+assert.deepEqual(defeatedById.resolution, {
+  requestedCount: 1,
+  availableCount: 2,
+  resolvedCount: 0,
+  complete: false,
+  code: 'TARGET_NOT_FOUND',
+  targetId: 'a',
+});
 const removed = core.removeDefeatedCombatants(collection);
 assert.deepEqual(removed.removed.map(value => value.id), ['a']);
 assert.deepEqual(removed.collection.order, ['b', 'c']);

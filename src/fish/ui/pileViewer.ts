@@ -2,9 +2,10 @@
  * 牌堆查看器 - 显示抽牌堆、弃牌堆等内容
  */
 
-import type { Card } from '../../game-core';
+import { describeCardCost, type Card } from '../../game-core';
 import { escapeHtml, escapeHtmlAttribute } from '../shared/html';
 import { EffectProgramDisplay } from './effectProgramDisplay';
+import { GameStateManager } from '../core/gameStateManager';
 
 export type BattlePileType = 'deck' | 'draw' | 'discard' | 'exhaust';
 
@@ -97,9 +98,14 @@ export class PileViewer {
       category: 'special' as const,
     }));
     const compactDiscardTagsHTML = PileViewer.effectDisplay.createCompactEffectTagsHTML(discardEffectTags);
+    const compactAttachmentTagsHTML = PileViewer.effectDisplay.createCompactEffectTagsHTML(
+      PileViewer.effectDisplay.attachmentToTags(card.attachments),
+    );
 
     const displayCost =
-      card.type === 'Curse' || card.cost === undefined ? '—' : card.cost === 'energy' ? 'X' : card.cost;
+      card.type === 'Curse' || card.cost === undefined
+        ? '—'
+        : describeCardCost(card.cost, GameStateManager.getInstance().getPlayer().resources);
 
     return `
       <div class="card enhanced-card rarity-${escapeHtmlAttribute(card.rarity)} card-type-${escapeHtmlAttribute(card.type)}" data-card-id="${escapeHtmlAttribute(card.id)}">
@@ -124,6 +130,7 @@ export class PileViewer {
           ${card.description ? `<div class="card-description">${escapeHtml(card.description)}</div>` : ''}
           ${compactTagsHTML}
           ${compactDiscardTagsHTML}
+          ${compactAttachmentTagsHTML}
         </div>
       </div>
     `;

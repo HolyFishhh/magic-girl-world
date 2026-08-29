@@ -1,4 +1,5 @@
 import type { EffectProgram } from './effectDsl';
+import { type CardEffectCommand } from './cardEffectRuntime';
 export type ScheduledPhase = 'turn_start' | 'before_draw' | 'after_draw' | 'turn_end';
 export type ScheduledOwner = 'player' | 'enemy' | 'system';
 export type ScheduledPayload = {
@@ -14,10 +15,15 @@ export type ScheduledPayload = {
     entityId: string;
     reason: 'delayed_death' | 'execute';
 } | {
+    type: 'card_zone_operation';
+    command: CardEffectCommand;
+} | {
     type: 'card_zone';
     operation: 'move' | 'remove' | 'recover' | 'generate';
     data: Record<string, unknown>;
 };
+/** Normalize old saved card-zone payloads into the only executable command shape. */
+export declare function scheduledCardZoneCommand(payload: ScheduledPayload): CardEffectCommand | null;
 export interface ScheduledEffect {
     id: string;
     source: {
@@ -57,7 +63,9 @@ export declare function takeDueScheduledEffects(state: EffectSchedulerState, tur
  * the returned state only after every payload has committed successfully; on a
  * payload failure they retain the original state and can retry the whole phase.
  */
-export declare function runScheduledPhaseAtomically<T>(state: EffectSchedulerState, turn: number, phase: ScheduledPhase, initial: T, execute: (draft: T, effect: ScheduledEffect) => T | Promise<T>): Promise<{
+export declare function runScheduledPhaseAtomically<T>(state: EffectSchedulerState, turn: number, phase: ScheduledPhase, initial: T, execute: (draft: T, effect: ScheduledEffect) => T | Promise<T>, options?: {
+    isTerminal?: (draft: T) => boolean;
+}): Promise<{
     state: EffectSchedulerState;
     value: T;
     executed: ScheduledEffect[];

@@ -1,4 +1,5 @@
 import { createCardCopyIdentity } from './cardIdentity';
+import { inheritedCardAttachments } from './cardAttachment';
 import {
   inheritedCardPatches,
   materializeCardPatches,
@@ -36,6 +37,7 @@ export type AdvancedCardZoneRequest =
 export type AdvancedCardZoneFailureCode =
   | 'DUPLICATE_CARD_ID'
   | 'RANDOM_SOURCE_REQUIRED'
+  | 'INSUFFICIENT_CANDIDATES'
   | 'INVALID_SELECTION'
   | 'STALE_PLAN'
   | 'DUPLICATE_GENERATED_ID';
@@ -102,7 +104,7 @@ export function planAdvancedCardZoneTransaction<TCard extends SelectableCard>(
   const candidates = orderedCardsForSelector(zones, request.selector);
   const requested = request.selector.pick === 'all'
     ? candidates.length
-    : Math.min(candidates.length, normalizedAmount(request.selector.count ?? request.amount));
+    : normalizedAmount(request.selector.count ?? request.amount);
   const selection = planCardSelection(
     {
       candidateIds: candidates.map(card => card.id),
@@ -114,7 +116,9 @@ export function planAdvancedCardZoneTransaction<TCard extends SelectableCard>(
     random,
   );
   if (!selection.ok) {
-    return { ok: false, code: selection.code === 'RANDOM_SOURCE_REQUIRED' ? 'RANDOM_SOURCE_REQUIRED' : 'INVALID_SELECTION' };
+    if (selection.code === 'RANDOM_SOURCE_REQUIRED') return { ok: false, code: 'RANDOM_SOURCE_REQUIRED' };
+    if (selection.code === 'INSUFFICIENT_CANDIDATES') return { ok: false, code: 'INSUFFICIENT_CANDIDATES' };
+    return { ok: false, code: 'INVALID_SELECTION' };
   }
   return { ok: true, request, candidateIds: candidates.map(card => card.id), selection, snapshot: zoneSnapshot };
 }
@@ -187,6 +191,7 @@ export function commitAdvancedCardZoneTransaction<TCard extends SelectableCard &
       ...structuredClone(source),
       ...identity,
       patches: inheritedCardPatches(patchable, policy),
+      attachments: inheritedCardAttachments(patchable, policy),
     } as TCard & PatchableCard) as TCard;
     created.push(copy);
   }
@@ -198,7 +203,7 @@ export function commitAdvancedCardZoneTransaction<TCard extends SelectableCard &
 /** Replace the definition while retaining one owned/run identity and only explicitly inherited patches. */
 export function transformCardInstance<TCard extends PatchableCard>(
   source: TCard,
-  replacement: Omit<TCard, 'id' | 'runInstanceId' | 'combatInstanceId' | 'patches' | 'patchBase'>,
+  replacement: Omit<TCard, 'id' | 'runInstanceId' | 'combatInstanceId' | 'patches' | 'patchBase' | 'attachments'>,
   policy: CardPatchInheritancePolicy = TRANSFORM_PATCH_POLICY,
 ): TCard {
   const transformed = {
@@ -210,6 +215,7 @@ export function transformCardInstance<TCard extends PatchableCard>(
     parentCombatInstanceId: source.combatInstanceId || source.id,
     origin: 'transformed' as const,
     patches: inheritedCardPatches(source, policy),
+    attachments: inheritedCardAttachments(source, policy),
   } as unknown as TCard;
   return materializeCardPatches(transformed);
 }

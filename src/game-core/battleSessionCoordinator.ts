@@ -7,8 +7,10 @@ import {
   type CommittedCardPlay,
   type PreparedCardPlay,
 } from './cardPlayTransaction';
-import type { CardEnergyPayment, PlayedCardDestination } from './cardRules';
+import type { PlayedCardDestination } from './cardRules';
+import type { CardResourcePayment } from './combatResource';
 import { clearCardPatches, type PatchableCard } from './cardPatch';
+import { advanceCardAttachments } from './cardAttachment';
 import { clearDynamicCardCostAfterPlay } from './dynamicCardCost';
 import {
   runBattleStartFlow,
@@ -126,6 +128,7 @@ export interface BattleSessionTurnPorts<TToken> extends BattleSessionTransaction
   canEndTurn(): boolean;
   isTerminal(): boolean;
   beginEnemyTurn(): MaybePromise<void>;
+  consumeExtraTurn?(actor: 'player' | 'enemy'): MaybePromise<boolean>;
   executeTurnStep(step: BattleTurnFlowStep): MaybePromise<void>;
 }
 
@@ -146,10 +149,11 @@ export async function advanceBattleSessionTurn<TToken>(
 
     const token = await ports.beginTransaction(action);
     try {
-      await ports.beginEnemyTurn();
       const flow = await runBattleTurnFlow({
         isTerminal: ports.isTerminal,
         execute: ports.executeTurnStep,
+        beginEnemyTurn: ports.beginEnemyTurn,
+        consumeExtraTurn: ports.consumeExtraTurn,
       });
       await ports.commitTransaction(token);
       return { status: flow.completed ? 'completed' : 'stopped', flow };
@@ -170,16 +174,16 @@ export interface BattleSessionCardPlayPorts<TCard extends CardPlayCard, TToken>
   applyCardPlayCommit(committed: CommittedCardPlay<TCard>): MaybePromise<void>;
   beginCardTransit(card: TCard): MaybePromise<void>;
   endCardTransit(card: TCard): MaybePromise<void>;
-  executeCardEffect(card: TCard, payment: CardEnergyPayment, repeatIndex: number): MaybePromise<void>;
+  executeCardEffect(card: TCard, payment: CardResourcePayment, repeatIndex: number): MaybePromise<void>;
   movePlayedCard(card: TCard, destination: PlayedCardDestination): MaybePromise<void>;
   resolvePlayedCardDestination?(card: TCard, defaultDestination: PlayedCardDestination): PlayedCardDestination;
   triggerPostCardPlay(card: TCard): MaybePromise<void>;
   recordCardPlayEvent?(
     card: TCard,
-    payment: CardEnergyPayment,
+    payment: CardResourcePayment,
     event: { phase: 'before' | 'after'; replayIndex: number; automatic: boolean },
   ): MaybePromise<void>;
-  recordCardResourceSpent?(card: TCard, payment: CardEnergyPayment): MaybePromise<void>;
+  recordCardResourceSpent?(card: TCard, payment: CardResourcePayment): MaybePromise<void>;
   recordPlayedCardMoved?(card: TCard, destination: PlayedCardDestination): MaybePromise<void>;
 }
 
@@ -241,11 +245,11 @@ export async function playBattleSessionCard<TCard extends CardPlayCard, TToken>(
         repeatsExecuted += 1;
       }
 
-      const playedCard = clearDynamicCardCostAfterPlay((
+      const playedCard = clearDynamicCardCostAfterPlay(advanceCardAttachments((
         'patchBase' in committed.card || 'patches' in committed.card
           ? clearCardPatches(committed.card as TCard & PatchableCard, 'played')
           : { ...committed.card, doubleEffect: undefined, replayCount: 0 }
-      ) as TCard & PatchableCard) as TCard;
+      ) as TCard & PatchableCard, 'played')) as TCard;
       const destination = ports.resolvePlayedCardDestination?.(playedCard, committed.destination) ?? committed.destination;
       await ports.movePlayedCard(playedCard, destination);
       await ports.recordPlayedCardMoved?.(playedCard, destination);

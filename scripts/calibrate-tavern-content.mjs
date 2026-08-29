@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 
 import { createTavernApi, getChat } from './lib/tavern-api.mjs';
 
@@ -12,15 +12,40 @@ const { createContentPackFromMvuBattle } = require(resolve('src/runtime/contentP
 
 const root = resolve(new URL('..', import.meta.url).pathname.replace(/^\/(?:([A-Za-z]:))/, '$1'));
 const releaseConfig = JSON.parse(await readFile(resolve(root, 'release.config.json'), 'utf8'));
-const [avatarUrl, chatFile, requestedMessageId] = process.argv.slice(2);
-const tavernUrl = new URL(process.env.TAVERN_URL || releaseConfig.defaultTavernUrl);
+const args = process.argv.slice(2);
+let avatarUrl;
+let chatFile;
+let requestedMessageId;
+let chat;
 
-if (!avatarUrl?.endsWith('.png') || !chatFile) {
-  throw new Error('Usage: node scripts/calibrate-tavern-content.mjs <avatar.png> <chat-file> [message-id]');
+if (args[0] === '--file') {
+  const sourcePath = resolve(args[1] || '');
+  if (!args[1]) throw new Error('Usage: node scripts/calibrate-tavern-content.mjs --file <chat.jsonl> [message-id]');
+  chat = (await readFile(sourcePath, 'utf8'))
+    .split(/\r?\n/g)
+    .filter(Boolean)
+    .map((line, index) => {
+      try {
+        return JSON.parse(line);
+      } catch (error) {
+        throw new Error(`Invalid JSONL at line ${index + 1}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    });
+  avatarUrl = `${basename(dirname(sourcePath))}.png`;
+  chatFile = basename(sourcePath, '.jsonl');
+  requestedMessageId = args[2];
+} else {
+  [avatarUrl, chatFile, requestedMessageId] = args;
+  if (!avatarUrl?.endsWith('.png') || !chatFile) {
+    throw new Error(
+      'Usage: node scripts/calibrate-tavern-content.mjs <avatar.png> <chat-file> [message-id]\n' +
+      '   or: node scripts/calibrate-tavern-content.mjs --file <chat.jsonl> [message-id]',
+    );
+  }
+  const tavernUrl = new URL(process.env.TAVERN_URL || releaseConfig.defaultTavernUrl);
+  const api = await createTavernApi(tavernUrl);
+  chat = await getChat(api, avatarUrl, chatFile);
 }
-
-const api = await createTavernApi(tavernUrl);
-const chat = await getChat(api, avatarUrl, chatFile);
 
 function layersFor(message) {
   return Array.isArray(message?.variables) ? message.variables : [message?.variables];
@@ -53,8 +78,28 @@ const player = {
   level: Number(battle.level),
 };
 const build = core.summarizeBuildBudget(content, player);
-const request = core.createBattleRequest({ content, player, route: null, seed: 0 });
-const enemyAssessment = core.assessEnemyBudget(request, build);
+const contentContract = core.validateContentPackContract(content, { requireExecutable: true });
+let request = null;
+let requestError = null;
+try {
+  request = core.createBattleRequest({ content, player, route: null, seed: 0 });
+} catch (error) {
+  requestError = error instanceof Error ? error.message : String(error);
+}
+const enemyAssessment = request
+  ? core.assessEnemyBudget(request, build)
+  : { budget: core.recommendEnemyBudget(build, 1, 1), warnings: [] };
+const startedAt = performance.now();
+const designAssessment = core.assessContentDesign({
+  pack: content,
+  budget: build,
+  player,
+  previous: battle.design_context,
+  rewardCandidates: Array.isArray(selected.layer.stat_data.reward?.card)
+    ? selected.layer.stat_data.reward.card
+    : [],
+});
+const designDurationMs = Math.round((performance.now() - startedAt) * 100) / 100;
 
 function describe(definition) {
   const analysis = core.analyzeContentDefinition(definition);
@@ -87,8 +132,28 @@ const report = {
     enemy: battle.enemy?.name ?? null,
   },
   buildBudget: build,
+  contentContract: {
+    ok: contentContract.ok,
+    issues: contentContract.ok ? [] : contentContract.issues,
+    requestError,
+  },
   enemyBudget: enemyAssessment.budget,
   enemyWarnings: enemyAssessment.warnings,
+  designAssistant: {
+    durationMs: designDurationMs,
+    fingerprint: designAssessment.context.fingerprint,
+    build: designAssessment.build,
+    enemy: designAssessment.enemy,
+    forecast: designAssessment.forecast,
+    reward: designAssessment.reward,
+    adaptiveEnemyBudget: designAssessment.budget,
+    diagnostics: designAssessment.diagnostics,
+    recentEnemySignatures: designAssessment.context.recentEnemySignatures,
+    lastBattle: designAssessment.context.lastBattle ?? null,
+    performance: designAssessment.context.performance ?? null,
+    brief: designAssessment.context.brief,
+    shadow: designAssessment.simulation,
+  },
   cards: content.cards.map(describe),
   relics: content.relics.map(describe),
   abilities: content.abilities.map(describe),

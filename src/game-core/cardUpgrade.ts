@@ -1,5 +1,6 @@
 import { validateRewardCandidate, validateRewardCandidateAgainstLibrary } from './rewardCandidateValidation';
 import { isCompactEffectList } from './compactEffectContract';
+import type { CardCost } from './combatResource';
 
 export interface CardUpgradePatch {
   /** Optional route binding for node-scoped upgrades. */
@@ -7,7 +8,7 @@ export interface CardUpgradePatch {
   card_id: string;
   description?: string;
   name?: string;
-  cost?: number | 'energy';
+  cost?: CardCost;
   effects?: unknown;
   discard_effects?: unknown;
   trigger?: string;
@@ -22,6 +23,7 @@ export interface CardUpgradeOptions {
   maxLevel?: number;
   knownStatusIds?: Iterable<string>;
   statusDefinitions?: readonly unknown[];
+  knownResourceIds?: Iterable<string>;
 }
 
 export type CardUpgradeResult =
@@ -119,10 +121,11 @@ export function applyCardUpgrade(
 
   const validation = validateRewardCandidate('cards', next);
   if (!validation.ok) return { ok: false, message: validation.message };
-  if (options.knownStatusIds || options.statusDefinitions) {
+  if (options.knownStatusIds || options.statusDefinitions || options.knownResourceIds) {
     const libraryValidation = validateRewardCandidateAgainstLibrary('cards', next, {
       knownStatusIds: options.knownStatusIds,
       statusDefinitions: options.statusDefinitions,
+      knownResourceIds: options.knownResourceIds,
     });
     if (!libraryValidation.ok) return { ok: false, message: libraryValidation.message };
   }

@@ -1,8 +1,9 @@
 import { type ContentAnalysis } from './contentAnalysis';
+import type { CardCost } from './combatResource';
 /** Host-neutral card data used by the minimum deck diagnostics. */
 export interface DeckPlayabilityCard {
     type?: string;
-    cost?: number | 'energy';
+    cost?: CardCost;
     quantity?: number;
     analysis?: Pick<ContentAnalysis, 'metrics' | 'dynamicMetrics'> | null;
 }

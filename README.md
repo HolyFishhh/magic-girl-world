@@ -4,8 +4,8 @@
 
 ## 当前发布
 
-- 版本：`0.5.148`
-- 角色显示名：`魔法少女世界 0.5.148`
+- 版本：`0.5.155`
+- 角色显示名：`魔法少女世界 0.5.155`
 - 唯一交付卡：根目录 `魔法少女世界.png`
 - SillyTavern 实测基线：`1.18.0`
 - 酒馆助手最低版本：`3.4.17`，实测版本：`4.9.3`
@@ -16,7 +16,7 @@
 ## 导入与启用
 
 1. 在 SillyTavern 导入根目录 `魔法少女世界.png`。
-2. 在角色管理中明确选择显示名为 `魔法少女世界 0.5.148` 的新卡，不要继续使用旧同名角色。
+2. 在角色管理中明确选择显示名为 `魔法少女世界 0.5.155` 的新卡，不要继续使用旧版本角色。
 3. 首次出现“包含内嵌世界书”提示时选择“是”。若未出现，在角色“更多...”中执行“导入角色卡的世界书”。
 4. 在酒馆助手的“脚本 -> 角色脚本”中启用当前角色。应能看到“MVU变量框架”和“魔法少女世界运行时”。全局脚本或预设脚本列表为空不代表角色脚本丢失。
 5. 看到 MVU 初始化成功后开始新对话。
@@ -103,6 +103,7 @@ X 费与条件：
 - `src/fish/ui/`：战斗 iframe 呈现与交互，不解析 AI 文本。
 - `src/common/`：正文末尾状态栏、奖励事务和可选远征入口。
 - `src/runtime/`：角色级共享运行时、楼层变量、MVU readiness 和战斗交接。
+- `src/sillytavern-extension/`：可选的顶层构筑评分、流派知识图谱、第二轮动态注入和敌人数值校准扩展。
 - `worldbook_new/`：当前唯一 AI 协议。
 
 卡牌处理和战斗后端可从 `dist/portable/` 独立导入，不依赖酒馆助手、MUV 或 DOM。外部网站或 Mod 只需实现自己的状态、选择、事件和展示端口。
@@ -129,7 +130,7 @@ npm run tavern:battle-repair-chat -- status "魔法少女世界 0.5.93.png" ordi
 npm run measure:worldbook-roles
 ```
 
-`0.5.148` 不包含实验中的卡牌与敌人生成知识库；该方案已记录在 `TODO.md`，研究资料只供后续重构参考。
+当前正式角色卡仍不强制依赖卡牌与敌人生成知识库；可选扩展的设计、安装和降级边界见 `docs/sillytavern-design-assistant-plugin.md`。
 
 ## 维护原则
 
@@ -140,3 +141,5 @@ npm run measure:worldbook-roles
 - 发布后必须用全新版本名的最终 PNG 在真实 SillyTavern 回归。
 
 重构过程见 `docs/refactor-log.md`，MVU 分工见 `docs/mvu-worldbook-boundary.md`，酒馆链路踩坑见 `docs/tavern-helper-pitfalls.md`。
+
+玩家可见的完整版本记录见 `docs/player-release-notes.md`；正式发布前必须按 `docs/release-playbook.md` 汇总跨任务改动并同步角色卡与卡图仓库。

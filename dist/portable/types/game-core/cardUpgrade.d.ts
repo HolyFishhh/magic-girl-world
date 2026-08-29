@@ -1,10 +1,11 @@
+import type { CardCost } from './combatResource';
 export interface CardUpgradePatch {
     /** Optional route binding for node-scoped upgrades. */
     node_id: string;
     card_id: string;
     description?: string;
     name?: string;
-    cost?: number | 'energy';
+    cost?: CardCost;
     effects?: unknown;
     discard_effects?: unknown;
     trigger?: string;
@@ -18,6 +19,7 @@ export interface CardUpgradeOptions {
     maxLevel?: number;
     knownStatusIds?: Iterable<string>;
     statusDefinitions?: readonly unknown[];
+    knownResourceIds?: Iterable<string>;
 }
 export type CardUpgradeResult = {
     ok: true;

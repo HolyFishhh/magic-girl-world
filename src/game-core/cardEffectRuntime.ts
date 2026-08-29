@@ -20,7 +20,10 @@ import {
   type CardPatch,
   type CardPatchLedger,
 } from './cardPatch';
+import { applyCardAttachment, inheritedCardAttachments } from './cardAttachment';
+import type { CardMoveReason } from './battleEventJournal';
 import type { EffectCommand } from './effectCommandRuntime';
+import { applyCardUpgradeBundle, type CardUpgradeChange } from './cardProgression';
 import {
   planAdvancedCardZoneTransaction,
   transformCardInstance,
@@ -47,7 +50,10 @@ export type CardEffectCommand = Extract<
       | 'remove_cards'
       | 'transform_cards'
       | 'apply_card_patch'
-      | 'add_card';
+      | 'apply_card_attachment'
+      | 'upgrade_cards'
+      | 'add_card'
+      | 'ensure_card';
   }
 >;
 
@@ -65,7 +71,9 @@ export type CardEffectChoicePurpose =
   | 'move'
   | 'remove'
   | 'transform'
-  | 'patch';
+  | 'patch'
+  | 'attachment'
+  | 'upgrade';
 
 export interface CardEffectChoiceRequest {
   purpose: CardEffectChoicePurpose;
@@ -75,7 +83,7 @@ export interface CardEffectChoiceRequest {
 }
 
 export type CardEffectRuntimeEvent =
-  | { type: 'card_added'; zone: 'hand' | 'draw'; card: Card }
+  | { type: 'card_added'; zone: 'hand' | 'draw' | 'discard'; card: Card }
   | { type: 'card_cost_reduced'; card: Card; previousCost: number; nextCost: number }
   | {
       type: 'card_value_modified';
@@ -88,7 +96,9 @@ export type CardEffectRuntimeEvent =
   | { type: 'card_scry_discarded'; card: Card }
   | { type: 'card_moved'; card: Card; destination: CardPileZone; position: 'top' | 'bottom' }
   | { type: 'card_removed'; card: Card }
-  | { type: 'card_transformed'; previous: Card; card: Card };
+  | { type: 'card_transformed'; previous: Card; card: Card }
+  | { type: 'card_upgraded'; previous: Card; card: Card; levels: number; scope: 'combat' | 'run' | 'permanent' }
+  | { type: 'card_attachment_applied'; card: Card; attachmentId: string; attachmentKind: 'enchantment' | 'affliction' };
 
 export interface CardEffectRuntimeContext {
   currentCardId?: string;
@@ -120,13 +130,14 @@ export interface CardEffectStatePort {
   createRuntimeCardId(sourceId: string): string;
   addCardToHand(card: Card): boolean;
   addCardToDeck(card: Card): void;
+  placeGeneratedCard(card: Card, preferredZone: 'hand' | 'draw'): 'hand' | 'draw' | 'discard';
 }
 
 export interface CardEffectRuntimePorts {
   drawCards(count: number): Promise<void>;
   chooseCards(candidates: readonly Card[], request: CardEffectChoiceRequest): Promise<readonly string[] | null>;
-  onCardDiscarded(card: Card): Promise<void>;
-  onCardExhausted(card: Card): Promise<void>;
+  onCardDiscarded(card: Card, reason: CardMoveReason, source: CardPileZone): Promise<void>;
+  onCardExhausted(card: Card, source: CardPileZone): Promise<void>;
   autoPlayCard(card: Card, source: CardPileZone, free: boolean): Promise<boolean>;
   present?(event: CardEffectRuntimeEvent): void;
 }
@@ -146,11 +157,17 @@ const CARD_EFFECT_COMMAND_TYPES = new Set<CardEffectCommand['type']>([
   'remove_cards',
   'transform_cards',
   'apply_card_patch',
+  'apply_card_attachment',
+  'upgrade_cards',
   'add_card',
+  'ensure_card',
 ]);
 
-export function isCardEffectCommand(command: EffectCommand): command is CardEffectCommand {
-  return CARD_EFFECT_COMMAND_TYPES.has(command.type as CardEffectCommand['type']);
+export function isCardEffectCommand(command: unknown): command is CardEffectCommand {
+  return Boolean(
+    command && typeof command === 'object' && !Array.isArray(command) &&
+    CARD_EFFECT_COMMAND_TYPES.has((command as CardEffectCommand).type),
+  );
 }
 
 function normalizeCount(value: number, fallback = 0): number {
@@ -170,6 +187,12 @@ function selectionPurpose(request: CardZoneOperationRequest): CardEffectChoicePu
   if (request.type === 'discard_cards') return 'discard';
   if (request.type === 'exhaust_cards') return 'exhaust';
   return 'source' in request && request.source === 'draw' ? 'seek' : 'recover';
+}
+
+function discardReason(request: { selector: CardSelector }): CardMoveReason {
+  if (request.selector.pick === 'choose') return 'player_choice';
+  if (request.selector.pick === 'random') return 'random_effect';
+  return 'effect';
 }
 
 function generatedCard(definition: GeneratedCardDefinition, runtimeId: string): Card {
@@ -240,6 +263,9 @@ export class CardEffectRuntime {
     if (command.type === 'remove_cards') return this.removeCards(command, context);
     if (command.type === 'transform_cards') return this.transformCards(command, context);
     if (command.type === 'apply_card_patch') return this.applyStructuredPatch(command, context);
+    if (command.type === 'apply_card_attachment') return this.applyStructuredAttachment(command, context);
+    if (command.type === 'upgrade_cards') return this.upgradeCards(command, context);
+    if (command.type === 'ensure_card') return this.ensureCardInstances(command);
     return this.addGeneratedCards(command.card, command.count, command.zone);
   }
 
@@ -248,6 +274,9 @@ export class CardEffectRuntime {
     context: CardEffectRuntimeContext = {},
   ): Promise<readonly Card[]> {
     const zones = this.state.readCardZoneState();
+    const sourceById = new Map<string, CardPileZone>();
+    for (const zone of ['hand', 'drawPile', 'discardPile', 'exhaustPile'] as const)
+      zones[zone].forEach(card => sourceById.set(card.id, zone));
     const excludedCardIds = new Set([
       ...(context.excludedCardIds || []),
       ...(context.currentCardId ? [context.currentCardId] : []),
@@ -281,9 +310,12 @@ export class CardEffectRuntime {
     if (!committed.ok) throw new Error(`card zone commit failed: ${committed.code}`);
 
     if (request.type === 'discard_cards') {
-      for (const card of committed.moved) await this.ports.onCardDiscarded(card);
+      const reason = discardReason(request);
+      for (const card of committed.moved)
+        await this.ports.onCardDiscarded(card, reason, sourceById.get(card.id) || 'hand');
     } else if (request.type === 'exhaust_cards') {
-      for (const card of committed.moved) await this.ports.onCardExhausted(card);
+      for (const card of committed.moved)
+        await this.ports.onCardExhausted(card, sourceById.get(card.id) || 'hand');
     } else if (request.type === 'recover_cards') {
       for (const card of committed.moved) this.ports.present?.({ type: 'card_recovered', source: request.source, card });
     } else {
@@ -308,18 +340,20 @@ export class CardEffectRuntime {
   ): Promise<Card[]> {
     const candidates = this.candidates(selector, context).filter(card => (filter ? filter(card) : true));
     const requested = selector.pick === 'all' ? candidates.length : normalizeCount(selector.count ?? 1);
-    const maximum = Math.min(candidates.length, requested);
     const plan = planCardSelection(
       {
         candidateIds: candidates.map(card => card.id),
         mode: selectorMode(selector.pick),
-        minimum: maximum,
-        maximum,
+        minimum: requested,
+        maximum: requested,
         allowCancel: true,
       },
       () => this.state.nextRandom(),
     );
-    if (!plan.ok) throw new Error(`card selection failed: ${plan.code}`);
+    if (!plan.ok) {
+      if (plan.code === 'INSUFFICIENT_CANDIDATES') return [];
+      throw new Error(`card selection failed: ${plan.code}`);
+    }
     const response =
       plan.kind === 'interactive'
         ? await this.ports.chooseCards(candidates, {
@@ -383,6 +417,7 @@ export class CardEffectRuntime {
         combatInstanceId,
         origin: 'copied' as const,
         patches: inheritedCardPatches(card, TEMPORARY_COPY_PATCH_POLICY),
+        attachments: inheritedCardAttachments(card, TEMPORARY_COPY_PATCH_POLICY),
       };
       if (!this.state.addCardToHand(materializeCardPatches(copy))) break;
     }
@@ -502,9 +537,9 @@ export class CardEffectRuntime {
     }, 'move', context);
     for (const card of committed.selected) {
       if (command.destination === 'discardPile' && sourceById.get(card.id) === 'hand')
-        await this.ports.onCardDiscarded(card);
+        await this.ports.onCardDiscarded(card, 'effect', 'hand');
       if (command.destination === 'exhaustPile' && sourceById.get(card.id) !== 'exhaustPile')
-        await this.ports.onCardExhausted(card);
+        await this.ports.onCardExhausted(card, sourceById.get(card.id) || 'hand');
       this.ports.present?.({ type: 'card_moved', card, destination: command.destination, position: command.position });
     }
     return committed.selected;
@@ -536,6 +571,7 @@ export class CardEffectRuntime {
         combatInstanceId: _combatInstanceId,
         patches: _patches,
         patchBase: _patchBase,
+        attachments: _attachments,
         ...replacement
       } = generated;
       return transformCardInstance(card, replacement);
@@ -543,6 +579,43 @@ export class CardEffectRuntime {
     for (const card of updated) {
       const prior = previous.get(card.id);
       if (prior) this.ports.present?.({ type: 'card_transformed', previous: prior, card });
+    }
+    return updated;
+  }
+
+  private async upgradeCards(
+    command: Extract<CardEffectCommand, { type: 'upgrade_cards' }>,
+    context: CardEffectRuntimeContext,
+  ): Promise<Card[]> {
+    const selected = await this.selectCards(command.selector, 'upgrade', context);
+    if (selected.length === 0) return [];
+    const previous = new Map(selected.map(card => [card.id, card]));
+    const changes = command.changes.map(change => {
+      if (change.kind === 'numeric' || change.kind === 'cost' || change.kind === 'x_value') {
+        if (typeof change.value !== 'number') throw new Error('resolved card upgrade change requires a number');
+      }
+      if (change.kind === 'replay' && typeof change.extra !== 'number')
+        throw new Error('resolved card replay upgrade requires a number');
+      return structuredClone(change) as CardUpgradeChange;
+    });
+    const source = context.source || { kind: 'system' as const, id: context.currentCardId || 'upgrade' };
+    const updated = this.state.updateOwnedCards(
+      selected.map(card => card.id),
+      card => applyCardUpgradeBundle(card, {
+        source,
+        scope: command.scope,
+        createdTurn: Math.max(0, Math.floor(context.currentTurn || 0)),
+        levels: command.levels,
+        ...(command.maxLevel !== undefined ? { maxLevel: command.maxLevel } : {}),
+        changes,
+      }),
+      selectorZones(command.selector.zone),
+    );
+    for (const card of updated) {
+      const prior = previous.get(card.id);
+      if (prior) this.ports.present?.({
+        type: 'card_upgraded', previous: prior, card, levels: command.levels, scope: command.scope,
+      });
     }
     return updated;
   }
@@ -647,21 +720,72 @@ export class CardEffectRuntime {
     return selected.map(card => updatedById.get(card.id)).filter((card): card is Card => Boolean(card));
   }
 
+  private async applyStructuredAttachment(
+    command: Extract<CardEffectCommand, { type: 'apply_card_attachment' }>,
+    context: CardEffectRuntimeContext,
+  ): Promise<Card[]> {
+    const selected = await this.selectCards(command.selector, 'attachment', context);
+    if (selected.length === 0) return [];
+    const source = context.source || { kind: 'system' as const, id: context.currentCardId || 'effect' };
+    const turn = Math.max(0, Math.floor(context.currentTurn || 0));
+    const updated = this.state.updateOwnedCards(
+      selected.map(card => card.id),
+      card => applyCardAttachment(card, {
+        ...structuredClone(command.attachment),
+        source: structuredClone(source),
+        appliedTurn: turn,
+      }),
+      selectorZones(command.selector.zone),
+    );
+    for (const card of updated) this.ports.present?.({
+      type: 'card_attachment_applied',
+      card,
+      attachmentId: command.attachment.id,
+      attachmentKind: command.attachment.kind,
+    });
+    return updated;
+  }
+
   private addGeneratedCards(
     definition: GeneratedCardDefinition,
     requestedCount: number,
     zone: 'hand' | 'draw',
+    options: { inheritFuturePatches?: boolean } = {},
   ): Card[] {
     const cards: Card[] = [];
     for (let index = 0; index < normalizeCount(requestedCount); index += 1) {
       let card = generatedCard(definition, this.state.createRuntimeCardId(definition.id));
-      const futurePatches = this.state.readCardPatchLedger().patches.filter(patch => cardPatchApplies(card, patch));
-      for (const patch of futurePatches) card = appendCardPatch(card, patch);
-      if (zone === 'hand' && !this.state.addCardToHand(card)) break;
-      if (zone === 'draw') this.state.addCardToDeck(card);
+      if (options.inheritFuturePatches !== false) {
+        const futurePatches = this.state.readCardPatchLedger().patches.filter(patch => cardPatchApplies(card, patch));
+        for (const patch of futurePatches) card = appendCardPatch(card, patch);
+      }
+      const placedZone = this.state.placeGeneratedCard(card, zone);
       cards.push(card);
-      this.ports.present?.({ type: 'card_added', zone, card });
+      this.ports.present?.({ type: 'card_added', zone: placedZone, card });
     }
     return cards;
+  }
+
+  /**
+   * Guarantee concrete combat roots without mutating a persistent template or
+   * counting temporary copies. This is intentionally a current-battle
+   * operation: later instance patches affect only the cards now present.
+   */
+  private ensureCardInstances(
+    command: Extract<CardEffectCommand, { type: 'ensure_card' }>,
+  ): Card[] {
+    const allZones: CardPileZone[] = ['hand', 'drawPile', 'discardPile', 'exhaustPile'];
+    const matches = (): Card[] => allZones
+      .flatMap(zone => this.state.readCardZoneState()[zone])
+      .filter(card => {
+        if ((card.templateId || card.originalId || card.id) !== command.card.id) return false;
+        return command.includeCopies || card.origin !== 'copied';
+      });
+    const existing = matches();
+    const missing = Math.max(0, normalizeCount(command.minimum) - existing.length);
+    if (missing > 0) {
+      this.addGeneratedCards(command.card, missing, command.zone, { inheritFuturePatches: false });
+    }
+    return matches();
   }
 }

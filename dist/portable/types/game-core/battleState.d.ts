@@ -7,16 +7,23 @@ import { type BattleRandomState } from './deterministicRandom';
 import type { EffectProgram } from './effectDsl';
 import type { CardIdentity, CardOrigin } from './cardIdentity';
 import type { CardPatch, CardPatchBaseSnapshot, CardPatchLedger } from './cardPatch';
+import type { CardAttachment } from './cardAttachment';
+import type { CardCost, CombatResourceState } from './combatResource';
+import { type CardAttachmentRemovalEvent } from './cardAttachment';
+import type { CardMoveReason } from './battleEventJournal';
 import { type CardPatchCleanupReason } from './cardPatch';
 import { type BattleEndResult } from './battleTerminal';
 import { type CoreBattlePhase } from './turnState';
 import { type EffectSchedulerState, type ScheduleEffectDraft, type ScheduledEffect } from './effectScheduler';
 import { type AppendBattleEventResult, type BattleEventDraft, type BattleEventJournalState } from './battleEventJournal';
+import { channelOrb as channelOrbInContainer, modifyOrbValues as modifyValuesInOrbContainer, removeSelectedOrbs, resizeOrbContainer, transitionStance, type ActiveStance, type OrbContainer, type OrbInstance, type TurnControlState } from './specialCombatContainers';
+import type { CardValueOperator, EffectOrbSelector } from './effectDsl';
+import { copySummonUnits, healSummonUnits, updateSummonResources, type BattleOwner, type SummonActionQueueEntry, type SummonCollectionState, type SummonDamageResult, type SummonInterceptResult, type SummonOverflowPolicy, type SummonSelector, type SummonStatusState, type SummonUnit, type SummonUnitDefinition } from './summonUnit';
 export interface Card extends Partial<CardIdentity> {
     id: string;
     originalId?: string;
     name: string;
-    cost: number | 'energy' | undefined;
+    cost: CardCost | undefined;
     type: 'Attack' | 'Skill' | 'Power' | 'Event' | 'Curse';
     rarity: 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary' | 'Corrupt';
     emoji: string;
@@ -34,6 +41,7 @@ export interface Card extends Partial<CardIdentity> {
     upgradeLevel?: number;
     patchBase?: CardPatchBaseSnapshot;
     patches?: CardPatch[];
+    attachments?: CardAttachment[];
     replayCount?: number;
     xValueBonus?: number;
 }
@@ -62,6 +70,7 @@ export interface Relic {
     emoji: string;
     rarity: 'Common' | 'Uncommon' | 'Rare' | 'Boss' | 'ENS';
     trigger: string;
+    eventQuery?: import('./battleEventJournal').EventTriggerQuery;
 }
 export interface Ability {
     id: string;
@@ -71,6 +80,7 @@ export interface Ability {
     /** Player-facing origin, for example the card, relic or status that granted it. */
     source?: string;
     trigger: string;
+    eventQuery?: import('./battleEventJournal').EventTriggerQuery;
     effectProgram: EffectProgram;
 }
 export interface BattleHistoryEntry {
@@ -84,8 +94,12 @@ export interface BattleHistoryEntry {
     };
     actor?: 'player' | 'enemy';
     actionName?: string;
+    /** Stable acting entity identity; distinguishes several enemies in one turn. */
+    actorId?: string;
+    actorName?: string;
 }
 export interface Player {
+    tags?: string[];
     emoji: string;
     maxHp: number;
     currentHp: number;
@@ -93,6 +107,8 @@ export interface Player {
     currentLust: number;
     energy: number;
     maxEnergy: number;
+    /** Custom resources exclude the compatibility energy channel. */
+    resources?: Record<string, CombatResourceState>;
     block: number;
     statusEffects: StatusEffect[];
     relics: Relic[];
@@ -105,6 +121,8 @@ export interface Player {
     discardPile: Card[];
     exhaustPile: Card[];
     drawPerTurn: number;
+    stance?: ActiveStance | null;
+    orbs?: OrbContainer;
 }
 export interface EnemyIntent {
     type: 'attack' | 'defend' | 'buff' | 'debuff' | 'special';
@@ -127,6 +145,7 @@ export interface Enemy {
     currentLust: number;
     energy: number;
     maxEnergy: number;
+    resources?: Record<string, CombatResourceState>;
     block: number;
     statusEffects: StatusEffect[];
     intent: EnemyIntent;
@@ -148,12 +167,18 @@ export interface Enemy {
     /** Higher priority acts first; speed breaks equal-priority ties. */
     actionPriority?: number;
     speed?: number;
+    /** Stable semantic tags used by generic targeting and execute exclusions. */
+    tags?: string[];
+    stance?: ActiveStance | null;
+    orbs?: OrbContainer;
 }
 export type BattlePhase = CoreBattlePhase;
 export interface GameState {
     player: Player;
     /** Ordered living/defeated enemy entities. New code uses this collection. */
     enemies?: Enemy[];
+    /** Removed combatants retained for complete logs and post-battle narration. */
+    defeatedEnemies?: Enemy[];
     /** Player-selected or compatibility opponent. */
     activeEnemyId?: string | null;
     /** Legacy active-opponent alias; kept synchronized with enemies. */
@@ -178,6 +203,9 @@ export interface GameState {
     /** Template/future-copy patches are persisted separately from concrete card instances. */
     cardPatchLedger?: CardPatchLedger;
     effectScheduler?: EffectSchedulerState;
+    turnControl?: TurnControlState;
+    /** Independent allied/enemy sub-entities with their own HP, statuses and action order. */
+    summons?: SummonCollectionState;
 }
 export type BattleStateChangeListener = (state: GameState) => void;
 export declare function createEmptyPlayer(): Player;
@@ -202,6 +230,27 @@ export declare class BattleStateStore {
     scheduleEffect(draft: ScheduleEffectDraft): ScheduledEffect;
     readCardPatchLedger(): CardPatchLedger;
     writeCardPatchLedger(ledger: CardPatchLedger): void;
+    readSummons(): SummonCollectionState;
+    writeSummons(summons: SummonCollectionState, event?: string): void;
+    getSummons(owner?: BattleOwner, livingOnly?: boolean): SummonUnit[];
+    getSummonById(summonId: string): SummonUnit | null;
+    spawnSummons(owner: BattleOwner, definition: SummonUnitDefinition, count: number, capacity?: number, overflow?: SummonOverflowPolicy): {
+        spawned: SummonUnit[];
+        replaced: SummonUnit[];
+    };
+    selectSummons(selector: SummonSelector, source: BattleOwner): SummonUnit[];
+    copySummons(targetIds: readonly string[], owner: BattleOwner, capacity?: number, overflow?: SummonOverflowPolicy): ReturnType<typeof copySummonUnits>;
+    damageSummons(targetIds: readonly string[], amount: number, bypassBlock?: boolean): SummonDamageResult;
+    healSummons(targetIds: readonly string[], amount: number): ReturnType<typeof healSummonUnits>;
+    modifySummons(targetIds: readonly string[], stat: 'max_hp' | 'block' | 'actions_per_activation' | 'speed' | 'action_priority', operator: '+' | '-' | '*' | '/' | '=', value: number): SummonCollectionState;
+    modifySummonEffects(targetIds: readonly string[], stat: import('./effectDsl').CardValueStat, operator: import('./effectDsl').CardValueOperator, value: number): SummonCollectionState;
+    applyStatusToSummons(targetIds: readonly string[], definition: Omit<SummonStatusState, 'stacks'>, stacks: number): SummonCollectionState;
+    removeStatusFromSummons(targetIds: readonly string[], statusId: string): SummonCollectionState;
+    dismissSummons(targetIds: readonly string[], retainCorpse?: boolean): SummonUnit[];
+    updateSummonResources(targetIds: readonly string[], resourceId: string, value: number, mode: 'gain' | 'set'): ReturnType<typeof updateSummonResources>;
+    interceptDamageWithSummons(owner: BattleOwner, amount: number): SummonInterceptResult;
+    resetSummonsForTurn(owner: BattleOwner): void;
+    getSummonActionQueue(owner: BattleOwner): SummonActionQueueEntry[];
     getEnemy(): Enemy | null;
     getEnemies(options?: {
         livingOnly?: boolean;
@@ -222,9 +271,19 @@ export declare class BattleStateStore {
     updateEnemyById(enemyId: string, updates: Partial<Enemy>, _options?: {
         skipAttributeTriggers?: boolean;
     }): void;
+    setCombatantStance(target: 'player' | 'enemy', stance: Omit<ActiveStance, 'enteredTurn'> | null): ReturnType<typeof transitionStance>;
+    setCombatantOrbSlots(target: 'player' | 'enemy', slots: number): ReturnType<typeof resizeOrbContainer>;
+    channelCombatantOrb(target: 'player' | 'enemy', definition: Omit<OrbInstance, 'instanceId'>): ReturnType<typeof channelOrbInContainer>;
+    removeCombatantOrbs(target: 'player' | 'enemy', selector: EffectOrbSelector): ReturnType<typeof removeSelectedOrbs>;
+    modifyCombatantOrbValues(target: 'player' | 'enemy', selector: EffectOrbSelector, operator: CardValueOperator, value: number): ReturnType<typeof modifyValuesInOrbContainer>;
+    queueExtraTurns(actor: 'player' | 'enemy', amount: number): void;
+    consumeExtraTurn(actor: 'player' | 'enemy'): boolean;
+    requestForceEndTurn(actor: 'player' | 'enemy'): void;
+    isForceEndTurnRequested(actor: 'player' | 'enemy'): boolean;
+    consumeForceEndTurn(actor: 'player' | 'enemy'): boolean;
     setEnemy(enemy: Enemy): void;
     setEnemies(enemies: readonly Enemy[], activeEnemyId?: string | null): void;
-    removeDefeatedEnemies(): Enemy[];
+    removeDefeatedEnemies(enemyIds?: readonly string[]): Enemy[];
     setPhase(phase: BattlePhase): void;
     incrementTurn(): void;
     beginEnemyTurn(): void;
@@ -252,6 +311,9 @@ export declare class BattleStateStore {
     scryOwnedCards(amount: number, cardIds: readonly string[]): Card[];
     updateOwnedCards(cardIds: readonly string[], update: (card: Card) => Card, sources?: readonly CardPileZone[]): Card[];
     clearOwnedCardPatches(reason: CardPatchCleanupReason): Card[];
+    advanceOwnedCardAttachments(event: CardAttachmentRemovalEvent, reason?: CardMoveReason): Card[];
+    /** Finalize card-local lifetimes at the real combat/run boundary, including upgrade history. */
+    cleanupOwnedCardProgression(event: 'combat_end' | 'run_end'): Card[];
     replaceCardZones(zones: CardZoneState<Card>, event: 'draw' | 'shuffle'): void;
     readCardZoneState(): CardZoneState<Card>;
     commitCardZoneOperation(plan: CardZoneOperationPlan, selectedIds?: readonly string[]): CommitCardZoneOperationResult<Card>;
@@ -262,6 +324,8 @@ export declare class BattleStateStore {
     createRuntimeCardId(sourceId: string): string;
     addCardToHand(card: Card): boolean;
     addCardToDeck(card: Card): void;
+    /** One authoritative placement rule for generated cards and hand overflow. */
+    placeGeneratedCard(card: Card, preferredZone: 'hand' | 'draw'): 'hand' | 'draw' | 'discard';
     beginCardTransit(card: Card): void;
     endCardTransit(card: Card): void;
     protected getInFlightCardCounts(): ReadonlyMap<string, number>;

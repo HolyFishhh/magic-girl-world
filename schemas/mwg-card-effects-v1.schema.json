@@ -27,6 +27,68 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256
+        },
+        { "$ref": "#/$defs/historyFormula" }
+      ]
+    },
+    "battleEventKind": {
+      "enum": [
+        "turn_started", "turn_ended", "card_drawn", "card_moved", "card_played",
+        "damage_resolved", "heal_resolved", "resource_spent", "resource_changed",
+        "stance_changed", "orb_channeled", "orb_evoked", "orb_value_changed",
+        "turn_control_changed", "summon_spawned", "summon_acted", "summon_intercepted",
+        "summon_defeated", "summon_status_applied", "summon_status_triggered",
+        "summon_status_removed", "entity_defeated"
+      ]
+    },
+    "battleEventPhase": { "enum": ["before", "resolve", "after"] },
+    "eventSourceKind": {
+      "enum": ["card", "relic", "status", "ability", "enemy_action", "system", "summon", "enchantment", "affliction"]
+    },
+    "damageKind": { "enum": ["attack", "effect", "hp_loss", "retaliation", "damage_over_time", "execute"] },
+    "historyFormula": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["history"],
+      "properties": {
+        "history": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["metric"],
+          "properties": {
+            "metric": { "enum": ["count", "last_damage", "last_hp_loss", "last_heal", "last_resource_spent", "last_turn", "last_sequence"] },
+            "scope": { "enum": ["turn", "combat", "run", "card_instance", "team"] },
+            "event": { "$ref": "#/$defs/battleEventKind" },
+            "phase": { "$ref": "#/$defs/battleEventPhase" },
+            "reason": { "type": "string", "minLength": 1 },
+            "source_kind": { "$ref": "#/$defs/eventSourceKind" },
+            "source_id": { "type": "string", "minLength": 1 },
+            "damage_type": { "$ref": "#/$defs/damageKind" },
+            "card_type": { "type": "string", "minLength": 1 },
+            "template_id": { "type": "string", "minLength": 1 },
+            "card_instance_id": { "type": "string", "minLength": 1 },
+            "actor_id": { "type": "string", "minLength": 1 },
+            "target_id": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "resourceId": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "not": { "const": "energy" } },
+    "cardCost": {
+      "oneOf": [
+        { "type": "integer", "minimum": 0 },
+        { "const": "energy" },
+        {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 16,
+          "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+          "additionalProperties": {
+            "oneOf": [
+              { "type": "integer", "minimum": 0 },
+              { "const": "all" }
+            ]
+          }
         }
       ]
     },
@@ -71,7 +133,7 @@
       ]
     },
     "cardZone": {
-      "enum": ["hand", "draw", "discard", "exhaust", "all"]
+      "enum": ["hand", "draw", "discard", "exhaust", "all", "combat"]
     },
     "cardPick": {
       "enum": ["random", "choose", "left", "right", "top", "bottom", "all"]
@@ -127,7 +189,8 @@
         "enemy_lose_buff",
         "enemy_lose_debuff",
         "gain_block",
-        "lose_block"
+        "lose_block",
+        "defeated"
       ]
     },
     "triggerInput": {
@@ -139,8 +202,36 @@
           "required": ["on", "effects"],
           "properties": {
             "on": { "$ref": "#/$defs/trigger" },
-            "effects": { "$ref": "#/$defs/effectList" }
-          }
+            "effects": { "$ref": "#/$defs/effectList" },
+            "scope": { "enum": ["turn", "combat", "run", "card_instance", "team"] },
+            "ordinal": { "enum": ["first", "nth", "every_n"] },
+            "n": { "type": "integer", "minimum": 1 },
+            "event": { "$ref": "#/$defs/battleEventKind" },
+            "phase": { "$ref": "#/$defs/battleEventPhase" },
+            "reason": { "type": "string", "minLength": 1 },
+            "source_kind": { "$ref": "#/$defs/eventSourceKind" },
+            "source_id": { "type": "string", "minLength": 1 },
+            "damage_type": { "$ref": "#/$defs/damageKind" },
+            "card_type": { "type": "string", "minLength": 1 },
+            "template_id": { "type": "string", "minLength": 1 },
+            "card_instance_id": { "type": "string", "minLength": 1 },
+            "actor_id": { "type": "string", "minLength": 1 },
+            "target_id": { "type": "string", "minLength": 1 }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "ordinal": { "const": "first" } }, "required": ["ordinal"] },
+              "then": { "not": { "required": ["n"] } }
+            },
+            {
+              "if": { "properties": { "ordinal": { "enum": ["nth", "every_n"] } }, "required": ["ordinal"] },
+              "then": { "required": ["n"] }
+            },
+            {
+              "if": { "required": ["n"] },
+              "then": { "required": ["ordinal"], "properties": { "ordinal": { "enum": ["nth", "every_n"] } } }
+            }
+          ]
         }
       ]
     },
@@ -151,6 +242,9 @@
       "properties": {
         "damage": { "$ref": "#/$defs/formula" },
         "hits": { "type": "integer", "minimum": 1, "maximum": 20 },
+        "damage_type": { "enum": ["attack", "effect", "hp_loss", "retaliation", "damage_over_time"] },
+        "bypass_block": { "type": "boolean" },
+        "lifesteal": { "$ref": "#/$defs/formula" },
         "to": { "$ref": "#/$defs/target" },
         "targets": { "$ref": "#/$defs/enemyTargetSelector" },
         "on": { "$ref": "#/$defs/trigger" },
@@ -163,6 +257,41 @@
       "required": ["heal"],
       "properties": {
         "heal": { "$ref": "#/$defs/formula" },
+        "to": { "$ref": "#/$defs/target" },
+        "targets": { "$ref": "#/$defs/enemyTargetSelector" },
+        "on": { "$ref": "#/$defs/trigger" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "executeEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["execute"],
+      "properties": {
+        "execute": { "$ref": "#/$defs/formula" },
+        "threshold_mode": { "enum": ["hp", "hp_percent"] },
+        "exclude_tags": {
+          "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }
+        },
+        "trigger_fatal": { "type": "boolean" },
+        "to": { "$ref": "#/$defs/target" },
+        "targets": { "$ref": "#/$defs/enemyTargetSelector" },
+        "on": { "$ref": "#/$defs/trigger" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "killEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kill"],
+      "properties": {
+        "kill": { "const": true },
+        "exclude_tags": {
+          "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }
+        },
+        "trigger_fatal": { "type": "boolean" },
         "to": { "$ref": "#/$defs/target" },
         "targets": { "$ref": "#/$defs/enemyTargetSelector" },
         "on": { "$ref": "#/$defs/trigger" },
@@ -192,6 +321,38 @@
         "on": { "$ref": "#/$defs/trigger" },
         "when": { "$ref": "#/$defs/formulaString" }
       }
+    },
+    "resourceEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "resource": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "amount"],
+          "properties": {
+            "id": { "$ref": "#/$defs/resourceId" },
+            "amount": { "$ref": "#/$defs/formula" }
+          }
+        },
+        "set_resource": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "value"],
+          "properties": {
+            "id": { "$ref": "#/$defs/resourceId" },
+            "value": { "$ref": "#/$defs/formula" }
+          }
+        },
+        "to": { "$ref": "#/$defs/target" },
+        "targets": { "$ref": "#/$defs/enemyTargetSelector" },
+        "on": { "$ref": "#/$defs/trigger" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      },
+      "oneOf": [
+        { "required": ["resource"], "not": { "required": ["set_resource"] } },
+        { "required": ["set_resource"], "not": { "required": ["resource"] } }
+      ]
     },
     "lustEffect": {
       "type": "object",
@@ -305,9 +466,10 @@
             "discard": { "anyOf": [{ "$ref": "#/$defs/formula" }, { "const": "all" }] },
             "from": { "$ref": "#/$defs/cardZone" },
             "pick": { "$ref": "#/$defs/cardPick" },
+            "name": { "type": "string", "minLength": 1 },
             "card_type": { "$ref": "#/$defs/cardTypeFilter" },
             "rarity": { "$ref": "#/$defs/cardRarityFilter" },
-            "cost": { "anyOf": [{ "type": "number", "minimum": 0 }, { "const": "energy" }] },
+        "cost": { "$ref": "#/$defs/cardCost" },
             "min_cost": { "type": "number", "minimum": 0 },
             "max_cost": { "type": "number", "minimum": 0 },
             "tag": { "$ref": "#/$defs/cardTagFilter" },
@@ -316,6 +478,7 @@
             "combat_instance_id": { "type": "string", "minLength": 1 },
             "origin": { "$ref": "#/$defs/cardOriginFilter" },
             "upgraded": { "type": "boolean" },
+            "root_only": { "type": "boolean" },
             "on": { "$ref": "#/$defs/trigger" },
             "when": { "$ref": "#/$defs/formulaString" }
           }
@@ -328,9 +491,10 @@
             "exhaust": { "anyOf": [{ "$ref": "#/$defs/formula" }, { "const": "all" }] },
             "from": { "$ref": "#/$defs/cardZone" },
             "pick": { "$ref": "#/$defs/cardPick" },
+            "name": { "type": "string", "minLength": 1 },
             "card_type": { "$ref": "#/$defs/cardTypeFilter" },
             "rarity": { "$ref": "#/$defs/cardRarityFilter" },
-            "cost": { "anyOf": [{ "type": "number", "minimum": 0 }, { "const": "energy" }] },
+        "cost": { "$ref": "#/$defs/cardCost" },
             "min_cost": { "type": "number", "minimum": 0 },
             "max_cost": { "type": "number", "minimum": 0 },
             "tag": { "$ref": "#/$defs/cardTagFilter" },
@@ -339,6 +503,7 @@
             "combat_instance_id": { "type": "string", "minLength": 1 },
             "origin": { "$ref": "#/$defs/cardOriginFilter" },
             "upgraded": { "type": "boolean" },
+            "root_only": { "type": "boolean" },
             "on": { "$ref": "#/$defs/trigger" },
             "when": { "$ref": "#/$defs/formulaString" }
           }
@@ -366,9 +531,10 @@
         "count": { "type": "integer", "minimum": 1, "maximum": 100 },
         "from": { "$ref": "#/$defs/cardZone" },
         "pick": { "$ref": "#/$defs/cardPick" },
+        "name": { "type": "string", "minLength": 1 },
         "card_type": { "$ref": "#/$defs/cardTypeFilter" },
         "rarity": { "$ref": "#/$defs/cardRarityFilter" },
-        "cost": { "anyOf": [{ "type": "number", "minimum": 0 }, { "const": "energy" }] },
+        "cost": { "$ref": "#/$defs/cardCost" },
         "min_cost": { "type": "number", "minimum": 0 },
         "max_cost": { "type": "number", "minimum": 0 },
         "tag": { "$ref": "#/$defs/cardTagFilter" },
@@ -377,6 +543,7 @@
         "combat_instance_id": { "type": "string", "minLength": 1 },
         "origin": { "$ref": "#/$defs/cardOriginFilter" },
         "upgraded": { "type": "boolean" },
+        "root_only": { "type": "boolean" },
         "on": { "$ref": "#/$defs/trigger" },
         "when": { "$ref": "#/$defs/formulaString" }
       }
@@ -394,9 +561,10 @@
         "count": { "type": "integer", "minimum": 1, "maximum": 100 },
         "from": { "$ref": "#/$defs/cardZone" },
         "pick": { "$ref": "#/$defs/cardPick" },
+        "name": { "type": "string", "minLength": 1 },
         "card_type": { "$ref": "#/$defs/cardTypeFilter" },
         "rarity": { "$ref": "#/$defs/cardRarityFilter" },
-        "cost": { "anyOf": [{ "type": "number", "minimum": 0 }, { "const": "energy" }] },
+        "cost": { "$ref": "#/$defs/cardCost" },
         "min_cost": { "type": "number", "minimum": 0 },
         "max_cost": { "type": "number", "minimum": 0 },
         "tag": { "$ref": "#/$defs/cardTagFilter" },
@@ -405,6 +573,7 @@
         "combat_instance_id": { "type": "string", "minLength": 1 },
         "origin": { "$ref": "#/$defs/cardOriginFilter" },
         "upgraded": { "type": "boolean" },
+        "root_only": { "type": "boolean" },
         "when": { "$ref": "#/$defs/formulaString" }
       },
       "oneOf": [
@@ -424,9 +593,10 @@
             "copy": { "anyOf": [{ "type": "integer", "minimum": 1, "maximum": 100 }, { "const": "all" }] },
             "from": { "$ref": "#/$defs/cardZone" },
             "pick": { "$ref": "#/$defs/cardPick" },
+            "name": { "type": "string", "minLength": 1 },
             "card_type": { "$ref": "#/$defs/cardTypeFilter" },
             "rarity": { "$ref": "#/$defs/cardRarityFilter" },
-            "cost": { "anyOf": [{ "type": "number", "minimum": 0 }, { "const": "energy" }] },
+        "cost": { "$ref": "#/$defs/cardCost" },
             "min_cost": { "type": "number", "minimum": 0 },
             "max_cost": { "type": "number", "minimum": 0 },
             "tag": { "$ref": "#/$defs/cardTagFilter" },
@@ -435,6 +605,7 @@
             "combat_instance_id": { "type": "string", "minLength": 1 },
             "origin": { "$ref": "#/$defs/cardOriginFilter" },
             "upgraded": { "type": "boolean" },
+            "root_only": { "type": "boolean" },
             "on": { "$ref": "#/$defs/trigger" },
             "when": { "$ref": "#/$defs/formulaString" }
           }
@@ -447,9 +618,10 @@
             "double": { "anyOf": [{ "type": "integer", "minimum": 1, "maximum": 100 }, { "const": "all" }] },
             "from": { "$ref": "#/$defs/cardZone" },
             "pick": { "$ref": "#/$defs/cardPick" },
+            "name": { "type": "string", "minLength": 1 },
             "card_type": { "$ref": "#/$defs/cardTypeFilter" },
             "rarity": { "$ref": "#/$defs/cardRarityFilter" },
-            "cost": { "anyOf": [{ "type": "number", "minimum": 0 }, { "const": "energy" }] },
+        "cost": { "$ref": "#/$defs/cardCost" },
             "min_cost": { "type": "number", "minimum": 0 },
             "max_cost": { "type": "number", "minimum": 0 },
             "tag": { "$ref": "#/$defs/cardTagFilter" },
@@ -458,6 +630,7 @@
             "combat_instance_id": { "type": "string", "minLength": 1 },
             "origin": { "$ref": "#/$defs/cardOriginFilter" },
             "upgraded": { "type": "boolean" },
+            "root_only": { "type": "boolean" },
             "on": { "$ref": "#/$defs/trigger" },
             "when": { "$ref": "#/$defs/formulaString" }
           }
@@ -472,6 +645,19 @@
         "add_card": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
         "to": { "enum": ["hand", "deck"] },
         "count": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "on": { "$ref": "#/$defs/trigger" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "ensureCardEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ensure_card"],
+      "properties": {
+        "ensure_card": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "to": { "enum": ["hand", "deck"] },
+        "minimum": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "include_copies": { "type": "boolean" },
         "on": { "$ref": "#/$defs/trigger" },
         "when": { "$ref": "#/$defs/formulaString" }
       }
@@ -500,9 +686,10 @@
         "count": { "type": "integer", "minimum": 1, "maximum": 100 },
         "from": { "$ref": "#/$defs/cardZone" },
         "pick": { "$ref": "#/$defs/cardPick" },
+        "name": { "type": "string", "minLength": 1 },
         "card_type": { "$ref": "#/$defs/cardTypeFilter" },
         "rarity": { "$ref": "#/$defs/cardRarityFilter" },
-        "cost": { "anyOf": [{ "type": "number", "minimum": 0 }, { "const": "energy" }] },
+        "cost": { "$ref": "#/$defs/cardCost" },
         "min_cost": { "type": "number", "minimum": 0 },
         "max_cost": { "type": "number", "minimum": 0 },
         "tag": { "$ref": "#/$defs/cardTagFilter" },
@@ -511,6 +698,165 @@
         "combat_instance_id": { "type": "string", "minLength": 1 },
         "origin": { "$ref": "#/$defs/cardOriginFilter" },
         "upgraded": { "type": "boolean" },
+        "root_only": { "type": "boolean" },
+        "on": { "$ref": "#/$defs/trigger" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "cardAttachmentChange": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "stat", "operator", "value"],
+          "properties": {
+            "kind": { "const": "numeric" },
+            "stat": { "enum": ["damage", "block", "lust", "stacks"] },
+            "operator": { "enum": ["add", "subtract", "multiply", "divide"] },
+            "value": { "$ref": "#/$defs/formula" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "operator", "value"],
+          "properties": {
+            "kind": { "enum": ["cost", "x_value"] },
+            "operator": { "enum": ["add", "subtract", "multiply", "divide", "set", "min", "max"] },
+            "value": { "$ref": "#/$defs/formula" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "keyword", "enabled"],
+          "properties": {
+            "kind": { "const": "keyword" },
+            "keyword": { "enum": ["retain", "exhaust", "ethereal", "innate"] },
+            "enabled": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "extra"],
+          "properties": { "kind": { "const": "replay" }, "extra": { "$ref": "#/$defs/formula" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "timing", "operator", "value"],
+          "properties": {
+            "kind": { "const": "dynamic_cost" },
+            "timing": { "enum": ["on_draw", "while_in_hand", "on_play"] },
+            "operator": { "enum": ["add", "subtract", "multiply", "divide", "set", "min", "max"] },
+            "value": { "$ref": "#/$defs/formula" },
+            "minimum": { "type": "number", "minimum": 0 },
+            "maximum": { "type": "number", "minimum": 0 }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "mode"],
+          "properties": { "kind": { "const": "play_access" }, "mode": { "enum": ["deny", "allow"] } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "reasons"],
+          "properties": {
+            "kind": { "const": "discard_auto_play" },
+            "reasons": {
+              "type": "array", "minItems": 1, "uniqueItems": true,
+              "items": { "enum": ["player_choice", "random_effect", "effect", "turn_cleanup", "scry", "recover", "exhaust", "generate", "copy", "transform", "auto_play", "other"] }
+            },
+            "failure_destination": { "enum": ["discard", "exhaust", "draw_top", "draw_bottom", "hand", "remove"] },
+            "only_player_turn": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "cardAttachmentEffect": {
+      "type": "object", "additionalProperties": false,
+      "required": ["attach_card"],
+      "properties": {
+        "attach_card": {
+          "type": "object", "additionalProperties": false,
+          "required": ["id", "kind", "name", "changes"],
+          "properties": {
+            "id": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+            "kind": { "enum": ["enchantment", "affliction"] },
+            "name": { "type": "string", "minLength": 1 },
+            "description": { "type": "string", "minLength": 1 },
+            "emoji": { "type": "string", "minLength": 1 },
+            "scope": { "enum": ["resolution", "turn", "until_played", "combat", "run", "permanent"] },
+            "remove_on": { "enum": ["played", "discarded", "turn_end", "combat_end", "run_end", "manual"] },
+            "remaining": { "type": "integer", "minimum": 1, "maximum": 999 },
+            "discard_reasons": {
+              "type": "array", "minItems": 1, "uniqueItems": true,
+              "items": { "enum": ["player_choice", "random_effect", "effect", "turn_cleanup", "scry", "recover", "exhaust", "generate", "copy", "transform", "auto_play", "other"] }
+            },
+            "priority": { "type": "integer", "minimum": -100000, "maximum": 100000 },
+            "changes": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "$ref": "#/$defs/cardAttachmentChange" } }
+          }
+        },
+        "count": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "from": { "$ref": "#/$defs/cardZone" },
+        "pick": { "$ref": "#/$defs/cardPick" },
+        "name": { "type": "string", "minLength": 1 },
+        "card_type": { "$ref": "#/$defs/cardTypeFilter" },
+        "rarity": { "$ref": "#/$defs/cardRarityFilter" },
+        "cost": { "$ref": "#/$defs/cardCost" },
+        "min_cost": { "type": "number", "minimum": 0 },
+        "max_cost": { "type": "number", "minimum": 0 },
+        "tag": { "$ref": "#/$defs/cardTagFilter" },
+        "template_id": { "type": "string", "minLength": 1 },
+        "run_instance_id": { "type": "string", "minLength": 1 },
+        "combat_instance_id": { "type": "string", "minLength": 1 },
+        "origin": { "$ref": "#/$defs/cardOriginFilter" },
+        "upgraded": { "type": "boolean" },
+        "root_only": { "type": "boolean" },
+        "on": { "$ref": "#/$defs/trigger" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "cardUpgradeChange": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["numeric", "cost", "keyword", "replay", "x_value", "dynamic_cost"] },
+        "stat": { "enum": ["damage", "block", "lust", "stacks"] },
+        "operator": { "enum": ["add", "subtract", "multiply", "divide", "set", "min", "max"] },
+        "value": { "$ref": "#/$defs/formula" },
+        "keyword": { "enum": ["retain", "exhaust", "ethereal", "innate"] },
+        "enabled": { "type": "boolean" },
+        "extra": { "$ref": "#/$defs/formula" },
+        "timing": { "enum": ["on_draw", "while_in_hand", "on_play"] },
+        "minimum": { "type": "number", "minimum": 0 },
+        "maximum": { "type": "number", "minimum": 0 }
+      }
+    },
+    "cardUpgradeEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["upgrade_card", "changes"],
+      "properties": {
+        "upgrade_card": { "anyOf": [{ "type": "integer", "minimum": 1, "maximum": 100 }, { "const": "all" }] },
+        "scope": { "enum": ["combat", "run", "permanent"] },
+        "levels": { "type": "integer", "minimum": 1, "maximum": 99 },
+        "max_level": { "type": "integer", "minimum": 1, "maximum": 99 },
+        "changes": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "$ref": "#/$defs/cardUpgradeChange" } },
+        "count": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "from": { "$ref": "#/$defs/cardZone" },
+        "pick": { "$ref": "#/$defs/cardPick" },
+        "name": { "type": "string", "minLength": 1 },
+        "card_type": { "$ref": "#/$defs/cardTypeFilter" },
+        "rarity": { "$ref": "#/$defs/cardRarityFilter" },
+        "cost": { "$ref": "#/$defs/cardCost" },
+        "min_cost": { "type": "number", "minimum": 0 },
+        "max_cost": { "type": "number", "minimum": 0 },
+        "tag": { "$ref": "#/$defs/cardTagFilter" },
+        "template_id": { "type": "string", "minLength": 1 },
+        "run_instance_id": { "type": "string", "minLength": 1 },
+        "combat_instance_id": { "type": "string", "minLength": 1 },
+        "origin": { "$ref": "#/$defs/cardOriginFilter" },
+        "upgraded": { "type": "boolean" },
+        "root_only": { "type": "boolean" },
         "on": { "$ref": "#/$defs/trigger" },
         "when": { "$ref": "#/$defs/formulaString" }
       }
@@ -520,7 +866,7 @@
       "additionalProperties": false,
       "required": ["modify"],
       "properties": {
-        "modify": { "enum": ["damage", "damage_taken", "lust", "lust_taken", "heal", "block"] },
+        "modify": { "enum": ["damage", "damage_taken", "lust", "lust_taken", "heal", "block", "summon_capacity"] },
         "add": { "$ref": "#/$defs/formula" },
         "subtract": { "$ref": "#/$defs/formula" },
         "multiply": { "$ref": "#/$defs/formula" },
@@ -538,29 +884,524 @@
       ]
     },
     "cardPlayRuleEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["card_rule"],
+      "properties": {
+        "card_rule": {
+          "enum": [
+            "replay",
+            "free",
+            "retain_hand",
+            "retain_block",
+            "limit_draw",
+            "limit_block_gain",
+            "limit_energy_gain",
+            "deny_card_play",
+            "allow_card_play",
+            "limit_card_play",
+            "card_destination"
+          ]
+        },
+        "limit": { "anyOf": [{ "$ref": "#/$defs/formula" }, { "const": "all" }] },
+        "extra": { "$ref": "#/$defs/formula" },
+        "to": { "$ref": "#/$defs/target" },
+        "destination": { "enum": ["discard", "exhaust", "draw_top", "draw_bottom", "hand", "remove"] },
+        "priority": { "type": "integer", "minimum": -100000, "maximum": 100000 },
+        "resources": {
+          "oneOf": [
+            { "const": "all" },
+            { "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" } }
+          ]
+        },
+        "name": { "type": "string", "minLength": 1 },
+        "card_type": { "$ref": "#/$defs/cardTypeFilter" },
+        "rarity": { "$ref": "#/$defs/cardRarityFilter" },
+        "cost": { "$ref": "#/$defs/cardCost" },
+        "min_cost": { "type": "number", "minimum": 0 },
+        "max_cost": { "type": "number", "minimum": 0 },
+        "tag": { "$ref": "#/$defs/cardTagFilter" },
+        "template_id": { "type": "string", "minLength": 1 },
+        "run_instance_id": { "type": "string", "minLength": 1 },
+        "combat_instance_id": { "type": "string", "minLength": 1 },
+        "origin": { "$ref": "#/$defs/cardOriginFilter" },
+        "upgraded": { "type": "boolean" },
+        "root_only": { "type": "boolean" },
+        "on": { "$ref": "#/$defs/trigger" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      },
       "oneOf": [
         {
-          "type": "object",
-          "additionalProperties": false,
+          "required": ["limit"],
+          "properties": {
+            "card_rule": { "enum": ["free", "limit_draw", "limit_block_gain", "limit_energy_gain", "limit_card_play"] }
+          },
+          "not": { "anyOf": [{ "required": ["extra"] }, { "required": ["destination"] }] }
+        },
+        {
           "required": ["card_rule", "limit"],
           "properties": {
-            "card_rule": { "const": "free" },
-            "limit": { "anyOf": [{ "$ref": "#/$defs/formula" }, { "const": "all" }] },
-            "to": { "$ref": "#/$defs/target" }
+            "card_rule": { "const": "replay" }
+          },
+          "not": { "anyOf": [{ "required": ["destination"] }, { "required": ["resources"] }] }
+        },
+        {
+          "properties": {
+            "card_rule": { "enum": ["retain_hand", "retain_block", "deny_card_play", "allow_card_play"] }
+          },
+          "not": { "anyOf": [{ "required": ["limit"] }, { "required": ["extra"] }, { "required": ["destination"] }, { "required": ["resources"] }] }
+        },
+        {
+          "required": ["destination"],
+          "properties": {
+            "card_rule": { "const": "card_destination" }
+          },
+          "not": { "anyOf": [{ "required": ["limit"] }, { "required": ["extra"] }, { "required": ["resources"] }] }
+        }
+      ],
+      "allOf": [
+        {
+          "if": { "properties": { "card_rule": { "not": { "const": "free" } } } },
+          "then": { "not": { "required": ["resources"] } }
+        }
+      ]
+    },
+    "stanceDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "name": { "type": "string", "minLength": 1 },
+        "emoji": { "type": "string" },
+        "description": { "type": "string" },
+        "enter": { "$ref": "#/$defs/effectList" },
+        "exit": { "$ref": "#/$defs/effectList" },
+        "passive": { "$ref": "#/$defs/stancePassiveEffectList" }
+      }
+    },
+    "stancePassiveEffect": {
+      "oneOf": [
+        { "$ref": "#/$defs/modifierEffect" },
+        { "$ref": "#/$defs/cardPlayRuleEffect" }
+      ]
+    },
+    "stancePassiveEffectList": {
+      "anyOf": [
+        { "type": "array", "minItems": 1, "maxItems": 256, "items": { "$ref": "#/$defs/stancePassiveEffect" } },
+        { "$ref": "#/$defs/stancePassiveEffect" }
+      ]
+    },
+    "orbDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "value"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "name": { "type": "string", "minLength": 1 },
+        "emoji": { "type": "string" },
+        "description": { "type": "string" },
+        "value": { "$ref": "#/$defs/formula" },
+        "passive": { "$ref": "#/$defs/effectList" },
+        "evoke": { "$ref": "#/$defs/effectList" }
+      }
+    },
+    "summonSelector": {
+      "type": "object", "additionalProperties": false,
+      "required": ["owner", "pick"],
+      "properties": {
+        "owner": { "enum": ["self", "opponent", "any"] },
+        "pick": { "enum": ["left", "right", "choose", "first", "last", "random", "random_n", "all", "lowest_hp", "highest_hp", "by_id"] },
+        "count": { "type": "integer", "minimum": 1 },
+        "id": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "template_id": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "tags": { "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" } },
+        "slot": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "include_untargetable": { "type": "boolean" }
+      },
+      "allOf": [
+        { "if": { "properties": { "pick": { "const": "all" } } }, "then": { "not": { "required": ["count"] } } },
+        { "if": { "properties": { "pick": { "const": "by_id" } } }, "then": { "required": ["id"] } }
+      ]
+    },
+    "summonResource": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "name", "emoji", "current", "max", "refresh"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "name": { "type": "string", "minLength": 1 }, "emoji": { "type": "string", "minLength": 1 },
+        "current": { "type": "integer", "minimum": 0 }, "max": { "type": "integer", "minimum": 1 },
+        "refresh": { "enum": ["reset", "retain"] }
+      }
+    },
+    "spawnSummonEffect": {
+      "type": "object", "additionalProperties": false,
+      "required": ["spawn_summon"],
+      "properties": {
+        "spawn_summon": {
+          "type": "object", "additionalProperties": false,
+          "required": ["id", "name", "emoji"],
+          "properties": {
+            "id": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+            "name": { "type": "string", "minLength": 1 }, "emoji": { "type": "string", "minLength": 1 },
+            "description": { "type": "string" }, "has_hp": { "type": "boolean" },
+            "max_hp": { "type": "number", "minimum": 0 },
+            "block": { "type": "number", "minimum": 0 },
+            "tags": { "type": "array", "maxItems": 32, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" } },
+            "resources": { "type": "object", "maxProperties": 16, "additionalProperties": { "$ref": "#/$defs/summonResource" } },
+            "modifiers": { "type": "object", "additionalProperties": { "type": "number" } },
+            "action": { "$ref": "#/$defs/effectList" },
+            "actions": {
+              "type": "array", "maxItems": 20,
+              "items": {
+                "type": "object", "additionalProperties": false, "required": ["id", "name", "effects"],
+                "properties": {
+                  "id": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+                  "name": { "type": "string", "minLength": 1 }, "emoji": { "type": "string", "minLength": 1 },
+                  "description": { "type": "string" }, "weight": { "type": "number", "exclusiveMinimum": 0 },
+                  "fixed": { "type": "boolean" },
+                  "effects": { "$ref": "#/$defs/effectList" }, "when": { "$ref": "#/$defs/formulaString" },
+                  "creates": { "type": "array" }
+                }
+              }
+            },
+            "abilities": {
+              "type": "array", "maxItems": 20,
+              "items": {
+                "type": "object", "additionalProperties": false, "required": ["id", "trigger"],
+                "properties": {
+                  "id": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+                  "name": { "type": "string" }, "emoji": { "type": "string" }, "description": { "type": "string" },
+                  "fixed": { "type": "boolean" },
+                  "trigger": {
+                    "oneOf": [
+                      { "enum": ["battle_start", "ability_gain", "turn_start", "turn_end", "card_played", "attack_played", "skill_played", "power_played", "on_discard", "on_exhaust", "on_draw", "on_shuffle", "take_damage", "take_heal", "deal_damage", "deal_heal", "lust_increase", "lust_decrease", "deal_lust_increase", "deal_lust_decrease", "gain_buff", "gain_debuff", "lose_buff", "lose_debuff", "enemy_gain_buff", "enemy_gain_debuff", "enemy_lose_buff", "enemy_lose_debuff", "gain_block", "lose_block", "defeated"] },
+                      { "type": "object", "required": ["on", "effects"], "properties": { "on": { "type": "string" }, "effects": { "$ref": "#/$defs/effectList" } }, "additionalProperties": true }
+                    ]
+                  },
+                  "effects": { "$ref": "#/$defs/effectList" }, "creates": { "type": "array" }
+                }
+              }
+            },
+            "actions_per_activation": { "type": "integer", "minimum": 0, "maximum": 20 },
+            "action_priority": { "type": "integer" }, "speed": { "type": "integer" },
+            "intercept": {
+              "type": "object", "additionalProperties": false, "required": ["mode"],
+              "properties": {
+                "mode": { "const": "unblocked_attack" }, "priority": { "type": "integer" },
+                "max_per_turn": { "type": "integer", "minimum": 1 }
+              }
+            },
+            "slot": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+            "on_existing": { "enum": ["reinforce", "replace"] },
+            "on_defeated": { "enum": ["new_instance", "revive_reset", "revive_reinforce"] },
+            "retain_corpse": { "type": "boolean" },
+            "capabilities": {
+              "type": "object", "additionalProperties": false,
+              "properties": {
+                "selectable": { "type": "boolean" }, "accepts_status": { "type": "boolean" },
+                "acts": { "type": "boolean" }, "intercepts": { "type": "boolean" }
+              }
+            },
+            "count": { "$ref": "#/$defs/formula" }, "capacity": { "type": "integer", "minimum": 1 },
+            "overflow": { "enum": ["reject", "replace_oldest", "replace_lowest_hp"] }
+          },
+          "allOf": [
+            { "if": { "anyOf": [{ "required": ["on_existing"] }, { "required": ["on_defeated"] }] }, "then": { "required": ["slot"] } },
+            { "if": { "properties": { "has_hp": { "const": false } }, "required": ["has_hp"] }, "then": {}, "else": { "required": ["max_hp"] } }
+          ]
+        },
+        "to": { "$ref": "#/$defs/target" }, "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "spawnEnemyEffect": {
+      "type": "object", "additionalProperties": false,
+      "required": ["spawn_enemy"],
+      "properties": {
+        "spawn_enemy": {
+          "type": "object", "additionalProperties": false,
+          "required": ["id", "name", "emoji", "max_hp", "actions", "lust_effect"],
+          "properties": {
+            "id": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+            "name": { "type": "string", "minLength": 1 },
+            "emoji": { "type": "string", "minLength": 1 },
+            "description": { "type": "string" },
+            "max_hp": { "type": "number", "exclusiveMinimum": 0 },
+            "hp": { "type": "number", "minimum": 0 },
+            "max_lust": { "type": "number", "minimum": 0 },
+            "lust": { "type": "number", "minimum": 0 },
+            "block": { "type": "number", "minimum": 0 },
+            "actions": {
+              "type": "array", "minItems": 1, "maxItems": 24,
+              "items": {
+                "type": "object", "required": ["name", "effects"],
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "description": { "type": "string" },
+                  "weight": { "type": "number", "exclusiveMinimum": 0 },
+                  "effects": { "$ref": "#/$defs/effectList" },
+                  "when": { "$ref": "#/$defs/formulaString" },
+                  "creates": { "type": "array" }
+                },
+                "additionalProperties": false
+              }
+            },
+            "abilities": {
+              "type": "array", "maxItems": 24,
+              "items": {
+                "type": "object", "required": ["id", "trigger"],
+                "properties": {
+                  "id": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+                  "name": { "type": "string" }, "emoji": { "type": "string" },
+                  "description": { "type": "string" }, "source": { "type": "string" },
+                  "trigger": {
+                    "oneOf": [
+                      { "enum": ["battle_start", "passive", "ability_gain", "turn_start", "turn_end", "card_played", "attack_played", "skill_played", "power_played", "on_discard", "on_exhaust", "on_draw", "on_shuffle", "take_damage", "take_heal", "deal_damage", "deal_heal", "lust_increase", "lust_decrease", "deal_lust_increase", "deal_lust_decrease", "gain_buff", "gain_debuff", "lose_buff", "lose_debuff", "enemy_gain_buff", "enemy_gain_debuff", "enemy_lose_buff", "enemy_lose_debuff", "gain_block", "lose_block", "defeated"] },
+                      {
+                        "type": "object", "required": ["on", "effects"],
+                        "properties": { "on": { "type": "string" }, "effects": { "$ref": "#/$defs/effectList" } },
+                        "additionalProperties": true
+                      }
+                    ]
+                  },
+                  "effects": { "$ref": "#/$defs/effectList" },
+                  "creates": { "type": "array" }
+                },
+                "additionalProperties": false
+              }
+            },
+            "status_effects": { "type": "array", "items": { "type": "object" } },
+            "lust_effect": {
+              "type": "object", "required": ["name", "effects"],
+              "properties": {
+                "name": { "type": "string", "minLength": 1 },
+                "emoji": { "type": "string" }, "description": { "type": "string" },
+                "effects": { "$ref": "#/$defs/effectList" }, "when": { "$ref": "#/$defs/formulaString" }
+              },
+              "additionalProperties": false
+            },
+            "action_mode": { "enum": ["random", "probability", "sequence", "sequence_then_probability"] },
+            "action_config": { "type": "object" },
+            "action_priority": { "type": "integer", "minimum": -999, "maximum": 999 },
+            "speed": { "type": "integer", "minimum": -999, "maximum": 999 },
+            "tags": { "type": "array", "maxItems": 32, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" } },
+            "resources": { "type": "object" }, "stance": { "type": ["object", "null"] },
+            "orb_slots": { "type": "integer", "minimum": 0, "maximum": 20 },
+            "orbs": { "type": "array", "items": { "type": "object" } },
+            "count": { "$ref": "#/$defs/formula" },
+            "capacity": { "type": "integer", "minimum": 1, "maximum": 12 }
+          }
+        },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "summonAmountEffect": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["damage_summon"],
+          "properties": { "damage_summon": { "$ref": "#/$defs/summonAmountInput" }, "when": { "$ref": "#/$defs/formulaString" } }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["heal_summon"],
+          "properties": { "heal_summon": { "$ref": "#/$defs/summonAmountInput" }, "when": { "$ref": "#/$defs/formulaString" } }
+        }
+      ]
+    },
+    "summonAmountInput": {
+      "type": "object", "additionalProperties": false, "required": ["selector", "amount"],
+      "properties": { "selector": { "$ref": "#/$defs/summonSelector" }, "amount": { "$ref": "#/$defs/formula" } }
+    },
+    "modifySummonEffect": {
+      "type": "object", "additionalProperties": false, "required": ["modify_summon"],
+      "properties": {
+        "modify_summon": {
+          "type": "object", "additionalProperties": false, "required": ["selector", "stat"],
+          "properties": {
+            "selector": { "$ref": "#/$defs/summonSelector" },
+            "stat": { "enum": ["max_hp", "block", "actions_per_activation", "speed", "action_priority"] },
+            "add": { "$ref": "#/$defs/formula" }, "subtract": { "$ref": "#/$defs/formula" },
+            "multiply": { "$ref": "#/$defs/formula" }, "divide": { "$ref": "#/$defs/formula" }, "set": { "$ref": "#/$defs/formula" }
+          },
+          "oneOf": [{ "required": ["add"] }, { "required": ["subtract"] }, { "required": ["multiply"] }, { "required": ["divide"] }, { "required": ["set"] }]
+        },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "modifySummonProgramEffect": {
+      "type": "object", "additionalProperties": false, "required": ["modify_summon_effect"],
+      "properties": {
+        "modify_summon_effect": {
+          "type": "object", "additionalProperties": false, "required": ["selector", "stat"],
+          "properties": {
+            "selector": { "$ref": "#/$defs/summonSelector" },
+            "stat": { "enum": ["damage", "block", "lust", "stacks"] },
+            "add": { "$ref": "#/$defs/formula" }, "subtract": { "$ref": "#/$defs/formula" },
+            "multiply": { "$ref": "#/$defs/formula" }, "divide": { "$ref": "#/$defs/formula" }
+          },
+          "oneOf": [{ "required": ["add"] }, { "required": ["subtract"] }, { "required": ["multiply"] }, { "required": ["divide"] }]
+        },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "summonResourceEffect": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["summon_resource"],
+          "properties": {
+            "summon_resource": { "type": "object", "additionalProperties": false, "required": ["selector", "id", "amount"], "properties": { "selector": { "$ref": "#/$defs/summonSelector" }, "id": { "$ref": "#/$defs/resourceId" }, "amount": { "$ref": "#/$defs/formula" } } },
+            "when": { "$ref": "#/$defs/formulaString" }
           }
         },
         {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["card_rule", "limit"],
+          "type": "object", "additionalProperties": false, "required": ["set_summon_resource"],
           "properties": {
-            "card_rule": { "const": "replay" },
-            "limit": { "anyOf": [{ "$ref": "#/$defs/formula" }, { "const": "all" }] },
-            "extra": { "$ref": "#/$defs/formula" },
-            "to": { "$ref": "#/$defs/target" }
+            "set_summon_resource": { "type": "object", "additionalProperties": false, "required": ["selector", "id", "value"], "properties": { "selector": { "$ref": "#/$defs/summonSelector" }, "id": { "$ref": "#/$defs/resourceId" }, "value": { "$ref": "#/$defs/formula" } } },
+            "when": { "$ref": "#/$defs/formulaString" }
           }
         }
       ]
+    },
+    "summonStatusEffect": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["apply_summon_status"],
+          "properties": {
+            "apply_summon_status": { "type": "object", "additionalProperties": false, "required": ["selector", "id"], "properties": { "selector": { "$ref": "#/$defs/summonSelector" }, "id": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }, "stacks": { "$ref": "#/$defs/formula" } } },
+            "when": { "$ref": "#/$defs/formulaString" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["remove_summon_status"],
+          "properties": {
+            "remove_summon_status": { "type": "object", "additionalProperties": false, "required": ["selector", "id"], "properties": { "selector": { "$ref": "#/$defs/summonSelector" }, "id": { "anyOf": [{ "const": "all" }, { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }] } } },
+            "when": { "$ref": "#/$defs/formulaString" }
+          }
+        }
+      ]
+    },
+    "summonControlEffect": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["activate_summon"],
+          "properties": { "activate_summon": { "type": "object", "additionalProperties": false, "required": ["selector"], "properties": { "selector": { "$ref": "#/$defs/summonSelector" } } }, "when": { "$ref": "#/$defs/formulaString" } }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["dismiss_summon"],
+          "properties": { "dismiss_summon": { "type": "object", "additionalProperties": false, "required": ["selector"], "properties": { "selector": { "$ref": "#/$defs/summonSelector" }, "retain_corpse": { "type": "boolean" } } }, "when": { "$ref": "#/$defs/formulaString" } }
+        }
+      ]
+    },
+    "copySummonEffect": {
+      "type": "object", "additionalProperties": false, "required": ["copy_summon"],
+      "properties": {
+        "copy_summon": {
+          "type": "object", "additionalProperties": false, "required": ["selector"],
+          "properties": {
+            "selector": { "$ref": "#/$defs/summonSelector" },
+            "to": { "enum": ["same", "self", "opponent"] },
+            "capacity": { "type": "integer", "minimum": 1 },
+            "overflow": { "enum": ["reject", "replace_oldest", "replace_lowest_hp"] }
+          }
+        },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "summonerEffectsEffect": {
+      "type": "object", "additionalProperties": false,
+      "required": ["summoner_effects"],
+      "properties": {
+        "summoner_effects": { "$ref": "#/$defs/effectList" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "stanceEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stance"],
+      "properties": {
+        "stance": { "anyOf": [{ "$ref": "#/$defs/stanceDefinition" }, { "type": "null" }] },
+        "to": { "$ref": "#/$defs/target" },
+        "targets": { "$ref": "#/$defs/enemyTargetSelector" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "channelOrbEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["channel_orb"],
+      "properties": {
+        "channel_orb": { "$ref": "#/$defs/orbDefinition" },
+        "to": { "$ref": "#/$defs/target" },
+        "targets": { "$ref": "#/$defs/enemyTargetSelector" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "evokeOrbEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evoke_orb"],
+      "properties": {
+        "evoke_orb": { "anyOf": [{ "type": "integer", "minimum": 1, "maximum": 100 }, { "const": "all" }] },
+        "to": { "$ref": "#/$defs/target" },
+        "targets": { "$ref": "#/$defs/enemyTargetSelector" },
+        "pick": { "enum": ["first", "last", "all"] },
+        "count": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "orb_id": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      },
+      "allOf": [
+        { "if": { "properties": { "pick": { "const": "all" } }, "required": ["pick"] }, "then": { "not": { "required": ["count"] } } }
+      ]
+    },
+    "orbSlotsEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["orb_slots"],
+      "properties": {
+        "orb_slots": { "$ref": "#/$defs/formula" },
+        "to": { "$ref": "#/$defs/target" },
+        "targets": { "$ref": "#/$defs/enemyTargetSelector" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "modifyOrbEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["modify_orb"],
+      "properties": {
+        "modify_orb": { "const": "value" },
+        "to": { "$ref": "#/$defs/target" },
+        "targets": { "$ref": "#/$defs/enemyTargetSelector" },
+        "pick": { "enum": ["first", "last", "all"] },
+        "count": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "orb_id": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "add": { "$ref": "#/$defs/formula" },
+        "subtract": { "$ref": "#/$defs/formula" },
+        "multiply": { "$ref": "#/$defs/formula" },
+        "divide": { "$ref": "#/$defs/formula" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      },
+      "oneOf": [{ "required": ["add"] }, { "required": ["subtract"] }, { "required": ["multiply"] }, { "required": ["divide"] }]
+    },
+    "extraTurnEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["extra_turn"],
+      "properties": {
+        "extra_turn": { "$ref": "#/$defs/formula" },
+        "to": { "$ref": "#/$defs/target" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
+    "endTurnEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["end_turn"],
+      "properties": {
+        "end_turn": { "const": true },
+        "to": { "$ref": "#/$defs/target" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
     },
     "cardTemplate": {
       "type": "object",
@@ -576,7 +1417,7 @@
         "emoji": { "type": "string" },
         "type": { "enum": ["Attack", "Skill", "Power", "Event", "Curse"] },
         "rarity": { "enum": ["Common", "Uncommon", "Rare", "Epic", "Legendary", "Corrupt"] },
-        "cost": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "const": "energy" }] },
+        "cost": { "$ref": "#/$defs/cardCost" },
         "description": { "type": "string" },
         "effects": {
           "$ref": "#/$defs/effectList"
@@ -595,12 +1436,36 @@
       "minLength": 1,
       "maxLength": 256
     },
+    "choiceEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["choose", "options"],
+      "properties": {
+        "choose": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "options": {
+          "type": "array", "minItems": 2, "maxItems": 8,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["id", "label", "effects"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+              "label": { "type": "string", "minLength": 1 },
+              "effects": { "$ref": "#/$defs/effectList" }
+            }
+          }
+        },
+        "on": { "$ref": "#/$defs/trigger" },
+        "when": { "$ref": "#/$defs/formulaString" }
+      }
+    },
     "effect": {
       "anyOf": [
         { "$ref": "#/$defs/amountEffect" },
+        { "$ref": "#/$defs/executeEffect" },
+        { "$ref": "#/$defs/killEffect" },
         { "$ref": "#/$defs/healEffect" },
         { "$ref": "#/$defs/blockEffect" },
         { "$ref": "#/$defs/energyEffect" },
+        { "$ref": "#/$defs/resourceEffect" },
         { "$ref": "#/$defs/lustEffect" },
         { "$ref": "#/$defs/setEffect" },
         { "$ref": "#/$defs/narrateEffect" },
@@ -614,14 +1479,35 @@
         { "$ref": "#/$defs/reduceCostEffect" },
         { "$ref": "#/$defs/modifyCardEffect" },
         { "$ref": "#/$defs/cardPatchEffect" },
+        { "$ref": "#/$defs/cardAttachmentEffect" },
+        { "$ref": "#/$defs/cardUpgradeEffect" },
         { "$ref": "#/$defs/selectCardEffect" },
         { "$ref": "#/$defs/addCardEffect" },
+        { "$ref": "#/$defs/ensureCardEffect" },
         { "$ref": "#/$defs/modifierEffect" },
         { "$ref": "#/$defs/cardPlayRuleEffect" },
+        { "$ref": "#/$defs/stanceEffect" },
+        { "$ref": "#/$defs/channelOrbEffect" },
+        { "$ref": "#/$defs/spawnSummonEffect" },
+        { "$ref": "#/$defs/spawnEnemyEffect" },
+        { "$ref": "#/$defs/summonAmountEffect" },
+        { "$ref": "#/$defs/modifySummonEffect" },
+        { "$ref": "#/$defs/modifySummonProgramEffect" },
+        { "$ref": "#/$defs/summonResourceEffect" },
+        { "$ref": "#/$defs/summonStatusEffect" },
+        { "$ref": "#/$defs/summonControlEffect" },
+        { "$ref": "#/$defs/copySummonEffect" },
+        { "$ref": "#/$defs/summonerEffectsEffect" },
+        { "$ref": "#/$defs/evokeOrbEffect" },
+        { "$ref": "#/$defs/orbSlotsEffect" },
+        { "$ref": "#/$defs/modifyOrbEffect" },
+        { "$ref": "#/$defs/extraTurnEffect" },
+        { "$ref": "#/$defs/endTurnEffect" },
         { "$ref": "#/$defs/scheduleEffect" },
         { "$ref": "#/$defs/autoPlayEffect" },
         { "$ref": "#/$defs/cardDestinationEffect" },
         { "$ref": "#/$defs/advancedZoneEffect" },
+        { "$ref": "#/$defs/choiceEffect" },
         { "$ref": "#/$defs/bundleEffect" }
       ]
     },
@@ -643,6 +1529,9 @@
         },
         "draw": { "$ref": "#/$defs/formula" },
         "stacks": { "$ref": "#/$defs/formula" },
+        "damage_type": { "enum": ["attack", "effect", "hp_loss", "retaliation", "damage_over_time"] },
+        "bypass_block": { "type": "boolean" },
+        "lifesteal": { "$ref": "#/$defs/formula" },
         "to": { "$ref": "#/$defs/target" },
         "targets": { "$ref": "#/$defs/enemyTargetSelector" },
         "when": { "$ref": "#/$defs/formulaString" },
@@ -693,9 +1582,10 @@
         "pick": { "$ref": "#/$defs/cardPick" },
         "count": { "type": "integer", "minimum": 1, "maximum": 100 },
         "free": { "type": "boolean" },
+        "name": { "type": "string", "minLength": 1 },
         "card_type": { "$ref": "#/$defs/cardTypeFilter" },
         "rarity": { "$ref": "#/$defs/cardRarityFilter" },
-        "cost": { "anyOf": [{ "type": "number", "minimum": 0 }, { "const": "energy" }] },
+        "cost": { "$ref": "#/$defs/cardCost" },
         "min_cost": { "type": "number", "minimum": 0 },
         "max_cost": { "type": "number", "minimum": 0 },
         "tag": { "$ref": "#/$defs/cardTagFilter" },
@@ -704,6 +1594,7 @@
         "combat_instance_id": { "type": "string", "minLength": 1 },
         "origin": { "$ref": "#/$defs/cardOriginFilter" },
         "upgraded": { "type": "boolean" },
+        "root_only": { "type": "boolean" },
         "when": { "$ref": "#/$defs/formulaString" }
       }
     },
@@ -727,12 +1618,13 @@
             "count": { "type": "integer", "minimum": 1, "maximum": 100 },
             "destination": { "enum": ["hand", "draw", "discard", "exhaust"] },
             "position": { "enum": ["top", "bottom"] },
+            "name": { "type": "string", "minLength": 1 },
             "card_type": { "$ref": "#/$defs/cardTypeFilter" }, "rarity": { "$ref": "#/$defs/cardRarityFilter" },
-            "cost": { "anyOf": [{ "type": "number", "minimum": 0 }, { "const": "energy" }] },
+        "cost": { "$ref": "#/$defs/cardCost" },
             "min_cost": { "type": "number", "minimum": 0 }, "max_cost": { "type": "number", "minimum": 0 },
             "tag": { "$ref": "#/$defs/cardTagFilter" }, "template_id": { "type": "string", "minLength": 1 },
             "run_instance_id": { "type": "string", "minLength": 1 }, "combat_instance_id": { "type": "string", "minLength": 1 },
-            "origin": { "$ref": "#/$defs/cardOriginFilter" }, "upgraded": { "type": "boolean" },
+            "origin": { "$ref": "#/$defs/cardOriginFilter" }, "upgraded": { "type": "boolean" }, "root_only": { "type": "boolean" },
             "when": { "$ref": "#/$defs/formulaString" }
           }
         },
@@ -743,12 +1635,13 @@
             "remove_card": { "anyOf": [{ "type": "integer", "minimum": 1, "maximum": 100 }, { "const": "all" }] },
             "from": { "$ref": "#/$defs/cardZone" }, "pick": { "$ref": "#/$defs/cardPick" },
             "count": { "type": "integer", "minimum": 1, "maximum": 100 },
+            "name": { "type": "string", "minLength": 1 },
             "card_type": { "$ref": "#/$defs/cardTypeFilter" }, "rarity": { "$ref": "#/$defs/cardRarityFilter" },
-            "cost": { "anyOf": [{ "type": "number", "minimum": 0 }, { "const": "energy" }] },
+        "cost": { "$ref": "#/$defs/cardCost" },
             "min_cost": { "type": "number", "minimum": 0 }, "max_cost": { "type": "number", "minimum": 0 },
             "tag": { "$ref": "#/$defs/cardTagFilter" }, "template_id": { "type": "string", "minLength": 1 },
             "run_instance_id": { "type": "string", "minLength": 1 }, "combat_instance_id": { "type": "string", "minLength": 1 },
-            "origin": { "$ref": "#/$defs/cardOriginFilter" }, "upgraded": { "type": "boolean" },
+            "origin": { "$ref": "#/$defs/cardOriginFilter" }, "upgraded": { "type": "boolean" }, "root_only": { "type": "boolean" },
             "when": { "$ref": "#/$defs/formulaString" }
           }
         },
@@ -759,12 +1652,13 @@
             "transform_card": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
             "from": { "$ref": "#/$defs/cardZone" }, "pick": { "$ref": "#/$defs/cardPick" },
             "count": { "type": "integer", "minimum": 1, "maximum": 100 },
+            "name": { "type": "string", "minLength": 1 },
             "card_type": { "$ref": "#/$defs/cardTypeFilter" }, "rarity": { "$ref": "#/$defs/cardRarityFilter" },
-            "cost": { "anyOf": [{ "type": "number", "minimum": 0 }, { "const": "energy" }] },
+        "cost": { "$ref": "#/$defs/cardCost" },
             "min_cost": { "type": "number", "minimum": 0 }, "max_cost": { "type": "number", "minimum": 0 },
             "tag": { "$ref": "#/$defs/cardTagFilter" }, "template_id": { "type": "string", "minLength": 1 },
             "run_instance_id": { "type": "string", "minLength": 1 }, "combat_instance_id": { "type": "string", "minLength": 1 },
-            "origin": { "$ref": "#/$defs/cardOriginFilter" }, "upgraded": { "type": "boolean" },
+            "origin": { "$ref": "#/$defs/cardOriginFilter" }, "upgraded": { "type": "boolean" }, "root_only": { "type": "boolean" },
             "when": { "$ref": "#/$defs/formulaString" }
           }
         }

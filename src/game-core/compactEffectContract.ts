@@ -5,6 +5,12 @@ export const COMPACT_EFFECT_META_KEYS = [
   'on',
   'stacks',
   'hits',
+  'damage_type',
+  'bypass_block',
+  'lifesteal',
+  'threshold_mode',
+  'exclude_tags',
+  'trigger_fatal',
   'from',
   'pick',
   'count',
@@ -24,6 +30,7 @@ export const COMPACT_EFFECT_META_KEYS = [
   'enabled',
   'min',
   'max',
+  'name',
   'card_type',
   'rarity',
   'cost',
@@ -35,6 +42,8 @@ export const COMPACT_EFFECT_META_KEYS = [
   'combat_instance_id',
   'origin',
   'upgraded',
+  'root_only',
+  'include_copies',
   'phase',
   'priority',
   'repeat_every',
@@ -43,6 +52,12 @@ export const COMPACT_EFFECT_META_KEYS = [
   'free',
   'destination',
   'position',
+  'options',
+  'changes',
+  'levels',
+  'max_level',
+  'orb_id',
+  'resources',
 ] as const;
 
 export const COMPACT_EFFECT_META_KEY_SET = new Set<string>(COMPACT_EFFECT_META_KEYS);
@@ -108,10 +123,126 @@ function normalizeNestedStatusInput(value: unknown): unknown {
   return normalized;
 }
 
+const LEGACY_PATCH_CARD_META_KEYS = new Set([
+  'from',
+  'pick',
+  'count',
+  'scope',
+  'match',
+  'future_copies',
+  'timing',
+  'minimum',
+  'maximum',
+  'name',
+  'card_type',
+  'rarity',
+  'cost',
+  'min_cost',
+  'max_cost',
+  'tag',
+  'template_id',
+  'run_instance_id',
+  'combat_instance_id',
+  'origin',
+  'upgraded',
+  'root_only',
+  'when',
+]);
+
+const LEGACY_PATCH_CARD_PAYLOAD_KEYS: Readonly<Record<string, ReadonlySet<string>>> = {
+  damage: new Set(['add', 'subtract', 'multiply', 'divide']),
+  block: new Set(['add', 'subtract', 'multiply', 'divide']),
+  lust: new Set(['add', 'subtract', 'multiply', 'divide']),
+  stacks: new Set(['add', 'subtract', 'multiply', 'divide']),
+  cost: new Set(['add', 'subtract', 'multiply', 'divide', 'set', 'min', 'max']),
+  x_value: new Set(['add', 'subtract', 'multiply', 'divide', 'set', 'min', 'max']),
+  dynamic_cost: new Set([
+    'add',
+    'subtract',
+    'multiply',
+    'divide',
+    'set',
+    'min',
+    'max',
+    'timing',
+    'minimum',
+    'maximum',
+  ]),
+  replay: new Set(['extra']),
+  retain: new Set(['enabled']),
+  exhaust: new Set(['enabled']),
+  ethereal: new Set(['enabled']),
+  innate: new Set(['enabled']),
+};
+
+const LEGACY_PATCH_CARD_ARITHMETIC_KEYS = new Set([
+  'add',
+  'subtract',
+  'multiply',
+  'divide',
+  'set',
+  'min',
+  'max',
+]);
+
+function hasSingleLegacyPatchOperator(patchType: string, payload: Readonly<Record<string, unknown>>): boolean {
+  if (['damage', 'block', 'lust', 'stacks'].includes(patchType)) {
+    return ['add', 'subtract', 'multiply', 'divide'].filter(key => payload[key] !== undefined).length === 1;
+  }
+  if (['cost', 'x_value', 'dynamic_cost'].includes(patchType)) {
+    return [...LEGACY_PATCH_CARD_ARITHMETIC_KEYS].filter(key => payload[key] !== undefined).length === 1;
+  }
+  if (patchType === 'replay') return payload.extra !== undefined;
+  return typeof payload.enabled === 'boolean';
+}
+
+/**
+ * Canonicalize one unambiguous model deviation:
+ * `{patch_card:{damage:{add:1},scope:'combat',...}}` becomes the public shallow
+ * shape `{patch_card:'damage',add:1,scope:'combat',...}`. Ambiguous patch kinds,
+ * unknown nested fields, multiple operators, or conflicting outer fields remain
+ * untouched and are rejected by the normal compiler.
+ */
+function normalizeNestedPatchCardInput(value: unknown): unknown {
+  if (!isRecord(value) || !isRecord(value.patch_card)) return value;
+  const nested = value.patch_card;
+  const patchTypes = Object.keys(nested).filter(key => !LEGACY_PATCH_CARD_META_KEYS.has(key));
+  if (patchTypes.length !== 1) return value;
+
+  const patchType = patchTypes[0];
+  const payload = nested[patchType];
+  const allowedPayloadKeys = LEGACY_PATCH_CARD_PAYLOAD_KEYS[patchType];
+  if (!isRecord(payload) || !allowedPayloadKeys) return value;
+  const payloadKeys = Object.keys(payload);
+  if (
+    payloadKeys.length === 0 ||
+    payloadKeys.some(key => !allowedPayloadKeys.has(key)) ||
+    !hasSingleLegacyPatchOperator(patchType, payload)
+  ) {
+    return value;
+  }
+
+  const flattened: Record<string, unknown> = { ...value, patch_card: patchType };
+  const merge = (entries: Readonly<Record<string, unknown>>, ignoredKey?: string): boolean => {
+    for (const [key, entry] of Object.entries(entries)) {
+      if (key === ignoredKey) continue;
+      if (flattened[key] !== undefined && flattened[key] !== entry) return false;
+      flattened[key] = entry;
+    }
+    return true;
+  };
+  if (!merge(nested, patchType) || !merge(payload)) return value;
+  return flattened;
+}
+
+function normalizeCompactEffectInput(value: unknown): unknown {
+  return normalizeNestedPatchCardInput(normalizeNestedStatusInput(value));
+}
+
 /** AI may omit the array wrapper when a card has exactly one shallow effect. */
 export function normalizeCompactEffectEntries(value: unknown): unknown[] | null {
-  if (Array.isArray(value)) return value.map(normalizeNestedStatusInput);
-  if (value !== null && typeof value === 'object') return [normalizeNestedStatusInput(value)];
+  if (Array.isArray(value)) return value.map(normalizeCompactEffectInput);
+  if (value !== null && typeof value === 'object') return [normalizeCompactEffectInput(value)];
   return null;
 }
 
@@ -146,10 +277,14 @@ export function normalizeCompactNamedEffectInput(value: unknown, fallbackName: s
 }
 
 const OPERATION_META_KEYS: Readonly<Record<string, readonly string[]>> = {
-  damage: ['hits', 'to', 'targets', 'when', 'on'],
+  damage: ['hits', 'damage_type', 'bypass_block', 'lifesteal', 'to', 'targets', 'when', 'on'],
+  execute: ['threshold_mode', 'exclude_tags', 'trigger_fatal', 'to', 'targets', 'when', 'on'],
+  kill: ['exclude_tags', 'trigger_fatal', 'to', 'targets', 'when', 'on'],
   heal: ['to', 'targets', 'when', 'on'],
   block: ['to', 'targets', 'when', 'on'],
   energy: ['to', 'targets', 'when', 'on'],
+  resource: ['to', 'targets', 'when', 'on'],
+  set_resource: ['to', 'targets', 'when', 'on'],
   lust: ['to', 'targets', 'when', 'on'],
   set_hp: ['to', 'targets', 'when', 'on'],
   set_lust: ['to', 'targets', 'when', 'on'],
@@ -167,17 +302,41 @@ const OPERATION_META_KEYS: Readonly<Record<string, readonly string[]>> = {
   reduce_cost: ['from', 'pick', 'count', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when', 'on'],
   modify_card: ['from', 'pick', 'count', 'add', 'subtract', 'multiply', 'divide', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when', 'on'],
   patch_card: ['from', 'pick', 'count', 'add', 'subtract', 'multiply', 'divide', 'set', 'min', 'max', 'extra', 'enabled', 'scope', 'match', 'future_copies', 'timing', 'minimum', 'maximum', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when', 'on'],
+  attach_card: ['from', 'pick', 'count', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when', 'on'],
+  upgrade_card: ['from', 'pick', 'count', 'scope', 'levels', 'max_level', 'changes', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when', 'on'],
   copy: ['from', 'pick', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when', 'on'],
   double: ['from', 'pick', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when', 'on'],
   add_card: ['to', 'count', 'when', 'on'],
+  ensure_card: ['to', 'minimum', 'include_copies', 'when', 'on'],
   modify: ['add', 'subtract', 'multiply', 'divide', 'set', 'to', 'targets'],
-  card_rule: ['limit', 'extra', 'to'],
+  card_rule: ['limit', 'extra', 'to', 'destination', 'priority', 'resources', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded'],
+  stance: ['to', 'targets', 'when'],
+  channel_orb: ['to', 'targets', 'when'],
+  spawn_summon: ['to', 'when'],
+  spawn_enemy: ['when'],
+  damage_summon: ['when'],
+  heal_summon: ['when'],
+  modify_summon: ['when'],
+  summon_resource: ['when'],
+  set_summon_resource: ['when'],
+  apply_summon_status: ['when'],
+  remove_summon_status: ['when'],
+  activate_summon: ['when'],
+  dismiss_summon: ['when'],
+  copy_summon: ['when'],
+  summoner_effects: ['when'],
+  evoke_orb: ['to', 'targets', 'pick', 'count', 'orb_id', 'when'],
+  orb_slots: ['to', 'targets', 'when'],
+  modify_orb: ['to', 'targets', 'pick', 'count', 'orb_id', 'add', 'subtract', 'multiply', 'divide', 'when'],
+  extra_turn: ['to', 'when'],
+  end_turn: ['to', 'when'],
   schedule: ['phase', 'priority', 'repeat_every', 'repeats', 'effects', 'when'],
   auto_play: ['from', 'pick', 'count', 'free', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when'],
   card_destination: ['when'],
   move_card: ['from', 'pick', 'count', 'destination', 'position', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when'],
   remove_card: ['from', 'pick', 'count', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when'],
   transform_card: ['from', 'pick', 'count', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when'],
+  choose: ['options', 'when', 'on'],
 };
 
 export function compactEffectOperationKeys(value: Readonly<Record<string, unknown>>): string[] {

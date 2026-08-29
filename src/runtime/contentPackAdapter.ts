@@ -24,6 +24,7 @@ function normalizeMvuEnemy(value: unknown): unknown {
 /** Map the canonical MUV battle root into the portable content boundary once. */
 export function createContentPackFromMvuBattle(battleData: unknown): ContentPack {
   if (!isRecord(battleData)) throw new Error('battle data must be an object');
+  const core = isRecord(battleData.core) ? battleData.core : {};
   return createContentPack({
     cards: normalizeMvuList(battleData.cards),
     statuses: normalizeMvuStatusDefinitions(battleData.statuses),
@@ -31,6 +32,7 @@ export function createContentPackFromMvuBattle(battleData: unknown): ContentPack
     items: normalizeMvuList(battleData.items),
     abilities: normalizeMvuList(battleData.player_abilities),
     activeStatuses: normalizeMvuList(battleData.player_status_effects),
+    playerResources: normalizeMvuList(core.resources),
     enemy: normalizeMvuEnemy(battleData.enemy),
     enemies: normalizeMvuList(battleData.enemies).map(normalizeMvuEnemy),
     playerDesireEffect: normalizeCompactNamedEffectInput(battleData.player_lust_effect, '欲望满溢'),

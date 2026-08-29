@@ -23,6 +23,12 @@ export interface StatusDefinitionRegistryLoadResult {
   rejected: readonly unknown[];
 }
 
+function isThresholdExecuteProgram(program: EffectProgram): boolean {
+  return program.steps.length > 0 && program.steps.every(step =>
+    (step.op === 'execute' || step.op === 'kill') && step.target === 'self' && !step.targetSelector,
+  );
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -65,6 +71,7 @@ export function normalizeRuntimeStatusDefinition(
     if (!(trigger in rawTriggers)) continue;
     const compiled = compileCompactEffectList(rawTriggers[trigger], { implicitTarget: 'self' });
     if (!compiled.ok) return null;
+    if (trigger === 'threshold_execute' && !isThresholdExecuteProgram(compiled.value)) return null;
     triggers[trigger] = [compiled.value];
   }
 

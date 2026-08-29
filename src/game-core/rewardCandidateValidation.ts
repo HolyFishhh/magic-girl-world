@@ -10,6 +10,7 @@ import { CARD_RARITY_SET, CARD_TYPE_SET, RELIC_RARITY_SET } from './contentCatal
 import { validateEffectProgramPolicy } from './effectProgramPolicy';
 import { resolveTriggerInput } from './triggerInput';
 import type { EffectProgram } from './effectDsl';
+import { normalizeCardCost, validateCardCost } from './combatResource';
 
 export type RewardCandidateCategory = 'cards' | 'artifacts' | 'items';
 
@@ -19,6 +20,7 @@ export interface RewardCandidateLibrary {
   existing?: readonly unknown[];
   knownStatusIds?: Iterable<string>;
   statusDefinitions?: readonly unknown[];
+  knownResourceIds?: Iterable<string>;
 }
 
 /** Read the amount granted by one reward candidate. AI card candidates commonly use 0 to mean "not owned yet". */
@@ -104,6 +106,8 @@ function validateEffects(
     allowModifiers?: boolean;
     power?: boolean;
     allowSpentEnergy?: boolean;
+    allowSpentResources?: ReadonlySet<string>;
+    allowXResources?: ReadonlySet<string>;
   } = {},
 ): RewardCandidateValidationResult {
   for (const field of ['effect', 'effect_program', 'effectProgram']) {
@@ -141,18 +145,14 @@ function validateEffects(
   ) {
     return failure('持续修饰或出牌规则只允许用于 passive 或状态 hold');
   }
-  if (options.allowModifiers) {
-    const policy = validateEffectProgramPolicy(combined, { modifierPolicy: 'only' });
-    if (!policy.ok) return failure(`${policy.issues[0].path}: ${policy.issues[0].message}`);
-  }
-  if (options.power) {
-    const policy = validateEffectProgramPolicy(combined, {
-      triggerPolicy: 'require_root_or_status',
-      modifierPolicy: 'forbid',
-      allowSpentEnergy: options.allowSpentEnergy,
-    });
-    if (!policy.ok) return failure(`${policy.issues[0].path}: ${policy.issues[0].message}`);
-  }
+  const policy = validateEffectProgramPolicy(combined, {
+    triggerPolicy: options.power ? 'require_root_or_status' : 'forbid',
+    modifierPolicy: options.allowModifiers ? 'only' : 'forbid',
+    allowSpentEnergy: options.allowSpentEnergy,
+    allowSpentResources: options.allowSpentResources,
+    allowXResources: options.allowXResources,
+  });
+  if (!policy.ok) return failure(`${policy.issues[0].path}: ${policy.issues[0].message}`);
   return { ok: true };
 }
 
@@ -175,11 +175,8 @@ export function validateRewardCandidate(
     }
     if (type === 'Curse') {
       if (value.cost !== undefined) return failure('Curse 不得包含 cost');
-    } else if (
-      (value.cost ?? 0) !== 'energy' &&
-      (!Number.isInteger(value.cost ?? 0) || ((value.cost ?? 0) as number) < 0)
-    ) {
-      return failure('卡牌 cost 必须是非负整数或 energy');
+    } else if (validateCardCost(value.cost ?? 0)) {
+      return failure('卡牌 cost 必须是非负整数、energy 或合法资源费用对象');
     }
     const triggerInput = resolveTriggerInput(value);
     const trigger = type === 'Power' ? triggerInput.trigger : undefined;
@@ -187,21 +184,26 @@ export function validateRewardCandidate(
     for (const flag of ['retain', 'exhaust', 'ethereal', 'innate']) {
       if (value[flag] !== undefined && typeof value[flag] !== 'boolean') return failure(`卡牌 ${flag} 必须是布尔值`);
     }
+    const costComponents = normalizeCardCost((value.cost ?? 0) as any);
     const main = validateEffects(value, {
       trigger,
       when: value.when,
       creates: value.creates,
       power: type === 'Power',
-      allowSpentEnergy: value.cost === 'energy',
+      allowSpentEnergy: costComponents.energy === 'all',
+      allowSpentResources: new Set(Object.keys(costComponents)),
+      allowXResources: new Set(Object.entries(costComponents).filter(([, component]) => component === 'all').map(([id]) => id)),
     });
     if (!main.ok) return main;
     if (Object.prototype.hasOwnProperty.call(value, 'discard_effect')) {
       return failure('discard_effect 已移除，请使用浅层 discard_effects');
     }
     if (value.discard_effects !== undefined) {
-      const discard = compileCompactEffectList(value.discard_effects, { creates: value.creates });
-      if (!discard.ok)
-        return failure(`discard_effects${discard.issues[0].path.slice(1)}: ${discard.issues[0].message}`);
+      const discard = validateEffects(
+        { effects: value.discard_effects, creates: value.creates },
+        { creates: value.creates },
+      );
+      if (!discard.ok) return failure(`discard_effects: ${discard.message}`);
     }
     return { ok: true };
   }
@@ -231,6 +233,37 @@ export function validateRewardCandidateAgainstLibrary(
 ): RewardCandidateValidationResult {
   const base = validateRewardCandidate(category, value);
   if (!base.ok || !isRecord(value)) return base;
+
+  if (library.knownResourceIds) {
+    const knownResources = new Set(['energy', ...library.knownResourceIds]);
+    if (category === 'cards') {
+      const missingCostResources = Object.keys(normalizeCardCost((value.cost ?? 0) as any))
+        .filter(id => !knownResources.has(id));
+      if (missingCostResources.length > 0)
+        return failure(`费用引用了未注册资源: ${missingCostResources.sort().join(', ')}`);
+    }
+    const references = new Set<string>();
+    const visit = (entry: unknown): void => {
+      if (typeof entry === 'string') {
+        for (const match of entry.matchAll(/(?:self|opponent)\.resource\.([A-Za-z_][A-Za-z0-9_]*)\.(?:current|max)/g)) {
+          references.add(match[1]);
+        }
+        return;
+      }
+      if (Array.isArray(entry)) {
+        entry.forEach(visit);
+        return;
+      }
+      if (!isRecord(entry)) return;
+      if ((entry.op === 'gain_resource' || entry.op === 'set_resource') && typeof entry.resource === 'string') {
+        references.add(entry.resource);
+      }
+      Object.values(entry).forEach(visit);
+    };
+    compactPrograms(value).forEach(visit);
+    const missing = [...references].filter(id => !knownResources.has(id)).sort();
+    if (missing.length > 0) return failure(`引用了未注册资源: ${missing.join(', ')}`);
+  }
 
   const supportStatus = value.status;
   if (supportStatus !== undefined && !isRecord(supportStatus)) return failure('候选 status 必须是一个状态定义对象');

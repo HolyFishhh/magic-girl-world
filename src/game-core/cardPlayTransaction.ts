@@ -1,11 +1,21 @@
-import { resolveCardEnergyPayment, resolvePlayedCardDestination, type CardEnergyPayment, type CardRuleCard, type PlayedCardDestination } from './cardRules';
+import { resolvePlayedCardDestination, type CardRuleCard, type PlayedCardDestination } from './cardRules';
 import { resolveActiveCardPlayRules, type CardPlayRuleEvent } from './cardPlayRuleRuntime';
 import { resolveDynamicCardCostAtPlay, type DynamicCardCostRule } from './dynamicCardCost';
 import type { CoreEffectState, EffectExecutionContext } from './effectDsl';
+import type { SelectableCard } from './cardSelectorRuntime';
+import { resolveCardAttachmentPlayAccess, type CardAttachment } from './cardAttachment';
+import {
+  applyCardResourcePayment,
+  resolveCardResourcePayment,
+  type CardResourcePayment,
+  type CardCost,
+  type CombatResourcePool,
+} from './combatResource';
 
 export interface CardPlayCard extends CardRuleCard {
   doubleEffect?: boolean;
   replayCount?: number;
+  attachments?: CardAttachment[];
 }
 
 export interface CardPlayState<TCard extends CardPlayCard> {
@@ -13,6 +23,8 @@ export interface CardPlayState<TCard extends CardPlayCard> {
   hasOpponent: boolean;
   hand: readonly TCard[];
   energy: number;
+  /** Custom/current resource amounts; energy is always read from the dedicated compatibility field. */
+  resources?: CombatResourcePool;
   cardsPlayedThisTurn: number;
   cardRuleUsesThisTurn?: number;
   attacksPlayedThisTurn?: number;
@@ -20,6 +32,7 @@ export interface CardPlayState<TCard extends CardPlayCard> {
   stunned?: boolean;
   statusIds?: Iterable<string>;
   cardPlayRules?: readonly CardPlayRuleEvent[];
+  playedCardsThisTurn?: readonly SelectableCard[];
   dynamicCostRules?: readonly DynamicCardCostRule[];
   dynamicCostState?: CoreEffectState;
   dynamicCostContext?: EffectExecutionContext;
@@ -33,19 +46,28 @@ export type CardPlayFailureCode =
   | 'STUNNED'
   | 'DOMINATED_ATTACK'
   | 'SILENCED_SKILL'
-  | 'INSUFFICIENT_ENERGY';
+  | 'RULE_DENIED'
+  | 'RULE_LIMIT_REACHED'
+  | 'INSUFFICIENT_ENERGY'
+  | 'INSUFFICIENT_RESOURCE';
 
 export interface CardPlayFailure {
   ok: false;
   code: CardPlayFailureCode;
   requiredEnergy?: number;
   availableEnergy?: number;
+  resource?: string;
+  requiredResource?: number;
+  availableResource?: number;
+  /** Cost preview metadata is retained for read-only UI even when payment cannot commit. */
+  effectiveCost?: CardCost;
+  payment?: CardResourcePayment;
 }
 
 export interface PreparedCardPlay<TCard extends CardPlayCard> {
   ok: true;
   card: TCard;
-  payment: CardEnergyPayment;
+  payment: CardResourcePayment;
   destination: PlayedCardDestination;
   repeatCount: number;
 }
@@ -53,6 +75,7 @@ export interface PreparedCardPlay<TCard extends CardPlayCard> {
 export interface CommittedCardPlay<TCard extends CardPlayCard> extends PreparedCardPlay<TCard> {
   hand: TCard[];
   energy: number;
+  resources: Record<string, number>;
   cardsPlayedThisTurn: number;
   cardRuleUsesThisTurn: number;
   attacksPlayedThisTurn: number;
@@ -78,16 +101,23 @@ function inspectCardPlay<TCard extends CardPlayCard>(
   if (state.phase !== 'player_turn') return { ok: false, code: 'WRONG_PHASE' };
   const card = state.hand.find(entry => entry.id === cardId);
   if (!card) return { ok: false, code: 'CARD_NOT_FOUND' };
-  if (card.type === 'Curse') return { ok: false, code: 'CURSE_UNPLAYABLE' };
   if (state.stunned) return { ok: false, code: 'STUNNED' };
-  const statuses = statusSet(state.statusIds);
-  if (card.type === 'Attack' && statuses.has('dominated')) return { ok: false, code: 'DOMINATED_ATTACK' };
-  if (card.type === 'Skill' && statuses.has('silenced')) return { ok: false, code: 'SILENCED_SKILL' };
-
   const activeRules = resolveActiveCardPlayRules(
     state.cardPlayRules || [],
     state.cardRuleUsesThisTurn ?? state.cardsPlayedThisTurn,
+    card,
+    state.playedCardsThisTurn || [],
   );
+  const attachmentAccess = resolveCardAttachmentPlayAccess(card);
+  if (activeRules.denied || (attachmentAccess.denied && !attachmentAccess.explicitlyAllowed)) {
+    return { ok: false, code: 'RULE_DENIED' };
+  }
+  if (activeRules.playLimitReached) return { ok: false, code: 'RULE_LIMIT_REACHED' };
+  const explicitlyAllowed = activeRules.explicitlyAllowed || attachmentAccess.explicitlyAllowed;
+  if (card.type === 'Curse' && !explicitlyAllowed) return { ok: false, code: 'CURSE_UNPLAYABLE' };
+  const statuses = statusSet(state.statusIds);
+  if (!explicitlyAllowed && card.type === 'Attack' && statuses.has('dominated')) return { ok: false, code: 'DOMINATED_ATTACK' };
+  if (!explicitlyAllowed && card.type === 'Skill' && statuses.has('silenced')) return { ok: false, code: 'SILENCED_SKILL' };
   const effectiveCost = state.dynamicCostState
     ? resolveDynamicCardCostAtPlay(card as CardPlayCard & any, state.dynamicCostRules || [], {
         state: state.dynamicCostState,
@@ -95,26 +125,40 @@ function inspectCardPlay<TCard extends CardPlayCard>(
       })
     : card.cost;
   const effectiveCard = effectiveCost === card.cost ? card : ({ ...card, cost: effectiveCost } as TCard);
-  const payment = activeRules.free
-    ? {
-        requiredEnergy: 0,
-        spentEnergy: 0,
-        xValue: effectiveCard.cost === 'energy' ? Math.max(0, Math.floor(effectiveCard.xValueBonus || 0)) : 0,
-      }
-    : resolveCardEnergyPayment(effectiveCard, state.energy);
-  if (state.energy < payment.requiredEnergy) {
+  const pool = { ...(state.resources || {}), energy: state.energy };
+  const payment = resolveCardResourcePayment(
+    effectiveCard.cost,
+    pool,
+    activeRules.free ? activeRules.freeResources || 'all' : undefined,
+    effectiveCard.xValueBonus,
+  );
+  if (!payment.affordable) {
+    const shortage = payment.shortage!;
+    if (shortage.resource !== 'energy') {
+      return {
+        ok: false,
+        code: 'INSUFFICIENT_RESOURCE',
+        resource: shortage.resource,
+        requiredResource: shortage.required,
+        availableResource: shortage.available,
+        effectiveCost: effectiveCard.cost,
+        payment,
+      };
+    }
     return {
       ok: false,
       code: 'INSUFFICIENT_ENERGY',
-      requiredEnergy: payment.requiredEnergy,
+      requiredEnergy: shortage.required,
       availableEnergy: state.energy,
+      effectiveCost: effectiveCard.cost,
+      payment,
     };
   }
   return {
     ok: true,
     card: effectiveCard,
     payment,
-    destination: resolvePlayedCardDestination(effectiveCard),
+    destination: activeRules.destination || resolvePlayedCardDestination(effectiveCard),
     repeatCount: 1 + Math.min(20, normalizedCounter(effectiveCard.replayCount ?? (effectiveCard.doubleEffect ? 1 : 0))) + activeRules.extraReplays,
   };
 }
@@ -135,10 +179,15 @@ export function commitCardPlay<TCard extends CardPlayCard>(
   const cardId = prepared.card.id;
   const inspected = inspectCardPlay(cardId, latest);
   if (!inspected.ok) return inspected;
+  const remainingResources = applyCardResourcePayment(
+    { ...(latest.resources || {}), energy: latest.energy },
+    inspected.payment,
+  );
   return {
     ...inspected,
     hand: latest.hand.filter(card => card.id !== cardId),
-    energy: latest.energy - inspected.payment.spentEnergy,
+    energy: remainingResources.energy || 0,
+    resources: Object.fromEntries(Object.entries(remainingResources).filter(([id]) => id !== 'energy')),
     cardsPlayedThisTurn: normalizedCounter(latest.cardsPlayedThisTurn) + 1,
     cardRuleUsesThisTurn: normalizedCounter(latest.cardRuleUsesThisTurn ?? latest.cardsPlayedThisTurn) + 1,
     attacksPlayedThisTurn: normalizedCounter(latest.attacksPlayedThisTurn) + (inspected.card.type === 'Attack' ? 1 : 0),

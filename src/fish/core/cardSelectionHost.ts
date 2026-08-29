@@ -5,6 +5,7 @@ import {
   type CardSelectionMode,
 } from '../../game-core';
 import type { Card } from '../../game-core';
+import type { CombatResourceState } from '../../game-core';
 import { TavernCardInteractionPresenter } from '../ui/cardInteractionPresenter';
 
 export interface TavernCardSelectionRequest {
@@ -14,6 +15,7 @@ export interface TavernCardSelectionRequest {
   title: string;
   allowCancel?: boolean;
   random?: () => number;
+  resources?: Readonly<Record<string, Pick<CombatResourceState, 'name' | 'emoji'>>>;
 }
 
 export type TavernCardSelectionResult =
@@ -54,6 +56,7 @@ export class TavernCardSelectionHost {
             minimum: plan.minimum,
             maximum: plan.maximum,
             allowCancel: plan.allowCancel,
+            resources: request.resources,
           })
         : undefined;
     const resolved = resolveCardSelection(plan, response);

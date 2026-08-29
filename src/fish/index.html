@@ -63,9 +63,6 @@
             <!-- 敌人标题 - 始终显示 -->
             <div class="enemy-title-bar">
               <div class="enemy-avatar-stack">
-                <div class="enemy-intent-summary" id="enemy-intent-summary" aria-label="敌方下一轮效果">
-                  <span class="intent-badge" title="准备行动">❓</span>
-                </div>
                 <div class="enemy-emoji">👹</div>
               </div>
               <div class="enemy-name" id="enemy-name">正在恢复战斗...</div>
@@ -107,6 +104,7 @@
                   <div class="stat-icon">🛡️</div>
                   <div class="stat-value" id="enemy-block">0</div>
                 </div>
+                <div class="combat-resource-list enemy-combat-resources" id="enemy-combat-resources" aria-label="敌方特殊资源"></div>
               </div>
 
               <!-- 敌人状态效果和欲望效果 - 紧凑布局 -->
@@ -115,6 +113,7 @@
                 <div class="effect-section status-section" id="enemy-status-section">
                   <div class="effect-label" title="状态">状态</div>
                   <div class="status-effects enemy-status" id="enemy-status-effects"></div>
+                  <div class="special-containers" id="enemy-special-containers"></div>
                 </div>
 
                 <!-- 欲望效果 -->
@@ -122,7 +121,7 @@
                   <div class="lust-effect-display" id="enemy-lust-effect"></div>
                 </div>
                 <div class="abilities-section">
-                  <div class="abilities-label" title="能力">能力</div>
+                  <div class="abilities-label" title="敌方被动">敌方被动</div>
                   <div class="abilities-grid" id="enemy-abilities"></div>
                 </div>
               </div>
@@ -135,10 +134,15 @@
             <div class="battle-stage" id="battle-stage">
               <div class="stage-combatant stage-player" id="stage-player">
                 <div class="stage-emoji" id="stage-player-emoji">✨</div>
+                <div class="stage-summons" id="player-summons" aria-label="我方召唤单位"></div>
               </div>
               <div class="stage-action-lane" id="stage-action-lane" aria-hidden="true"></div>
               <div class="stage-combatant stage-enemy" id="stage-enemy">
+                <button class="enemy-intent-summary stage-intent-summary" id="enemy-intent-summary" type="button" aria-label="敌方下一轮效果">
+                  <span class="intent-badge" title="准备行动">❓</span>
+                </button>
                 <div class="stage-emoji" id="stage-enemy-emoji">👹</div>
+                <div class="stage-summons" id="enemy-summons" aria-label="敌方召唤单位"></div>
               </div>
 
               <!-- 拖动投放区只覆盖行动舞台，不遮住整副手牌 -->
@@ -158,6 +162,7 @@
                   <div class="stat-icon">⚡</div>
                   <div class="stat-value" id="player-energy">3/3</div>
                 </div>
+                <div class="combat-resource-list" id="player-combat-resources" aria-label="特殊资源"></div>
               </div>
               <div class="player-hand" id="hand-cards">
                 <!-- 卡牌在此动态生成 -->
@@ -235,6 +240,7 @@
                 <div class="effect-section status-section" id="player-status-section">
                   <div class="effect-label" title="状态">状态</div>
                   <div class="status-effects player-status" id="player-status-effects"></div>
+                  <div class="special-containers" id="player-special-containers"></div>
                 </div>
 
                 <!-- 欲望效果 -->

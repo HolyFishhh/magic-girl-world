@@ -9,8 +9,12 @@ require('ts-node/register/transpile-only');
 const { assessInitialPlayerContent } = require(resolve('src/game-core/playerContentReadiness.ts'));
 const { createContentPackFromMvuBattle } = require(resolve('src/runtime/contentPackAdapter.ts'));
 const { settleTavernBattleVariables } = require(resolve('src/runtime/battleSettlementAdapter.ts'));
+const { refreshMvuContentDesignContext } = require(resolve('src/runtime/contentDesignContextAdapter.ts'));
 const { preflightBattleContent } = require(resolve('src/fish/core/battleContentPreflight.ts'));
 const { applyRewardSelectionsToStat, hasSelectableRewards } = require(resolve('src/common/rewardTransactions.ts'));
+const runCore = require(resolve('src/game-core/runState.ts'));
+const runAdapter = require(resolve('src/runtime/runStateAdapter.ts'));
+const runTransactions = require(resolve('src/common/runTransactions.ts'));
 
 const settlementMarker = '[MVU_BATTLE_SETTLEMENT]';
 const enemy = ({ id, name, hp, maxHp }) => ({
@@ -103,6 +107,9 @@ const initial = assessInitialPlayerContent(createContentPackFromMvuBattle(variab
 assert.equal(initial.ok, true, `initialization failed: ${JSON.stringify(initial.issues)}`);
 assert.equal(initial.deck.deckQuantity, 11);
 assert.equal(preflightBattleContent(variables.stat_data.battle).ok, true, 'the initialized first encounter must open');
+refreshMvuContentDesignContext(variables);
+assert.equal(variables.stat_data.battle.design_context.recentEnemySignatures.length, 1);
+const firstEnemySignature = variables.stat_data.battle.design_context.recentEnemySignatures[0];
 
 const firstRequest = {
   player: { hp: 80, maxHp: 80, lust: 0, maxLust: 100, level: 1 },
@@ -126,6 +133,8 @@ assert.equal(variables.stat_data.battle.core.hp, 63);
 assert.equal(variables.stat_data.battle.exp, 25);
 assert.equal(variables.stat_data.battle.items[0].count, 1);
 assert.equal(variables.stat_data.battle.enemy.name, '');
+assert.equal(variables.stat_data.battle.design_context.lastBattle.outcome, 'victory');
+assert.equal(variables.stat_data.battle.design_context.performance.battles, 1);
 
 // Emulate the settlement model: ordinary rewards plus a story-confirmed cost of victory.
 variables.stat_data.reward.card = [
@@ -149,6 +158,8 @@ variables.stat_data.battle.cards.push({
 });
 variables.stat_data.reward.request = null;
 assert.equal(hasSelectableRewards(variables.stat_data), true);
+refreshMvuContentDesignContext(variables);
+assert.equal(variables.stat_data.battle.design_context.rewardReview.candidateCount, 2);
 
 const rewardSummary = applyRewardSelectionsToStat(variables.stat_data, {
   cards: [0], artifacts: [], items: [0],
@@ -158,12 +169,22 @@ assert.equal(hasSelectableRewards(variables.stat_data), false);
 assert.equal(variables.stat_data.battle.cards.some(card => card.id === 'victory_cost'), true);
 assert.equal(variables.stat_data.battle.cards.some(card => card.id === 'reward_counter'), true);
 assert.equal(variables.stat_data.battle.cards.find(card => card.id === 'starter_strike').quantity, 5);
+refreshMvuContentDesignContext(variables);
+assert.equal(variables.stat_data.battle.design_context.rewardReview, undefined);
 
 // The next encounter inherits the grown deck and may begin with story-established damage.
 const secondEnemy = enemy({ id: 'second_enemy', name: '第二名敌人', hp: 29, maxHp: 42 });
+secondEnemy.actions = [
+  { id: 'second_enemy_pressure', name: '侵蚀波', weight: 2, effects: { damage: 4, lust: 8 } },
+  { id: 'second_enemy_charge', name: '蓄势', weight: 1, effects: { block: 7 } },
+];
+secondEnemy.action_config = { probability: { 侵蚀波: 2, 蓄势: 1 } };
 variables.stat_data.battle.enemy = secondEnemy;
 assert.equal(preflightBattleContent(variables.stat_data.battle).ok, true, 'the second encounter must accept inherited growth');
 assert.equal(variables.stat_data.battle.enemy.hp < variables.stat_data.battle.enemy.max_hp, true);
+refreshMvuContentDesignContext(variables);
+assert.equal(variables.stat_data.battle.design_context.recentEnemySignatures.length, 2);
+assert.notEqual(variables.stat_data.battle.design_context.recentEnemySignatures[1], firstEnemySignature);
 
 const expBeforeDefeat = variables.stat_data.battle.exp;
 settleTavernBattleVariables(variables, {
@@ -188,6 +209,8 @@ settleTavernBattleVariables(variables, {
 assert.equal(variables.stat_data.battle.core.hp, 0);
 assert.equal(variables.stat_data.battle.exp, expBeforeDefeat, 'defeat must not grant victory experience');
 assert.equal(variables.stat_data.battle.enemy.name, '');
+assert.equal(variables.stat_data.battle.design_context.lastBattle.outcome, 'defeat');
+assert.equal(variables.stat_data.battle.design_context.performance.battles, 2);
 
 // Emulate one legal multi-penalty response. No fixed count or exclusive category is imposed.
 variables.stat_data.reward.card = [];
@@ -217,5 +240,70 @@ assert.deepEqual(
   ['lasting_wound', 'enemy_mark'],
 );
 assert.equal(variables.stat_data.run, null, 'story mode must not silently initialize a tower run');
+
+const reachRunNode = (kind, seed = 1) => {
+  let state = runCore.createRunState({ seed, floorsPerAct: 8 });
+  for (let guard = 0; guard < 80; guard += 1) {
+    const choice = state.choices.find(entry => entry.kind === kind);
+    if (choice) return runCore.enterRunNode(state, choice.id);
+    state = runCore.completeRunNode(runCore.enterRunNode(state, state.choices[0].id), { outcome: 'cleared' });
+  }
+  throw new Error(`run node ${kind} was not reached`);
+};
+
+// The same persistent roots survive reroll, claim, a later campfire transaction, and save restore.
+const expeditionStat = {
+  run: runCore.createRunState({ seed: 2026, startingGold: 30 }),
+  status: { permanent_status: [], temporary_status: [] },
+  battle: {
+    core: { hp: 40, max_hp: 80, card_removal_count: 1 },
+    cards: [{
+      id: 'run_starter', name: '远征起手', type: 'Attack', rarity: 'Common', cost: 1, quantity: 2,
+      effects: { damage: 6 },
+    }],
+    artifacts: [], items: [], statuses: [], player_abilities: [], player_status_effects: [],
+  },
+  reward: {
+    card: [{
+      id: 'old_run_reward', name: '旧远征候选', type: 'Skill', rarity: 'Common', cost: 1, quantity: 1,
+      effects: { block: 5 },
+    }],
+    artifact: [], item: [], limits: { cards: 1 },
+    disabled_categories: [], pool_revision: 0, reroll_count: 0,
+  },
+};
+runAdapter.migrateRunProgramStateInStat(expeditionStat);
+runTransactions.executeUnifiedRunTransactionInStat(expeditionStat, {
+  kind: 'reward_pool',
+  goldCost: 5,
+  mutation: {
+    kind: 'reroll', categories: ['cards'], candidates: {
+      cards: [{
+        id: 'new_run_reward', name: '新远征候选', type: 'Skill', rarity: 'Common', cost: 1, quantity: 1,
+        effects: { draw: 1 },
+      }],
+    },
+  },
+});
+runTransactions.executeUnifiedRunTransactionInStat(expeditionStat, {
+  kind: 'reward_claim', selections: { cards: [0], artifacts: [], items: [] },
+});
+assert.equal(expeditionStat.run.gold, 25);
+assert.equal(expeditionStat.battle.cards.some(card => card.id === 'new_run_reward'), true);
+assert.equal(new Set(expeditionStat.battle.cards.map(card => card.runInstanceId)).size, 3);
+expeditionStat.run = { ...reachRunNode('rest', 2), gold: expeditionStat.run.gold };
+runTransactions.executeUnifiedRunTransactionInStat(expeditionStat, { kind: 'rest_heal' });
+assert.equal(expeditionStat.battle.core.hp, 64);
+assert.equal(expeditionStat.run_transaction_revision, 3);
+assert.deepEqual(
+  expeditionStat.run_transaction_events.map(event => event.type),
+  ['reward_pool_changed', 'reward_claimed', 'rest_healed'],
+);
+const restoredExpedition = structuredClone(expeditionStat);
+const restoredRun = runAdapter.migrateRunProgramStateInStat(restoredExpedition);
+assert.equal(restoredRun.schemaVersion, 2);
+assert.equal(restoredExpedition.run_transaction_revision, 3);
+assert.equal(restoredExpedition.run_transaction_events.length, 3, 'save restore does not replay transaction events');
+assert.equal(restoredExpedition.run_trigger_invocations.length, 0, 'save restore does not synthesize trigger calls');
 
 console.log('Story mode deterministically completes initialization, victory rewards, a second encounter, and multi-penalty defeat.');

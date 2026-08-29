@@ -2,15 +2,75 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
+import Ajv2020 from 'webpack/node_modules/ajv/dist/2020.js';
 
 const require = createRequire(import.meta.url);
 process.env.TS_NODE_COMPILER_OPTIONS = JSON.stringify({ module: 'CommonJS', moduleResolution: 'node' });
 require('ts-node/register/transpile-only');
 const core = require(resolve('src/game-core/effectDsl.ts'));
 const schema = JSON.parse(await readFile(resolve('schemas/mwg-effect-v1.schema.json'), 'utf8'));
+const validateEffectSchema = new Ajv2020({ strict: false, allErrors: true }).compile(schema);
 
 assert.equal(schema.$schema, 'https://json-schema.org/draft/2020-12/schema');
 assert.equal(schema.$defs.program.properties.spec.const, core.EFFECT_PROGRAM_SPEC);
+for (const definition of ['stanceEffect', 'channelOrbEffect', 'evokeOrbsEffect', 'setOrbSlotsEffect', 'modifyOrbsEffect', 'grantExtraTurnEffect', 'forceEndTurnEffect']) {
+  assert.ok(schema.$defs[definition], `AST schema must expose ${definition}`);
+}
+assert.ok(schema.$defs.applyCardAttachmentEffect);
+assert.ok(schema.$defs.cardAttachmentChange);
+assert.ok(schema.$defs.historyExpression);
+assert.ok(schema.$defs.eventTriggerQuery);
+assert.ok(schema.$defs.registerTriggerEffect);
+
+const schemaEventProgram = {
+  spec: 'mwg.effect/v1',
+  steps: [{
+    op: 'register_trigger',
+    target: 'self',
+    trigger: 'deal_damage',
+    eventQuery: {
+      scope: 'combat',
+      ordinal: 'every_n',
+      n: 2,
+      filter: {
+        kind: 'damage_resolved', phase: 'resolve', sourceKind: 'card', damageKind: 'attack',
+        actorId: 'player', targetId: 'enemy_alpha',
+      },
+    },
+    effects: [{
+      op: 'gain_block',
+      target: 'self',
+      amount: {
+        op: 'history', metric: 'last_hp_loss', scope: 'turn',
+        filter: { kind: 'damage_resolved', phase: 'resolve', targetId: 'player' },
+      },
+    }],
+  }],
+};
+assert.equal(validateEffectSchema(schemaEventProgram), true, JSON.stringify(validateEffectSchema.errors));
+for (const invalidProgram of [
+  {
+    ...schemaEventProgram,
+    steps: [{ ...schemaEventProgram.steps[0], eventQuery: { ordinal: 'first', n: 1 } }],
+  },
+  {
+    ...schemaEventProgram,
+    steps: [{ ...schemaEventProgram.steps[0], eventQuery: { ordinal: 'nth' } }],
+  },
+  {
+    ...schemaEventProgram,
+    steps: [{ ...schemaEventProgram.steps[0], eventQuery: { filter: { damageKind: 'untyped' } } }],
+  },
+  {
+    ...schemaEventProgram,
+    steps: [{
+      ...schemaEventProgram.steps[0],
+      effects: [{ op: 'gain_block', target: 'self', amount: { op: 'history', metric: 'unknown_metric' } }],
+    }],
+  },
+]) {
+  assert.equal(validateEffectSchema(invalidProgram), false, 'internal schema must reject malformed event history/query input');
+}
 
 const program = {
   spec: 'mwg.effect/v1',
@@ -138,6 +198,38 @@ const energyResult = core.executeEffectProgram(
 );
 assert.equal(energyResult.ok, true);
 
+const signedDeltaResult = core.executeEffectProgram(
+  {
+    spec: 'mwg.effect/v1',
+    steps: [
+      { op: 'gain_lust', target: 'self', amount: -8 },
+      { op: 'gain_energy', target: 'self', amount: -2 },
+      { op: 'gain_resource', target: 'self', resource: 'charge', amount: -3 },
+      { op: 'set_stat', target: 'self', stat: 'block', value: -5 },
+    ],
+  },
+  {
+    ...state,
+    self: { ...state.self, lust: 20, energy: 3, block: 4, resources: { charge: 5 }, maxResources: { charge: 9 } },
+  },
+  { spentEnergy: 0 },
+);
+assert.equal(signedDeltaResult.ok, true);
+assert.equal(signedDeltaResult.state.self.lust, 12);
+assert.equal(signedDeltaResult.state.self.energy, 1);
+assert.equal(signedDeltaResult.state.self.resources.charge, 2);
+assert.equal(signedDeltaResult.state.self.block, 0, 'block is clamped at the state boundary');
+for (const step of [
+  { op: 'damage', target: 'opponent', amount: -1 },
+  { op: 'gain_block', target: 'self', amount: -1 },
+  { op: 'apply_status', target: 'self', status: 'focus', stacks: -1 },
+  { op: 'draw_cards', amount: -1 },
+]) {
+  const rejected = core.executeEffectProgram({ spec: 'mwg.effect/v1', steps: [step] }, state, { spentEnergy: 0 });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.error.code, 'NEGATIVE_AMOUNT');
+}
+
 const recoverProgram = {
   spec: 'mwg.effect/v1',
   steps: [{ op: 'recover_cards', source: 'discard', pick: 'choose', amount: 2 }],
@@ -159,6 +251,30 @@ assert.deepEqual(core.executeEffectProgram(scryProgram, state, { spentEnergy: 0 
 ]);
 assert.equal(schema.$defs.scryEffect.properties.op.const, 'scry_cards');
 assert.equal(energyResult.state.self.energy, 5, 'maxEnergy is a turn refill value, not a temporary gain cap');
+
+const attachmentProgram = {
+  spec: 'mwg.effect/v1',
+  steps: [{
+    op: 'apply_card_attachment',
+    selector: { zone: 'hand', pick: 'choose', count: 1 },
+    attachment: {
+      id: 'dsl_affliction', kind: 'affliction', name: 'DSL负面附着', scope: 'combat',
+      removeOn: 'discarded', discardReasons: ['player_choice'], remaining: 1,
+      changes: [
+        { kind: 'numeric', stat: 'damage', operator: 'add', value: { op: 'var', path: 'battle.turn_number' } },
+        { kind: 'play_access', mode: 'deny' },
+      ],
+    },
+  }],
+};
+assert.equal(core.validateEffectProgram(attachmentProgram).ok, true);
+const attachmentResult = core.executeEffectProgram(attachmentProgram, state, { spentEnergy: 0 });
+assert.equal(attachmentResult.ok, true);
+assert.equal(attachmentResult.events[0].type, 'apply_card_attachment');
+assert.equal(attachmentResult.events[0].attachment.changes[0].value, 3);
+const invalidAttachment = structuredClone(attachmentProgram);
+invalidAttachment.steps[0].attachment.changes[1].mode = 'sometimes';
+assert.equal(core.validateEffectProgram(invalidAttachment).ok, false);
 
 const richState = {
   ...state,
@@ -194,6 +310,33 @@ assert.equal(core.evaluateNumericExpression(advancedFormula, richState, { spentE
 assert.equal(core.evaluateNumericExpression({ op: 'count_statuses', target: 'self' }, richState, { spentEnergy: 0 }), 1);
 assert.equal(core.evaluateNumericExpression({ op: 'ceil', value: 2.1 }, richState, { spentEnergy: 0 }), 3);
 assert.equal(core.validateEffectProgram({ spec: 'mwg.effect/v1', steps: [{ op: 'damage', target: 'opponent', amount: advancedFormula }] }).ok, true);
+
+const defeatState = {
+  ...structuredClone(state),
+  opponent: { ...structuredClone(state.opponent), hp: 8, maxHp: 40, block: 99, tags: ['elite'] },
+};
+const excludedDefeat = core.executeEffectProgram(
+  { spec: 'mwg.effect/v1', steps: [{
+    op: 'execute', target: 'opponent', threshold: 25, thresholdMode: 'hp_percent', excludeTags: ['elite'],
+  }] },
+  defeatState,
+  { spentEnergy: 0 },
+);
+assert.equal(excludedDefeat.state.opponent.hp, 8);
+assert.equal(excludedDefeat.events[0].excludedBy, 'elite');
+const successfulDefeat = core.executeEffectProgram(
+  { spec: 'mwg.effect/v1', steps: [{
+    op: 'execute', target: 'opponent', threshold: 25, thresholdMode: 'hp_percent', triggerFatal: true,
+  }] },
+  defeatState,
+  { spentEnergy: 0 },
+);
+assert.equal(successfulDefeat.state.opponent.hp, 0);
+assert.equal(successfulDefeat.state.opponent.block, 99);
+assert.deepEqual(successfulDefeat.events[0], {
+  type: 'defeat', target: 'opponent', method: 'execute', succeeded: true, previousHp: 8,
+  threshold: 25, thresholdMode: 'hp_percent', fatal: true,
+});
 
 const source = await readFile(resolve('src/game-core/effectDsl.ts'), 'utf8');
 assert.doesNotMatch(source, /from ['"].*(runtime|ui|tavern|messageVariables|jquery)/i);

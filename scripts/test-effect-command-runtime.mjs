@@ -12,6 +12,7 @@ const { TavernEffectCommandHost } = require(resolve('src/fish/core/effectCommand
 const state = {
   self: { hp: 5, maxHp: 10, lust: 0, maxLust: 100, energy: 3, maxEnergy: 3, block: 0 },
   opponent: { hp: 10, maxHp: 10, lust: 0, maxLust: 100, energy: 0, maxEnergy: 0, block: 1 },
+  currentTurn: 4,
   cardsPlayedThisTurn: 1,
 };
 const program = {
@@ -69,6 +70,39 @@ await core.runEffectCommandProgram(
 );
 assert.equal(fractional[0].amount, 2.5, 'numeric battle formulas keep up to two decimal places');
 
+const typedDamageCommands = [];
+await core.runEffectCommandProgram(
+  {
+    spec: 'mwg.effect/v1',
+    steps: [{
+      op: 'damage', target: 'opponent', amount: 7, damageKind: 'hp_loss',
+      bypassBlock: true, lifesteal: { op: 'divide', left: 1, right: 2 },
+    }],
+  },
+  { spentEnergy: 0 },
+  { readState: () => structuredClone(state), execute: command => typedDamageCommands.push(command) },
+);
+assert.deepEqual(typedDamageCommands, [{
+  type: 'damage', target: 'opponent', amount: 7, damageKind: 'hp_loss', bypassBlock: true, lifesteal: 0.5,
+}]);
+
+const defeatCommands = [];
+await core.runEffectCommandProgram(
+  {
+    spec: 'mwg.effect/v1',
+    steps: [
+      { op: 'execute', target: 'opponent', threshold: 25, thresholdMode: 'hp_percent', excludeTags: ['boss'] },
+      { op: 'kill', target: 'opponent', triggerFatal: false },
+    ],
+  },
+  { spentEnergy: 0 },
+  { readState: () => structuredClone(state), execute: command => defeatCommands.push(command) },
+);
+assert.deepEqual(defeatCommands, [
+  { type: 'execute', target: 'opponent', threshold: 25, thresholdMode: 'hp_percent', excludeTags: ['boss'], triggerFatal: true },
+  { type: 'kill', target: 'opponent', triggerFatal: false },
+]);
+
 const discreteCommands = [];
 await core.runEffectCommandProgram(
   {
@@ -79,6 +113,72 @@ await core.runEffectCommandProgram(
   { readState: () => structuredClone(state), execute: command => discreteCommands.push(command) },
 );
 assert.equal(discreteCommands[0].amount, 2, 'card counts remain discrete even when a formula is used');
+
+const signedDeltaCommands = [];
+await core.runEffectCommandProgram(
+  {
+    spec: 'mwg.effect/v1',
+    steps: [
+      { op: 'gain_lust', target: 'self', amount: -7.5 },
+      { op: 'gain_energy', target: 'self', amount: -1 },
+      { op: 'gain_resource', target: 'self', resource: 'charge', amount: -2 },
+      { op: 'set_stat', target: 'self', stat: 'lust', value: -20 },
+    ],
+  },
+  { spentEnergy: 0 },
+  { readState: () => structuredClone(state), execute: command => signedDeltaCommands.push(command) },
+);
+assert.deepEqual(signedDeltaCommands.map(command => command.type), [
+  'gain_lust', 'gain_energy', 'gain_resource', 'set_stat',
+]);
+assert.deepEqual(signedDeltaCommands.slice(0, 3).map(command => command.amount), [-7.5, -1, -2]);
+assert.equal(signedDeltaCommands[3].value, -20, 'set operations may cross zero; the state boundary performs clamping');
+
+for (const step of [
+  { op: 'damage', target: 'opponent', amount: -1 },
+  { op: 'gain_block', target: 'self', amount: -1 },
+  { op: 'apply_status', target: 'self', status: 'focus', stacks: -1 },
+  { op: 'draw_cards', amount: -1 },
+  { op: 'set_orb_slots', target: 'self', amount: -1 },
+]) {
+  await assert.rejects(
+    core.runEffectCommandProgram(
+      { spec: 'mwg.effect/v1', steps: [step] },
+      { spentEnergy: 0 },
+      { readState: () => structuredClone(state), execute: () => undefined },
+    ),
+    /不能为负数/,
+  );
+}
+
+const choiceCommands = [];
+await core.runEffectCommandProgram(
+  {
+    spec: 'mwg.effect/v1',
+    steps: [{
+      op: 'choose_one', choiceId: 'route', options: [
+        { id: 'guard', label: '稳守', effects: [{ op: 'gain_block', target: 'self', amount: 6 }] },
+        { id: 'strike', label: '强攻', effects: [{ op: 'damage', target: 'opponent', amount: 7 }] },
+      ],
+    }],
+  },
+  { spentEnergy: 0 },
+  {
+    readState: () => structuredClone(state),
+    chooseEffectOption: choice => choice.options[1].id,
+    execute: command => choiceCommands.push(command),
+  },
+);
+assert.deepEqual(choiceCommands.map(command => command.type), ['choice_selected', 'damage']);
+assert.equal(choiceCommands[0].optionId, 'strike');
+await assert.rejects(core.runEffectCommandProgram(
+  { spec: 'mwg.effect/v1', steps: [{ op: 'choose_one', choiceId: 'missing_host', options: [
+    { id: 'a', label: '甲', effects: [{ op: 'draw_cards', amount: 1 }] },
+    { id: 'b', label: '乙', effects: [{ op: 'draw_cards', amount: 2 }] },
+  ] }] },
+  { spentEnergy: 0 },
+  { readState: () => structuredClone(state), execute: () => undefined },
+), /当前宿主不支持效果选择/);
 
 const recoveryCommands = [];
 await core.runEffectCommandProgram(
@@ -109,6 +209,55 @@ await core.runEffectCommandProgram(
   { readState: () => structuredClone(state), execute: command => scryCommands.push(command) },
 );
 assert.deepEqual(scryCommands, [{ type: 'scry_cards', amount: 3 }]);
+
+const specialCommands = [];
+await core.runEffectCommandProgram(
+  {
+    spec: 'mwg.effect/v1',
+    steps: [
+      { op: 'set_stance', target: 'self', stance: { id: 'calm', name: '静心' } },
+      {
+        op: 'channel_orb', target: 'self',
+        orb: { id: 'spark', name: '火花', value: { op: 'var', path: 'context.orb_value' } },
+      },
+      { op: 'evoke_orbs', target: 'self', selector: { pick: 'first', count: 1 } },
+      { op: 'set_orb_slots', target: 'self', amount: 3 },
+      { op: 'modify_orbs', target: 'self', selector: { pick: 'all' }, operator: 'add', value: 2 },
+      { op: 'grant_extra_turn', target: 'self', amount: 1 },
+      { op: 'force_end_turn', target: 'opponent' },
+    ],
+  },
+  { spentEnergy: 0, orbValue: 4.5 },
+  { readState: () => structuredClone(state), execute: command => specialCommands.push(command) },
+);
+assert.deepEqual(specialCommands, [
+  { type: 'set_stance', target: 'self', stance: { id: 'calm', name: '静心' } },
+  { type: 'channel_orb', target: 'self', orb: { id: 'spark', name: '火花', value: 4.5 } },
+  { type: 'evoke_orbs', target: 'self', selector: { pick: 'first', count: 1 } },
+  { type: 'set_orb_slots', target: 'self', amount: 3 },
+  { type: 'modify_orbs', target: 'self', selector: { pick: 'all' }, operator: 'add', value: 2 },
+  { type: 'grant_extra_turn', target: 'self', amount: 1 },
+  { type: 'force_end_turn', target: 'opponent' },
+]);
+
+const attachmentCommands = [];
+await core.runEffectCommandProgram(
+  {
+    spec: 'mwg.effect/v1',
+    steps: [{
+      op: 'apply_card_attachment',
+      selector: { zone: 'hand', pick: 'left', count: 1 },
+      attachment: {
+        id: 'command_enchantment', kind: 'enchantment', name: '命令附魔', scope: 'run',
+        changes: [{ kind: 'cost', operator: 'subtract', value: { op: 'var', path: 'battle.turn_number' } }],
+      },
+    }],
+  },
+  { spentEnergy: 0 },
+  { readState: () => structuredClone(state), execute: command => attachmentCommands.push(command) },
+);
+assert.equal(attachmentCommands[0].type, 'apply_card_attachment');
+assert.equal(attachmentCommands[0].attachment.changes[0].value, state.currentTurn);
 
 let terminal = false;
 const terminalCommands = [];
@@ -158,10 +307,16 @@ const commandHost = new TavernEffectCommandHost({
   executeCardCommand: command => hosted.push(['card', command.type]),
   presentCommand: command => hosted.push(['present', command.type]),
   executeBattleCommand: (command, sourceIsPlayer) => hosted.push(['battle', command.type, sourceIsPlayer]),
+  executeSpecialCommand: (command, sourceIsPlayer) => hosted.push(['special', command.type, sourceIsPlayer]),
+  executeSummonCommand: (command, sourceIsPlayer) => hosted.push(['summon', command.type, sourceIsPlayer]),
   applyStatus: (target, status, stacks) => hosted.push(['apply_status', target, status, stacks]),
   removeStatuses: (target, selection) => hosted.push(['remove_status', target, selection]),
   registerAbility: (target, definition) => hosted.push(['ability', target, definition.trigger, definition.effectProgram]),
   narrate: text => hosted.push(['narrate', text]),
+  chooseEffectOption: choice => Promise.resolve(choice.options[0].id),
+  scheduleEffect: () => Promise.resolve(),
+  setCardDestination: () => Promise.resolve(),
+  forEachEnemyTarget: async (_selector, execute) => execute(),
 });
 await commandHost.executeProgram(
   {
@@ -177,6 +332,12 @@ await commandHost.executeProgram(
       { op: 'gain_energy', target: 'self', amount: 1 },
       { op: 'apply_status', target: 'opponent', status: 'weak', stacks: 2 },
       { op: 'remove_status', target: 'self', status: 'all' },
+      { op: 'set_orb_slots', target: 'self', amount: 2 },
+      {
+        op: 'spawn_summon', target: 'self', count: 1,
+        summon: { id: 'helper', name: '助手', emoji: '🧚', maxHp: 10 },
+      },
+      { op: 'activate_summons', selector: { owner: 'self', pick: 'all' } },
       { op: 'narrate', text: '离开战斗' },
     ],
   },
@@ -191,6 +352,12 @@ assert.deepEqual(hosted, [
   ['apply_status', 'player', 'weak', 2],
   ['present', 'remove_status'],
   ['remove_status', 'enemy', 'all_buffs'],
+  ['present', 'set_orb_slots'],
+  ['special', 'set_orb_slots', false],
+  ['present', 'spawn_summon'],
+  ['summon', 'spawn_summon', false],
+  ['present', 'activate_summons'],
+  ['summon', 'activate_summons', false],
   ['present', 'narration'],
   ['narrate', '离开战斗'],
 ]);
@@ -201,9 +368,10 @@ assert.match(commandHostSource, /runEffectCommandProgram\(/);
 assert.match(commandHostSource, /isCardEffectCommand\(command\)/);
 assert.match(commandHostSource, /ports\.executeCardCommand\(command\)/);
 assert.match(commandHostSource, /isBattleEffectCommand\(command\)/);
-assert.match(commandHostSource, /ports\.executeBattleCommand\(command, sourceIsPlayer\)/);
+assert.match(commandHostSource, /ports\.executeBattleCommand\(command, sourceIsPlayer, resolvedEnemyId\)/);
 assert.match(commandHostSource, /ports\.applyStatus\(/);
 assert.match(commandHostSource, /ports\.removeStatuses\(/);
+assert.match(commandHostSource, /ports\.executeSummonCommand\(command, sourceIsPlayer\)/);
 assert.match(commandHostSource, /ports\.narrate\(command\.text\)/);
 assert.doesNotMatch(executorSource, /runEffectCommandProgram|adaptBattleEffectCommandForTavern/);
 assert.doesNotMatch(executorSource, /compileEffectCommandForTavern/);
@@ -213,7 +381,7 @@ assert.match(commandHostSource, /effectProgram,/);
 assert.match(executorSource, /const previousPendingDeaths = this\.pendingDeaths/);
 assert.match(executorSource, /effectCommandHost\.executeProgram\(program, sourceIsPlayer, context\)/);
 assert.match(executorSource, /new BattleEffectRuntime\(this\.gameStateManager/);
-assert.match(executorSource, /battleEffectRuntime\.execute\(command/);
+assert.match(executorSource, /battleEffectRuntime\.execute\(effectiveCommand/);
 assert.doesNotMatch(commandHostSource, /EffectExpression|executeExpression|effectCommandAdapter/);
 
 console.log('Modern effect programs route cards, numeric battle effects, statuses, triggers, and narration.');

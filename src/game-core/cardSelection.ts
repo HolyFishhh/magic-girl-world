@@ -5,6 +5,7 @@ export type CardSelectionMode = 'choose' | 'leftmost' | 'rightmost' | 'all' | 'r
 export type CardSelectionFailureCode =
   | 'DUPLICATE_CANDIDATE_ID'
   | 'RANDOM_SOURCE_REQUIRED'
+  | 'INSUFFICIENT_CANDIDATES'
   | 'CANCEL_NOT_ALLOWED'
   | 'INVALID_RESPONSE';
 
@@ -34,7 +35,12 @@ export type CardSelectionPlan =
       maximum: number;
       allowCancel: boolean;
     }
-  | { ok: false; code: CardSelectionFailureCode };
+  | {
+      ok: false;
+      code: CardSelectionFailureCode;
+      requestedMinimum?: number;
+      availableCount?: number;
+    };
 
 export type CardSelectionResult =
   | { status: 'selected'; selectedIds: string[] }
@@ -55,8 +61,18 @@ export function planCardSelection(
     return { ok: false, code: 'DUPLICATE_CANDIDATE_ID' };
   }
 
-  const maximum = Math.min(candidateIds.length, normalizeCount(request.maximum));
-  const minimum = Math.min(maximum, normalizeCount(request.minimum));
+  const requestedMaximum = normalizeCount(request.maximum);
+  const requestedMinimum = normalizeCount(request.minimum);
+  const maximum = Math.min(candidateIds.length, requestedMaximum);
+  if (requestedMinimum > maximum) {
+    return {
+      ok: false,
+      code: 'INSUFFICIENT_CANDIDATES',
+      requestedMinimum,
+      availableCount: Math.min(candidateIds.length, requestedMaximum),
+    };
+  }
+  const minimum = requestedMinimum;
   const base = { candidateIds, minimum, maximum, allowCancel: request.allowCancel };
 
   if (request.mode === 'choose' && maximum > 0) {

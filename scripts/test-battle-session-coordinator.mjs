@@ -77,7 +77,12 @@ function transactionHarness(state) {
     executeTurnStep: step => steps.push(step),
   });
   assert.equal(result.status, 'completed');
-  assert.deepEqual(steps, ['begin_enemy', ...core.BATTLE_TURN_FLOW_STEPS]);
+  const enemyStep = core.BATTLE_TURN_FLOW_STEPS.indexOf('enemy_block_reset');
+  assert.deepEqual(steps, [
+    ...core.BATTLE_TURN_FLOW_STEPS.slice(0, enemyStep),
+    'begin_enemy',
+    ...core.BATTLE_TURN_FLOW_STEPS.slice(enemyStep),
+  ]);
   assert.deepEqual(tx.events, ['begin:end_turn', 'commit']);
 
   state.phase = 'player_turn';
@@ -98,6 +103,31 @@ function transactionHarness(state) {
   );
   assert.equal(state.phase, 'player_turn');
   assert.equal(state.marker, 0);
+  assert.equal(tx.gate.active(), null);
+}
+
+{
+  const state = { phase: 'player_turn', terminal: false, extraPlayerTurns: 1, marker: 0 };
+  const tx = transactionHarness(state);
+  await assert.rejects(
+    core.advanceBattleSessionTurn({
+      ...tx,
+      canEndTurn: () => state.phase === 'player_turn',
+      isTerminal: () => state.terminal,
+      beginEnemyTurn: () => { state.phase = 'enemy_turn'; },
+      consumeExtraTurn: actor => {
+        if (actor !== 'player' || state.extraPlayerTurns <= 0) return false;
+        state.extraPlayerTurns -= 1;
+        return true;
+      },
+      executeTurnStep: step => {
+        state.marker += 1;
+        if (step === 'player_begin') throw new Error('extra turn failed');
+      },
+    }),
+    /extra turn failed/,
+  );
+  assert.deepEqual(state, { phase: 'player_turn', terminal: false, extraPlayerTurns: 1, marker: 0 });
   assert.equal(tx.gate.active(), null);
 }
 

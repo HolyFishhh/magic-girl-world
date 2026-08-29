@@ -1,4 +1,13 @@
-import type { BattleEndResult } from '../../game-core';
+import {
+  normalizeCardCost,
+  resourcePoolFromCombatant,
+  resolveCardResourcePayment,
+  type BattleEndResult,
+  type CardCost,
+  type CardResourcePayment,
+  type ResolvedSummonAction,
+  type SummonUnit,
+} from '../../game-core';
 import { BattleLog } from '../modules/battleLog';
 import type { Player } from '../../game-core';
 import { AnimationManager } from './animationManager';
@@ -19,6 +28,12 @@ export type BattleEffectLogSource = {
   details?: string;
 };
 
+export interface CardPaymentPreview {
+  ok: boolean;
+  effectiveCost?: CardCost;
+  payment?: CardResourcePayment;
+}
+
 /** Owns every direct battle-effect presentation side effect inside the Tavern iframe. */
 export class TavernBattleEffectPresenter {
   private static instance: TavernBattleEffectPresenter;
@@ -36,8 +51,11 @@ export class TavernBattleEffectPresenter {
     BattleLog.addLog(message, type, source);
   }
 
-  public logStatusEffect(target: string, statusName: string, stacks: number, duration: number, isApply = true): void {
+  public logStatusEffect(target: string, statusName: string, stacks: number, duration: number, isApply = true, emoji = '✨'): void {
     BattleLog.logStatusEffect(target, statusName, stacks, duration, isApply);
+    if (target === '玩家' || target === '敌人') {
+      this.animationManager.showStatusEffect(target === '玩家' ? 'player' : 'enemy', emoji, statusName, stacks, isApply);
+    }
   }
 
   public logLustOverflow(target: string, effectName: string): void {
@@ -46,10 +64,26 @@ export class TavernBattleEffectPresenter {
 
   public showBlockAbsorption(target: 'player' | 'enemy', amount: number): void {
     try {
-      this.animationManager.showDamageNumber(target, amount, 'block');
+      this.animationManager.showStageEffect(target, '🛡️', -Math.abs(amount), 'block');
     } catch (error) {
       console.warn('显示格挡抵消动画失败:', error);
     }
+  }
+
+  public showBlockChange(target: 'player' | 'enemy', change: number): void {
+    this.animationManager.showStageEffect(target, '🛡️', change, 'block');
+  }
+
+  public showEnergyChange(target: 'player' | 'enemy', change: number): void {
+    this.animationManager.showStageEffect(target, '⚡', change, 'energy');
+  }
+
+  public showResourceChange(target: 'player' | 'enemy', emoji: string, change: number): void {
+    this.animationManager.showStageEffect(target, emoji || '◆', change, 'resource');
+  }
+
+  public showSummonAction(unit: SummonUnit, action: ResolvedSummonAction): void {
+    this.animationManager.playSummonAction(unit, action);
   }
 
   public showHealthChange(target: 'player' | 'enemy', change: number, currentHp: number, maxHp: number): void {
@@ -84,16 +118,40 @@ export class TavernBattleEffectPresenter {
     }
   }
 
-  public refreshPlayerEnergy(player: Player): void {
+  public refreshPlayerEnergy(player: Player, previewCard?: (cardId: string) => CardPaymentPreview): void {
     window.setTimeout(() => {
       try {
         $('#player-energy').text(`${player.energy || 0}/${player.maxEnergy || 3}`);
+        for (const resource of Object.values(player.resources || {})) {
+          const chip = $(`#player-combat-resources .combat-resource-chip[data-resource-id="${resource.id}"]`);
+          chip.find('b').text(`${resource.current}/${resource.max}`);
+        }
+        const pool = resourcePoolFromCombatant(player.energy, player.resources);
         for (const card of player.hand || []) {
           const cardElement = $('.card').filter((_, element) => String($(element).data('card-id')) === card.id);
           if (cardElement.length === 0) continue;
-          const canAfford = card.cost === 'energy' || player.energy >= (card.cost || 0);
+          const preview = previewCard?.(card.id);
+          const payment = preview?.payment || resolveCardResourcePayment(
+            preview?.effectiveCost ?? card.cost,
+            pool,
+            undefined,
+            card.xValueBonus,
+          );
+          const canAfford = preview ? preview.ok : payment.affordable;
           cardElement.toggleClass('clickable', canAfford).toggleClass('unaffordable', !canAfford);
-          cardElement.find('.card-cost').toggleClass('insufficient-energy', !canAfford);
+          cardElement.find('.card-cost').toggleClass('insufficient-cost', !canAfford);
+          const components = normalizeCardCost(preview?.effectiveCost ?? card.cost);
+          cardElement.find('.card-cost-component').each((_, element) => {
+            const resourceId = String($(element).attr('data-resource-id') || '');
+            const amount = components[resourceId];
+            const waived = payment.waived.includes(resourceId);
+            $(element).toggleClass('waived', waived);
+            if (waived) $(element).text(`免${resourceId === 'energy' ? '💎' : player.resources?.[resourceId]?.emoji || '◆'}`);
+            $(element).toggleClass(
+              'insufficient',
+              !waived && typeof amount === 'number' && amount > (pool[resourceId] || 0),
+            );
+          });
         }
       } catch (error) {
         console.warn('刷新能量界面失败:', error);

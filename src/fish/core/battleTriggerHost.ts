@@ -2,13 +2,17 @@ import {
   allocateRuntimeId,
   AbilityTriggerRuntime,
   runBattleTriggerDispatches,
+  resolveAbilityTriggerPlan,
   runTriggerTransaction,
   StatusLifecycleRuntime,
+  SummonStatusLifecycleRuntime,
   type AbilityTrigger,
   type AbilityTriggerPlan,
   type BattleTriggerDispatch,
   type EffectProgram,
   type StatusLifecycleEvent,
+  type SummonStatusLifecycleEvent,
+  type SummonUnit,
 } from '../../game-core';
 import { DynamicStatusManager } from '../combat/dynamicStatusManager';
 import type { Ability, Enemy, Player, StatusEffect } from '../../game-core';
@@ -19,6 +23,9 @@ export type BattleTriggerExecutionContext = Record<string, unknown> & {
   triggerType?: string;
   statusContext?: StatusEffect;
   abilityContext?: Ability;
+  summonContext?: SummonUnit;
+  summonStatusContext?: { summonId: string };
+  summonEffectFixed?: boolean;
 };
 
 export interface BattleTriggerHostPorts {
@@ -33,7 +40,7 @@ export interface BattleTriggerHostPorts {
     type?: 'info' | 'damage' | 'heal' | 'action' | 'system',
     source?: { type: 'card' | 'relic' | 'ability' | 'status'; name: string; details?: string },
   ): void;
-  logStatusEffect(targetName: string, statusName: string, stacks: number, duration: number, isApply: boolean): void;
+  logStatusEffect(targetName: string, statusName: string, stacks: number, duration: number, isApply: boolean, emoji?: string): void;
 }
 
 /**
@@ -47,7 +54,10 @@ export class TavernBattleTriggerHost {
   private readonly dynamicStatusManager = DynamicStatusManager.getInstance();
   private readonly sessionHost = BattleSessionHost.getInstance();
   private readonly abilityRuntime = new AbilityTriggerRuntime({
-    readAbilities: target => this.getEntity(target)?.abilities,
+    readAbilities: (target, context) => this.getEntity(
+      target,
+      target === 'enemy' && typeof context?.enemyId === 'string' ? context.enemyId : undefined,
+    )?.abilities,
     execute: (target, plan, context) => this.executeAbilityTriggerTransaction(target, plan, context),
   });
   private readonly statusRuntime = new StatusLifecycleRuntime({
@@ -63,6 +73,19 @@ export class TavernBattleTriggerHost {
     dispatch: dispatches => this.dispatch(dispatches),
     present: event => this.presentStatusEvent(event),
   });
+  private readonly summonStatusRuntime = new SummonStatusLifecycleRuntime({
+    state: this.gameStateManager,
+    definitions: {
+      get: statusId => this.dynamicStatusManager.getStatusDefinition(statusId),
+      getTriggerEffects: (statusId, trigger) =>
+        this.dynamicStatusManager.getStatusTriggerEffects(statusId, trigger),
+    },
+    transactions: this.sessionHost.triggerTransactionPorts(),
+    execute: (effect, owner, context) =>
+      this.ports.executeProgram(effect, owner === 'player', context),
+    present: event => this.presentSummonStatusEvent(event),
+  });
+  private readonly activeSummonAbilities = new Set<string>();
 
   public constructor(private readonly ports: BattleTriggerHostPorts) {}
 
@@ -77,6 +100,7 @@ export class TavernBattleTriggerHost {
     targetType: 'player' | 'enemy',
     definition: {
       trigger: string;
+      eventQuery?: import('../../game-core').EventTriggerQuery;
       effectProgram: EffectProgram;
       name?: string;
       emoji?: string;
@@ -116,7 +140,70 @@ export class TavernBattleTriggerHost {
     trigger: string,
     context: Readonly<Record<string, unknown>> = {},
   ): Promise<void> {
-    await this.abilityRuntime.run(targetType, trigger, context);
+    await this.abilityRuntime.run(targetType, trigger, {
+      ...context,
+      eventJournal: this.gameStateManager.getGameState().eventJournal,
+    });
+    await this.processSummonAbilitiesByTrigger(targetType, trigger, context);
+  }
+
+  /** Run summon-local triggered abilities while keeping ordinary `self` bound to the exact unit. */
+  public async processSummonAbilitiesByTrigger(
+    owner: 'player' | 'enemy',
+    trigger: string,
+    context: Readonly<Record<string, unknown>> = {},
+  ): Promise<void> {
+    const requestedId = typeof context.summonId === 'string' ? context.summonId : null;
+    const summons = this.gameStateManager.getSummons(owner).filter(unit => !requestedId || unit.instanceId === requestedId);
+    for (const summon of summons) await this.processSummonUnitAbilities(summon, trigger, context);
+  }
+
+  public async processSummonUnitAbilities(
+    summon: SummonUnit,
+    trigger: string,
+    context: Readonly<Record<string, unknown>> = {},
+  ): Promise<void> {
+    const eventContext = {
+      ...context,
+      summonId: summon.instanceId,
+      eventJournal: this.gameStateManager.getGameState().eventJournal,
+    };
+    for (const ability of summon.abilities || []) {
+      const source: Ability = {
+        ...ability,
+        source: `召唤单位「${summon.name}」`,
+      };
+      const plan = resolveAbilityTriggerPlan(source, trigger, eventContext);
+      if (!plan) continue;
+      const activeKey = `${summon.instanceId}:${plan.trigger}:${ability.id}`;
+      if (this.activeSummonAbilities.has(activeKey)) continue;
+      this.activeSummonAbilities.add(activeKey);
+      try {
+        const result = await runTriggerTransaction(
+          `summon_ability_${plan.trigger}`,
+          this.sessionHost.triggerTransactionPorts(),
+          () => this.ports.executeProgram(plan.program, summon.owner === 'player', {
+            ...eventContext,
+            triggerType: plan.trigger,
+            summonContext: summon,
+            summonEffectFixed: ability.fixed === true,
+            abilityContext: source,
+          }),
+          'recover-and-continue',
+        );
+        if (result.status === 'rolled_back') {
+          this.ports.addLog(`${summon.name}的${source.name || source.id}执行失败，战斗状态已回滚。`, 'system');
+        } else {
+          this.ports.addLog(`${summon.name}触发：${source.name || source.id}`, 'action', {
+            type: 'ability',
+            name: source.name || source.id,
+            details: source.description || `触发：${plan.trigger}`,
+          });
+        }
+      } finally {
+        this.activeSummonAbilities.delete(activeKey);
+      }
+    }
   }
 
   public async applyStatus(targetType: 'player' | 'enemy', statusId: string, stacks: number): Promise<void> {
@@ -129,6 +216,18 @@ export class TavernBattleTriggerHost {
 
   public async processStatusEffectsAtTurnEnd(targetType: 'player' | 'enemy'): Promise<void> {
     await this.statusRuntime.processTurnEnd(targetType);
+  }
+
+  public async applyStatusToSummons(targetIds: readonly string[], statusId: string, stacks: number): Promise<void> {
+    await this.summonStatusRuntime.apply(targetIds, statusId, stacks);
+  }
+
+  public async removeStatusesFromSummons(targetIds: readonly string[], selection: string): Promise<void> {
+    await this.summonStatusRuntime.remove(targetIds, selection);
+  }
+
+  public async processSummonStatusEffectsAtTurnEnd(owner: 'player' | 'enemy'): Promise<void> {
+    await this.summonStatusRuntime.processTurnEnd(owner);
   }
 
   private async executeAbilityTriggerTransaction(
@@ -145,6 +244,9 @@ export class TavernBattleTriggerHost {
           ...dispatchContext,
           triggerType: trigger,
           abilityContext: ability,
+          ...(targetType === 'enemy' && typeof dispatchContext.enemyId === 'string'
+            ? { battleContext: { enemyId: dispatchContext.enemyId } }
+            : {}),
         };
         await this.ports.executeProgram(plan.program, targetType === 'player', context);
       },
@@ -176,6 +278,7 @@ export class TavernBattleTriggerHost {
         event.status.stacks,
         0,
         true,
+        event.status.emoji,
       );
       return;
     }
@@ -209,8 +312,103 @@ export class TavernBattleTriggerHost {
     if (label) this.ports.addLog(`移除了${label}`, 'info');
   }
 
-  private getEntity(targetType: 'player' | 'enemy'): Player | Enemy | null {
-    return targetType === 'player' ? this.gameStateManager.getPlayer() : this.gameStateManager.getEnemy();
+  private presentSummonStatusEvent(event: SummonStatusLifecycleEvent): void {
+    if (event.type === 'missing_definition') {
+      this.ports.addLog(`召唤状态未注册: ${event.statusId}`, 'system');
+      return;
+    }
+    if (event.type === 'status_applied') {
+      this.recordSummonStatusEvent({
+        kind: 'summon_status_applied',
+        summon: event.summon,
+        status: event.status,
+        trigger: event.trigger,
+      });
+      this.ports.logStatusEffect(event.summon.name, event.status.name, event.status.stacks, 0, true, event.status.emoji);
+      return;
+    }
+    if (event.type === 'trigger_started') {
+      this.ports.addLog(`${event.summon.name}的${event.status.name}触发${event.trigger}效果`, 'action', {
+        type: 'status',
+        name: event.status.name,
+        details: `持有者：${event.summon.name}；触发：${event.trigger}`,
+      });
+      return;
+    }
+    if (event.type === 'status_removed') {
+      this.recordSummonStatusEvent({
+        kind: 'summon_status_removed',
+        summon: event.summon,
+        status: event.status,
+        reason: event.reason,
+      });
+      this.ports.addLog(
+        event.reason === 'decay'
+          ? `${event.summon.name}的状态结束: ${event.status.name}`
+          : `${event.summon.name}移除了状态: ${event.status.name}`,
+        'info',
+      );
+      return;
+    }
+    if (event.type === 'trigger_completed') {
+      this.recordSummonStatusEvent({
+        kind: 'summon_status_triggered',
+        summon: event.summon,
+        status: event.status,
+        trigger: event.trigger,
+      });
+      return;
+    }
+    this.ports.addLog(
+      `${event.summon.name}的${event.status.name}${event.trigger}效果执行失败，战斗状态已回滚。`,
+      'system',
+    );
+  }
+
+  private recordSummonStatusEvent(
+    event:
+      | {
+          kind: 'summon_status_applied'; summon: SummonUnit;
+          status: StatusEffect;
+          trigger: 'apply' | 'stack';
+        }
+      | {
+          kind: 'summon_status_triggered'; summon: SummonUnit;
+          status: StatusEffect; trigger: 'apply' | 'stack' | 'tick' | 'remove';
+        }
+      | {
+          kind: 'summon_status_removed'; summon: SummonUnit;
+          status: StatusEffect; reason: 'explicit' | 'decay';
+        },
+  ): void {
+    const state = this.gameStateManager.getGameState();
+    this.gameStateManager.recordBattleEvent({
+      turn: state.currentTurn,
+      phase: 'resolve',
+      kind: event.kind,
+      actorId: event.summon.instanceId,
+      summonId: event.summon.instanceId,
+      statusId: event.status.id,
+      statusName: event.status.name,
+      stacks: event.status.stacks,
+      ...('trigger' in event ? { trigger: event.trigger } : { reason: event.reason }),
+      cause: {
+        source: {
+          kind: 'status',
+          id: event.status.id,
+          name: event.status.name,
+          ownerId: event.summon.instanceId,
+        },
+      },
+    } as import('../../game-core').BattleEventDraft);
+  }
+
+  private getEntity(targetType: 'player' | 'enemy', enemyId?: string): Player | Enemy | null {
+    return targetType === 'player'
+      ? this.gameStateManager.getPlayer()
+      : enemyId
+        ? this.gameStateManager.getEnemyById(enemyId)
+        : this.gameStateManager.getEnemy();
   }
 
   private updateAbilities(targetType: 'player' | 'enemy', abilities: Ability[]): void {

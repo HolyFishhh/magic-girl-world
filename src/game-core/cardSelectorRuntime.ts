@@ -1,11 +1,13 @@
 import type { CardSelector, CardSelectorFilter } from './effectDsl';
 import type { CardOrigin } from './cardIdentity';
+import type { CardCost } from './combatResource';
 import type { CardPileZone, CardZoneCard, CardZoneState } from './cardZoneReducer';
 
 export interface SelectableCard extends CardZoneCard {
+  name?: string;
   type?: string;
   rarity?: string;
-  cost?: number | 'energy';
+  cost?: CardCost;
   tags?: readonly string[];
   originalId?: string;
   templateId?: string;
@@ -16,20 +18,30 @@ export interface SelectableCard extends CardZoneCard {
   upgradeLevel?: number;
 }
 
+function sameCost(left: CardCost | undefined, right: CardCost | undefined): boolean {
+  if (left === right) return true;
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object') return false;
+  const leftEntries = Object.entries(left).sort(([a], [b]) => a.localeCompare(b));
+  const rightEntries = Object.entries(right).sort(([a], [b]) => a.localeCompare(b));
+  return JSON.stringify(leftEntries) === JSON.stringify(rightEntries);
+}
+
 /** `all` intentionally preserves its legacy meaning and excludes the exhaust pile. */
 export function selectorZones(zone: CardSelector['zone']): CardPileZone[] {
   if (zone === 'hand') return ['hand'];
   if (zone === 'draw') return ['drawPile'];
   if (zone === 'discard') return ['discardPile'];
   if (zone === 'exhaust') return ['exhaustPile'];
+  if (zone === 'combat') return ['hand', 'drawPile', 'discardPile', 'exhaustPile'];
   return ['hand', 'drawPile', 'discardPile'];
 }
 
 export function cardMatchesSelectorFilter(card: SelectableCard, filter?: CardSelectorFilter): boolean {
   if (!filter) return true;
+  if (filter.name !== undefined && card.name !== filter.name) return false;
   if (filter.types && !filter.types.includes(card.type as never)) return false;
   if (filter.rarities && !filter.rarities.includes(card.rarity as never)) return false;
-  if (filter.cost !== undefined && card.cost !== filter.cost) return false;
+  if (filter.cost !== undefined && !sameCost(card.cost, filter.cost)) return false;
   if (filter.minCost !== undefined && (typeof card.cost !== 'number' || card.cost < filter.minCost)) return false;
   if (filter.maxCost !== undefined && (typeof card.cost !== 'number' || card.cost > filter.maxCost)) return false;
   if (filter.tags && !filter.tags.every(tag => card.tags?.includes(tag))) return false;
@@ -37,6 +49,7 @@ export function cardMatchesSelectorFilter(card: SelectableCard, filter?: CardSel
   if (filter.runInstanceId !== undefined && card.runInstanceId !== filter.runInstanceId) return false;
   if (filter.combatInstanceId !== undefined && (card.combatInstanceId || card.id) !== filter.combatInstanceId) return false;
   if (filter.origin !== undefined && card.origin !== filter.origin) return false;
+  if (filter.rootOnly === true && card.origin === 'copied') return false;
   const upgraded = card.upgraded === true || (card.upgradeLevel ?? 0) > 0;
   if (filter.upgraded !== undefined && upgraded !== filter.upgraded) return false;
   return true;

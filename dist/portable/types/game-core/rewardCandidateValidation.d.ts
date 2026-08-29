@@ -9,6 +9,7 @@ export interface RewardCandidateLibrary {
     existing?: readonly unknown[];
     knownStatusIds?: Iterable<string>;
     statusDefinitions?: readonly unknown[];
+    knownResourceIds?: Iterable<string>;
 }
 /** Read the amount granted by one reward candidate. AI card candidates commonly use 0 to mean "not owned yet". */
 export declare function readRewardCandidateQuantity(category: RewardCandidateCategory, value: unknown): number | null;

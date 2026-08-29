@@ -54,6 +54,12 @@ assert.equal(state.nodeCounts.boss, 2);
 assert.equal(state.choices.length, 0);
 assert.equal(run.validateRunState(state).ok, true);
 
+const legacyV1 = { ...structuredClone(first), schemaVersion: 1 };
+const migratedV1 = run.validateRunState(legacyV1);
+assert.equal(migratedV1.ok, true, 'valid schema v1 saves are migrated during restore');
+assert.equal(migratedV1.value.schemaVersion, 2);
+assert.equal(legacyV1.schemaVersion, 1, 'migration does not mutate the saved snapshot');
+
 const corrupted = structuredClone(state);
 corrupted.seed = -1;
 assert.deepEqual(run.validateRunState(corrupted), { ok: false, message: 'run seed is invalid' });

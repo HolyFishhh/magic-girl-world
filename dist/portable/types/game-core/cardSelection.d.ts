@@ -1,5 +1,5 @@
 export type CardSelectionMode = 'choose' | 'leftmost' | 'rightmost' | 'all' | 'random';
-export type CardSelectionFailureCode = 'DUPLICATE_CANDIDATE_ID' | 'RANDOM_SOURCE_REQUIRED' | 'CANCEL_NOT_ALLOWED' | 'INVALID_RESPONSE';
+export type CardSelectionFailureCode = 'DUPLICATE_CANDIDATE_ID' | 'RANDOM_SOURCE_REQUIRED' | 'INSUFFICIENT_CANDIDATES' | 'CANCEL_NOT_ALLOWED' | 'INVALID_RESPONSE';
 export interface CardSelectionRequest {
     candidateIds: readonly string[];
     mode: CardSelectionMode;
@@ -25,6 +25,8 @@ export type CardSelectionPlan = {
 } | {
     ok: false;
     code: CardSelectionFailureCode;
+    requestedMinimum?: number;
+    availableCount?: number;
 };
 export type CardSelectionResult = {
     status: 'selected';

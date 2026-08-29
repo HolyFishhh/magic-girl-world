@@ -27,7 +27,9 @@ const relicPath = resolve('src/fish/core/relicTriggerHost.ts');
 const relicSource = await readFile(relicPath, 'utf8');
 const triggerRelics = readClassMethod(relicSource, relicPath, 'TavernRelicTriggerHost', 'triggerRelics');
 assert.match(relicSource, /new RelicTriggerRuntime\(/);
-assert.match(triggerRelics, /this\.runtime\.run\(trigger, context\)/);
+assert.match(triggerRelics, /this\.runtime\.run\(trigger,\s*\{/);
+assert.match(triggerRelics, /\.\.\.context,/);
+assert.match(triggerRelics, /eventJournal: this\.gameStateManager\.getGameState\(\)\.eventJournal/);
 assert.doesNotMatch(relicSource, /activeTriggers|getTriggeredEffectSegments|hasTriggeredEffect/);
 
 assert.doesNotMatch(relicSource, /public async triggerOn[A-Z]/);
@@ -62,10 +64,10 @@ assert.match(basicAttribute, /resolveAttributeTriggerDispatch\(\{/);
 assert.match(basicAttribute, /change: -absorption\.blockUsed/);
 assert.match(
   basicAttribute,
-  /ports\.dispatchTriggers\([\s\S]*entity = this\.getEntity\(target\)[\s\S]*value = absorption\.damage/,
+  /ports\.dispatchTriggers\([\s\S]*entity = this\.getEntity\(target, enemyId\)[\s\S]*value = absorption\.damage/,
 );
 assert.ok(
-  basicAttribute.indexOf('entity = this.getEntity(target)', 500) <
+  basicAttribute.indexOf('entity = this.getEntity(target, enemyId)', 500) <
     basicAttribute.indexOf('const calculated = applyNumericOperator(previousValue, operator, value)'),
   'damage must use the HP baseline after block-loss triggers finish',
 );

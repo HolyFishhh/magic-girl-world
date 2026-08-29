@@ -88,7 +88,7 @@
   "战斗内容生成要求": {
     "comment": "[mvu_update] 战斗内容生成要求",
     "constant": false,
-    "keys": ["<CHARACTER_INIT_PENDING>", "〈CHARACTER_INIT_PENDING〉", "＜CHARACTER_INIT_PENDING＞", "<CONTENT_PENDING>", "〈CONTENT_PENDING〉", "＜CONTENT_PENDING＞", "[开始战斗]", "<BATTLE_PENDING>", "〈BATTLE_PENDING〉", "＜BATTLE_PENDING＞", "[MVU_BATTLE_SETTLEMENT]", "[营火升级]", "[商店生成]", "[事件选择]", "[战斗内容修复]"],
+    "keys": ["<CHARACTER_INIT_PENDING>", "〈CHARACTER_INIT_PENDING〉", "＜CHARACTER_INIT_PENDING＞", "<CONTENT_PENDING>", "〈CONTENT_PENDING〉", "＜CONTENT_PENDING＞", "[开始战斗]", "<BATTLE_PENDING>", "〈BATTLE_PENDING〉", "＜BATTLE_PENDING＞", "[MVU_BATTLE_SETTLEMENT]", "[营火升级]", "[商店生成]", "[事件选择]", "[战斗内容修复]", "[玩家自然语言卡牌修复]"],
     "use_regex": false
   },
   "[initvar]不要启用": {
@@ -132,7 +132,7 @@
     "comment": "[mvu_update] 初始战斗内容修复",
     "create": true,
     "constant": false,
-    "keys": ["[战斗内容修复]"],
+    "keys": ["[战斗内容修复]", "[玩家自然语言卡牌修复]"],
     "use_regex": false
   },
   "战斗场景修复": {
@@ -168,7 +168,7 @@
     "create": true,
     "constant": false,
     "selective": true,
-    "keys": ["<CHARACTER_INIT_PENDING>", "〈CHARACTER_INIT_PENDING〉", "＜CHARACTER_INIT_PENDING＞", "<CONTENT_PENDING>", "〈CONTENT_PENDING〉", "＜CONTENT_PENDING＞", "<BATTLE_PENDING>", "〈BATTLE_PENDING〉", "＜BATTLE_PENDING＞", "[MVU_BATTLE_SETTLEMENT]", "[路线节点]", "[事件选择]", "[营火升级]", "[商店生成]", "[战斗内容修复]", "[战斗场景修复]"],
+    "keys": ["<CHARACTER_INIT_PENDING>", "〈CHARACTER_INIT_PENDING〉", "＜CHARACTER_INIT_PENDING＞", "<CONTENT_PENDING>", "〈CONTENT_PENDING〉", "＜CONTENT_PENDING＞", "<BATTLE_PENDING>", "〈BATTLE_PENDING〉", "＜BATTLE_PENDING＞", "[MVU_BATTLE_SETTLEMENT]", "[路线节点]", "[事件选择]", "[营火升级]", "[商店生成]", "[战斗内容修复]", "[玩家自然语言卡牌修复]", "[战斗场景修复]"],
     "use_regex": false,
     "extensions": {
       "group": "",

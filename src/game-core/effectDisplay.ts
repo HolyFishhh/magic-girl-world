@@ -3,6 +3,9 @@ import { compileCompactEffectList } from './compactEffectDsl';
 import type { CardSelector, ConditionExpression, EffectNode, EffectProgram, NumericExpression } from './effectDsl';
 import type { EnemyTargetSelector } from './combatantCollection';
 import { resolveTriggerInput } from './triggerInput';
+import { describeCardAttachmentRemaining, type CardAttachment } from './cardAttachment';
+import { describeCardCost } from './combatResource';
+import type { SummonSelector } from './summonUnit';
 
 export type EffectIntentType = 'attack' | 'lust_attack' | 'defend' | 'heal' | 'buff' | 'debuff' | 'special';
 
@@ -22,6 +25,7 @@ export interface EffectDisplayTag {
 
 export interface EffectDisplayContext {
   statusNames?: Readonly<Record<string, string>>;
+  resourceNames?: Readonly<Record<string, string>>;
   resolveStatusName?: (statusId: string) => string | undefined;
   selfLabel?: string;
   opponentLabel?: string;
@@ -63,6 +67,7 @@ const TRIGGER_STYLE: Readonly<Record<string, { name: string; icon: string; color
   deal_lust_decrease: { name: '造成欲望减少时', icon: '🧊', color: '#0284c7' },
   gain_block: { name: '获得格挡时', icon: '🛡️', color: '#2563eb' },
   lose_block: { name: '失去格挡时', icon: '💨', color: '#4b5563' },
+  defeated: { name: '被击败时', icon: '💀', color: '#991b1b' },
   gain_buff: { name: '获得增益时', icon: '✨', color: '#059669' },
   gain_debuff: { name: '获得减益时', icon: '🌫️', color: '#dc2626' },
   lose_buff: { name: '失去增益时', icon: '💨', color: '#4b5563' },
@@ -123,6 +128,16 @@ function describeVariablePath(path: string, context: EffectDisplayContext): stri
     'opponent.block': `${opponent}格挡`,
   };
   if (names[path]) return names[path];
+  const spentResource = path.match(/^context\.spent_resource\.([A-Za-z_][A-Za-z0-9_]*)$/);
+  if (spentResource) return `使用${context.resourceNames?.[spentResource[1]] || spentResource[1]}`;
+  const xResource = path.match(/^context\.x_resource\.([A-Za-z_][A-Za-z0-9_]*)$/);
+  if (xResource) return `${context.resourceNames?.[xResource[1]] || xResource[1]}的X值`;
+  const entityResource = path.match(/^(self|opponent)\.resource\.([A-Za-z_][A-Za-z0-9_]*)\.(current|max)$/);
+  if (entityResource) {
+    const owner = entityResource[1] === 'self' ? self : opponent;
+    const resource = context.resourceNames?.[entityResource[2]] || entityResource[2];
+    return `${owner}${resource}${entityResource[3] === 'max' ? '上限' : '数量'}`;
+  }
   const statusPath = path.match(/^(self|opponent)\.status\.([A-Za-z0-9_]+)\.stacks$/);
   return statusPath
     ? `${statusPath[1] === 'self' ? self : opponent}${displayStatusName(statusPath[2], context)}层数`
@@ -141,10 +156,13 @@ function describeNumber(value: NumericExpression, context: EffectDisplayContext)
   if (value.op === 'count_cards') return `${describeSelector(value.selector)}数量`;
   if (value.op === 'count_statuses') return `${targetName(value.target, context)}状态数量`;
   if (value.op === 'history') return ({
+    count: '符合条件的历史事件次数',
     last_damage: '最近一次伤害',
     last_hp_loss: '最近一次实际生命损失',
     last_heal: '最近一次治疗',
     last_resource_spent: '最近一次资源消耗',
+    last_turn: '最近一次事件的回合',
+    last_sequence: '最近一次事件的序号',
   } as const)[value.metric];
   if (value.op === 'intent_value') return '敌方意图数值';
   if (value.op === 'divide' && value.right === 2) return `${describeNumber(value.left, context)}的一半`;
@@ -160,6 +178,8 @@ function describeCondition(value: ConditionExpression, context: EffectDisplayCon
     return value.conditions
       .map(item => `“${describeCondition(item, context)}”`)
       .join(value.op === 'all' ? '并且' : '或者');
+  if (value.op === 'last_card_type') return `上一张打出的牌为${value.cardType}`;
+  if (value.op === 'intent_type') return `敌方意图为${value.intentType}`;
   const relations = { eq: '等于', neq: '不等于', gt: '高于', gte: '不低于', lt: '低于', lte: '不高于' } as const;
   const left = describeNumber(value.left, context);
   const right = describeNumber(value.right, context);
@@ -171,13 +191,17 @@ function describeCondition(value: ConditionExpression, context: EffectDisplayCon
 }
 
 function describeSelector(selector: CardSelector): string {
-  const zones = { hand: '手牌', draw: '抽牌堆', discard: '弃牌堆', exhaust: '消耗堆', all: '全部常规牌区' } as const;
+  const zones = {
+    hand: '手牌', draw: '抽牌堆', discard: '弃牌堆', exhaust: '消耗堆',
+    all: '全部常规牌区', combat: '本场战斗全部牌区',
+  } as const;
   const picks = { random: '随机', choose: '选择', left: '最左侧', right: '最右侧', top: '顶部', bottom: '底部', all: '全部' } as const;
   const filter = selector.filter;
   const constraints: string[] = [];
+  if (filter?.name) constraints.push(`名称:${filter.name}`);
   if (filter?.types?.length) constraints.push(filter.types.join('/'));
   if (filter?.rarities?.length) constraints.push(filter.rarities.join('/'));
-  if (filter?.cost !== undefined) constraints.push(`${filter.cost === 'energy' ? 'X' : filter.cost}费`);
+  if (filter?.cost !== undefined) constraints.push(`${describeCardCost(filter.cost)}费`);
   if (filter?.minCost !== undefined) constraints.push(`至少${filter.minCost}费`);
   if (filter?.maxCost !== undefined) constraints.push(`至多${filter.maxCost}费`);
   if (filter?.tags?.length) constraints.push(`标签:${filter.tags.join('+')}`);
@@ -187,6 +211,31 @@ function describeSelector(selector: CardSelector): string {
   if (filter?.origin) constraints.push(`来源:${filter.origin}`);
   if (filter?.upgraded !== undefined) constraints.push(filter.upgraded ? '已升级' : '未升级');
   return `${zones[selector.zone]}中${constraints.length ? `符合“${constraints.join('、')}”的` : ''}${picks[selector.pick]}${selector.count ? `${selector.count}张` : ''}`;
+}
+
+function describeSummonSelector(selector: SummonSelector): string {
+  const owner = selector.owner === 'self' ? '我方'
+    : selector.owner === 'opponent' ? '敌方' : '任意阵营';
+  const picks: Record<SummonSelector['pick'], string> = {
+    left: '最左侧、最早入场的',
+    right: '最右侧、最晚入场的',
+    choose: '手动选择的',
+    first: '最早入场的',
+    last: '最后入场的',
+    random: '随机',
+    random_n: '随机',
+    all: '全部',
+    lowest_hp: '生命比例最低的',
+    highest_hp: '生命比例最高的',
+    by_id: '指定的',
+  };
+  const filters = [
+    selector.templateId ? `类型为${selector.templateId}` : '',
+    selector.slot ? `位于${selector.slot}槽位` : '',
+    selector.tags?.length ? `具有${selector.tags.join('、')}标签` : '',
+  ].filter(Boolean);
+  const amount = selector.pick === 'all' ? '' : `${selector.count || 1}个`;
+  return `${owner}${filters.length ? `${filters.join('且')}的` : ''}${picks[selector.pick]}${amount}召唤单位`;
 }
 
 const targetName = (
@@ -213,6 +262,7 @@ const statName = (stat: string): string =>
     damage_taken: '受到的伤害',
     lust_taken: '受到的欲望伤害',
     heal: '治疗量',
+    summon_capacity: '召唤容量',
   })[stat] || '未知属性';
 
 function modifierSubject(target: 'self' | 'opponent', stat: string, context: EffectDisplayContext, selector?: EnemyTargetSelector): string {
@@ -225,6 +275,7 @@ function modifierSubject(target: 'self' | 'opponent', stat: string, context: Eff
       lust_taken: `${owner}受到的欲望伤害`,
       heal: `${owner}的治疗量`,
       block: `${owner}获得的格挡`,
+      summon_capacity: `${owner}的召唤容量`,
     }[stat] || `${owner}的未知属性`
   );
 }
@@ -232,14 +283,42 @@ function modifierSubject(target: 'self' | 'opponent', stat: string, context: Eff
 function nodeTags(node: EffectNode, context: EffectDisplayContext): EffectDisplayTag[] {
   const number = (value: NumericExpression) => describeNumber(value, context);
   switch (node.op) {
-    case 'damage':
-      return [tag(`对${targetName(node.target, context, node.targetSelector)}造成${number(node.amount)}点伤害`, 'attack')];
+    case 'damage': {
+      const target = targetName(node.target, context, node.targetSelector);
+      const prefix = node.damageKind === 'hp_loss'
+        ? `使${target}失去${number(node.amount)}点生命`
+        : node.damageKind === 'retaliation'
+          ? `对${target}造成${number(node.amount)}点反伤`
+          : node.damageKind === 'damage_over_time'
+            ? `对${target}造成${number(node.amount)}点持续伤害`
+            : `对${target}造成${number(node.amount)}点伤害`;
+      return [
+        tag(`${prefix}${node.bypassBlock || node.damageKind === 'hp_loss' ? '（无视格挡）' : ''}`, 'attack'),
+        ...(node.lifesteal !== undefined
+          ? [tag(`按实际生命损失的${number(node.lifesteal)}倍恢复生命`, 'heal')]
+          : []),
+      ];
+    }
+    case 'execute':
+      return [tag(
+        `当${targetName(node.target, context, node.targetSelector)}生命不高于${number(node.threshold)}${node.thresholdMode === 'hp_percent' ? '%' : '点'}时将其处决${node.excludeTags?.length ? `（排除标签：${node.excludeTags.join('、')}）` : ''}`,
+        'special',
+      )];
+    case 'kill':
+      return [tag(
+        `直接击杀${targetName(node.target, context, node.targetSelector)}${node.excludeTags?.length ? `（排除标签：${node.excludeTags.join('、')}）` : ''}`,
+        'special',
+      )];
     case 'heal':
       return [tag(`${targetName(node.target, context, node.targetSelector)}回复${number(node.amount)}点生命`, 'heal')];
     case 'gain_block':
       return [tag(`${targetName(node.target, context, node.targetSelector)}获得${number(node.amount)}点格挡`, 'defend')];
     case 'gain_energy':
       return [tag(`${targetName(node.target, context, node.targetSelector)}获得${number(node.amount)}点能量`, 'energy')];
+    case 'gain_resource':
+      return [tag(`${targetName(node.target, context, node.targetSelector)}获得${number(node.amount)}点${context.resourceNames?.[node.resource] || node.resource}`, 'energy')];
+    case 'set_resource':
+      return [tag(`将${targetName(node.target, context, node.targetSelector)}的${context.resourceNames?.[node.resource] || node.resource}设为${number(node.value)}`, 'energy')];
     case 'gain_lust':
       return [tag(`${targetName(node.target, context, node.targetSelector)}增加${number(node.amount)}点欲望`, 'lust')];
     case 'set_stat':
@@ -337,8 +416,125 @@ function nodeTags(node: EffectNode, context: EffectDisplayContext): EffectDispla
         : ({ damage: '伤害', block: '格挡', lust: '欲望', stacks: '状态层数' } as const)[node.patch.stat];
       return [tag(`${describeSelector(node.selector)}${scope}${subject}${operators[node.patch.operator]}${number(node.patch.value)}`, 'card')];
     }
+    case 'apply_card_attachment': {
+      const attachment = node.attachment;
+      const kind = attachment.kind === 'enchantment' ? '附魔' : '负面附着';
+      const removal = {
+        played: '打出后移除',
+        discarded: '符合弃牌原因后移除',
+        turn_end: '回合结束移除',
+        combat_end: '持续本场战斗',
+        run_end: '持续本次流程',
+        manual: '持续存在',
+      } as const;
+      const defaultRemoval = {
+        resolution: 'played', turn: 'turn_end', until_played: 'played',
+        combat: 'combat_end', run: 'run_end', permanent: 'manual',
+      } as const;
+      const removeOn = attachment.removeOn || defaultRemoval[attachment.scope];
+      const result = [tag(
+        `${describeSelector(node.selector)}获得${kind}“${attachment.name}”（${removal[removeOn]}${attachment.remaining && attachment.remaining > 1 ? `，剩余${attachment.remaining}次` : ''}）`,
+        attachment.kind === 'enchantment' ? 'buff' : 'debuff',
+      )];
+      for (const change of attachment.changes) {
+        if (change.kind === 'play_access') {
+          result.push(tag(change.mode === 'deny' ? '此牌不可主动打出' : '此牌允许主动打出', 'card'));
+        } else if (change.kind === 'discard_auto_play') {
+          result.push(tag(`在指定弃牌原因下免费自动打出；失败后移至${change.failureDestination}`, 'card'));
+        } else {
+          result.push(...nodeTags({
+            op: 'apply_card_patch',
+            selector: node.selector,
+            patch: { ...change, scope: attachment.scope },
+          } as EffectNode, context));
+        }
+      }
+      return result;
+    }
+    case 'upgrade_cards':
+      return [tag(`升级${describeSelector(node.selector)}${node.levels}级`, 'card')];
     case 'add_card':
       return [tag(`将${node.count}张${node.card.name}加入${node.zone === 'hand' ? '手牌' : '抽牌堆'}`, 'card')];
+    case 'ensure_card':
+      return [tag(
+        `本场战斗中确保至少有${number(node.minimum)}张${node.card.name}${node.includeCopies ? '（计入临时复制牌）' : ''}`,
+        'card',
+      )];
+    case 'spawn_summon': {
+      const action = node.summon.actionProgram?.steps
+        .flatMap(item => nodeTags(item, context)).map(item => item.text).join('；');
+      return [tag(
+        `${targetName(node.target, context)}召唤${number(node.count)}个「${node.summon.name}」${action ? `（行动：${action}）` : ''}`,
+        'special',
+      )];
+    }
+    case 'spawn_enemy':
+      return [tag(
+        `敌方增援${number(node.count)}个「${node.enemy.name}」${node.capacity ? `（场上敌人上限 ${node.capacity}）` : ''}`,
+        'special',
+      )];
+    case 'damage_summons':
+      return [tag(`对${describeSummonSelector(node.selector)}造成${number(node.amount)}点伤害`, 'attack')];
+    case 'heal_summons':
+      return [tag(`使${describeSummonSelector(node.selector)}恢复${number(node.amount)}点生命`, 'heal')];
+    case 'modify_summons': {
+      const stats = {
+        max_hp: '最大生命', block: '格挡', actions_per_activation: '每次行动次数',
+        speed: '速度', action_priority: '行动优先级',
+      } as const;
+      const operations = { add: '增加', subtract: '减少', multiply: '乘以', divide: '除以', set: '设为' } as const;
+      return [tag(
+        `${describeSummonSelector(node.selector)}的${stats[node.stat]}${operations[node.operator]}${number(node.value)}`,
+        'special',
+      )];
+    }
+    case 'modify_summon_effects': {
+      const stats = { damage: '伤害', block: '格挡', lust: '欲望', stacks: '状态层数' } as const;
+      const operations = { add: '增加', subtract: '减少', multiply: '乘以', divide: '除以' } as const;
+      return [tag(
+        `${describeSummonSelector(node.selector)}的行动与能力${stats[node.stat]}${operations[node.operator]}${number(node.value)}（固定效果除外）`,
+        'special',
+      )];
+    }
+    case 'gain_summon_resource':
+      return [tag(
+        `${describeSummonSelector(node.selector)}获得${number(node.amount)}点${context.resourceNames?.[node.resource] || node.resource}`,
+        'energy',
+      )];
+    case 'set_summon_resource':
+      return [tag(
+        `将${describeSummonSelector(node.selector)}的${context.resourceNames?.[node.resource] || node.resource}设为${number(node.value)}`,
+        'energy',
+      )];
+    case 'apply_summon_status':
+      return [tag(
+        `${describeSummonSelector(node.selector)}获得${number(node.stacks)}层${displayStatusName(node.status, context)}`,
+        'buff',
+      )];
+    case 'remove_summon_status':
+      return [tag(
+        `移除${describeSummonSelector(node.selector)}的${displayStatusName(node.status, context)}`,
+        'special',
+      )];
+    case 'activate_summons':
+      return [tag(`立即激活${describeSummonSelector(node.selector)}`, 'special')];
+    case 'dismiss_summons':
+      return [tag(
+        `遣散${describeSummonSelector(node.selector)}${node.retainCorpse ? '并保留其倒下记录' : ''}`,
+        'special',
+      )];
+    case 'copy_summons': {
+      const owner = node.targetOwner === 'same' ? '原阵营'
+        : node.targetOwner === 'self' ? '我方' : '敌方';
+      return [tag(`复制${describeSummonSelector(node.selector)}到${owner}`, 'special')];
+    }
+    case 'summoner_effects': {
+      const details = node.effects
+        .flatMap(item => nodeTags(item, { ...context, selfLabel: '召唤者' }))
+        .map(item => item.text)
+        .join('，');
+      return [tag(`作用于召唤者：${details}`, 'special')];
+    }
     case 'modify': {
       const operations = { add: '+', subtract: '-', multiply: '×', divide: '÷', set: '=' } as const;
       return [
@@ -349,16 +545,68 @@ function nodeTags(node: EffectNode, context: EffectDisplayContext): EffectDispla
       ];
     }
     case 'card_play_rule': {
-      const scope = node.limit === 'all' ? '所有牌' : `前${number(node.limit)}张牌`;
+      const scope = node.limit === 'all' ? '所有牌' : node.limit !== undefined ? `前${number(node.limit)}张牌` : '卡牌';
+      const selected = node.selector ? describeSelector(node.selector) : '卡牌';
+      const labels: Record<string, string> = {
+        retain_hand: '回合结束时保留全部手牌',
+        retain_block: '回合开始时保留格挡',
+        limit_draw: `每次至多抽${node.limit === 'all' ? '任意' : number(node.limit ?? 0)}张牌`,
+        limit_block_gain: `每次至多获得${node.limit === 'all' ? '任意' : number(node.limit ?? 0)}点格挡`,
+        limit_energy_gain: `每次至多获得${node.limit === 'all' ? '任意' : number(node.limit ?? 0)}点能量`,
+        deny_card_play: `禁止打出${selected}`,
+        allow_card_play: `允许打出${selected}，即使其通常不可打出`,
+        limit_card_play: `每回合至多打出${node.limit === 'all' ? '任意数量的' : number(node.limit ?? 0)}${selected}`,
+        card_destination: `${selected}结算后改为移至${node.destination || '指定区域'}`,
+      };
       return [
         tag(
           node.rule === 'free'
-            ? `每回合${scope}不消耗能量`
-            : `每回合${scope}额外结算${number(node.extra ?? 1)}次`,
+            ? `每回合${scope}不消耗${node.freeResources === 'all' || !node.freeResources ? '任何资源' : node.freeResources.join('、')}`
+            : node.rule === 'replay'
+              ? `每回合${scope}额外结算${number(node.extra ?? 1)}次`
+              : labels[node.rule] || node.rule,
           'special',
         ),
       ];
     }
+    case 'set_stance': {
+      if (!node.stance) return [tag(`${targetName(node.target, context, node.targetSelector)}退出当前姿态`, 'special')];
+      const passive = (node.stance.passiveEffects || [])
+        .flatMap(item => nodeTags(item, context)).map(item => item.text).join('；');
+      return [tag(
+        `${targetName(node.target, context, node.targetSelector)}进入姿态「${node.stance.name}」${passive ? `（持续：${passive}）` : ''}`,
+        'special',
+      )];
+    }
+    case 'channel_orb': {
+      const passive = (node.orb.passiveEffects || []).flatMap(item => nodeTags(item, context)).map(item => item.text).join('；');
+      const evoke = (node.orb.evokeEffects || []).flatMap(item => nodeTags(item, context)).map(item => item.text).join('；');
+      return [tag(
+        `${targetName(node.target, context, node.targetSelector)}充能 Orb「${node.orb.name}」（数值 ${number(node.orb.value)}${passive ? `；被动：${passive}` : ''}${evoke ? `；激发：${evoke}` : ''}）`,
+        'special',
+      )];
+    }
+    case 'evoke_orbs': {
+      const position = node.selector.pick === 'all' ? '全部' : node.selector.pick === 'last' ? '末尾' : '最前';
+      return [tag(
+        `${targetName(node.target, context, node.targetSelector)}激发${position}${node.selector.pick === 'all' ? '' : `${node.selector.count || 1}个`} Orb${node.selector.id ? `（类型 ${node.selector.id}）` : ''}`,
+        'special',
+      )];
+    }
+    case 'set_orb_slots':
+      return [tag(`将${targetName(node.target, context, node.targetSelector)}的 Orb 槽位设为 ${number(node.amount)}`, 'special')];
+    case 'modify_orbs': {
+      const operations = { add: '增加', subtract: '减少', multiply: '乘以', divide: '除以' } as const;
+      const position = node.selector.pick === 'all' ? '全部' : node.selector.pick === 'last' ? '末尾' : '最前';
+      return [tag(
+        `${targetName(node.target, context, node.targetSelector)}${position} Orb 的数值${operations[node.operator]}${number(node.value)}`,
+        'special',
+      )];
+    }
+    case 'grant_extra_turn':
+      return [tag(`${targetName(node.target, context)}获得${number(node.amount)}个额外回合`, 'special')];
+    case 'force_end_turn':
+      return [tag(`强制结束${targetName(node.target, context)}的当前回合`, 'special')];
     case 'register_trigger': {
       const details = node.effects
         .flatMap(item => nodeTags(item, context))
@@ -383,6 +631,8 @@ function nodeTags(node: EffectNode, context: EffectDisplayContext): EffectDispla
         : '';
       return [tag(`${timing}：${details}${repeat}`, 'special')];
     }
+    case 'choose_one':
+      return [tag(`从${node.options.map(option => option.label).join('、')}中选择一项`, 'special')];
     case 'if': {
       const thenText = node.then
         .flatMap(item => nodeTags(item, context))
@@ -402,6 +652,7 @@ function nodeTags(node: EffectNode, context: EffectDisplayContext): EffectDispla
     case 'narrate':
       return [tag(node.text, 'special')];
   }
+  return [];
 }
 
 function coalesceRepeatedTags(tags: EffectDisplayTag[]): EffectDisplayTag[] {
@@ -422,6 +673,46 @@ function coalesceRepeatedTags(tags: EffectDisplayTag[]): EffectDisplayTag[] {
     index += count;
   }
   return output;
+}
+
+/** Shared card-attachment wording for hand, pile, selection and detail surfaces. */
+export function cardAttachmentsToDisplayTags(
+  attachments: readonly CardAttachment[] | undefined,
+): EffectDisplayTag[] {
+  const tags: EffectDisplayTag[] = [];
+  const operators = { add: '增加', subtract: '减少', multiply: '乘以', divide: '除以', set: '设为', min: '上限设为', max: '下限设为' } as const;
+  const stats = { damage: '伤害', block: '格挡', lust: '欲望', stacks: '状态层数' } as const;
+  const keywords = { retain: '保留', exhaust: '消耗', ethereal: '空灵', innate: '固有' } as const;
+  const timings = { on_draw: '抽到时', while_in_hand: '留在手牌时', on_play: '打出时' } as const;
+  for (const attachment of attachments || []) {
+    const source = attachment.source.name || attachment.source.id;
+    tags.push(tag(
+      `${attachment.kind === 'enchantment' ? '附魔' : '负面附着'}“${attachment.name}”｜来源：${source}｜${describeCardAttachmentRemaining(attachment)}`,
+      attachment.kind === 'enchantment' ? 'buff' : 'debuff',
+    ));
+    for (const change of attachment.changes) {
+      if (change.kind === 'numeric') {
+        tags.push(tag(`${stats[change.stat]}${operators[change.operator]}${change.value}`, 'card'));
+      } else if (change.kind === 'cost' || change.kind === 'x_value') {
+        tags.push(tag(`${change.kind === 'cost' ? '费用' : 'X值'}${operators[change.operator]}${change.value}`, 'energy'));
+      } else if (change.kind === 'keyword') {
+        tags.push(tag(`${change.enabled ? '获得' : '移除'}“${keywords[change.keyword]}”`, 'card'));
+      } else if (change.kind === 'replay') {
+        tags.push(tag(`额外完整结算${change.extra}次`, 'card'));
+      } else if (change.kind === 'dynamic_cost') {
+        tags.push(tag(`${timings[change.timing]}费用${operators[change.operator]}${typeof change.value === 'number' ? change.value : '公式值'}`, 'energy'));
+      } else if (change.kind === 'play_access') {
+        tags.push(tag(change.mode === 'deny' ? '不可主动打出' : '允许主动打出', 'card'));
+      } else {
+        const reasonNames: Partial<Record<import('./battleEventJournal').CardMoveReason, string>> = {
+          player_choice: '主动选择', random_effect: '随机效果', effect: '战斗效果',
+        };
+        const reasons = change.reasons.map(reason => reasonNames[reason] || reason).join('、');
+        tags.push(tag(`因${reasons}从手牌弃掉时免费自动打出；失败去向：${change.failureDestination}`, 'card'));
+      }
+    }
+  }
+  return tags;
 }
 
 export function effectProgramToDisplayTags(

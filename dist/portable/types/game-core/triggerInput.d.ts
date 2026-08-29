@@ -1,3 +1,4 @@
+import type { EventTriggerQuery } from './battleEventJournal';
 export interface ResolvedTriggerInput {
     /** Raw trigger name. Validation remains the caller's responsibility. */
     trigger: unknown;
@@ -6,7 +7,10 @@ export interface ResolvedTriggerInput {
     /** Effects resolved immediately when a structured trigger is also present. */
     immediateEffects: unknown;
     structured: boolean;
+    /** Optional event metadata/ordinal filter carried by the trigger definition. */
+    eventQuery?: EventTriggerQuery;
 }
+export declare function resolveEventTriggerQueryInput(value: unknown): EventTriggerQuery | undefined;
 /**
  * Resolve the AI-facing trigger boundary.
  *

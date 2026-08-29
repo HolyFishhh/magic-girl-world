@@ -34,12 +34,12 @@ export class EnemyIntentPresenter {
     }
   }
 
-  showAction(action: EnemyAction): void {
+  showAction(action: EnemyAction, enemy?: Pick<Enemy, 'id' | 'name'>): void {
     try {
       const summary = summarizeEffectProgram(action.effectProgram);
       const kind = summary.type === 'attack' || summary.type === 'lust_attack' ? 'enemy' : 'skill';
       const emoji = this.iconFor(summary.type);
-      this.logAction(action.name, action.description || '执行行动');
+      this.logAction(action.name, action.description || '执行行动', enemy);
       this.animationManager.showEnemyActionAnimation(
         action.name,
         action.description,
@@ -52,8 +52,8 @@ export class EnemyIntentPresenter {
     }
   }
 
-  logAction(actionName: string, description: string): void {
-    BattleLog.logEnemyAction(actionName, description);
+  logAction(actionName: string, description: string, enemy?: Pick<Enemy, 'id' | 'name'>): void {
+    BattleLog.logEnemyAction(actionName, description, enemy);
   }
 
   render(enemy: Enemy | null): void {

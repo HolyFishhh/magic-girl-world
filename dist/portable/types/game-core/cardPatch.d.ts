@@ -1,9 +1,10 @@
 import type { CardSelectorFilter, CardValueOperator, CardValueStat, EffectProgram, NumericExpression } from './effectDsl';
 import { type SelectableCard } from './cardSelectorRuntime';
+import type { CardCost } from './combatResource';
 export type CardPatchScope = 'resolution' | 'turn' | 'until_played' | 'combat' | 'run' | 'permanent';
 export type CardKeyword = 'retain' | 'exhaust' | 'ethereal' | 'innate';
 export type CardCostOperator = 'add' | 'subtract' | 'multiply' | 'divide' | 'set' | 'min' | 'max';
-export type CardPatchSourceKind = 'card' | 'relic' | 'status' | 'ability' | 'system' | 'enchantment' | 'affliction';
+export type CardPatchSourceKind = 'card' | 'relic' | 'status' | 'ability' | 'system' | 'enemy_action' | 'summon' | 'enchantment' | 'affliction';
 export interface CardPatchSource {
     kind: CardPatchSourceKind;
     id: string;
@@ -63,7 +64,7 @@ export type CardPatch = (CardPatchBase & {
 });
 export interface CardPatchBaseSnapshot {
     effectProgram: EffectProgram;
-    cost?: number | 'energy';
+    cost?: CardCost;
     retain?: boolean;
     exhaust?: boolean;
     ethereal?: boolean;
@@ -82,6 +83,7 @@ export interface PatchableCard extends SelectableCard {
     doubleEffect?: boolean;
     patchBase?: CardPatchBaseSnapshot;
     patches?: CardPatch[];
+    attachments?: import('./cardAttachment').CardAttachment[];
 }
 export interface CardPatchLedger {
     patches: CardPatch[];

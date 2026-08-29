@@ -3,7 +3,9 @@ import {
   type Card,
   type EffectNode,
   type EffectProgram,
+  type ResolvedSummonAction,
   type StatusEffect,
+  type SummonUnit,
 } from '../../game-core';
 import { escapeHtml } from '../shared/html';
 
@@ -47,16 +49,20 @@ export class AnimationManager {
     return AnimationManager.instance;
   }
 
-  // 伤害数字队列，防止同时弹出
+  // 舞台效果共用一个短队列：先出现卡牌/行动，再依次显示实际结算。
   private damageQueue: Array<{
     target: 'player' | 'enemy';
-    damage: number;
-    type: 'damage' | 'heal' | 'lust' | 'block';
+    icon: string;
+    text: string;
+    tone: 'damage' | 'heal' | 'lust' | 'block' | 'energy' | 'status' | 'resource';
+    magnitude: number;
     timestamp: number;
   }> = [];
   private lastDamageTime = 0;
+  private lastActionStartedAt = 0;
   private damageTimer: ReturnType<typeof setTimeout> | null = null;
-  private readonly DAMAGE_INTERVAL = 150; // 最小间隔150ms
+  private readonly DAMAGE_INTERVAL = 95;
+  private readonly ACTION_LEAD_IN = 150;
 
   private displayBattleValue(value: number): number {
     return roundBattleDisplayValue(value);
@@ -70,12 +76,54 @@ export class AnimationManager {
     damage: number,
     type: 'damage' | 'heal' | 'lust' | 'block' = 'damage',
   ): void {
-    const now = Date.now();
+    const definitions = {
+      damage: { icon: '💥', prefix: '-', tone: 'damage' },
+      heal: { icon: '💚', prefix: '+', tone: 'heal' },
+      lust: { icon: '💗', prefix: '+', tone: 'lust' },
+      block: { icon: '🛡️', prefix: '+', tone: 'block' },
+    } as const;
+    const definition = definitions[type];
+    this.enqueueStageEffect(
+      target,
+      definition.icon,
+      `${definition.prefix}${this.displayBattleValue(Math.abs(damage))}`,
+      definition.tone,
+      Math.abs(damage),
+    );
+  }
 
-    // 添加到队列
-    this.damageQueue.push({ target, damage, type, timestamp: now });
+  public showStageEffect(
+    target: 'player' | 'enemy',
+    icon: string,
+    change: number,
+    tone: 'heal' | 'lust' | 'block' | 'energy' | 'status' | 'resource',
+    label = '',
+  ): void {
+    if (!Number.isFinite(change) || change === 0) return;
+    const prefix = change > 0 ? '+' : '-';
+    const value = `${prefix}${this.displayBattleValue(Math.abs(change))}`;
+    this.enqueueStageEffect(target, icon, label ? `${label} ${value}` : value, tone, Math.abs(change));
+  }
 
-    // 处理队列
+  public showStatusEffect(
+    target: 'player' | 'enemy',
+    emoji: string,
+    name: string,
+    stacks: number,
+    isApply: boolean,
+  ): void {
+    const suffix = stacks > 0 ? ` ${isApply ? '+' : '-'}${this.displayBattleValue(stacks)}` : '';
+    this.enqueueStageEffect(target, emoji || '✨', `${name}${suffix}`, 'status', Math.max(1, stacks));
+  }
+
+  private enqueueStageEffect(
+    target: 'player' | 'enemy',
+    icon: string,
+    text: string,
+    tone: 'damage' | 'heal' | 'lust' | 'block' | 'energy' | 'status' | 'resource',
+    magnitude: number,
+  ): void {
+    this.damageQueue.push({ target, icon, text, tone, magnitude, timestamp: Date.now() });
     this.processDamageQueue();
   }
 
@@ -83,11 +131,12 @@ export class AnimationManager {
     if (this.damageQueue.length === 0) return;
 
     const now = Date.now();
-    if (now - this.lastDamageTime < this.DAMAGE_INTERVAL) {
+    const readyAt = Math.max(this.lastDamageTime + this.DAMAGE_INTERVAL, this.lastActionStartedAt + this.ACTION_LEAD_IN);
+    if (now < readyAt) {
       // One shared timer drains the queue; one timer per event grows rapidly on
       // multi-hit/status-heavy turns and was the main source of late-battle lag.
       if (this.damageTimer === null) {
-        const remaining = Math.max(0, this.DAMAGE_INTERVAL - (now - this.lastDamageTime));
+        const remaining = Math.max(0, readyAt - now);
         this.damageTimer = setTimeout(() => {
           this.damageTimer = null;
           this.processDamageQueue();
@@ -100,7 +149,7 @@ export class AnimationManager {
     if (!damageData) return;
 
     this.lastDamageTime = now;
-    this.createPhysicalDamageAnimation(damageData.target, damageData.damage, damageData.type);
+    this.createPhysicalDamageAnimation(damageData);
 
     // 继续处理队列
     if (this.damageQueue.length > 0 && this.damageTimer === null) {
@@ -112,41 +161,14 @@ export class AnimationManager {
   }
 
   private createPhysicalDamageAnimation(
-    target: 'player' | 'enemy',
-    damage: number,
-    type: 'damage' | 'heal' | 'lust' | 'block',
+    effect: {
+      target: 'player' | 'enemy'; icon: string; text: string;
+      tone: 'damage' | 'heal' | 'lust' | 'block' | 'energy' | 'status' | 'resource'; magnitude: number;
+    },
   ): void {
     const stage = $('#battle-stage');
-    const targetElement = target === 'player' ? $('#stage-player-emoji') : $('#stage-enemy-emoji');
+    const targetElement = effect.target === 'player' ? $('#stage-player-emoji') : $('#stage-enemy-emoji');
     if (stage.length === 0 || targetElement.length === 0) return;
-
-    // 确定颜色和前缀
-    let color = '#ff4444';
-    let prefix = '-';
-    let icon = '';
-
-    switch (type) {
-      case 'damage':
-        color = '#ff4444';
-        prefix = '-';
-        icon = '💥';
-        break;
-      case 'heal':
-        color = '#44ff44';
-        prefix = '+';
-        icon = '💚';
-        break;
-      case 'lust':
-        color = '#ff69b4';
-        prefix = '+';
-        icon = '💗';
-        break;
-      case 'block':
-        color = '#4169e1';
-        prefix = '+';
-        icon = '🛡︎';
-        break;
-    }
 
     const stageRect = stage.get(0)!.getBoundingClientRect();
     const targetRect = targetElement.get(0)!.getBoundingClientRect();
@@ -154,19 +176,12 @@ export class AnimationManager {
     const randomY = targetRect.top - stageRect.top + targetRect.height * 0.35 + (Math.random() - 0.5) * 18;
 
     const damageText = $(`
-      <div class="physics-damage" style="
+      <div class="physics-damage stage-effect-pop tone-${effect.tone}" style="
         position: absolute;
         left: ${randomX}px;
         top: ${randomY}px;
-        color: ${color};
-        font-size: ${Math.min(20 + damage / 5, 36)}px;
-        font-weight: bold;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
-        pointer-events: none;
-        z-index: 1000;
-        font-family: 'ZCOOL KuaiLe', 'Noto Sans SC', 'Microsoft YaHei', sans-serif !important;
       ">
-        ${icon} ${prefix}${this.displayBattleValue(damage)}
+        <span>${escapeHtml(effect.icon)}</span><b>${escapeHtml(effect.text)}</b>
       </div>
     `);
 
@@ -177,7 +192,7 @@ export class AnimationManager {
     const driftX = Math.round((Math.random() - 0.5) * 36);
     damageText.css({ '--damage-drift-x': `${driftX}px` });
     damageText.addClass('physics-damage-active');
-    setTimeout(() => damageText.remove(), 950);
+    setTimeout(() => damageText.remove(), 620);
   }
 
   /**
@@ -403,11 +418,15 @@ export class AnimationManager {
     emoji: string,
     name: string,
     animationTarget: CombatAnimationTarget = kind === 'attack' || kind === 'enemy' ? 'opponent' : 'self',
+    sourceAnchor?: JQuery,
   ): Promise<void> {
     const stage = $('#battle-stage');
-    const sourceElement = source === 'player' ? $('#stage-player-emoji') : $('#stage-enemy-emoji');
+    const sourceElement = sourceAnchor?.length
+      ? sourceAnchor
+      : source === 'player' ? $('#stage-player-emoji') : $('#stage-enemy-emoji');
     const targetElement = source === 'player' ? $('#stage-enemy-emoji') : $('#stage-player-emoji');
     if (stage.length === 0 || sourceElement.length === 0 || targetElement.length === 0) return Promise.resolve();
+    this.lastActionStartedAt = Date.now();
 
     const crossesStage = kind === 'attack' || kind === 'enemy';
     const visualTarget = crossesStage || animationTarget === 'opponent' ? targetElement : sourceElement;
@@ -455,6 +474,23 @@ export class AnimationManager {
     }, duration);
     // Animation is deliberately fire-and-forget so rapid card play is never blocked.
     return Promise.resolve();
+  }
+
+  /** A summon acts from its own stage emoji instead of borrowing the owner's portrait. */
+  public playSummonAction(unit: SummonUnit, action: ResolvedSummonAction): void {
+    const sourceAnchor = $('.stage-summon-unit').filter((_, element) =>
+      String($(element).attr('data-summon-id') || '') === unit.instanceId,
+    ).first();
+    const animationTarget = resolveCombatAnimationTarget(action.effectProgram, 'skill');
+    const kind: CombatActionKind = animationTarget === 'opponent' ? 'attack' : 'skill';
+    void this.playCombatAction(
+      unit.owner,
+      kind,
+      action.emoji || unit.emoji,
+      action.name,
+      animationTarget,
+      sourceAnchor,
+    );
   }
 
   /**

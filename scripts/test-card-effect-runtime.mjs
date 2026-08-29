@@ -43,7 +43,7 @@ const runtime = host.createCardEffectRuntime({
     choices.push({ candidates: candidates.map(entry => entry.id), ...request });
     return choose({ candidates, ...request });
   },
-  onCardDiscarded: async entry => discarded.push(entry.id),
+  onCardDiscarded: async (entry, reason, source) => discarded.push({ id: entry.id, reason, source }),
   onCardExhausted: async entry => exhausted.push(entry.id),
   present: event => events.push(event),
 });
@@ -56,7 +56,7 @@ await runtime.execute(
   { type: 'discard_cards', selector: { zone: 'hand', pick: 'choose' }, amount: 1 },
   { currentCardId: 'current__1' },
 );
-assert.deepEqual(discarded, ['hand_a__1']);
+assert.deepEqual(discarded, [{ id: 'hand_a__1', reason: 'player_choice', source: 'hand' }]);
 assert.deepEqual(host.getPlayer().hand.map(entry => entry.id), ['current__1', 'curse__1']);
 assert.deepEqual(host.getPlayer().discardPile.map(entry => entry.id), ['discard_a__1', 'hand_a__1']);
 assert.ok(!choices.at(-1).candidates.includes('current__1'), 'the resolving card cannot discard itself');
@@ -98,6 +98,23 @@ await runtime.execute(
   { currentTurn: 1, source: { kind: 'card', id: 'lesson' } },
 );
 assert.equal(host.getPlayer().discardPile.find(entry => entry.id === 'discard_a__1').retain, true);
+choose = request => [request.candidates.find(entry => entry.id === 'discard_a__1').id];
+await runtime.execute({
+  type: 'apply_card_attachment',
+  selector: { zone: 'discard', pick: 'choose', count: 1, filter: { templateId: 'discard_a' } },
+  attachment: {
+    id: 'runtime_affliction', kind: 'affliction', name: '运行时负面附着', scope: 'combat',
+    removeOn: 'played', remaining: 1,
+    changes: [
+      { kind: 'cost', operator: 'add', value: 1 },
+      { kind: 'play_access', mode: 'deny' },
+    ],
+  },
+}, { currentTurn: 2, source: { kind: 'enemy_action', id: 'bind_action', name: '束缚行动' } });
+const attachedRuntimeCard = host.getPlayer().discardPile.find(entry => entry.id === 'discard_a__1');
+assert.equal(attachedRuntimeCard.cost, 2);
+assert.equal(attachedRuntimeCard.attachments[0].source.kind, 'enemy_action');
+assert.equal(events.at(-1).type, 'card_attachment_applied');
 await runtime.execute({
   type: 'add_card',
   zone: 'hand',
@@ -229,6 +246,23 @@ await valueRuntime.execute({
 assert.equal(valueHost.getPlayer().hand[0].effectProgram.steps[3].stacks, 1);
 assert.equal(valueEvents.filter(event => event.type === 'card_value_modified').length, 10);
 
+valueChoose = candidates => [candidates.find(entry => entry.id === 'value_left__1').id];
+await valueRuntime.execute({
+  type: 'upgrade_cards',
+  selector: { zone: 'hand', pick: 'choose', count: 1 },
+  scope: 'permanent',
+  levels: 1,
+  maxLevel: 3,
+  changes: [
+    { kind: 'numeric', stat: 'damage', operator: 'add', value: 3 },
+    { kind: 'keyword', keyword: 'retain', enabled: true },
+  ],
+}, { currentTurn: 2, source: { kind: 'card', id: 'training' } });
+const upgradedRuntimeCard = valueHost.getPlayer().hand.find(entry => entry.id === 'value_left__1');
+assert.equal(upgradedRuntimeCard.upgradeLevel, 1);
+assert.equal(upgradedRuntimeCard.retain, true);
+assert.equal(valueEvents.at(-1).type, 'card_upgraded');
+
 const handBeforeCopy = host.getPlayer().hand.length;
 await runtime.execute({ type: 'copy_cards', selector: { zone: 'hand', pick: 'left' } });
 assert.equal(host.getPlayer().hand.length, handBeforeCopy + 1);
@@ -257,6 +291,16 @@ const generated = host.getPlayer().drawPile.filter(entry => entry.originalId ===
 assert.equal(generated.length, 2);
 assert.equal(new Set(generated.map(entry => entry.id)).size, 2);
 assert.ok(generated.every(entry => entry.effectProgram?.spec === 'mwg.effect/v1'));
+
+await runtime.execute(
+  { type: 'discard_cards', selector: { zone: 'draw', pick: 'right' }, amount: 1 },
+  { currentCardId: 'current__1' },
+);
+assert.deepEqual(discarded.at(-1), {
+  id: generated.at(-1).id,
+  reason: 'effect',
+  source: 'drawPile',
+});
 
 // Full enemy-content path: compact MVU JSON -> compiled enemy action -> command
 // runtime -> the player's draw pile. This protects the enemy card-insertion

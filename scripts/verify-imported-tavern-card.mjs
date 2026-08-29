@@ -16,6 +16,12 @@ const worldbook = character?.data?.character_book || character?.character_book;
 const regexes = extensions.regex_scripts || [];
 const scripts = (extensions?.tavern_helper?.scripts || []).filter(entry => entry?.type === 'script');
 
+assert.equal(
+  extensions.magic_girl_world?.design_assistant_scope,
+  'mwg.design-assistant-card/v1',
+  'imported card must opt into the design assistant explicitly',
+);
+
 assert.equal(character?.name || character?.data?.name, releaseConfig.characterName);
 assert.equal(character?.data?.character_version, releaseConfig.cardVersion);
 assert.equal(

@@ -3,7 +3,11 @@ import {
   validateRewardCandidateAgainstLibrary,
   type RewardCandidateValidationResult,
 } from '../game-core/rewardCandidateValidation';
-import { planRewardSelections } from '../game-core/rewardSettlement';
+import {
+  planRewardPoolMutation,
+  planRewardSelections,
+  type RewardPoolMutation,
+} from '../game-core/rewardSettlement';
 import type { RewardCategory, RewardSelections } from '../game-core/rewardSelection';
 import { flattenMvuArray, normalizeMvuStatusDefinitions } from '../runtime/mvuArrays';
 
@@ -23,11 +27,20 @@ export interface CardRemovalResult {
 
 export type RewardCandidateInspections = Record<RewardCategory, RewardCandidateValidationResult[]>;
 
+export interface RewardPoolMutationResult {
+  revision: number;
+  rerolls: number;
+  disabledCategories: RewardCategory[];
+  changedCategories: RewardCategory[];
+  counts: Record<RewardCategory, number>;
+}
+
 const REWARD_KEYS = {
   cards: 'card',
   artifacts: 'artifact',
   items: 'item',
 } as const;
+const REWARD_CATEGORIES: readonly RewardCategory[] = ['cards', 'artifacts', 'items'];
 
 function clonePlainValue<T>(value: T): T {
   return JSON.parse(JSON.stringify(value));
@@ -53,9 +66,22 @@ export function readRewardRoot(statRoot: unknown): Record<string, any> | null {
 
 export function hasSelectableRewards(statRoot: unknown): boolean {
   const reward = readRewardRoot(statRoot);
+  const disabled = new Set(readDisabledRewardCategories(statRoot));
   return Boolean(
-    reward && ['card', 'artifact', 'item'].some(key => normalizeMvuList(reward[key]).length > 0),
+    reward && REWARD_CATEGORIES.some(category => !disabled.has(category) && normalizeMvuList(reward[REWARD_KEYS[category]]).length > 0),
   );
+}
+
+export function readDisabledRewardCategories(statRoot: unknown): RewardCategory[] {
+  const reward = readRewardRoot(statRoot);
+  if (!reward || reward.disabled_categories === undefined) return [];
+  if (!Array.isArray(reward.disabled_categories)) throw new Error('reward.disabled_categories 必须是数组');
+  const categories = reward.disabled_categories.map((value: unknown) => {
+    if (!REWARD_CATEGORIES.includes(value as RewardCategory)) throw new Error(`奖励类别无效：${String(value)}`);
+    return value as RewardCategory;
+  });
+  if (new Set(categories).size !== categories.length) throw new Error('reward.disabled_categories 不能重复');
+  return REWARD_CATEGORIES.filter(category => categories.includes(category));
 }
 
 function getMutableMvuList(root: Record<string, any>, key: string): any[] {
@@ -75,10 +101,81 @@ export function readRewardLimits(statRoot: unknown): Record<RewardCategory, numb
   const reward = readRewardRoot(statRoot);
   if (!reward) return { cards: 1, artifacts: 1, items: 1 };
   const limits = isRecord(reward.limits) ? reward.limits : {};
+  const disabled = new Set(readDisabledRewardCategories(statRoot));
   return {
-    cards: readLimit(limits.cards),
-    artifacts: readLimit(limits.artifacts),
-    items: readLimit(limits.items),
+    cards: disabled.has('cards') ? 0 : readLimit(limits.cards),
+    artifacts: disabled.has('artifacts') ? 0 : readLimit(limits.artifacts),
+    items: disabled.has('items') ? 0 : readLimit(limits.items),
+  };
+}
+
+function rewardPoolCandidates(reward: Record<string, any>): Record<RewardCategory, Record<string, any>[]> {
+  return {
+    cards: normalizeMvuList<Record<string, any>>(reward.card),
+    artifacts: normalizeMvuList<Record<string, any>>(reward.artifact),
+    items: normalizeMvuList<Record<string, any>>(reward.item),
+  };
+}
+
+function validateRewardPool(stat: Record<string, any>, candidates: Record<RewardCategory, unknown[]>): void {
+  const battle = requireRecord(stat.battle, '奖励池修改失败：battle 数据不存在');
+  const statusDefinitions = normalizeMvuStatusDefinitions(battle.statuses);
+  const knownResourceIds = normalizeMvuList<Record<string, any>>(battle.core?.resources)
+    .map(resource => String(resource?.id || ''))
+    .filter(Boolean);
+  const libraries: Record<RewardCategory, Record<string, any>[]> = {
+    cards: normalizeMvuList<Record<string, any>>(battle.cards).map(clonePlainValue),
+    artifacts: normalizeMvuList<Record<string, any>>(battle.artifacts).map(clonePlainValue),
+    items: normalizeMvuList<Record<string, any>>(battle.items).map(clonePlainValue),
+  };
+  for (const category of REWARD_CATEGORIES) {
+    for (const candidate of candidates[category]) {
+      if (!isRecord(candidate)) throw new Error(`奖励池 ${category} 候选必须是对象`);
+      const validation = validateRewardCandidateAgainstLibrary(category, candidate, {
+        existing: libraries[category],
+        statusDefinitions,
+        knownResourceIds,
+      });
+      if (!validation.ok) throw new Error(`奖励 ${rewardName(candidate)} 无效：${validation.message}`);
+      libraries[category].push(clonePlainValue(candidate));
+    }
+  }
+}
+
+/** Atomically replace/reroll/disable/modify generated reward candidates. */
+export function mutateRewardPoolInStat(
+  statValue: unknown,
+  mutation: RewardPoolMutation,
+): RewardPoolMutationResult {
+  const stat = requireRecord(statValue, '奖励池修改失败：stat_data 不存在');
+  const reward = requireRecord(stat.reward, '奖励池修改失败：reward 数据不存在');
+  const plan = planRewardPoolMutation(
+    {
+      candidates: rewardPoolCandidates(reward),
+      disabledCategories: readDisabledRewardCategories(stat),
+      revision: reward.pool_revision,
+      rerolls: reward.reroll_count,
+    },
+    mutation,
+  );
+  validateRewardPool(stat, plan.candidates);
+
+  reward.card = plan.candidates.cards.map(clonePlainValue);
+  reward.artifact = plan.candidates.artifacts.map(clonePlainValue);
+  reward.item = plan.candidates.items.map(clonePlainValue);
+  reward.disabled_categories = [...plan.disabledCategories];
+  reward.pool_revision = plan.revision;
+  reward.reroll_count = plan.rerolls;
+  return {
+    revision: plan.revision,
+    rerolls: plan.rerolls,
+    disabledCategories: [...plan.disabledCategories],
+    changedCategories: [...plan.changedCategories],
+    counts: {
+      cards: plan.candidates.cards.length,
+      artifacts: plan.candidates.artifacts.length,
+      items: plan.candidates.items.length,
+    },
   };
 }
 
@@ -98,19 +195,23 @@ export function inspectRewardCandidates(statRoot: unknown): RewardCandidateInspe
     items: normalizeMvuList<Record<string, any>>(battle.items),
   };
   const statusDefinitions = normalizeMvuStatusDefinitions(battle.statuses);
+  const knownResourceIds = normalizeMvuList<Record<string, any>>(battle.core?.resources)
+    .map(resource => String(resource?.id || ''))
+    .filter(Boolean);
 
   return {
     cards: candidates.cards.map(candidate =>
-      validateRewardCandidateAgainstLibrary('cards', candidate, { existing: existing.cards, statusDefinitions }),
+      validateRewardCandidateAgainstLibrary('cards', candidate, { existing: existing.cards, statusDefinitions, knownResourceIds }),
     ),
     artifacts: candidates.artifacts.map(candidate =>
       validateRewardCandidateAgainstLibrary('artifacts', candidate, {
         existing: existing.artifacts,
         statusDefinitions,
+        knownResourceIds,
       }),
     ),
     items: candidates.items.map(candidate =>
-      validateRewardCandidateAgainstLibrary('items', candidate, { existing: existing.items, statusDefinitions }),
+      validateRewardCandidateAgainstLibrary('items', candidate, { existing: existing.items, statusDefinitions, knownResourceIds }),
     ),
   };
 }
@@ -180,6 +281,9 @@ export function applyRewardSelectionsToStat(
     items: normalizeMvuList<Record<string, any>>(reward.item),
   };
   const statusDefinitions = normalizeMvuStatusDefinitions(battle.statuses);
+  const knownResourceIds = normalizeMvuList<Record<string, any>>(battle.core?.resources)
+    .map(resource => String(resource?.id || ''))
+    .filter(Boolean);
   const validationLibraries: Record<RewardCategory, Record<string, any>[]> = {
     cards: normalizeMvuList<Record<string, any>>(battle.cards).map(clonePlainValue),
     artifacts: normalizeMvuList<Record<string, any>>(battle.artifacts).map(clonePlainValue),
@@ -190,6 +294,7 @@ export function applyRewardSelectionsToStat(
     candidates,
     existing: validationLibraries,
     statusDefinitions,
+    knownResourceIds,
     limits,
   });
 

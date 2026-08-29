@@ -7,9 +7,15 @@
  */
 
 import { compileCompactEffectList } from './compactEffectDsl';
+import { stableHash32, stableSerialize } from './deterministicRandom';
 import { isOuterLifecycleTrigger, REGISTERABLE_EFFECT_TRIGGER_SET } from './battleTriggers';
 import { resolveTriggerInput } from './triggerInput';
 import { isCompactEffectList, normalizeCompactEffectEntries } from './compactEffectContract';
+import {
+  normalizeCardCost,
+  resolveCardResourcePayment,
+  type CardCost,
+} from './combatResource';
 import {
   EFFECT_PROGRAM_SPEC,
   executeEffectProgram,
@@ -55,11 +61,18 @@ export interface ContentModifier {
 }
 
 export interface ContentAnalysisOptions {
+  /** Relative side that represents the enemy entity collection for source-aware analysis. */
+  enemyCollectionTarget?: EffectTarget;
   statusStacks?: Readonly<Record<string, number>>;
   selfStatusStacks?: Readonly<Record<string, number>>;
   opponentStatusStacks?: Readonly<Record<string, number>>;
   currentStatusStacks?: number;
   spentEnergy?: number;
+  /** Exact payment context for composite and custom-resource costs. */
+  spentResources?: Readonly<Record<string, number>>;
+  /** Exact X values resolved from every `all` cost component. */
+  xValues?: Readonly<Record<string, number>>;
+  xValue?: number;
   /** Optional detached-state overrides used by the shared scenario sampler. */
   selfHp?: number;
   selfMaxHp?: number;
@@ -67,6 +80,10 @@ export interface ContentAnalysisOptions {
   opponentMaxHp?: number;
   selfEnergy?: number;
   selfMaxEnergy?: number;
+  selfResources?: Readonly<Record<string, number>>;
+  selfMaxResources?: Readonly<Record<string, number>>;
+  opponentResources?: Readonly<Record<string, number>>;
+  opponentMaxResources?: Readonly<Record<string, number>>;
   currentTurn?: number;
   cardsPlayedThisTurn?: number;
   attacksPlayedThisTurn?: number;
@@ -163,6 +180,8 @@ function representativeState(options: ContentAnalysisOptions): CoreEffectState {
       discardPileSize: 0,
       exhaustPileSize: 0,
       statusStacks: { ...sharedStatusStacks, ...(options.selfStatusStacks || {}) },
+      resources: { ...(options.selfResources || {}) },
+      maxResources: { ...(options.selfMaxResources || options.selfResources || {}) },
     },
     opponent: {
       hp: clampStateNumber(options.opponentHp, opponentMaxHp, 0, opponentMaxHp),
@@ -173,6 +192,8 @@ function representativeState(options: ContentAnalysisOptions): CoreEffectState {
       maxEnergy: 3,
       block: 0,
       statusStacks: { ...sharedStatusStacks, ...(options.opponentStatusStacks || {}) },
+      resources: { ...(options.opponentResources || {}) },
+      maxResources: { ...(options.opponentMaxResources || options.opponentResources || {}) },
     },
     currentTurn: clampStateNumber(options.currentTurn, 2, 1, 999),
     cardsPlayedThisTurn: clampStateNumber(options.cardsPlayedThisTurn, 1, 0, 100),
@@ -229,7 +250,7 @@ function collectProgramDynamics(
       collectProgramDynamics(node.effects, dynamicMetrics, conditional);
       continue;
     }
-    if (node.op === 'add_card') {
+    if (node.op === 'add_card' || node.op === 'ensure_card') {
       collectProgramDynamics(node.card.program.steps, dynamicMetrics, conditional);
       if (node.card.discardProgram) collectProgramDynamics(node.card.discardProgram.steps, dynamicMetrics, true);
       continue;
@@ -249,7 +270,7 @@ function hasUncertainDamage(nodes: readonly EffectNode[], indirect = false): boo
     }
     if (node.op === 'if' && hasUncertainDamage([...(node.then || []), ...(node.else || [])], true)) return true;
     if (node.op === 'register_trigger' && hasUncertainDamage(node.effects, true)) return true;
-    if (node.op === 'add_card') {
+    if (node.op === 'add_card' || node.op === 'ensure_card') {
       if (hasUncertainDamage(node.card.program.steps, true)) return true;
       if (node.card.discardProgram && hasUncertainDamage(node.card.discardProgram.steps, true)) return true;
     }
@@ -264,6 +285,9 @@ export function analyzeEffectProgram(
 ): ContentAnalysis | null {
   const result = executeEffectProgram(program, representativeState(options), {
     spentEnergy: options.spentEnergy ?? 3,
+    spentResources: options.spentResources,
+    xValues: options.xValues,
+    xValue: options.xValue,
     statusStacks: options.currentStatusStacks,
   });
   if (!result.ok) return null;
@@ -278,6 +302,9 @@ export function analyzeEffectProgram(
       analysis.metrics.defense += event.amount * directWeight;
     } else if (event.type === 'gain_energy' && event.target === 'self') {
       analysis.metrics.energy += event.amount * directWeight;
+    } else if (event.type === 'gain_resource' && event.target === 'self') {
+      analysis.metrics.energy += event.amount * directWeight;
+      analysis.tags.push(`资源:${event.resource}`);
     } else if (event.type === 'gain_lust' && event.target === 'opponent') {
       analysis.metrics.attack += event.amount * CONTENT_DESIRE_EFFECT_WEIGHT * directWeight;
       analysis.lust += event.amount * directWeight;
@@ -299,9 +326,10 @@ export function analyzeEffectProgram(
     } else if (event.type === 'register_trigger') {
       const nested = analyzeEffectProgram({ spec: EFFECT_PROGRAM_SPEC, steps: event.effects }, options);
       if (nested) mergeAnalysis(analysis, nested, triggerWeight(event.trigger));
-    } else if (event.type === 'add_card') {
+    } else if (event.type === 'add_card' || event.type === 'ensure_card') {
       const nested = analyzeEffectProgram(event.card.program, options);
-      if (nested) mergeAnalysis(analysis, nested, Math.max(1, event.count) * 0.35 * directWeight);
+      const instances = event.type === 'add_card' ? event.count : event.minimum;
+      if (nested) mergeAnalysis(analysis, nested, Math.max(1, instances) * 0.35 * directWeight);
     }
   };
   result.events.forEach(consume);
@@ -347,6 +375,7 @@ function analyzeModernEffects(
       trigger: source.trigger,
       when: source.trigger ? undefined : definition.when,
       creates: definition.creates,
+      enemyCollectionTarget: options.enemyCollectionTarget,
     });
     if (!compiled.ok) return null;
     const analyzed = analyzeEffectProgram(compiled.value, options, source.weight);
@@ -355,6 +384,29 @@ function analyzeModernEffects(
     else mergeAnalysis(combined, analyzed);
   }
   return combined;
+}
+
+function optionsForDefinitionCost(
+  definition: Definition,
+  options: ContentAnalysisOptions,
+): ContentAnalysisOptions {
+  if (definition.cost === undefined) return options;
+  if (options.spentResources && options.xValues) return options;
+  try {
+    const selfEnergy = finiteStateNumber(options.selfEnergy, 3, 0);
+    const available = { energy: selfEnergy, ...(options.selfResources || {}) };
+    const payment = resolveCardResourcePayment(definition.cost as CardCost, available, undefined);
+    if (!payment.affordable) return options;
+    return {
+      ...options,
+      spentEnergy: options.spentEnergy ?? payment.spentEnergy,
+      spentResources: options.spentResources ?? payment.spent,
+      xValues: options.xValues ?? payment.xValues,
+      xValue: options.xValue ?? payment.xValue,
+    };
+  } catch {
+    return options;
+  }
 }
 
 function triggerWeight(value: unknown): number {
@@ -382,7 +434,7 @@ function mergeAnalysis(target: ContentAnalysis, source: ContentAnalysis, weight 
 }
 
 /** Analyze one shallow card/relic/ability/action without mutating runtime state. */
-export function analyzeContentDefinition(value: unknown, options: ContentAnalysisOptions = {}): ContentAnalysis {
+function analyzeContentDefinitionUncached(value: unknown, options: ContentAnalysisOptions = {}): ContentAnalysis {
   const metrics: Record<ContentMetric, number> = {
     attack: 0,
     defense: 0,
@@ -398,6 +450,7 @@ export function analyzeContentDefinition(value: unknown, options: ContentAnalysi
   let lust = 0;
   let damageKnown = true;
   const definition = isRecord(value) ? (value as Definition) : {};
+  const resolvedOptions = optionsForDefinitionCost(definition, options);
   const resolvedTrigger = resolveTriggerInput(definition);
   const effects = resolvedTrigger.structured
     ? [
@@ -439,7 +492,15 @@ export function analyzeContentDefinition(value: unknown, options: ContentAnalysi
     if (typeof rawEffect.apply_status === 'string') tags.add(`状态:${rawEffect.apply_status}`);
     if (rawEffect.discard !== undefined || isCompactEffectList(definition.discard_effects)) tags.add('弃牌');
     if (rawEffect.add_card !== undefined) tags.add('生成牌');
+    if (isRecord(rawEffect.attach_card)) {
+      tags.add(rawEffect.attach_card.kind === 'enchantment' ? '附魔' : '负面附着');
+      const changes = Array.isArray(rawEffect.attach_card.changes) ? rawEffect.attach_card.changes : [];
+      if (changes.some((change: unknown) => isRecord(change) && change.kind === 'discard_auto_play')) tags.add('弃牌');
+      if (changes.some((change: unknown) => isRecord(change) && ['cost', 'dynamic_cost', 'x_value'].includes(String(change.kind)))) tags.add('能量');
+    }
     if (rawEffect.reduce_cost !== undefined || rawEffect.energy !== undefined) tags.add('能量');
+    if (isRecord(rawEffect.resource) && typeof rawEffect.resource.id === 'string') tags.add(`资源:${rawEffect.resource.id}`);
+    if (isRecord(rawEffect.set_resource) && typeof rawEffect.set_resource.id === 'string') tags.add(`资源:${rawEffect.set_resource.id}`);
     if (rawEffect.reduce_cost !== undefined && numericLiteral(rawEffect.reduce_cost) === null)
       dynamicMetrics.add('energy');
     if (rawEffect.lust !== undefined) tags.add('欲望');
@@ -450,7 +511,7 @@ export function analyzeContentDefinition(value: unknown, options: ContentAnalysi
     Object.values(rawEffect).forEach(entry => collectStringStatusIds(entry, statusIds));
   }
 
-  const evaluated = analyzeModernEffects(effects, definition, options);
+  const evaluated = analyzeModernEffects(effects, definition, resolvedOptions);
   if (evaluated) {
     (Object.keys(metrics) as ContentMetric[]).forEach(metric => {
       metrics[metric] = evaluated.metrics[metric];
@@ -462,7 +523,13 @@ export function analyzeContentDefinition(value: unknown, options: ContentAnalysi
     damageKnown &&= evaluated.damageKnown;
   }
 
-  if (definition.cost === 'energy' || JSON.stringify(definition).includes('spent_energy')) tags.add('X费');
+  const encodedDefinition = JSON.stringify(definition);
+  const costComponents = normalizeCardCost((definition.cost ?? 0) as CardCost);
+  if (
+    Object.values(costComponents).some(component => component === 'all') ||
+    encodedDefinition.includes('spent_energy') ||
+    encodedDefinition.includes('x_resource.')
+  ) tags.add('X费');
   if (definition.type === 'Power' || resolvedTrigger.trigger !== undefined) tags.add('能力');
   if (definition.retain === true) tags.add('保留');
   if (definition.innate === true) tags.add('固有');
@@ -470,6 +537,7 @@ export function analyzeContentDefinition(value: unknown, options: ContentAnalysi
   if (isCompactEffectList(definition.discard_effects)) tags.add('弃牌');
 
   if (isCompactEffectList(definition.discard_effects)) {
+    // Discard effects do not inherit the payment context from the card play.
     const discarded = analyzeContentDefinition({ effects: definition.discard_effects }, options);
     const target: ContentAnalysis = {
       metrics,
@@ -486,6 +554,30 @@ export function analyzeContentDefinition(value: unknown, options: ContentAnalysi
   }
 
   return { metrics, dynamicMetrics, tags: [...tags], statusIds: [...statusIds], modifiers, damage, lust, damageKnown };
+}
+
+const contentAnalysisCache = new Map<string, ContentAnalysis>();
+
+function contentAnalysisCacheKey(value: unknown, options: ContentAnalysisOptions): string {
+  const serialized = stableSerialize([value, options]);
+  return `analysis1:${stableHash32(serialized).toString(36)}:${serialized.length}`;
+}
+
+/** Analyze one shallow definition with a bounded mechanics/state cache. */
+export function analyzeContentDefinition(value: unknown, options: ContentAnalysisOptions = {}): ContentAnalysis {
+  const key = contentAnalysisCacheKey(value, options);
+  const cached = contentAnalysisCache.get(key);
+  if (cached) return cached;
+  const result = analyzeContentDefinitionUncached(value, options);
+  contentAnalysisCache.set(key, result);
+  while (contentAnalysisCache.size > 2048) {
+    contentAnalysisCache.delete(contentAnalysisCache.keys().next().value as string);
+  }
+  return result;
+}
+
+export function clearContentAnalysisCache(): void {
+  contentAnalysisCache.clear();
 }
 
 export interface ContentAnalysisScenario {

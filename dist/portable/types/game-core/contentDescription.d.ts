@@ -1,6 +1,7 @@
 export interface CompactCardDescriptionOptions {
     includeKeywords?: boolean;
     statusNames?: Readonly<Record<string, string>>;
+    resourceNames?: Readonly<Record<string, string>>;
 }
 /** Keep internal IDs and formula paths out of player-facing AI prose. */
 export declare function normalizeChinesePlayerDescription(value: unknown): string;

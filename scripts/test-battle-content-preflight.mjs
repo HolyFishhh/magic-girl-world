@@ -41,6 +41,100 @@ const validBattle = {
 const valid = preflightBattleContent(validBattle);
 assert.equal(valid.ok, true, JSON.stringify(valid.issues));
 
+const validResourceBattle = structuredClone(validBattle);
+validResourceBattle.core.resources = [
+  { id: 'stars', name: '星能', emoji: '⭐', current: 2, max: 5, refresh: 'retain' },
+];
+validResourceBattle.cards[0].cost = { energy: 1, stars: 2 };
+assert.equal(preflightBattleContent(validResourceBattle).ok, true, JSON.stringify(preflightBattleContent(validResourceBattle).issues));
+
+const unknownResourceBattle = structuredClone(validBattle);
+unknownResourceBattle.cards[0].cost = { energy: 1, stars: 1 };
+const unknownResourceResult = preflightBattleContent(unknownResourceBattle);
+assert.equal(unknownResourceResult.ok, false);
+assert.equal(unknownResourceResult.issues.some(issue => issue.code === 'UNKNOWN_CARD_RESOURCE'), true);
+
+const invalidResourceBattle = structuredClone(validResourceBattle);
+invalidResourceBattle.core.resources.push({ id: 'stars', name: '重复', emoji: '!', current: 9, max: 2, refresh: 'never' });
+const invalidResourceResult = preflightBattleContent(invalidResourceBattle);
+assert.equal(invalidResourceResult.ok, false);
+for (const code of ['DUPLICATE_RESOURCE_ID', 'INVALID_RESOURCE_VALUE', 'INVALID_RESOURCE_REFRESH']) {
+  assert.equal(invalidResourceResult.issues.some(issue => issue.code === code), true, code);
+}
+
+const playerOwnedResourceStatus = structuredClone(validResourceBattle);
+playerOwnedResourceStatus.statuses.push({
+  id: 'star_guard',
+  name: '星辉守护',
+  emoji: '⭐',
+  type: 'buff',
+  stacks_change: -1,
+  maxStacks: 5,
+  triggers: { tick: { block: 'self.resource.stars.current' } },
+});
+playerOwnedResourceStatus.player_status_effects = [{ id: 'star_guard', stacks: 1 }];
+assert.equal(
+  preflightBattleContent(playerOwnedResourceStatus).ok,
+  true,
+  'a player-owned status must not force unrelated enemies to register the player private resource',
+);
+
+const invalidEnemyOwnedResourceStatus = structuredClone(playerOwnedResourceStatus);
+invalidEnemyOwnedResourceStatus.player_status_effects = [];
+invalidEnemyOwnedResourceStatus.enemy.status_effects = [{ id: 'star_guard', stacks: 1 }];
+const invalidEnemyOwnedStatusResult = preflightBattleContent(invalidEnemyOwnedResourceStatus);
+assert.equal(invalidEnemyOwnedStatusResult.ok, false);
+assert.equal(invalidEnemyOwnedStatusResult.issues.some(issue => issue.code === 'UNKNOWN_TARGET_RESOURCE'), true);
+
+const targetedEnemyResource = structuredClone(validResourceBattle);
+targetedEnemyResource.enemies = [
+  { ...structuredClone(validBattle.enemy), id: 'front', name: '前卫' },
+  {
+    ...structuredClone(validBattle.enemy),
+    id: 'back',
+    name: '后卫',
+    resources: [{ id: 'stars', name: '星能', emoji: '⭐', current: 1, max: 3, refresh: 'retain' }],
+  },
+];
+delete targetedEnemyResource.enemy;
+targetedEnemyResource.cards[0].effects = {
+  resource: { id: 'stars', amount: 1 },
+  to: 'opponent',
+  targets: { mode: 'by_id', id: 'back' },
+};
+assert.equal(preflightBattleContent(targetedEnemyResource).ok, true, 'by_id resource effects validate only their selected enemy');
+const invalidAllEnemyResource = structuredClone(targetedEnemyResource);
+invalidAllEnemyResource.cards[0].effects.targets = { mode: 'all' };
+const invalidAllEnemyResourceResult = preflightBattleContent(invalidAllEnemyResource);
+assert.equal(invalidAllEnemyResourceResult.ok, false);
+assert.equal(invalidAllEnemyResourceResult.issues.some(issue => issue.code === 'UNKNOWN_TARGET_RESOURCE'), true);
+
+const enemyAllySupport = structuredClone(targetedEnemyResource);
+enemyAllySupport.enemies[0].actions = [{
+  name: '群体支援',
+  weight: 1,
+  effects: [
+    { block: 4, to: 'self', targets: { mode: 'all' } },
+    { apply_status: 'weak', stacks: 1, to: 'self', targets: { mode: 'lowest_hp' } },
+  ],
+}];
+const enemyAllySupportResult = preflightBattleContent(enemyAllySupport);
+assert.equal(
+  enemyAllySupportResult.ok,
+  true,
+  `enemy actions may target the enemy-side collection for ally support: ${JSON.stringify(enemyAllySupportResult.issues)}`,
+);
+const invalidPlayerSelfSelector = structuredClone(targetedEnemyResource);
+invalidPlayerSelfSelector.cards[0].effects = { heal: 2, to: 'self', targets: { mode: 'all' } };
+const invalidPlayerSelfSelectorResult = preflightBattleContent(invalidPlayerSelfSelector);
+assert.equal(invalidPlayerSelfSelectorResult.ok, false);
+
+assert.equal(
+  invalidPlayerSelfSelectorResult.issues.some(issue => issue.code === 'INVALID_TARGET_SELECTOR'),
+  true,
+  'player self-target effects must not silently ignore an enemy collection selector',
+);
+
 const validDiscardBuild = structuredClone(validBattle);
 validDiscardBuild.cards = [
   {
@@ -96,6 +190,66 @@ assert.equal(
   'direct shallow desire effects should be normalized at the runtime boundary',
 );
 
+const nestedPatch = amount => ({
+  patch_card: {
+    damage: { add: amount },
+    scope: 'combat',
+    from: 'combat',
+    pick: 'all',
+    template_id: 'strike',
+    root_only: true,
+  },
+});
+const legacyNestedPatchBattle = structuredClone(validBattle);
+legacyNestedPatchBattle.cards[1].effects = [{ block: 6 }, nestedPatch(1)];
+legacyNestedPatchBattle.cards.push({
+  id: 'patch_power',
+  name: '持续强化',
+  type: 'Power',
+  rarity: 'Uncommon',
+  cost: 1,
+  quantity: 1,
+  trigger: { on: 'attack_played', effects: [nestedPatch(1)] },
+});
+legacyNestedPatchBattle.artifacts = [{
+  id: 'patch_relic',
+  name: '强化遗物',
+  rarity: 'Common',
+  trigger: { on: 'battle_start', effects: [nestedPatch(1)] },
+}];
+legacyNestedPatchBattle.items = [{
+  id: 'patch_item',
+  name: '强化道具',
+  count: 1,
+  effects: [{ heal: 8 }, nestedPatch(2)],
+}];
+legacyNestedPatchBattle.player_lust_effect = {
+  name: '终极强化',
+  effects: [{ damage: 35 }, nestedPatch(3)],
+};
+const legacyNestedPatchResult = preflightBattleContent(legacyNestedPatchBattle);
+assert.equal(
+  legacyNestedPatchResult.ok,
+  true,
+  `unambiguous nested patch_card deviations must normalize in every executable container: ${JSON.stringify(legacyNestedPatchResult.issues)}`,
+);
+
+const ambiguousNestedPatchBattle = structuredClone(validBattle);
+ambiguousNestedPatchBattle.cards[1].effects = [{
+  patch_card: {
+    damage: { add: 1 },
+    block: { add: 1 },
+    from: 'combat',
+    pick: 'all',
+  },
+}];
+const ambiguousNestedPatchResult = preflightBattleContent(ambiguousNestedPatchBattle);
+assert.equal(ambiguousNestedPatchResult.ok, false);
+assert.ok(
+  ambiguousNestedPatchResult.issues.some(issue => issue.path.includes('battle.cards[1].effects[0].patch_card')),
+  JSON.stringify(ambiguousNestedPatchResult.issues),
+);
+
 const oneDecimalBattle = structuredClone(validBattle);
 oneDecimalBattle.enemy.max_hp = 40.1;
 oneDecimalBattle.enemy.hp = 40.1;
@@ -112,7 +266,10 @@ keyedStatusBattle.statuses = {
     triggers: { apply: { effects: { block: 1 } } },
   },
 };
-keyedStatusBattle.cards[0].effects = { damage: 8, apply_status: 'combo_flow', stacks: 1 };
+keyedStatusBattle.cards[0].effects = [
+  { damage: 8 },
+  { apply_status: 'combo_flow', stacks: 1, to: 'self' },
+];
 keyedStatusBattle.cards.push({
   id: 'combo_power',
   name: '连击架势',
@@ -120,7 +277,7 @@ keyedStatusBattle.cards.push({
   rarity: 'Uncommon',
   cost: 1,
   quantity: 1,
-  effects: { apply_status: 'combo_flow', stacks: 2 },
+  effects: { apply_status: 'combo_flow', stacks: 2, to: 'self' },
 });
 keyedStatusBattle.player_abilities = [
   {
@@ -243,5 +400,74 @@ missingExplicitStatus.statuses = [
 ];
 const registeredStatusResult = preflightBattleContent(missingExplicitStatus);
 assert.equal(registeredStatusResult.ok, true, JSON.stringify(registeredStatusResult.issues));
+
+const createSplitEnemy = () => ({
+  id: 'split_child',
+  name: '分裂子体',
+  emoji: '🦠',
+  max_hp: 12,
+  hp: 12,
+  max_lust: 100,
+  lust: 0,
+  actions: [{ name: '侵蚀', weight: 1, effects: { damage: 3 } }],
+  abilities: [],
+  status_effects: [],
+  lust_effect: { name: '孢子爆发', effects: { damage: 2 } },
+  action_mode: 'random',
+  action_config: {},
+  count: 2,
+});
+
+const validSplitBattle = structuredClone(validBattle);
+validSplitBattle.enemy.abilities = [{
+  id: 'split_on_defeat',
+  name: '死亡分裂',
+  trigger: 'defeated',
+  effects: { spawn_enemy: createSplitEnemy() },
+}];
+assert.equal(
+  preflightBattleContent(validSplitBattle).ok,
+  true,
+  JSON.stringify(preflightBattleContent(validSplitBattle).issues),
+);
+
+const invalidSplitStatusBattle = structuredClone(validSplitBattle);
+invalidSplitStatusBattle.enemy.abilities[0].effects.spawn_enemy.actions[0].effects = {
+  apply_status: 'missing_spawn_status',
+  stacks: 1,
+  to: 'opponent',
+};
+const invalidSplitStatusResult = preflightBattleContent(invalidSplitStatusBattle);
+assert.equal(invalidSplitStatusResult.ok, false);
+assert.ok(
+  invalidSplitStatusResult.issues.some(issue =>
+    issue.code === 'UNKNOWN_STATUS' && issue.path.includes('spawn_enemy.actions[0]')),
+  JSON.stringify(invalidSplitStatusResult.issues),
+);
+
+const invalidSplitResourceBattle = structuredClone(validSplitBattle);
+invalidSplitResourceBattle.enemy.abilities[0].effects.spawn_enemy.actions[0] = {
+  name: '积蓄怒气',
+  description: '为自身积蓄怒气。',
+  weight: 1,
+  effects: { resource: { id: 'rage', amount: 1 }, to: 'self' },
+};
+const invalidSplitResourceResult = preflightBattleContent(invalidSplitResourceBattle);
+assert.equal(invalidSplitResourceResult.ok, false);
+assert.ok(
+  invalidSplitResourceResult.issues.some(issue =>
+    issue.code === 'UNKNOWN_TARGET_RESOURCE' && issue.path.includes('spawn_enemy.actions[0]')),
+  JSON.stringify(invalidSplitResourceResult.issues),
+);
+
+const validSplitResourceBattle = structuredClone(invalidSplitResourceBattle);
+validSplitResourceBattle.enemy.abilities[0].effects.spawn_enemy.resources = [{
+  id: 'rage', name: '怒气', emoji: '🔥', current: 0, max: 3, refresh: 'retain',
+}];
+assert.equal(
+  preflightBattleContent(validSplitResourceBattle).ok,
+  true,
+  JSON.stringify(preflightBattleContent(validSplitResourceBattle).issues),
+);
 
 console.log('Strict modern battle preflight passed.');

@@ -28,6 +28,33 @@ export type EnemyTargetSelector =
 export interface ResolvedCombatantTargets<T extends IdentifiedCombatant> {
   targets: T[];
   random: BattleRandomState;
+  resolution: CombatantTargetResolution;
+}
+
+export interface CombatantTargetResolution {
+  requestedCount: number;
+  availableCount: number;
+  resolvedCount: number;
+  complete: boolean;
+  code?: 'NO_LIVING_TARGETS' | 'TARGET_NOT_FOUND' | 'INSUFFICIENT_TARGETS';
+  targetId?: string;
+}
+
+function targetResolution(
+  requestedCount: number,
+  availableCount: number,
+  resolvedCount: number,
+  code?: CombatantTargetResolution['code'],
+  targetId?: string,
+): CombatantTargetResolution {
+  return {
+    requestedCount,
+    availableCount,
+    resolvedCount,
+    complete: code === undefined,
+    ...(code ? { code } : {}),
+    ...(targetId ? { targetId } : {}),
+  };
 }
 
 function clone<T>(value: T): T {
@@ -138,22 +165,48 @@ export function resolveEnemyTargets<T extends IdentifiedCombatant>(
   random: BattleRandomState,
 ): ResolvedCombatantTargets<T> {
   const living = listCombatants(collection, { livingOnly: true });
-  if (living.length === 0) return { targets: [], random };
+  if (living.length === 0) {
+    const requestedCount = selector.mode === 'all' ? 0 : selector.mode === 'random_n' ? selector.count : 1;
+    return {
+      targets: [],
+      random,
+      resolution: targetResolution(requestedCount, 0, 0, requestedCount > 0 ? 'NO_LIVING_TARGETS' : undefined),
+    };
+  }
   if (selector.mode === 'active') {
     const target = getActiveCombatant(collection);
-    return { targets: target ? [target] : [], random };
+    return {
+      targets: target ? [target] : [],
+      random,
+      resolution: targetResolution(1, living.length, target ? 1 : 0, target ? undefined : 'TARGET_NOT_FOUND'),
+    };
   }
   if (selector.mode === 'by_id') {
     const target = collection.byId[selector.id];
-    return { targets: target?.currentHp > 0 ? [clone(target)] : [], random };
+    const targets = target?.currentHp > 0 ? [clone(target)] : [];
+    return {
+      targets,
+      random,
+      resolution: targetResolution(1, living.length, targets.length, targets.length ? undefined : 'TARGET_NOT_FOUND', selector.id),
+    };
   }
-  if (selector.mode === 'all') return { targets: living, random };
+  if (selector.mode === 'all') {
+    return {
+      targets: living,
+      random,
+      resolution: targetResolution(living.length, living.length, living.length),
+    };
+  }
   if (selector.mode === 'lowest_hp' || selector.mode === 'highest_hp') {
     const direction = selector.mode === 'lowest_hp' ? 1 : -1;
     const sorted = living.sort((left, right) =>
       direction * (left.currentHp - right.currentHp) || collection.order.indexOf(left.id) - collection.order.indexOf(right.id),
     );
-    return { targets: [sorted[0]], random };
+    return {
+      targets: [sorted[0]],
+      random,
+      resolution: targetResolution(1, living.length, 1),
+    };
   }
   const count = selector.mode === 'random' ? 1 : Math.max(0, Math.trunc(selector.count));
   const allowRepeat = selector.allowRepeat === true;
@@ -166,7 +219,17 @@ export function resolveEnemyTargets<T extends IdentifiedCombatant>(
     targets.push(clone(picked.value));
     if (!allowRepeat) pool.splice(pool.findIndex(entry => entry.id === picked.value.id), 1);
   }
-  return { targets, random: cursor };
+  const shortage = targets.length < count;
+  return {
+    targets,
+    random: cursor,
+    resolution: targetResolution(
+      count,
+      living.length,
+      targets.length,
+      shortage ? 'INSUFFICIENT_TARGETS' : undefined,
+    ),
+  };
 }
 
 export function validateCombatantCollection(value: unknown): value is CombatantCollection<IdentifiedCombatant> {

@@ -14,11 +14,11 @@ export interface RelicTriggerPlan {
     program: EffectProgram;
 }
 /** Resolve one ability without executing or translating modern programs. */
-export declare function resolveAbilityTriggerPlan(ability: Ability, requestedTrigger: string): AbilityTriggerPlan | null;
+export declare function resolveAbilityTriggerPlan(ability: Ability, requestedTrigger: string, context?: TriggerExecutionContext): AbilityTriggerPlan | null;
 /** Resolve one relic without executing or translating modern programs. */
-export declare function resolveRelicTriggerPlan(relic: Relic, requestedTrigger: string): RelicTriggerPlan | null;
+export declare function resolveRelicTriggerPlan(relic: Relic, requestedTrigger: string, context?: TriggerExecutionContext): RelicTriggerPlan | null;
 export interface AbilityTriggerRuntimePorts {
-    readAbilities(target: 'player' | 'enemy'): readonly Ability[] | undefined;
+    readAbilities(target: 'player' | 'enemy', context?: TriggerExecutionContext): readonly Ability[] | undefined;
     execute(target: 'player' | 'enemy', plan: AbilityTriggerPlan, context: TriggerExecutionContext): MaybePromise<void>;
 }
 /** Portable ordered ability matching with recursion protection. */

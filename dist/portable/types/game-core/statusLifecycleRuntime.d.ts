@@ -5,7 +5,7 @@ import type { RuntimeStatusDefinition, StatusRuntimeEffect } from './statusDefin
 import { type TriggerTransactionPorts } from './triggerTransaction';
 type MaybePromise<T> = T | Promise<T>;
 export type StatusLifecycleTarget = 'player' | 'enemy';
-export type StatusLifecycleActiveTrigger = Exclude<StatusTrigger, 'hold'>;
+export type StatusLifecycleActiveTrigger = Exclude<StatusTrigger, 'hold' | 'threshold_execute'>;
 export type StatusLifecycleState = Pick<BattleStateStore, 'getPlayer' | 'getEnemy' | 'addStatusEffect' | 'updateStatusEffect' | 'removeStatusEffect' | 'updatePlayer' | 'updateEnemy'>;
 export interface StatusDefinitionReader {
     get(statusId: string): RuntimeStatusDefinition | undefined;

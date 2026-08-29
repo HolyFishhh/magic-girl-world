@@ -1,14 +1,19 @@
 import {
   advanceBattleSessionTurn,
+  createEffectSchedulerState,
   createBattleRandomState,
   prepareEnemyActionQueue,
   rollDefaultEnemyAttackDamage,
   runScheduledPhaseAtomically,
+  scheduledCardZoneCommand,
   runEnemyActionQueue,
   resolveEnemyTurnAction,
+  resolveActiveCardPlayRules,
+  refreshCombatResourceStates,
   type BattleTurnFlowStep,
   type EnemyActionQueueEntry,
   type EffectProgram,
+  type ScheduledEffect,
 } from '../../game-core';
 import { GameStateManager } from '../core/gameStateManager';
 import { prepareNextEnemyAction } from '../core/enemyActionHost';
@@ -45,7 +50,11 @@ export class BattleManager {
   // 战斗初始化
   public async initializeBattle(enemy: Enemy | readonly Enemy[]): Promise<void> {
     // 设置敌人
-    const enemies = Array.isArray(enemy) ? [...enemy] : [enemy as Enemy];
+    const enemies = (Array.isArray(enemy) ? [...enemy] : [enemy as Enemy]).map(entry => ({
+      ...entry,
+      energy: entry.maxEnergy,
+      resources: refreshCombatResourceStates(entry.resources),
+    }));
     if (enemies.length === 0) throw new Error('battle requires at least one enemy');
     this.gameStateManager.setEnemies(enemies, enemies[0].id);
 
@@ -53,6 +62,7 @@ export class BattleManager {
     const player = this.gameStateManager.getPlayer();
     this.gameStateManager.updatePlayer({
       energy: player.maxEnergy,
+      resources: refreshCombatResourceStates(player.resources),
     });
     // 初始化回合号
     this.gameStateManager.setCurrentTurn(0 as any);
@@ -81,6 +91,7 @@ export class BattleManager {
         canEndTurn: () => this.canPlayerAct(),
         isTerminal: () => this.gameStateManager.isGameOver(),
         beginEnemyTurn: () => this.gameStateManager.beginEnemyTurn(),
+        consumeExtraTurn: actor => this.gameStateManager.consumeExtraTurn(actor),
         executeTurnStep: step => this.executeTurnFlowStep(step),
       });
     } catch (error) {
@@ -100,8 +111,18 @@ export class BattleManager {
       case 'player_abilities_end':
         await UnifiedEffectExecutor.getInstance().processAbilitiesByTrigger('player', 'turn_end');
         return;
+      case 'player_summons_action':
+        await UnifiedEffectExecutor.getInstance().processSummonActions('player');
+        return;
+      case 'player_orbs_end':
+        await UnifiedEffectExecutor.getInstance().processOrbPassives('player');
+        return;
       case 'player_statuses_end':
         await UnifiedEffectExecutor.getInstance().processStatusEffectsAtTurnEnd('player');
+        await UnifiedEffectExecutor.getInstance().processSummonStatusEffectsAtTurnEnd('player');
+        return;
+      case 'player_threshold_execute':
+        await UnifiedEffectExecutor.getInstance().processThresholdExecutes('player');
         return;
       case 'scheduled_turn_end':
         await this.executeScheduledPhase('turn_end');
@@ -109,9 +130,30 @@ export class BattleManager {
       case 'advance_turn':
         this.gameStateManager.incrementTurn();
         return;
-      case 'enemy_block_reset':
-        for (const enemy of this.gameStateManager.getEnemies({ livingOnly: true }))
-          this.gameStateManager.updateEnemyById(enemy.id, { block: 0 }, { skipAttributeTriggers: true });
+      case 'enemy_block_reset': {
+        const previousActive = this.gameStateManager.getGameState().activeEnemyId;
+        for (const enemy of this.gameStateManager.getEnemies({ livingOnly: true })) {
+          this.gameStateManager.setActiveEnemy(enemy.id);
+          const rules = resolveActiveCardPlayRules(
+            UnifiedEffectExecutor.getInstance().getCardPlayRules('enemy'),
+            this.gameStateManager.getGameState().cardRuleUsesThisTurn || 0,
+          );
+          if (!rules.retainBlock)
+            this.gameStateManager.updateEnemyById(enemy.id, { block: 0 }, { skipAttributeTriggers: true });
+        }
+        if (previousActive) this.gameStateManager.setActiveEnemy(previousActive);
+        return;
+      }
+      case 'enemy_resources_reset':
+        for (const enemy of this.gameStateManager.getEnemies({ livingOnly: true })) {
+          this.gameStateManager.updateEnemyById(enemy.id, {
+            energy: enemy.maxEnergy,
+            resources: refreshCombatResourceStates(enemy.resources),
+          });
+        }
+        return;
+      case 'enemy_summons_reset':
+        this.gameStateManager.resetSummonsForTurn('enemy');
         return;
       case 'enemy_abilities_start':
         await this.forEachLivingEnemy(() => UnifiedEffectExecutor.getInstance().processAbilitiesByTrigger('enemy', 'turn_start'));
@@ -119,14 +161,24 @@ export class BattleManager {
       case 'enemy_action':
         await this.executeEnemyTurnAction();
         return;
+      case 'enemy_summons_action':
+        await UnifiedEffectExecutor.getInstance().processSummonActions('enemy');
+        return;
       case 'enemy_next_intent':
         this.setEnemyNextActions();
         return;
       case 'enemy_abilities_end':
         await this.forEachLivingEnemy(() => UnifiedEffectExecutor.getInstance().processAbilitiesByTrigger('enemy', 'turn_end'));
         return;
+      case 'enemy_orbs_end':
+        await this.forEachLivingEnemy(() => UnifiedEffectExecutor.getInstance().processOrbPassives('enemy'));
+        return;
       case 'enemy_statuses_end':
         await this.forEachLivingEnemy(() => UnifiedEffectExecutor.getInstance().processStatusEffectsAtTurnEnd('enemy'));
+        await UnifiedEffectExecutor.getInstance().processSummonStatusEffectsAtTurnEnd('enemy');
+        return;
+      case 'enemy_threshold_execute':
+        await UnifiedEffectExecutor.getInstance().processThresholdExecutes('enemy');
         return;
       case 'temporary_modifiers_clear':
         this.gameStateManager.clearTemporaryModifiers();
@@ -134,15 +186,26 @@ export class BattleManager {
       case 'player_begin':
         this.gameStateManager.beginPlayerTurn();
         return;
+      case 'player_summons_reset':
+        this.gameStateManager.resetSummonsForTurn('player');
+        return;
       case 'scheduled_turn_start':
         await this.executeScheduledPhase('turn_start');
         return;
       case 'player_block_reset':
-        this.gameStateManager.updatePlayer({ block: 0 }, { skipAttributeTriggers: true });
+        if (!resolveActiveCardPlayRules(
+          UnifiedEffectExecutor.getInstance().getCardPlayRules('player'),
+          this.gameStateManager.getGameState().cardRuleUsesThisTurn || 0,
+        ).retainBlock) {
+          this.gameStateManager.updatePlayer({ block: 0 }, { skipAttributeTriggers: true });
+        }
         return;
       case 'player_energy_reset': {
         const player = this.gameStateManager.getPlayer();
-        this.gameStateManager.updatePlayer({ energy: player.maxEnergy });
+        this.gameStateManager.updatePlayer({
+          energy: player.maxEnergy,
+          resources: refreshCombatResourceStates(player.resources),
+        });
         return;
       }
       case 'scheduled_before_draw':
@@ -170,29 +233,116 @@ export class BattleManager {
   private async executeScheduledPhase(
     phase: 'turn_start' | 'before_draw' | 'after_draw' | 'turn_end',
   ): Promise<void> {
+    const stateBefore = structuredClone(this.gameStateManager.getGameState());
     const before = this.gameStateManager.readEffectScheduler();
     const turn = this.gameStateManager.getGameState().currentTurn;
-    const result = await runScheduledPhaseAtomically(before, turn, phase, null, value => value);
-    for (const scheduled of result.executed) {
-      if (scheduled.payload.type !== 'effect_program')
-        throw new Error(`unsupported scheduled payload: ${scheduled.payload.type}`);
+    const originalIds = new Set(before.queue.map(item => item.id));
+    try {
+      const result = await runScheduledPhaseAtomically(
+        before,
+        turn,
+        phase,
+        null,
+        async (value, scheduled) => {
+          await this.executeScheduledPayload(scheduled);
+          return value;
+        },
+        { isTerminal: () => this.gameStateManager.isGameOver() },
+      );
+      const afterPayloads = this.gameStateManager.readEffectScheduler();
+      const newlyScheduled = afterPayloads.queue.filter(item => !originalIds.has(item.id));
+      const merged = createEffectSchedulerState([...result.state.queue, ...newlyScheduled]);
+      merged.nextSequence = Math.max(merged.nextSequence, result.state.nextSequence, afterPayloads.nextSequence);
+      this.gameStateManager.writeEffectScheduler(merged);
+    } catch (error) {
+      this.gameStateManager.replaceState(stateBefore, 'scheduled_phase_rollback');
+      throw error;
+    }
+  }
+
+  private async executeScheduledPayload(scheduled: ScheduledEffect): Promise<void> {
+    const context = {
+      triggerType: 'scheduled',
+      abilityContext: { id: scheduled.source.id, name: scheduled.source.name || '预约效果' },
+    };
+    if (scheduled.payload.type === 'effect_program') {
       await UnifiedEffectExecutor.getInstance().executeEffectProgram(
         scheduled.payload.program,
         scheduled.payload.sourceIsPlayer,
-        { triggerType: 'scheduled', abilityContext: { id: scheduled.source.id, name: scheduled.source.name || '预约效果' } },
+        context,
       );
+      return;
     }
-    this.gameStateManager.writeEffectScheduler(result.state);
+    if (scheduled.payload.type === 'remove_status') {
+      const owner = scheduled.payload.owner;
+      if (owner === 'enemy' && !this.gameStateManager.getEnemy()) return;
+      await UnifiedEffectExecutor.getInstance().executeEffectProgram(
+        {
+          spec: 'mwg.effect/v1',
+          steps: [{ op: 'remove_status', target: 'self', status: scheduled.payload.statusId }],
+        },
+        owner === 'player',
+        context,
+      );
+      return;
+    }
+    if (scheduled.payload.type === 'defeat_entity') {
+      const entityId = scheduled.payload.entityId;
+      if (entityId === 'player') {
+        if (this.gameStateManager.getPlayer().currentHp <= 0) return;
+        await UnifiedEffectExecutor.getInstance().executeEffectProgram(
+          { spec: 'mwg.effect/v1', steps: [{ op: 'kill', target: 'self' }] },
+          true,
+          context,
+        );
+        return;
+      }
+      const enemy = this.gameStateManager.getEnemyById(entityId);
+      if (!enemy || enemy.currentHp <= 0) return;
+      await UnifiedEffectExecutor.getInstance().executeEffectProgram(
+        {
+          spec: 'mwg.effect/v1',
+          steps: [{ op: 'kill', target: 'opponent', targetSelector: { mode: 'by_id', id: entityId } }],
+        },
+        true,
+        context,
+      );
+      return;
+    }
+    const command = scheduledCardZoneCommand(scheduled.payload);
+    if (!command) throw new Error(`unsupported scheduled payload: ${scheduled.payload.type}`);
+    const sourceKinds = new Set([
+      'card', 'relic', 'status', 'ability', 'system', 'enemy_action', 'summon', 'enchantment', 'affliction',
+    ]);
+    await this.cardSystem.executeCardEffectCommand(command, {
+      currentTurn: this.gameStateManager.getGameState().currentTurn,
+      source: {
+        kind: sourceKinds.has(scheduled.source.kind)
+          ? scheduled.source.kind as import('../../game-core').CardPatchSourceKind
+          : 'system',
+        id: scheduled.source.id,
+        ...(scheduled.source.name ? { name: scheduled.source.name } : {}),
+      },
+    });
   }
 
   private async executeEnemyTurnAction(): Promise<void> {
+    const previousActiveEnemyId = this.gameStateManager.getGameState().activeEnemyId;
     const entries = this.prepareCurrentEnemyQueue();
-    await runEnemyActionQueue(entries, {
-      isAlive: enemyId => (this.gameStateManager.getEnemyById(enemyId)?.currentHp || 0) > 0,
-      isTerminal: () => this.gameStateManager.isGameOver(),
-      execute: entry => this.executeEnemyQueueEntry(entry),
-      afterEach: () => { this.gameStateManager.removeDefeatedEnemies(); },
-    });
+    try {
+      await runEnemyActionQueue(entries, {
+        isAlive: enemyId => (this.gameStateManager.getEnemyById(enemyId)?.currentHp || 0) > 0,
+        isTerminal: () => this.gameStateManager.isGameOver() || this.gameStateManager.isForceEndTurnRequested('enemy'),
+        execute: entry => this.executeEnemyQueueEntry(entry),
+        afterEach: () => { this.gameStateManager.removeDefeatedEnemies(); },
+      });
+    } finally {
+      this.gameStateManager.consumeForceEndTurn('enemy');
+      // Acting enemies temporarily become the legacy active alias so their
+      // relative self/opponent effects resolve against the correct entity.
+      // Preserve the player's selected target across that internal queue.
+      if (previousActiveEnemyId) this.gameStateManager.setActiveEnemy(previousActiveEnemyId);
+    }
   }
 
   private async executeEnemyQueueEntry(entry: EnemyActionQueueEntry): Promise<void> {
@@ -220,7 +370,7 @@ export class BattleManager {
     const action = entry.action as import('../../game-core').EnemyAction;
 
     // 显示敌人行动动画
-    this.enemyIntentPresenter.showAction(action);
+    this.enemyIntentPresenter.showAction(action, enemy);
 
     await this.executeEnemyEffect(action.effectProgram, action.name, entry.enemyId);
 
@@ -237,7 +387,7 @@ export class BattleManager {
 
     // 默认攻击行为
     const damage = rollDefaultEnemyAttackDamage(() => this.gameStateManager.nextRandom());
-    this.enemyIntentPresenter.logAction('默认攻击', `造成${damage}点伤害`);
+    this.enemyIntentPresenter.logAction('默认攻击', `造成${damage}点伤害`, enemy);
     await this.executeEnemyEffect(
       { spec: 'mwg.effect/v1', steps: [{ op: 'damage', target: 'opponent', amount: damage }] },
       '默认攻击',
@@ -305,6 +455,10 @@ export class BattleManager {
     }
 
     const success = await this.cardSystem.playCard(cardId, targetType);
+
+    if (success && this.gameStateManager.consumeForceEndTurn('player') && this.canPlayerAct()) {
+      await this.endPlayerTurn();
+    }
 
     // 死亡检查已由 UnifiedEffectExecutor 统一处理，这里不需要再检查
 

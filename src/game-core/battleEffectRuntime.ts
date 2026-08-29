@@ -1,6 +1,7 @@
 import { absorbDamageWithBlock, applyNumericOperator, clampBattleAttribute, roundBattleValue } from './battleMath';
 import { resolveAttributeTriggerDispatch, type BattleSide, type BattleTriggerDispatch } from './battleEventDispatch';
 import type { Enemy, Player } from './battleState';
+import type { BattleTriggerEventContext } from './battleEventJournal';
 import type { EffectCommand } from './effectCommandRuntime';
 import {
   applyModifierOperation,
@@ -14,9 +15,13 @@ export type BattleEffectCommand = Extract<
   {
     type:
       | 'damage'
+      | 'execute'
+      | 'kill'
       | 'heal'
       | 'gain_block'
       | 'gain_energy'
+      | 'gain_resource'
+      | 'set_resource'
       | 'gain_lust'
       | 'set_stat'
       | 'modify';
@@ -43,6 +48,15 @@ export type BattleEffectRuntimeEvent =
     }
   | { type: 'block_absorbed'; target: BattleSide; amount: number }
   | {
+      type: 'summon_intercepted';
+      source: BattleSide;
+      target: BattleSide;
+      requested: number;
+      intercepted: number;
+      remaining: number;
+      hits: Array<{ summonId: string; blocked: number; hpLost: number; defeated: boolean }>;
+    }
+  | {
       type: 'damage_resolved';
       source: BattleSide;
       target: BattleSide;
@@ -59,6 +73,18 @@ export type BattleEffectRuntimeEvent =
       requested: number;
       modified: number;
       hpGained: number;
+    }
+  | {
+      type: 'defeat_resolved';
+      source: BattleSide;
+      target: BattleSide;
+      method: 'execute' | 'kill';
+      succeeded: boolean;
+      previousHp: number;
+      threshold?: number;
+      thresholdMode?: 'hp' | 'hp_percent';
+      fatal: boolean;
+      excludedBy?: string;
     }
   | {
       type: 'attribute_changed';
@@ -81,6 +107,14 @@ export type BattleEffectRuntimeEvent =
       operation: ModifierOperation;
       previousValue: number;
       nextValue: number;
+    }
+  | {
+      type: 'resource_changed';
+      target: BattleSide;
+      resource: string;
+      previousValue: number;
+      nextValue: number;
+      change: 'gain' | 'set';
     };
 
 export interface BattleEffectStatePort {
@@ -96,25 +130,60 @@ export interface BattleEffectRuntimePorts {
   readModifierSources(target: BattleSide, modifier: BattleModifierAttribute): readonly BattleModifierSource[];
   dispatchTriggers(dispatches: readonly BattleTriggerDispatch[]): Promise<void>;
   handleLustOverflow(target: BattleSide): Promise<void>;
+  interceptDamage?(request: {
+    source: BattleSide;
+    target: BattleSide;
+    amount: number;
+    damageKind: import('./battleEventJournal').DamageKind;
+    sourceEnemyId?: string;
+    targetEnemyId?: string;
+  }): Promise<{
+    remainingDamage: number;
+    interceptedDamage: number;
+    hits: Array<{ summonId: string; blocked: number; hpLost: number; defeated: boolean }>;
+  }>;
   present?(event: BattleEffectRuntimeEvent): void;
 }
 
 export interface BattleEffectRuntimeContext {
   source: BattleSide;
+  /** Stable identity for an enemy source while the legacy active alias may move. */
+  sourceEnemyId?: string;
+  /** Stable identity for an enemy target selected by a multi-enemy selector. */
+  targetEnemyId?: string;
   damageKind?: import('./battleEventJournal').DamageKind;
+  bypassBlock?: boolean;
+  /** Candidate journal metadata for triggers dispatched before the event is appended. */
+  triggerEventContext?: BattleTriggerEventContext;
+  /**
+   * Optional source-local modifier set. Summons and other independent actors can
+   * use their own modifiers without inheriting the owning combatant's direct or
+   * passive outgoing modifiers.
+   */
+  sourceModifierSources?: Partial<Record<BattleModifierAttribute, readonly BattleModifierSource[]>>;
 }
 
 export interface BattleEffectRuntimeResult {
   applied: boolean;
   target?: BattleSide;
   pendingDeath?: boolean;
+  blocked?: number;
+  hpLost?: number;
+  hpGained?: number;
+  defeated?: boolean;
+  fatal?: boolean;
+  excludedBy?: string;
 }
 
 const BATTLE_EFFECT_COMMAND_TYPES = new Set<BattleEffectCommand['type']>([
   'damage',
+  'execute',
+  'kill',
   'heal',
   'gain_block',
   'gain_energy',
+  'gain_resource',
+  'set_resource',
   'gain_lust',
   'set_stat',
   'modify',
@@ -155,8 +224,34 @@ export class BattleEffectRuntime {
     if (command.type === 'modify') return this.executeModifier(command, context);
 
     const target = resolveBattleEffectTarget(command.target, context.source);
+    if (command.type === 'execute' || command.type === 'kill') {
+      return this.executeDefeat(command, target, context);
+    }
     if (command.type === 'set_stat') {
       return this.executeAttribute(target, context.source, command.stat, '=', command.value, [], context);
+    }
+    if (command.type === 'gain_resource' || command.type === 'set_resource') {
+      const enemyId = target === 'enemy' ? context.targetEnemyId : undefined;
+      const entity = this.getEntity(target, enemyId);
+      if (!entity) return { applied: false, target };
+      const resource = entity.resources?.[command.resource];
+      if (!resource) return { applied: false, target };
+      const previousValue = resource.current;
+      const nextValue = Math.max(
+        0,
+        Math.min(resource.max, Math.floor(command.type === 'gain_resource' ? previousValue + command.amount : command.value)),
+      );
+      const resources = { ...(entity.resources || {}), [command.resource]: { ...resource, current: nextValue } };
+      this.updateEntity(target, { resources }, enemyId);
+      this.ports.present?.({
+        type: 'resource_changed',
+        target,
+        resource: command.resource,
+        previousValue,
+        nextValue,
+        change: command.type === 'gain_resource' ? 'gain' : 'set',
+      });
+      return { applied: true, target };
     }
 
     const definitions = {
@@ -189,15 +284,36 @@ export class BattleEffectRuntime {
       },
     } as const;
     const definition = definitions[command.type];
-    return this.executeAttribute(
+    const damageKind = command.type === 'damage'
+      ? command.damageKind || context.damageKind || 'effect'
+      : context.damageKind;
+    const bypassBlock = command.type === 'damage'
+      ? command.bypassBlock === true || command.damageKind === 'hp_loss'
+      : false;
+    const modifiers = command.type === 'damage' && damageKind === 'hp_loss'
+      ? []
+      : definition.modifiers;
+    const result = await this.executeAttribute(
       target,
       context.source,
       definition.attribute,
       definition.operator,
       command.amount,
-      definition.modifiers,
-      context,
+      modifiers,
+      { ...context, ...(damageKind ? { damageKind } : {}), ...(bypassBlock ? { bypassBlock: true } : {}) },
     );
+    if (command.type === 'damage' && result.applied && (command.lifesteal || 0) > 0 && (result.hpLost || 0) > 0) {
+      await this.executeAttribute(
+        context.source,
+        context.source,
+        'hp',
+        '+',
+        roundBattleValue((result.hpLost || 0) * (command.lifesteal || 0)),
+        [{ target: context.source, attribute: 'heal_modifier' }],
+        context,
+      );
+    }
+    return result;
   }
 
   private getEntity(target: BattleSide, enemyId?: string): Player | Enemy | null {
@@ -211,9 +327,13 @@ export class BattleEffectRuntime {
     else this.state.updateEnemy(updates);
   }
 
-  private modifierSources(target: BattleSide, modifier: BattleModifierAttribute): BattleModifierSource[] {
+  private modifierSources(
+    target: BattleSide,
+    modifier: BattleModifierAttribute,
+    enemyId?: string,
+  ): BattleModifierSource[] {
     const sources = [...this.ports.readModifierSources(target, modifier)];
-    const direct = this.getEntity(target)?.modifiers?.[modifier];
+    const direct = this.getEntity(target, enemyId)?.modifiers?.[modifier];
     if (typeof direct === 'number' && direct !== 0) {
       sources.push({ operation: { operator: '+', value: direct }, name: 'direct' });
     }
@@ -223,10 +343,22 @@ export class BattleEffectRuntime {
   private applyModifiers(
     value: number,
     definitions: readonly { target: BattleSide; attribute: BattleModifierAttribute }[],
+    context: BattleEffectRuntimeContext,
   ): number {
     let result = value;
     for (const definition of definitions) {
-      for (const source of this.modifierSources(definition.target, definition.attribute)) {
+      const enemyId = definition.target === 'enemy'
+        ? definition.target === context.source
+          ? context.sourceEnemyId || context.targetEnemyId
+          : context.targetEnemyId
+        : undefined;
+      const independentSourceModifiers = definition.target === context.source
+        ? context.sourceModifierSources?.[definition.attribute]
+        : undefined;
+      const sources = independentSourceModifiers === undefined
+        ? this.modifierSources(definition.target, definition.attribute, enemyId)
+        : [...independentSourceModifiers];
+      for (const source of sources) {
         const previousValue = result;
         result = applyModifierOperation(result, source.operation);
         this.ports.present?.({
@@ -251,18 +383,32 @@ export class BattleEffectRuntime {
     modifiers: readonly { target: BattleSide; attribute: BattleModifierAttribute }[],
     context: BattleEffectRuntimeContext,
   ): Promise<BattleEffectRuntimeResult> {
-    const enemyId = target === 'enemy' ? this.state.getEnemy()?.id : undefined;
+    const enemyId = target === 'enemy' ? context.targetEnemyId : undefined;
     let entity = this.getEntity(target, enemyId);
     if (!entity) return { applied: false, target };
 
     const baseRequested = roundBattleValue(Number.isFinite(requestedValue) ? requestedValue : 0);
+    const eventContext: BattleTriggerEventContext = {
+      ...(context.triggerEventContext || {}),
+      eventRecorded: false,
+      phase: 'resolve',
+      actorId: source === 'player' ? 'player' : context.sourceEnemyId || context.triggerEventContext?.actorId || 'enemy',
+      targetId: target === 'player' ? 'player' : enemyId || context.triggerEventContext?.targetId || 'enemy',
+      ...(attribute === 'hp' && operator === '-'
+        ? { kind: 'damage_resolved' as const, damageKind: context.damageKind || 'effect' }
+        : attribute === 'hp' && operator === '+'
+          ? { kind: 'heal_resolved' as const }
+          : {}),
+    };
     let value = roundBattleValue(
-      this.applyModifiers(Number.isFinite(requestedValue) ? requestedValue : 0, modifiers),
+      this.applyModifiers(Number.isFinite(requestedValue) ? requestedValue : 0, modifiers, context),
     );
     const modifiedRequested = value;
     let blocked = 0;
     if (attribute === 'hp' && operator === '-') {
-      const absorption = absorbDamageWithBlock(value, entity.block);
+      const absorption = context.bypassBlock
+        ? { damage: value, blockUsed: 0, remainingBlock: entity.block }
+        : absorbDamageWithBlock(value, entity.block);
       if (absorption.blockUsed > 0) {
         blocked = absorption.blockUsed;
         this.updateEntity(target, { block: absorption.remainingBlock }, enemyId);
@@ -273,12 +419,35 @@ export class BattleEffectRuntime {
             change: -absorption.blockUsed,
             target,
             source,
+            eventContext,
           }),
         );
         entity = this.getEntity(target, enemyId);
         if (!entity) return { applied: false, target };
       }
       value = absorption.damage;
+      if (value > 0 && context.damageKind === 'attack' && this.ports.interceptDamage) {
+        const intercepted = await this.ports.interceptDamage({
+          source,
+          target,
+          amount: value,
+          damageKind: context.damageKind,
+          ...(context.sourceEnemyId ? { sourceEnemyId: context.sourceEnemyId } : {}),
+          ...(context.targetEnemyId ? { targetEnemyId: context.targetEnemyId } : {}),
+        });
+        if (intercepted.interceptedDamage > 0) {
+          this.ports.present?.({
+            type: 'summon_intercepted',
+            source,
+            target,
+            requested: value,
+            intercepted: intercepted.interceptedDamage,
+            remaining: intercepted.remainingDamage,
+            hits: intercepted.hits,
+          });
+        }
+        value = Math.max(0, roundBattleValue(intercepted.remainingDamage));
+      }
     }
 
     entity = this.getEntity(target, enemyId);
@@ -295,7 +464,7 @@ export class BattleEffectRuntime {
 
     const change = roundBattleValue(nextValue - previousValue);
     await this.ports.dispatchTriggers(
-      resolveAttributeTriggerDispatch({ attribute, change, target, source }),
+      resolveAttributeTriggerDispatch({ attribute, change, target, source, eventContext }),
     );
 
     if (attribute === 'lust') {
@@ -330,7 +499,13 @@ export class BattleEffectRuntime {
 
     if (attribute !== 'hp') return { applied: true, target };
     const finalEntity = this.getEntity(target, enemyId);
-    return { applied: true, target, pendingDeath: Boolean(finalEntity && finalEntity.currentHp <= 0) };
+    return {
+      applied: true,
+      target,
+      pendingDeath: Boolean(finalEntity && finalEntity.currentHp <= 0),
+      ...(operator === '-' ? { blocked, hpLost: Math.max(0, -change) } : {}),
+      ...(operator === '+' ? { hpGained: Math.max(0, change) } : {}),
+    };
   }
 
   private executeModifier(
@@ -338,7 +513,8 @@ export class BattleEffectRuntime {
     context: BattleEffectRuntimeContext,
   ): BattleEffectRuntimeResult {
     const target = resolveBattleEffectTarget(command.target, context.source);
-    const entity = this.getEntity(target);
+    const enemyId = target === 'enemy' ? context.targetEnemyId : undefined;
+    const entity = this.getEntity(target, enemyId);
     if (!entity) return { applied: false, target };
     const modifier = MODIFIER_ATTRIBUTE_BY_STAT[command.stat];
     const previousValue = entity.modifiers?.[modifier] || 0;
@@ -347,7 +523,7 @@ export class BattleEffectRuntime {
       value: command.value,
     };
     const nextValue = applyModifierOperation(previousValue, operation);
-    this.updateEntity(target, { modifiers: { ...(entity.modifiers || {}), [modifier]: nextValue } });
+    this.updateEntity(target, { modifiers: { ...(entity.modifiers || {}), [modifier]: nextValue } }, enemyId);
     this.ports.present?.({
       type: 'direct_modifier_changed',
       target,
@@ -357,5 +533,46 @@ export class BattleEffectRuntime {
       nextValue,
     });
     return { applied: true, target };
+  }
+
+  private executeDefeat(
+    command: Extract<BattleEffectCommand, { type: 'execute' | 'kill' }>,
+    target: BattleSide,
+    context: BattleEffectRuntimeContext,
+  ): BattleEffectRuntimeResult {
+    const enemyId = target === 'enemy' ? context.targetEnemyId : undefined;
+    const entity = this.getEntity(target, enemyId);
+    if (!entity) return { applied: false, target };
+    const excludedBy = command.excludeTags?.find(tag => entity.tags?.includes(tag));
+    const thresholdHp = command.type === 'kill'
+      ? Number.POSITIVE_INFINITY
+      : command.thresholdMode === 'hp_percent'
+        ? roundBattleValue(entity.maxHp * command.threshold / 100)
+        : command.threshold;
+    const defeated = !excludedBy && entity.currentHp > 0 && entity.currentHp <= thresholdHp;
+    const previousHp = entity.currentHp;
+    if (defeated) this.updateEntity(target, { currentHp: 0 }, enemyId);
+    const fatal = defeated && command.triggerFatal !== false;
+    this.ports.present?.({
+      type: 'defeat_resolved',
+      source: context.source,
+      target,
+      method: command.type,
+      succeeded: defeated,
+      previousHp,
+      ...(command.type === 'execute'
+        ? { threshold: command.threshold, thresholdMode: command.thresholdMode }
+        : {}),
+      fatal,
+      ...(excludedBy ? { excludedBy } : {}),
+    });
+    return {
+      applied: true,
+      target,
+      pendingDeath: defeated,
+      defeated,
+      fatal,
+      ...(excludedBy ? { excludedBy } : {}),
+    };
   }
 }

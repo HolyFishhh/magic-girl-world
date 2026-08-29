@@ -31,12 +31,24 @@ await core.runEffectCommandProgram(program, { spentEnergy: 0 }, {
 assert.deepEqual(commands[0].targetSelector, { mode: 'all' });
 assert.deepEqual(commands[1].targetSelector, { mode: 'random_n', count: 2, allowRepeat: false, retarget: 'each_hit' });
 
-const invalidSelf = core.validateEffectProgram({
+const portableSelfCollection = core.validateEffectProgram({
   spec: core.EFFECT_PROGRAM_SPEC,
   steps: [{ op: 'heal', target: 'self', targetSelector: { mode: 'all' }, amount: 2 }],
 });
-assert.equal(invalidSelf.ok, false);
-assert.equal(invalidSelf.issues.some(issue => issue.code === 'INVALID_TARGET_SELECTOR'), true);
+assert.equal(portableSelfCollection.ok, true, 'portable AST may bind an enemy collection to either relative side');
+const invalidPlayerSelfCollection = core.compileCompactEffectList({
+  heal: 2,
+  to: 'self',
+  targets: { mode: 'all' },
+});
+assert.equal(invalidPlayerSelfCollection.ok, false, 'player-authored effects cannot apply enemy selectors to the player');
+const enemyAllyCollection = core.compileCompactEffectList([
+  { heal: 2, to: 'self', targets: { mode: 'all' } },
+  { block: 3, to: 'self', targets: { mode: 'lowest_hp' } },
+  { apply_status: 'guarded', stacks: 1, to: 'self', targets: { mode: 'random_n', count: 2 } },
+], { enemyCollectionTarget: 'self' });
+assert.equal(enemyAllyCollection.ok, true, enemyAllyCollection.ok ? '' : JSON.stringify(enemyAllyCollection.issues));
+assert.equal(enemyAllyCollection.value.steps.every(step => step.target === 'self'), true);
 assert.equal(core.validateEffectProgram({
   spec: core.EFFECT_PROGRAM_SPEC,
   steps: [{ op: 'damage', target: 'opponent', targetSelector: { mode: 'random_n', count: 0 }, amount: 2 }],
@@ -63,11 +75,11 @@ const host = new TavernEffectCommandHost({
   isTerminal: () => false,
   executeCardCommand: async () => {},
   presentCommand: () => {},
-  executeBattleCommand: async command => executed.push(command),
+  executeBattleCommand: async (command, _sourceIsPlayer, enemyId) => executed.push({ command, enemyId }),
   forEachEnemyTarget: async (selector, execute) => {
     selectors.push(selector);
     const count = selector.mode === 'all' ? 3 : selector.mode === 'random_n' ? selector.count : 1;
-    for (let index = 0; index < count; index += 1) await execute();
+    for (let index = 0; index < count; index += 1) await execute(`enemy-${index + 1}`);
   },
   applyStatus: async () => {},
   removeStatuses: async () => {},
@@ -77,7 +89,18 @@ const host = new TavernEffectCommandHost({
 await host.executeProgram({ spec: core.EFFECT_PROGRAM_SPEC, steps: [program.steps[0]] }, true);
 assert.deepEqual(selectors, [{ mode: 'all' }]);
 assert.equal(executed.length, 3);
-assert.equal(executed.every(command => command.targetSelector === undefined), true, 'fan-out commands must be single-target');
+assert.equal(executed.every(entry => entry.command.targetSelector === undefined), true, 'fan-out commands must be single-target');
+assert.deepEqual(
+  executed.map(entry => entry.enemyId),
+  ['enemy-1', 'enemy-2', 'enemy-3'],
+  'the host must preserve each resolved enemy ID through the single-target command',
+);
+executed.length = 0;
+selectors.length = 0;
+await host.executeProgram({ spec: core.EFFECT_PROGRAM_SPEC, steps: [enemyAllyCollection.value.steps[0]] }, false);
+assert.deepEqual(selectors, [{ mode: 'all' }], 'enemy self-target collection fans out to its living allies');
+assert.equal(executed.length, 3);
+assert.equal(executed.every(entry => entry.command.target === 'self'), true);
 
 for (const path of ['schemas/mwg-effect-v1.schema.json', 'schemas/mwg-card-effects-v1.schema.json'])
   JSON.parse(await readFile(resolve(path), 'utf8'));

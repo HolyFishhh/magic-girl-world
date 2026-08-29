@@ -30,11 +30,12 @@ export const ABILITY_TRIGGERS = [
   'enemy_lose_debuff',
   'gain_block',
   'lose_block',
+  'defeated',
 ] as const;
 
 export type AbilityTrigger = (typeof ABILITY_TRIGGERS)[number];
 
-export const STATUS_TRIGGERS = ['apply', 'stack', 'tick', 'remove', 'hold'] as const;
+export const STATUS_TRIGGERS = ['apply', 'stack', 'tick', 'remove', 'hold', 'threshold_execute'] as const;
 export type StatusTrigger = (typeof STATUS_TRIGGERS)[number];
 export type BattleTrigger = AbilityTrigger | StatusTrigger;
 

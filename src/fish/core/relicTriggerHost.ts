@@ -43,7 +43,10 @@ export class TavernRelicTriggerHost {
   }
 
   public async triggerRelics(trigger: AbilityTrigger, context: Record<string, unknown> = {}): Promise<void> {
-    await this.runtime.run(trigger, context);
+    await this.runtime.run(trigger, {
+      ...context,
+      eventJournal: this.gameStateManager.getGameState().eventJournal,
+    });
   }
 
   private async triggerRelic(plan: RelicTriggerPlan, context: Record<string, unknown>): Promise<void> {

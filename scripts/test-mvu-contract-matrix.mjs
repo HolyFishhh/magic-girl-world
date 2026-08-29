@@ -11,7 +11,15 @@ assert.equal(contract.spec, 'mwg.mvu-stat-data/v1');
 assert.equal(contract.root, 'stat_data');
 assert.equal(contract.initialization, 'worldbook_new/变量初始化.json');
 
-const allowedShapes = new Set(['string', 'number', 'array', 'object', 'nullable-object']);
+const allowedShapes = new Set([
+  'string',
+  'number',
+  'array',
+  'object',
+  'nullable-object',
+  'program-managed',
+  'optional-program-fields',
+]);
 const allowedOwners = new Set(['ai', 'program', 'shared']);
 const allowedLifecycles = new Set(['persistent', 'battle-temporary', 'candidate', 'one-shot-request', 'optional-run']);
 const allowedOperations = new Set(['set', 'assign', 'remove', 'add']);
@@ -56,14 +64,16 @@ function visit(value, path = '') {
 visit(initial);
 
 assert.deepEqual(
-  [...declared.keys()].sort(),
+  [...declared.keys()].filter(path => !path.includes('[]')).sort(),
   [...initialized.keys()].sort(),
   'every initialized MUV leaf/extensible object must have exactly one contract entry',
 );
 for (const [path, expected] of initialized) {
   const actual = declared.get(path);
-  assert.equal(actual.shape, expected.shape, `${path} shape drifted from initialization`);
-  assert.equal(actual.extensible, expected.extensible, `${path} extensibility drifted from initialization`);
+  if (actual.shape !== 'program-managed') {
+    assert.equal(actual.shape, expected.shape, `${path} shape drifted from initialization`);
+    assert.equal(actual.extensible, expected.extensible, `${path} extensibility drifted from initialization`);
+  }
 }
 
 const promptSources = await Promise.all(
@@ -102,8 +112,24 @@ assert.match(runStateAdapterSource, /flattenMvuArray<.*>\(stat\.battle\?\.cards,
 
 assert.deepEqual(declared.get('run').group.ai_operations, [], 'AI must not mutate program-owned run state');
 assert.equal(declared.get('run').group.owner, 'program');
+assert.deepEqual(
+  declared.get('battle.design_context').group.ai_operations,
+  [],
+  'AI must not mutate program-owned content design context',
+);
+assert.equal(declared.get('battle.design_context').group.owner, 'program');
+assert.deepEqual(
+  declared.get('battle.cards[].$meta.mwg_card_progression').group.ai_operations,
+  [],
+  'AI must not mutate persistent card progression metadata',
+);
+assert.equal(declared.get('battle.cards[].$meta.mwg_card_progression').group.owner, 'program');
+assert.deepEqual(declared.get('run_trigger_invocations').group.ai_operations, []);
+assert.equal(declared.get('run_trigger_invocations').group.owner, 'program');
+assert.deepEqual(declared.get('run_trigger_counters.total').group.ai_operations, []);
 assert.equal(declared.get('battle.core.energy'), undefined, 'energy belongs to BattleState, not MUV');
 assert.equal(declared.get('battle.core.block'), undefined, 'block belongs to BattleState, not MUV');
-assert.ok(contract.legacy.every(entry => entry.policy === 'removed' || entry.policy === 'runtime-only'));
+assert.ok(contract.legacy.every(entry =>
+  entry.policy === 'removed' || entry.policy === 'runtime-only' || entry.policy === 'program-migrated'));
 
 console.log(`MUV contract covers ${declared.size} canonical paths and rejects removed storage fields.`);

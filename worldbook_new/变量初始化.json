@@ -33,7 +33,11 @@
       "max_hp": 100,
       "lust": 0,
       "max_lust": 100,
-      "card_removal_count": 1
+      "card_removal_count": 1,
+      "stance": null,
+      "orb_slots": 0,
+      "orbs": ["$__META_EXTENSIBLE__$"],
+      "resources": ["$__META_EXTENSIBLE__$"]
     },
     "cards": ["$__META_EXTENSIBLE__$"],
     "artifacts": ["$__META_EXTENSIBLE__$"],
@@ -43,14 +47,23 @@
     "player_status_effects": ["$__META_EXTENSIBLE__$"],
     "level": 1,
     "exp": 0,
+    "design_context": null,
+    "lineage_memory": null,
     "enemy": {
       "$meta": { "extensible": false },
       "name": "",
+      "family_id": "",
+      "family_name": "",
+      "evolution_stage": "",
       "emoji": "",
       "max_hp": 0,
       "hp": 0,
       "max_lust": 100,
       "lust": 0,
+      "stance": null,
+      "orb_slots": 0,
+      "orbs": ["$__META_EXTENSIBLE__$"],
+      "resources": ["$__META_EXTENSIBLE__$"],
       "description": "",
       "actions": ["$__META_EXTENSIBLE__$"],
       "abilities": ["$__META_EXTENSIBLE__$"],
@@ -87,10 +100,35 @@
     "artifact": ["$__META_EXTENSIBLE__$"],
     "item": ["$__META_EXTENSIBLE__$"],
     "limits": { "$meta": { "extensible": true } },
-    "request": null
+    "request": null,
+    "disabled_categories": ["$__META_EXTENSIBLE__$"],
+    "pool_revision": 0,
+    "reroll_count": 0
   },
   "run": null,
   "run_result": null,
   "run_upgrade": null,
+  "run_upgrade_target": null,
+  "run_transform": null,
+  "run_transform_target": null,
+  "run_reward_reroll": null,
+  "run_rules": ["$__META_EXTENSIBLE__$"],
+  "run_trigger_invocations": ["$__META_EXTENSIBLE__$"],
+  "run_trigger_counters": {
+    "$meta": { "extensible": false },
+    "total": 0,
+    "by_trigger": { "$meta": { "extensible": true } },
+    "by_source_kind": { "$meta": { "extensible": true } },
+    "by_source": { "$meta": { "extensible": true } }
+  },
+  "run_transaction_revision": 0,
+  "run_transaction_log": ["$__META_EXTENSIBLE__$"],
+  "run_transaction_events": ["$__META_EXTENSIBLE__$"],
+  "run_transaction_counters": {
+    "$meta": { "extensible": false },
+    "total": 0,
+    "by_event": { "$meta": { "extensible": true } },
+    "by_source": { "$meta": { "extensible": true } }
+  },
   "game_mode": "story"
 }

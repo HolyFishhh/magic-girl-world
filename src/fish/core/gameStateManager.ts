@@ -1,4 +1,11 @@
-import { getCurrentMessageVariables } from '../../runtime/messageVariables';
+import {
+  getCurrentMessageVariables,
+  isCurrentMessageLatest,
+  updateCurrentMessageVariablesWith,
+} from '../../runtime/messageVariables';
+import { refreshMvuContentDesignContext } from '../../runtime/contentDesignContextAdapter';
+import { readRuntimeContentDesignSettings } from '../../runtime/contentDesignSettings';
+import { maybeRequestAutomaticBalanceCalibration } from '../../runtime/automaticBalanceCalibration';
 import {
   assessEnemyBudget,
   BattleStateStore,
@@ -11,15 +18,21 @@ import {
   BattleContentContractError,
   contentPathToBattlePath,
   summarizeBuildBudget,
+  normalizeOrbContainer,
+  normalizeTurnControl,
+  normalizeCombatResourceStates,
   type Card,
   type Enemy,
   type GameState,
+  type ContentDesignAssessment,
 } from '../../game-core';
 import { formatBattleContentIssues, preflightBattleContent, type BattleContentIssue } from './battleContentPreflight';
 import { inspectBattleDataContract, readBattleDataContract } from './battleDataContract';
 import { BattleSessionStore } from './battleSessionStore';
 import {
   buildMvuStatusDisplayContext,
+  convertMvuOrbContainer,
+  convertMvuStance,
   convertMvuCards,
   convertMvuEnemies,
   convertMvuAbilities,
@@ -133,6 +146,19 @@ export class GameStateManager extends BattleStateStore {
     const enemy = super.getEnemy();
     if (enemy || this.lastLoadError) return enemy;
 
+    // The MVU fallback exists only to bootstrap a battle whose runtime state has
+    // not been loaded yet.  Once combat has started, an empty living roster is
+    // authoritative: restoring `battle.enemy` here would resurrect the original
+    // definition between lethal damage, defeated triggers and battle-end UI.
+    // A recorded corpse is authoritative even while a defeated passive is still
+    // resolving and the replacement roster has not entered yet.
+    const runtimeState = this.getGameState();
+    if (
+      runtimeState.phase !== 'setup' ||
+      runtimeState.isGameOver ||
+      (runtimeState.defeatedEnemies?.length || 0) > 0
+    ) return null;
+
     try {
       const variables = getCurrentMessageVariables();
       const battleContract = readBattleDataContract(variables);
@@ -193,6 +219,30 @@ export class GameStateManager extends BattleStateStore {
         }
       }
       const battleRequest = battleData ? createBattleRequestFromMvu(variables, battleData) : undefined;
+      if (battleRequest && isCurrentMessageLatest()) {
+        let designDiagnostics = '';
+        let designAssessment: ContentDesignAssessment | null = null;
+        await Promise.resolve(
+          updateCurrentMessageVariablesWith(currentVariables => {
+            const design = refreshMvuContentDesignContext(currentVariables, {
+              request: battleRequest,
+              ...readRuntimeContentDesignSettings(),
+            });
+            designAssessment = design.assessment;
+            designDiagnostics = design.assessment
+              ? design.assessment.diagnostics
+                  .filter(issue => issue.severity !== 'advice')
+                  .map(issue => `${issue.code}:${issue.message}`)
+                  .join('；')
+              : '';
+            return currentVariables;
+          }),
+        );
+        if (designDiagnostics) console.warn(`内容设计辅助警告：${designDiagnostics}`);
+        if (designAssessment && await maybeRequestAutomaticBalanceCalibration(variables, designAssessment)) {
+          return this.loadFromSillyTavern();
+        }
+      }
       if (battleRequest) {
         const balance = assessEnemyBudget(
           battleRequest,
@@ -207,6 +257,21 @@ export class GameStateManager extends BattleStateStore {
       const restoredState = this.battleSessionStore.prepare(variables, battleRequest);
       if (restoredState) {
         this.gameState = recoverRestoredAbilityMetadata(restoredState);
+        this.gameState.turnControl = normalizeTurnControl(this.gameState.turnControl);
+        this.gameState.player.orbs = normalizeOrbContainer(this.gameState.player.orbs);
+        this.gameState.player.resources = normalizeCombatResourceStates(this.gameState.player.resources);
+        if (this.gameState.enemies) {
+          this.gameState.enemies = this.gameState.enemies.map(enemy => ({
+            ...enemy,
+            resources: normalizeCombatResourceStates(enemy.resources),
+          }));
+        }
+        if (this.gameState.defeatedEnemies) {
+          this.gameState.defeatedEnemies = this.gameState.defeatedEnemies.map(enemy => ({
+            ...enemy,
+            resources: normalizeCombatResourceStates(enemy.resources),
+          }));
+        }
         this.normalizeEnemyCollection();
         try {
           this.notifyListeners('state_loaded');
@@ -256,9 +321,24 @@ export class GameStateManager extends BattleStateStore {
       const player = this.gameState.player;
       if (!player) return;
 
+      const ownedCards = [...player.hand, ...player.drawPile, ...player.discardPile, ...player.exhaustPile];
+      const ownedRunIds = new Set(ownedCards.map(card => card.runInstanceId).filter(Boolean));
+      for (const card of mvuCards) {
+        if (typeof card?.runInstanceId !== 'string' || ownedRunIds.has(card.runInstanceId)) continue;
+        const converted = convertMvuCards([{ ...card, quantity: 1 }], {
+          createId: sourceId => this.createRuntimeCardId(sourceId),
+          existingIds: ownedCards.map(entry => entry.id),
+          statusNames,
+        })[0];
+        if (converted) {
+          this.addCardToDeck(converted);
+          ownedRunIds.add(converted.runInstanceId);
+        }
+      }
+
       // 统计当前牌堆系中各 originalId 的数量（不含 player.deck，避免与初始化时的快照重复计算）
       const currentCounts = countCardOwnership(
-        [...player.hand, ...player.drawPile, ...player.discardPile, ...player.exhaustPile],
+        ownedCards,
         this.getInFlightCardCounts(),
       );
 
@@ -266,6 +346,7 @@ export class GameStateManager extends BattleStateStore {
       const desiredCounts = new Map<string, { card: any; count: number }>();
       for (const c of mvuCards) {
         if (!c || typeof c !== 'object') continue;
+        if (typeof c.runInstanceId === 'string') continue;
         const key = c.id || c.name;
         if (!key) continue;
         const qty = Math.max(1, Number(c.quantity) || 1);
@@ -329,6 +410,7 @@ export class GameStateManager extends BattleStateStore {
       maxLust: core['max_lust'] ?? 100,
       energy: 3, // 战斗中计算，不从MVU读取
       maxEnergy: 3, // 固定值
+      resources: normalizeCombatResourceStates(core['resources']),
       block: 0, // 战斗中计算，不从MVU读取
       drawPerTurn: 5, // 固定值，不从MVU读取
       // 设置卡牌数据
@@ -344,6 +426,8 @@ export class GameStateManager extends BattleStateStore {
       statusEffects: playerStatusEffects,
       // 设置道具数据
       items,
+      stance: convertMvuStance(core['stance'], 1),
+      orbs: convertMvuOrbContainer(core['orb_slots'], core['orbs']),
     };
 
     const opening = resolveStartingHand(

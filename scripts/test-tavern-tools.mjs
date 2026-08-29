@@ -75,7 +75,17 @@ try {
   globalThis.fetch = originalFetch;
 }
 
-const [apiSource, importSource, snapshotSource, calibrationSource, startSource, readinessSource, battleRepairSource] =
+const [
+  apiSource,
+  importSource,
+  snapshotSource,
+  calibrationSource,
+  startSource,
+  readinessSource,
+  battleRepairSource,
+  webpackSource,
+  devTavernSource,
+] =
   await Promise.all([
     readFile(resolve('scripts/lib/tavern-api.mjs'), 'utf8'),
     readFile(resolve('scripts/import-tavern-card.mjs'), 'utf8'),
@@ -84,6 +94,8 @@ const [apiSource, importSource, snapshotSource, calibrationSource, startSource, 
     readFile(resolve('scripts/test-real-tavern-start.mjs'), 'utf8'),
     readFile(resolve('scripts/test-real-tavern-initial-readiness.mjs'), 'utf8'),
     readFile(resolve('scripts/test-real-tavern-battle-repair.mjs'), 'utf8'),
+    readFile(resolve('webpack.config.ts'), 'utf8'),
+    readFile(resolve('scripts/dev-tavern.mjs'), 'utf8'),
   ]);
 for (const source of [importSource, snapshotSource, calibrationSource, startSource, readinessSource, battleRepairSource]) {
   assert.match(source, /from ['"].*lib\/tavern-api\.mjs['"]/);
@@ -119,5 +131,10 @@ assert.match(importSource, /enabledCharacterScripts\.includes\(releaseConfig\.ch
 assert.match(importSource, /enabledCharacterScripts\.push\(releaseConfig\.characterName\)/);
 assert.match(importSource, /settings\.active_character = importedAvatar/);
 assert.match(importSource, /settings\.active_group = null/);
+assert.match(webpackSource, /process\.argv\.includes\('--watch'\)/);
+assert.match(webpackSource, /new Server\(port/);
+assert.match(webpackSource, /io\.emit\('iframe_updated'\)/);
+assert.match(devTavernSource, /'--watch'/);
+assert.match(devTavernSource, /websocket listener/);
 
 console.log('One Tavern HTTP boundary serves import, snapshot, calibration, start, readiness, and battle-repair fixtures.');

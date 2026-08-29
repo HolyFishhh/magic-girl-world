@@ -1,4 +1,5 @@
 import type { EffectProgram } from './effectDsl';
+import { isCardEffectCommand, type CardEffectCommand } from './cardEffectRuntime';
 
 export type ScheduledPhase = 'turn_start' | 'before_draw' | 'after_draw' | 'turn_end';
 export type ScheduledOwner = 'player' | 'enemy' | 'system';
@@ -7,11 +8,29 @@ export type ScheduledPayload =
   | { type: 'effect_program'; program: EffectProgram; sourceIsPlayer: boolean }
   | { type: 'remove_status'; owner: ScheduledOwner; statusId: string }
   | { type: 'defeat_entity'; entityId: string; reason: 'delayed_death' | 'execute' }
+  | { type: 'card_zone_operation'; command: CardEffectCommand }
   | {
       type: 'card_zone';
       operation: 'move' | 'remove' | 'recover' | 'generate';
       data: Record<string, unknown>;
     };
+
+/** Normalize old saved card-zone payloads into the only executable command shape. */
+export function scheduledCardZoneCommand(payload: ScheduledPayload): CardEffectCommand | null {
+  if (payload.type === 'card_zone_operation')
+    return isCardEffectCommand(payload.command) ? structuredClone(payload.command) : null;
+  if (payload.type !== 'card_zone') return null;
+  const embedded = payload.data.command;
+  if (isCardEffectCommand(embedded)) return structuredClone(embedded);
+  const type = ({
+    move: 'move_cards',
+    remove: 'remove_cards',
+    recover: 'recover_cards',
+    generate: 'add_card',
+  } as const)[payload.operation];
+  const candidate = { ...structuredClone(payload.data), type };
+  return isCardEffectCommand(candidate) ? candidate : null;
+}
 
 export interface ScheduledEffect {
   id: string;
@@ -60,6 +79,13 @@ function validateDraft(draft: ScheduleEffectDraft): void {
     throw new Error('repeatEvery must be positive integer');
   if (draft.remainingRepeats !== undefined && (!Number.isInteger(draft.remainingRepeats) || draft.remainingRepeats < 1))
     throw new Error('remainingRepeats must be positive integer');
+  if (!draft.payload || typeof draft.payload !== 'object') throw new Error('scheduled effect requires payload');
+  if (draft.payload.type === 'remove_status' && (!draft.payload.statusId.trim() || !['player', 'enemy'].includes(draft.payload.owner)))
+    throw new Error('scheduled remove_status requires a player/enemy owner and status id');
+  if (draft.payload.type === 'defeat_entity' && !draft.payload.entityId.trim())
+    throw new Error('scheduled defeat_entity requires entity id');
+  if ((draft.payload.type === 'card_zone' || draft.payload.type === 'card_zone_operation') && !scheduledCardZoneCommand(draft.payload))
+    throw new Error('scheduled card-zone payload requires a card effect command');
 }
 
 export function scheduleEffect(
@@ -116,11 +142,37 @@ export async function runScheduledPhaseAtomically<T>(
   phase: ScheduledPhase,
   initial: T,
   execute: (draft: T, effect: ScheduledEffect) => T | Promise<T>,
+  options: { isTerminal?: (draft: T) => boolean } = {},
 ): Promise<{ state: EffectSchedulerState; value: T; executed: ScheduledEffect[] }> {
-  const taken = takeDueScheduledEffects(state, turn, phase);
+  if (!Number.isInteger(turn) || turn < 0) throw new Error('turn must be non-negative integer');
+  const due = state.queue.filter(item => item.dueTurn <= turn && item.phase === phase).sort(scheduleOrder);
+  const dueIds = new Set(due.map(item => item.id));
+  const queue = state.queue.filter(item => !dueIds.has(item.id)).map(item => structuredClone(item));
   let draft = structuredClone(initial);
-  for (const effect of taken.due) draft = await execute(draft, structuredClone(effect));
-  return { state: taken.state, value: draft, executed: taken.due };
+  const executed: ScheduledEffect[] = [];
+  for (const effect of due) {
+    if (options.isTerminal?.(draft)) break;
+    draft = await execute(draft, structuredClone(effect));
+    executed.push(structuredClone(effect));
+  }
+  const executedIds = new Set(executed.map(item => item.id));
+  for (const item of due) {
+    if (!executedIds.has(item.id)) {
+      queue.push(structuredClone(item));
+      continue;
+    }
+    if (!item.repeatEvery || !item.remainingRepeats || item.remainingRepeats <= 1) continue;
+    queue.push({
+      ...structuredClone(item),
+      dueTurn: turn + item.repeatEvery,
+      remainingRepeats: item.remainingRepeats - 1,
+    });
+  }
+  return {
+    state: { ...state, queue: queue.sort(scheduleOrder) },
+    value: draft,
+    executed,
+  };
 }
 
 export function cancelScheduledEffects(

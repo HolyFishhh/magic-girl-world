@@ -27,6 +27,17 @@ assert.match(runtimeSource, /class="mwg-tool-orb"/, 'settings must use an icon-o
 assert.match(runtimeSource, /class="mwg-settings-sheet"/, 'general settings must have its own sheet');
 assert.match(runtimeSource, /class="mwg-mvu-panel"/, 'MVU progress must have an independent panel');
 assert.match(runtimeSource, /data-mwg-monitor-setting="showMvuWindow"/);
+assert.match(runtimeSource, /data-mwg-difficulty/);
+for (const difficultyPercent of [10, 50, 80, 100, 110]) {
+  assert.match(runtimeSource, new RegExp(`<option value="${difficultyPercent}">`));
+}
+assert.match(runtimeSource, /data-mwg-monitor-setting="autoCalibration"/);
+assert.match(runtimeSource, /difficultyPercent:\s*80/);
+assert.match(runtimeSource, /autoCalibration:\s*true/);
+assert.match(runtimeSource, /data-action="open-card-repair"/);
+assert.match(runtimeSource, /data-mwg-card-repair-input/);
+assert.match(runtimeSource, /正在按你的要求增量修复卡牌/);
+assert.doesNotMatch(runtimeSource, /mwg-card-repair-(?:form|error)\{display:none!important/);
 assert.match(runtimeSource, /data-mwg-monitor-loading-title>正在生成变量/);
 assert.match(runtimeSource, /setPointerCapture/);
 assert.match(runtimeSource, /orbPosition/);
@@ -138,8 +149,20 @@ assert.equal(typeof variableUpdateStartedListener, 'function');
 assert.equal(typeof commandParsedListener, 'function');
 assert.equal(typeof variableUpdateEndedListener, 'function');
 assert.equal(typeof context.MagicGirlWorldMvuMonitor?.begin, 'function');
+assert.equal(typeof sharedRuntime.registerCardRepairHandler, 'function');
+assert.equal(typeof sharedRuntime.requestCardRepair, 'function');
+let cardRepairRequirement = '';
+const disposeCardRepairHandler = sharedRuntime.registerCardRepairHandler(async requirement => {
+  cardRepairRequirement = requirement;
+});
+await sharedRuntime.requestCardRepair('把星火改成两段攻击');
+assert.equal(cardRepairRequirement, '把星火改成两段攻击');
+disposeCardRepairHandler();
+await assert.rejects(sharedRuntime.requestCardRepair('再次修复'), /尚未完成第二轮修复接口加载/);
 assert.deepEqual(JSON.parse(JSON.stringify(context.MagicGirlWorldMvuMonitor.getSettings())), {
   showMvuWindow: true,
+  difficultyPercent: 80,
+  autoCalibration: true,
 });
 assert.doesNotThrow(() => {
   globalExtraAnalysis = true;

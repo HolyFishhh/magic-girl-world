@@ -57,6 +57,33 @@ const replayed = journal.appendBattleEvent(state, {
 assert.equal(replayed.ok, true);
 state = replayed.state;
 
+const spent = journal.appendBattleEvent(state, {
+  turn: 1,
+  phase: 'resolve',
+  kind: 'resource_spent',
+  cause: { source, parentEventId: played.event.id, rootEventId: played.event.id },
+  actorId: 'player',
+  resource: 'stars',
+  requested: 2,
+  spent: 2,
+});
+assert.equal(spent.ok, true);
+state = spent.state;
+const changed = journal.appendBattleEvent(state, {
+  turn: 1,
+  phase: 'resolve',
+  kind: 'resource_changed',
+  cause: { source, parentEventId: played.event.id, rootEventId: played.event.id },
+  actorId: 'player',
+  targetId: 'enemy:a',
+  resource: 'rage',
+  previousValue: 1,
+  nextValue: 3,
+  change: 'gain',
+});
+assert.equal(changed.ok, true);
+state = changed.state;
+
 assert.equal(journal.countBattleEvents(state, { scope: 'turn', turn: 1, filter: { kind: 'card_played', cardType: 'Attack' } }), 2);
 assert.equal(journal.countBattleEvents(state, { scope: 'card_instance', cardInstanceId: 'strike__1', filter: { kind: 'card_played' } }), 2);
 assert.equal(journal.countBattleEvents(state, { scope: 'team', teamActorIds: ['player'], filter: { kind: 'damage_resolved', damageKind: 'attack' } }), 1);
@@ -65,6 +92,8 @@ assert.equal(journal.matchesEventOrdinal(state, replayed.event.id, { scope: 'com
 assert.equal(state.lastCardPlayed.id, replayed.event.id);
 assert.equal(state.lastDamage.hpLost, 5);
 assert.equal(state.lastActualHpLoss.hpLost, 5);
+assert.equal(journal.countBattleEvents(state, { scope: 'turn', turn: 1, filter: { kind: 'resource_spent' } }), 1);
+assert.equal(journal.countBattleEvents(state, { scope: 'combat', filter: { kind: 'resource_changed' } }), 1);
 
 const restored = journal.createBattleEventJournal(JSON.parse(JSON.stringify(state.events)));
 assert.deepEqual(restored, state, 'journal restoration must not recount or reorder events differently');
@@ -92,5 +121,18 @@ const invalidDamage = journal.appendBattleEvent(state, {
   fatal: false,
 });
 assert.equal(invalidDamage.code, 'INVALID_EVENT_VALUE');
+const invalidResource = journal.appendBattleEvent(state, {
+  turn: 1,
+  phase: 'resolve',
+  kind: 'resource_changed',
+  cause: { source },
+  actorId: 'player',
+  targetId: 'enemy:a',
+  resource: 'bad-resource',
+  previousValue: 0,
+  nextValue: 1,
+  change: 'gain',
+});
+assert.equal(invalidResource.code, 'INVALID_EVENT_VALUE');
 
 console.log('Causal battle journal preserves phases, reasons, scopes, ordinals, recursion guards, and deterministic restoration.');

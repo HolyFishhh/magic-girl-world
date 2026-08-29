@@ -1,5 +1,6 @@
 import { type CardPlayCard, type CardPlayFailure, type CardPlayState, type CommittedCardPlay, type PreparedCardPlay } from './cardPlayTransaction';
-import type { CardEnergyPayment, PlayedCardDestination } from './cardRules';
+import type { PlayedCardDestination } from './cardRules';
+import type { CardResourcePayment } from './combatResource';
 import { type BattleStartFlowResult, type BattleStartFlowStep, type BattleTurnFlowResult, type BattleTurnFlowStep } from './battleTurnFlow';
 export type BattleSessionAction = 'battle_start' | 'play_card' | 'use_item' | 'end_turn';
 type MaybePromise<T> = T | Promise<T>;
@@ -45,6 +46,7 @@ export interface BattleSessionTurnPorts<TToken> extends BattleSessionTransaction
     canEndTurn(): boolean;
     isTerminal(): boolean;
     beginEnemyTurn(): MaybePromise<void>;
+    consumeExtraTurn?(actor: 'player' | 'enemy'): MaybePromise<boolean>;
     executeTurnStep(step: BattleTurnFlowStep): MaybePromise<void>;
 }
 export type BattleSessionTurnResult = {
@@ -62,16 +64,16 @@ export interface BattleSessionCardPlayPorts<TCard extends CardPlayCard, TToken> 
     applyCardPlayCommit(committed: CommittedCardPlay<TCard>): MaybePromise<void>;
     beginCardTransit(card: TCard): MaybePromise<void>;
     endCardTransit(card: TCard): MaybePromise<void>;
-    executeCardEffect(card: TCard, payment: CardEnergyPayment, repeatIndex: number): MaybePromise<void>;
+    executeCardEffect(card: TCard, payment: CardResourcePayment, repeatIndex: number): MaybePromise<void>;
     movePlayedCard(card: TCard, destination: PlayedCardDestination): MaybePromise<void>;
     resolvePlayedCardDestination?(card: TCard, defaultDestination: PlayedCardDestination): PlayedCardDestination;
     triggerPostCardPlay(card: TCard): MaybePromise<void>;
-    recordCardPlayEvent?(card: TCard, payment: CardEnergyPayment, event: {
+    recordCardPlayEvent?(card: TCard, payment: CardResourcePayment, event: {
         phase: 'before' | 'after';
         replayIndex: number;
         automatic: boolean;
     }): MaybePromise<void>;
-    recordCardResourceSpent?(card: TCard, payment: CardEnergyPayment): MaybePromise<void>;
+    recordCardResourceSpent?(card: TCard, payment: CardResourcePayment): MaybePromise<void>;
     recordPlayedCardMoved?(card: TCard, destination: PlayedCardDestination): MaybePromise<void>;
 }
 export type BattleSessionCardPlayResult<TCard extends CardPlayCard> = {

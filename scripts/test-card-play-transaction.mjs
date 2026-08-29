@@ -49,6 +49,26 @@ assert.equal(core.prepareCardPlay('attack', { ...base, phase: 'enemy_turn' }).co
 assert.equal(core.prepareCardPlay('attack', { ...base, hasOpponent: false }).code, 'NO_OPPONENT');
 assert.equal(core.prepareCardPlay('attack', { ...base, energy: 0 }).code, 'INSUFFICIENT_ENERGY');
 
+const deniedByAttachment = core.applyCardAttachment({
+  ...attack,
+  rarity: 'Common',
+  effectProgram: { spec: 'mwg.effect/v1', steps: [] },
+}, {
+  id: 'sealed', kind: 'affliction', name: '封锁', scope: 'combat', appliedTurn: 1,
+  source: { kind: 'enemy_action', id: 'seal' },
+  changes: [{ kind: 'play_access', mode: 'deny' }],
+});
+assert.equal(core.prepareCardPlay(deniedByAttachment.id, { ...base, hand: [deniedByAttachment] }).code, 'RULE_DENIED');
+const allowedCurse = core.applyCardAttachment({
+  ...deniedByAttachment,
+  id: 'curse', type: 'Curse', cost: undefined, attachments: [], patches: [], patchBase: undefined,
+}, {
+  id: 'permission', kind: 'enchantment', name: '解放', scope: 'combat', appliedTurn: 1,
+  source: { kind: 'card', id: 'permission' },
+  changes: [{ kind: 'play_access', mode: 'allow' }],
+});
+assert.equal(core.prepareCardPlay('curse', { ...base, hand: [allowedCurse] }).ok, true);
+
 const xCard = { id: 'x', name: '全力', type: 'Attack', cost: 'energy', doubleEffect: true };
 const xPrepared = core.prepareCardPlay('x', { ...base, hand: [xCard], energy: 4, cardsPlayedThisTurn: 2 });
 assert.equal(xPrepared.ok, true);
@@ -103,6 +123,49 @@ assert.equal(freeX.ok, true);
 assert.equal(freeX.payment.spentEnergy, 0, 'a free X-cost card resolves with zero spent energy');
 assert.equal(freeX.repeatCount, 2, 'free payment does not remove an existing one-shot double effect');
 
+const compositeCard = { id: 'composite', name: '复合费用', type: 'Skill', cost: { energy: 1, stars: 2 } };
+const compositeState = { ...base, hand: [compositeCard], resources: { stars: 3 } };
+const compositePrepared = core.prepareCardPlay('composite', compositeState);
+assert.equal(compositePrepared.ok, true);
+assert.deepEqual(compositePrepared.payment.spent, { energy: 1, stars: 2 });
+const compositeCommit = core.commitCardPlay(compositePrepared, compositeState);
+assert.equal(compositeCommit.ok, true);
+assert.equal(compositeCommit.energy, 2);
+assert.deepEqual(compositeCommit.resources, { stars: 1 });
+const insufficientComposite = core.prepareCardPlay('composite', { ...compositeState, resources: { stars: 1 } });
+assert.equal(insufficientComposite.code, 'INSUFFICIENT_RESOURCE');
+assert.deepEqual(insufficientComposite.effectiveCost, { energy: 1, stars: 2 });
+assert.deepEqual(insufficientComposite.payment.waived, []);
+
+const partialFreeRule = { ...freeRule, limit: 'all', freeResources: ['energy'] };
+const partiallyFree = core.prepareCardPlay('composite', {
+  ...compositeState,
+  energy: 0,
+  resources: { stars: 2 },
+  cardPlayRules: [partialFreeRule],
+});
+assert.equal(partiallyFree.ok, true);
+assert.deepEqual(partiallyFree.payment.spent, { energy: 0, stars: 2 });
+const allFreeComposite = core.prepareCardPlay('composite', {
+  ...compositeState,
+  energy: 0,
+  resources: { stars: 0 },
+  cardPlayRules: [{ ...freeRule, limit: 'all' }],
+});
+assert.equal(allFreeComposite.ok, true);
+assert.deepEqual(allFreeComposite.payment.spent, { energy: 0, stars: 0 });
+
+const multiX = { id: 'multi_x', name: '多资源X', type: 'Attack', cost: { energy: 'all', stars: 'all' } };
+const multiXPrepared = core.prepareCardPlay('multi_x', {
+  ...base,
+  hand: [multiX],
+  energy: 3,
+  resources: { stars: 2 },
+});
+assert.equal(multiXPrepared.ok, true);
+assert.deepEqual(multiXPrepared.payment.xValues, { energy: 3, stars: 2 });
+assert.deepEqual(multiXPrepared.payment.spent, { energy: 3, stars: 2 });
+
 const stackedRules = core.resolveActiveCardPlayRules(
   [
     { ...replayRule, limit: 'all', extra: 12 },
@@ -111,6 +174,18 @@ const stackedRules = core.resolveActiveCardPlayRules(
   ],
   99,
 );
-assert.deepEqual(stackedRules, { free: true, extraReplays: 20 }, 'replays stack but keep the safety cap');
+assert.deepEqual(
+  stackedRules,
+  {
+    free: true,
+    extraReplays: 20,
+    retainHand: false,
+    retainBlock: false,
+    denied: false,
+    explicitlyAllowed: false,
+    playLimitReached: false,
+  },
+  'replays stack but keep the safety cap',
+);
 
 console.log('Portable card play transactions re-read host state and preserve atomic intent.');

@@ -5,6 +5,10 @@ export interface EffectProgramPolicyOptions {
     triggerPolicy?: EffectTriggerPolicy;
     modifierPolicy?: EffectModifierPolicy;
     allowSpentEnergy?: boolean;
+    /** Resource IDs whose actual paid amount may be read by the program. */
+    allowSpentResources?: ReadonlySet<string>;
+    /** Resource IDs whose resolved `all`/X value may be read by the program. */
+    allowXResources?: ReadonlySet<string>;
     allowStatusStacks?: boolean;
     allowNarrate?: boolean;
     requireSingleNarrate?: boolean;

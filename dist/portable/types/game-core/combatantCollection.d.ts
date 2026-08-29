@@ -35,6 +35,15 @@ export type EnemyTargetSelector = {
 export interface ResolvedCombatantTargets<T extends IdentifiedCombatant> {
     targets: T[];
     random: BattleRandomState;
+    resolution: CombatantTargetResolution;
+}
+export interface CombatantTargetResolution {
+    requestedCount: number;
+    availableCount: number;
+    resolvedCount: number;
+    complete: boolean;
+    code?: 'NO_LIVING_TARGETS' | 'TARGET_NOT_FOUND' | 'INSUFFICIENT_TARGETS';
+    targetId?: string;
 }
 export declare function createCombatantCollection<T extends IdentifiedCombatant>(combatants?: readonly T[], activeId?: string | null): CombatantCollection<T>;
 export declare function listCombatants<T extends IdentifiedCombatant>(collection: CombatantCollection<T>, options?: {

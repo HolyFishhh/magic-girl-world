@@ -1,0 +1,17 @@
+{
+  "display_name": "魔法少女世界 设计辅助器",
+  "loading_order": 110,
+  "requires": [],
+  "optional": [],
+  "dependencies": ["third-party/JS-Slash-Runner"],
+  "js": "index.js",
+  "css": "index.css",
+  "hooks": {
+    "activate": "activate",
+    "disable": "disable"
+  },
+  "author": "HolyFishhh",
+  "version": "0.1.0",
+  "homePage": "https://github.com/HolyFishhh/magic-girl-world",
+  "minimum_client_version": "1.18.0"
+}

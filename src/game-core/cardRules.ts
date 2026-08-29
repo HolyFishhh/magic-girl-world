@@ -1,7 +1,9 @@
+import { resolveCardResourcePayment, type CardCost, type CardResourcePayment } from './combatResource';
+
 export interface CardRuleCard {
   id: string;
   name: string;
-  cost?: number | 'energy';
+  cost?: CardCost;
   type: string;
   effectProgram: unknown;
   originalId?: string;
@@ -68,18 +70,16 @@ export function resolveCardEnergyPayment(
   card: Pick<CardRuleCard, 'cost' | 'xValueBonus'>,
   availableEnergy: number,
 ): CardEnergyPayment {
-  const energy = Number.isFinite(availableEnergy) ? Math.max(0, availableEnergy) : 0;
-  if (card.cost === 'energy') {
-    return {
-      requiredEnergy: 0,
-      spentEnergy: energy,
-      xValue: energy + Math.max(0, Math.floor(card.xValueBonus || 0)),
-    };
-  }
-
-  const cost = typeof card.cost === 'number' && Number.isFinite(card.cost) ? Math.max(0, card.cost) : 0;
-  return { requiredEnergy: cost, spentEnergy: cost, xValue: 0 };
+  const payment = resolveCardResourcePayment(
+    card.cost,
+    { energy: Number.isFinite(availableEnergy) ? Math.max(0, availableEnergy) : 0 },
+    undefined,
+    card.xValueBonus,
+  );
+  return { requiredEnergy: payment.requiredEnergy, spentEnergy: payment.spentEnergy, xValue: payment.xValue };
 }
+
+export type { CardResourcePayment };
 
 /** Power cards are one-shot ability registrations even if generated content omits exhaust. */
 export function resolvePlayedCardDestination(
@@ -96,6 +96,7 @@ export function selectTurnEndCurseTriggers<TCard extends CardRuleCard>(hand: rea
 /** Partition the current hand after curse effects have finished mutating it. */
 export function resolveTurnEndHandDisposition<TCard extends CardRuleCard>(
   hand: readonly TCard[],
+  retainAll = false,
 ): TurnEndHandDisposition<TCard> {
   const exhaust: TCard[] = [];
   const discard: TCard[] = [];
@@ -103,7 +104,7 @@ export function resolveTurnEndHandDisposition<TCard extends CardRuleCard>(
 
   for (const card of hand) {
     if (card.ethereal) exhaust.push(card);
-    else if (card.retain || card.type === 'Curse') keep.push(card);
+    else if (retainAll || card.retain || card.type === 'Curse') keep.push(card);
     else discard.push(card);
   }
 

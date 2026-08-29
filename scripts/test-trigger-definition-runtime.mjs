@@ -25,6 +25,23 @@ const abilityRuntime = new core.AbilityTriggerRuntime({
 await abilityRuntime.run('player', 'turn_end', { turn: 2 });
 assert.deepEqual(abilityRuns, [['player', 'steady', 'turn_end', { turn: 2 }]]);
 
+const defeatedByEnemy = {
+  left: [{ id: 'split_left', trigger: 'defeated', effectProgram: program }],
+  right: [
+    { id: 'armor_right', trigger: 'take_damage', effectProgram: program },
+    { id: 'split_right', trigger: 'defeated', effectProgram: program },
+  ],
+};
+const enemyRuns = [];
+const enemyRuntime = new core.AbilityTriggerRuntime({
+  readAbilities: (_target, context) => defeatedByEnemy[context.enemyId] || [],
+  execute: async (_target, plan, context) => enemyRuns.push(`${context.enemyId}:${plan.source.id}`),
+});
+await enemyRuntime.run('enemy', 'defeated', { enemyId: 'left' });
+await enemyRuntime.run('enemy', 'defeated', { enemyId: 'right' });
+assert.deepEqual(enemyRuns, ['left:split_left', 'right:split_right']);
+assert.ok(core.ABILITY_TRIGGER_SET.has('defeated'));
+
 const relic = { id: 'guard_stone', name: 'Guard Stone', trigger: 'take_damage', effectProgram: program };
 assert.deepEqual(core.resolveRelicTriggerPlan(relic, 'take_damage'), {
   source: relic,

@@ -104,14 +104,24 @@ assert.deepEqual(
 assert.equal(firstRandom.getGameState().random.cursor, 3);
 
 store.setCardPlayCounters({ cardsPlayedThisTurn: 4, attacksPlayedThisTurn: 2, skillsPlayedThisTurn: 2 });
+const summonProgram = { spec: 'mwg.effect/v1', steps: [{ op: 'damage', target: 'opponent', amount: 2 }] };
+const summoned = store.spawnSummons('player', {
+  id: 'guard_unit', name: 'Guard unit', emoji: 'G', maxHp: 6,
+  actionProgram: summonProgram, actionsPerActivation: 1,
+  intercept: { mode: 'unblocked_attack' },
+}, 1);
+assert.equal(summoned.spawned.length, 1);
+assert.equal(store.getSummonActionQueue('player').length, 1);
 store.createSnapshot('action');
 store.updatePlayer({ currentHp: 1 });
+store.damageSummons([summoned.spawned[0].instanceId], 99);
 store.beginEnemyTurn();
 store.incrementTurn();
 assert.equal(store.restoreSnapshot('action'), true);
 assert.equal(store.getPlayer().currentHp, 61);
 assert.equal(store.getCurrentPhase(), 'player_turn');
 assert.equal(store.getGameState().currentTurn, 0);
+assert.equal(store.getSummons('player').length, 1, 'summon entities must roll back with the battle snapshot');
 assert.equal(store.deleteSnapshot('action'), true);
 assert.equal(store.restoreSnapshot('action'), false);
 

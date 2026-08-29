@@ -2,59 +2,244 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
-    <title>Tavern Helper iframe fixture</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>魔法少女世界 多敌战斗夹具</title>
     <style>
-      body { margin: 0; background: #1b1b24; color: #eee; font-family: sans-serif; }
-      #status { position: fixed; z-index: 5; top: 8px; right: 8px; padding: 6px 9px; background: #1118; border: 1px solid #8888; }
-      iframe { display: block; width: 100%; min-height: 900px; border: 0; }
+      html, body { margin: 0; min-height: 100%; background: #11131f; color: #f5f1ff; font-family: sans-serif; }
+      #status { position: fixed; z-index: 5; top: 8px; right: 8px; padding: 6px 9px; border: 1px solid #ffffff33; border-radius: 8px; background: #111c; }
+      iframe { display: block; width: 100%; min-height: 960px; border: 0; }
     </style>
   </head>
   <body>
-    <div id="status">loading fixture...</div>
+    <div id="status">正在加载多敌战斗夹具……</div>
     <script>
       const initialVariables = {
         stat_data: {
           battle: {
-            core: { hp: 80, max_hp: 80, lust: 0, max_lust: 100 },
+            core: { emoji: '🧙‍♀️', hp: 76, max_hp: 80, lust: 18, max_lust: 100, card_removal_count: 1 },
             cards: [
-              { id: 'fixture_strike', name: '测试斩击', type: 'Attack', rarity: 'Common', cost: 1, emoji: '⚔️', description: '造成 8 点伤害。', effect: 'damage:8', quantity: 4 },
-              { id: 'fixture_guard', name: '测试防御', type: 'Skill', rarity: 'Common', cost: 1, emoji: '🛡️', description: '获得 6 点格挡。', effect: 'block:6', quantity: 3 },
-              { id: 'fixture_draw', name: '测试呼吸', type: 'Skill', rarity: 'Uncommon', cost: 0, emoji: '✨', description: '抽 1 张牌并获得 1 点能量。', effect: 'draw:1,energy:1', quantity: 2 }
+              {
+                id: 'fixture_arc',
+                name: '星弧横扫',
+                emoji: '🌠',
+                type: 'Attack',
+                rarity: 'Uncommon',
+                cost: 1,
+                quantity: 3,
+                description: '星光沿着战场弧线掠过，同时压制所有敌方。',
+                effects: { damage: 5, targets: { mode: 'all' } }
+              },
+              {
+                id: 'fixture_guard',
+                name: '月幕守护',
+                emoji: '🌙',
+                type: 'Skill',
+                rarity: 'Common',
+                cost: 1,
+                quantity: 3,
+                description: '展开柔和月幕，为自己获得稳定格挡。',
+                effects: { block: 7 }
+              },
+              {
+                id: 'fixture_focus',
+                name: '星轨校准',
+                emoji: '✨',
+                type: 'Skill',
+                rarity: 'Rare',
+                cost: 0,
+                quantity: 2,
+                description: '调整星轨，补充能量并抽取新的行动。',
+                effects: [{ energy: 1 }, { draw: 1 }]
+              },
+              {
+                id: 'fixture_summon',
+                name: '唤来星辉守卫',
+                emoji: '🦊',
+                type: 'Skill',
+                rarity: 'Rare',
+                cost: 1,
+                quantity: 2,
+                innate: true,
+                exhaust: true,
+                description: '呼唤会拦截攻击并独立行动的星辉守卫。',
+                effects: {
+                  spawn_summon: {
+                    id: 'starlight_guard',
+                    name: '星辉守卫',
+                    emoji: '🦊',
+                    description: '由契约星光凝成的守护兽，会保护召唤者并主动出击。',
+                    max_hp: 14,
+                    block: 2,
+                    count: 1,
+                    capacity: 3,
+                    overflow: 'replace_oldest',
+                    action_priority: 2,
+                    speed: 4,
+                    actions_per_activation: 1,
+                    intercept: { mode: 'unblocked_attack', priority: 3, max_per_turn: 1 },
+                    capabilities: { selectable: true, accepts_status: true, acts: true, intercepts: true },
+                    action: [{ damage: 4 }]
+                  },
+                  to: 'self'
+                }
+              }
             ],
-            artifacts: [], statuses: [], player_status_effects: [], player_abilities: [], items: [],
-            enemy: { name: 'MUV测试傀儡', emoji: '👹', max_hp: 60, hp: 60, max_lust: 100, lust: 0, description: 'iframe 桥接冒烟目标。', actions: [{ name: '木槌攻击', effect: 'damage:6', description: '准备进行 6 点攻击', weight: 1 }], abilities: [], status_effects: [], lust_effect: { name: '测试反馈', description: '测试', effect: 'damage:1' } }
+            artifacts: [
+              {
+                id: 'fixture_orbit',
+                name: '环星徽记',
+                emoji: '🪐',
+                rarity: 'Uncommon',
+                description: '战斗开始时，环绕的星屑会形成一层保护。',
+                trigger: { on: 'battle_start', effects: { block: 4 } }
+              }
+            ],
+            items: [],
+            statuses: [],
+            player_status_effects: [],
+            player_abilities: [],
+            enemies: [
+              {
+                id: 'ember_hound',
+                tags: ['beast'],
+                name: '烬火猎犬',
+                emoji: '🐺',
+                hp: 31,
+                max_hp: 36,
+                lust: 0,
+                max_lust: 100,
+                action_priority: 2,
+                speed: 5,
+                description: '拖着火星疾行的猎犬，已经在先前交锋中受伤。',
+                actions: [
+                  { name: '灼爪突袭', emoji: '🔥', weight: 2, description: '高速逼近并挥出灼热利爪。', effects: { damage: 7 } },
+                  { name: '焦烟低吼', emoji: '💨', weight: 1, description: '吐出焦烟扰乱对手。', effects: { lust: 5 } }
+                ],
+                abilities: [],
+                status_effects: [],
+                lust_effect: { name: '焦热失控', emoji: '🔥', description: '炽热本能爆发并发动追击。', effects: { damage: 6 } },
+                action_mode: 'probability',
+                action_config: { probability: { '灼爪突袭': 2, '焦烟低吼': 1 } }
+              },
+              {
+                id: 'glass_mage',
+                tags: ['caster'],
+                name: '镜晶术士',
+                emoji: '🔮',
+                hp: 42,
+                max_hp: 42,
+                lust: 12,
+                max_lust: 100,
+                action_priority: 3,
+                speed: 2,
+                description: '操纵折射晶片的施术者，会支援同伴并改变行动节奏。',
+                actions: [
+                  { name: '折光射线', emoji: '💎', weight: 2, description: '令晶片聚焦后发射光束。', effects: { damage: 6 } },
+                  { name: '群晶护幕', emoji: '🛡️', weight: 1, description: '为仍在战斗的敌方展开护幕。', effects: { block: 4, to: 'self', targets: { mode: 'all' } } }
+                ],
+                abilities: [],
+                status_effects: [],
+                lust_effect: { name: '镜像回响', emoji: '🪞', description: '镜像扰乱感知后造成冲击。', effects: { lust: 5, damage: 4 } },
+                action_mode: 'probability',
+                action_config: { probability: { '折光射线': 2, '群晶护幕': 1 } }
+              },
+              {
+                id: 'thorn_drone',
+                tags: ['construct'],
+                name: '荆棘浮游机',
+                emoji: '🛸',
+                hp: 24,
+                max_hp: 24,
+                lust: 0,
+                max_lust: 100,
+                action_priority: 1,
+                speed: 7,
+                description: '快速盘旋的小型构装体，总会抢先寻找射击角度。',
+                actions: [
+                  { name: '荆针点射', emoji: '🌵', weight: 1, description: '连续射出细小荆针。', effects: { damage: 3, hits: 2 } }
+                ],
+                abilities: [],
+                status_effects: [],
+                lust_effect: { name: '过载震颤', emoji: '⚡', description: '核心过载并放出一次电击。', effects: { damage: 5 } },
+                action_mode: 'random',
+                action_config: {}
+              }
+            ]
           }
         },
         schema: { type: 'object', properties: {} }
       };
+
       const state = structuredClone(initialVariables);
       const calls = [];
+      const globals = Object.create(null);
       const clone = value => structuredClone(value);
+      const mergeInto = (target, source) => {
+        for (const [key, value] of Object.entries(source || {})) {
+          if (value && typeof value === 'object' && !Array.isArray(value)) {
+            if (!target[key] || typeof target[key] !== 'object' || Array.isArray(target[key])) target[key] = {};
+            mergeInto(target[key], value);
+          } else target[key] = clone(value);
+        }
+        return target;
+      };
       const api = {
         getVariables: option => { calls.push(['get', option]); return clone(state); },
-        replaceVariables: (value, option) => { calls.push(['replace', option]); Object.assign(state, clone(value)); },
-        updateVariablesWith: (updater, option) => { calls.push(['update', option]); const next = updater(clone(state)); Object.assign(state, clone(next)); return next; },
-        insertOrAssignVariables: (value, option) => { calls.push(['insertOrAssign', option, value]); state.stat_data.battle.statuses = value?.stat_data?.battle?.statuses || state.stat_data.battle.statuses; return value; },
+        replaceVariables: (value, option) => { calls.push(['replace', option]); Object.keys(state).forEach(key => delete state[key]); mergeInto(state, clone(value)); },
+        updateVariablesWith: (updater, option) => {
+          calls.push(['update', option]);
+          const next = updater(clone(state));
+          Object.keys(state).forEach(key => delete state[key]);
+          mergeInto(state, clone(next));
+          return clone(state);
+        },
+        insertOrAssignVariables: (value, option) => { calls.push(['insertOrAssign', option, value]); return mergeInto(state, clone(value)); },
+        initializeGlobal: (name, value) => { globals[name] = value; window[name] = value; return value; },
+        waitGlobalInitialized: async name => {
+          for (let index = 0; index < 100; index += 1) {
+            if (globals[name]) return globals[name];
+            await new Promise(resolve => setTimeout(resolve, 20));
+          }
+          throw new Error('全局运行时未初始化: ' + name);
+        },
         getTavernHelperVersion: async () => '3.4.17',
-        waitGlobalInitialized: async () => undefined,
         getCurrentMessageId: () => 42,
-        Mvu: { getMvuData: option => api.getVariables(option), replaceMvuData: (value, option) => api.replaceVariables(value, option) }
+        getLastMessageId: () => 42,
+        Mvu: {
+          getMvuData: option => api.getVariables(option),
+          replaceMvuData: (value, option) => api.replaceVariables(value, option)
+        }
       };
+
       window.__fixtureCalls = calls;
       window.__fixtureState = state;
-      fetch('./fish-interface.json')
-        .then(response => response.json())
-        .then(payload => {
-          const frame = document.createElement('iframe');
-          frame.name = 'TH-message--42--0';
-          const bridge = Object.keys(api).map(key => `window.${key}=window.parent.__tavernApi[${JSON.stringify(key)}];`).join('');
-          frame.srcdoc = '<script>' + bridge + '</scr' + 'ipt>' + payload.replaceString.slice(4, -4);
-          document.body.append(frame);
-          window.__fixtureFrame = frame;
-          document.querySelector('#status').textContent = 'fixture loaded';
-        })
-        .catch(error => { document.querySelector('#status').textContent = String(error); });
       window.__tavernApi = api;
+      Object.assign(window, api);
+
+      const mountInterface = () => {
+        fetch('./fish-interface.json')
+          .then(response => response.json())
+          .then(payload => {
+            const frame = document.createElement('iframe');
+            frame.name = 'TH-message--42--0';
+            const bridge = Object.keys(api)
+              .map(key => 'window[' + JSON.stringify(key) + ']=window.parent.__tavernApi[' + JSON.stringify(key) + '];')
+              .join('');
+            frame.srcdoc = '<script>' + bridge + '</scr' + 'ipt>' + payload.replaceString.slice(4, -4);
+            document.body.append(frame);
+            window.__fixtureFrame = frame;
+            document.querySelector('#status').textContent = '多敌战斗夹具已加载';
+          })
+          .catch(error => { document.querySelector('#status').textContent = String(error); });
+      };
+
+      const runtimeScript = document.createElement('script');
+      runtimeScript.src = './character-runtime.js';
+      runtimeScript.addEventListener('load', mountInterface, { once: true });
+      runtimeScript.addEventListener('error', () => {
+        document.querySelector('#status').textContent = '角色运行时加载失败';
+      }, { once: true });
+      document.head.append(runtimeScript);
     </script>
   </body>
 </html>

@@ -22,7 +22,7 @@ export type AdvancedCardZoneRequest = {
     position: CardPilePosition;
     persistent: boolean;
 };
-export type AdvancedCardZoneFailureCode = 'DUPLICATE_CARD_ID' | 'RANDOM_SOURCE_REQUIRED' | 'INVALID_SELECTION' | 'STALE_PLAN' | 'DUPLICATE_GENERATED_ID';
+export type AdvancedCardZoneFailureCode = 'DUPLICATE_CARD_ID' | 'RANDOM_SOURCE_REQUIRED' | 'INSUFFICIENT_CANDIDATES' | 'INVALID_SELECTION' | 'STALE_PLAN' | 'DUPLICATE_GENERATED_ID';
 export interface AdvancedCardZonePlan {
     ok: true;
     request: AdvancedCardZoneRequest;
@@ -49,7 +49,7 @@ export declare function commitAdvancedCardZoneTransaction<TCard extends Selectab
     code: AdvancedCardZoneFailureCode;
 };
 /** Replace the definition while retaining one owned/run identity and only explicitly inherited patches. */
-export declare function transformCardInstance<TCard extends PatchableCard>(source: TCard, replacement: Omit<TCard, 'id' | 'runInstanceId' | 'combatInstanceId' | 'patches' | 'patchBase'>, policy?: CardPatchInheritancePolicy): TCard;
+export declare function transformCardInstance<TCard extends PatchableCard>(source: TCard, replacement: Omit<TCard, 'id' | 'runInstanceId' | 'combatInstanceId' | 'patches' | 'patchBase' | 'attachments'>, policy?: CardPatchInheritancePolicy): TCard;
 /** Place already validated generated cards atomically; duplicate IDs reject the whole batch. */
 export declare function placeGeneratedCards<TCard extends SelectableCard>(zones: CardZoneState<TCard>, cards: readonly TCard[], destination: CardPileZone, position: CardPilePosition): AdvancedCardZoneCommit<TCard> | {
     ok: false;

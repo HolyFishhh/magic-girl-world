@@ -1,10 +1,12 @@
 import type { CardSelector, CardSelectorFilter } from './effectDsl';
 import type { CardOrigin } from './cardIdentity';
+import type { CardCost } from './combatResource';
 import type { CardPileZone, CardZoneCard, CardZoneState } from './cardZoneReducer';
 export interface SelectableCard extends CardZoneCard {
+    name?: string;
     type?: string;
     rarity?: string;
-    cost?: number | 'energy';
+    cost?: CardCost;
     tags?: readonly string[];
     originalId?: string;
     templateId?: string;

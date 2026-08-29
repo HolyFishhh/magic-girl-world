@@ -1,3 +1,5 @@
+import { validateCombatResourceDefinitions } from '../../game-core';
+
 export interface BattleDataContractResult {
   data: Record<string, any>;
   source: 'stat_data.battle';
@@ -23,6 +25,27 @@ function isFiniteNumber(value: unknown): value is number {
 
 function hasBattlePrecision(value: unknown): value is number {
   return isFiniteNumber(value) && Math.abs(value * 100 - Math.round(value * 100)) < 1e-7;
+}
+
+function inspectSpecialContainers(
+  source: Record<string, any>,
+  path: string,
+): BattleDataContractInspection | null {
+  if (source.stance !== undefined && source.stance !== null && !isRecord(source.stance))
+    return failure('INVALID_TYPE', `${path}.stance`, '必须是对象或 null');
+  if (
+    source.orb_slots !== undefined &&
+    (!Number.isInteger(source.orb_slots) || source.orb_slots < 0 || source.orb_slots > 20)
+  ) {
+    return failure('INVALID_TYPE', `${path}.orb_slots`, '必须是 0 到 20 的整数');
+  }
+  if (source.orbs !== undefined && !Array.isArray(source.orbs))
+    return failure('INVALID_TYPE', `${path}.orbs`, '必须是数组');
+  if (Array.isArray(source.orbs) && Number.isInteger(source.orb_slots) && source.orbs.length > source.orb_slots)
+    return failure('INVALID_TYPE', `${path}.orbs`, '初始 Orb 数量不能超过槽位数');
+  const resourceIssue = validateCombatResourceDefinitions(source.resources, `${path}.resources`)[0];
+  if (resourceIssue) return failure('INVALID_TYPE', resourceIssue.path, resourceIssue.message);
+  return null;
 }
 
 /**
@@ -65,8 +88,11 @@ export function inspectBattleDataContract(variables: unknown): BattleDataContrac
       return failure('INVALID_TYPE', `battle.core.${field}`, '必须是最多两位小数的有限数值');
     }
   }
+  const coreSpecialIssue = inspectSpecialContainers(core, 'battle.core');
+  if (coreSpecialIssue) return coreSpecialIssue;
 
-  const enemies = Array.isArray(data.enemies) && data.enemies.length > 0 ? data.enemies : [data.enemy];
+  const usesEnemyRoster = Array.isArray(data.enemies) && data.enemies.length > 0;
+  const enemies = usesEnemyRoster ? data.enemies : [data.enemy];
   if (enemies.length === 0 || enemies.length > 12)
     return failure('INVALID_TYPE', 'battle.enemies', '必须包含 1 到 12 个敌人');
   const enemyIds = new Set<string>();
@@ -77,14 +103,31 @@ export function inspectBattleDataContract(variables: unknown): BattleDataContrac
     if (typeof enemy.name !== 'string' || enemy.name.trim() === '') {
       return failure('MISSING_VALUE', `${path}.name`, '名称不能为空');
     }
-    const id = typeof enemy.id === 'string' && enemy.id.trim() ? enemy.id.trim() : enemy.name.trim();
+    const authoredId = typeof enemy.id === 'string' ? enemy.id.trim() : '';
+    if (usesEnemyRoster && !authoredId) {
+      return failure('MISSING_VALUE', `${path}.id`, '多敌战斗中的每个敌人都必须提供稳定英文 ID');
+    }
+    if (authoredId && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(authoredId)) {
+      return failure('INVALID_TYPE', `${path}.id`, '敌人 ID 必须是稳定英文标识');
+    }
+    const id = authoredId || `enemy_${index + 1}`;
     if (enemyIds.has(id)) return failure('INVALID_TYPE', `${path}.id`, `敌人 ID 重复：${id}`);
     enemyIds.add(id);
+    if (
+      enemy.tags !== undefined &&
+      (!Array.isArray(enemy.tags) || enemy.tags.length > 32 ||
+        enemy.tags.some(tag => typeof tag !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(tag)) ||
+        new Set(enemy.tags).size !== enemy.tags.length)
+    ) {
+      return failure('INVALID_TYPE', `${path}.tags`, '必须是最多 32 项且不重复的稳定英文标签数组');
+    }
     for (const field of ['hp', 'max_hp', 'lust', 'max_lust'] as const) {
       if (!hasBattlePrecision(enemy[field])) {
         return failure('INVALID_TYPE', `${path}.${field}`, '必须是最多两位小数的有限数值');
       }
     }
+    const enemySpecialIssue = inspectSpecialContainers(enemy, path);
+    if (enemySpecialIssue) return enemySpecialIssue;
   }
   if (!Array.isArray(data.cards)) return failure('INVALID_TYPE', 'battle.cards', '必须是数组');
 

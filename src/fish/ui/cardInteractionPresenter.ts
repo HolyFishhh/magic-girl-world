@@ -1,6 +1,7 @@
-import type { Card } from '../../game-core';
+import type { Card, CombatResourceState } from '../../game-core';
 import { BattleLog } from '../modules/battleLog';
 import { escapeHtml, escapeHtmlAttribute } from '../shared/html';
+import { describeCardCost } from '../../game-core';
 import { AnimationManager, resolveCombatAnimationTarget } from './animationManager';
 import { EffectProgramDisplay } from './effectProgramDisplay';
 
@@ -9,6 +10,7 @@ export interface CardSelectionModalRequest {
   minimum: number;
   maximum: number;
   allowCancel: boolean;
+  resources?: Readonly<Record<string, Pick<CombatResourceState, 'name' | 'emoji'>>>;
 }
 
 /** Owns card interaction DOM and animation inside the Tavern battle iframe. */
@@ -66,7 +68,7 @@ export class TavernCardInteractionPresenter {
   ): Promise<string[] | null> {
     return new Promise(resolve => {
       const selectedIds: string[] = [];
-      const { title, minimum, maximum, allowCancel } = request;
+      const { title, minimum, maximum, allowCancel, resources } = request;
       const modal = $(`
         <div class="card-selection-modal">
           <div class="modal-backdrop"></div>
@@ -83,12 +85,16 @@ export class TavernCardInteractionPresenter {
                     const effectTags = this.effectDisplay.createWrappedEffectTagsHTML(
                       this.effectDisplay.programToTags(card.effectProgram),
                     );
+                    const attachmentTags = this.effectDisplay.createWrappedEffectTagsHTML(
+                      this.effectDisplay.attachmentToTags(card.attachments),
+                    );
                     return `
                   <div class="selection-card" data-card-id="${escapeHtmlAttribute(card.id)}">
                     <div class="card-emoji">${escapeHtml(card.emoji)}</div>
                     <div class="card-name">${escapeHtml(card.name)}</div>
-                    <div class="card-cost">${escapeHtml(card.cost)}</div>
+                    <div class="card-cost">${escapeHtml(describeCardCost(card.cost, resources))}</div>
                     ${effectTags}
+                    ${attachmentTags}
                     <div class="card-description">${escapeHtml(card.description || '')}</div>
                   </div>
                 `;

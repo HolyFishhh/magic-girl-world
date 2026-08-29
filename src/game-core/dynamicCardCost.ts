@@ -1,4 +1,5 @@
 import type { CardCostOperator, CardPatchScope, PatchableCard } from './cardPatch';
+import type { CardCost } from './combatResource';
 import { cardMatchesSelectorFilter } from './cardSelectorRuntime';
 import {
   evaluateNumericExpression,
@@ -31,7 +32,7 @@ export interface DynamicCardCostContext {
 
 export interface DynamicCostLifecycleCard extends PatchableCard {
   /** Evaluated once when this concrete instance is drawn; cleared after it leaves play. */
-  drawCostOverride?: number | 'energy';
+  drawCostOverride?: CardCost;
   dynamicCostDrawTurn?: number;
 }
 
@@ -77,12 +78,12 @@ function activeRules(
 
 function resolveFromBase(
   card: DynamicCostLifecycleCard,
-  base: number | 'energy' | undefined,
+  base: CardCost | undefined,
   rules: readonly DynamicCardCostRule[],
   context: DynamicCardCostContext,
   timings: ReadonlySet<DynamicCostTiming>,
-): number | 'energy' | undefined {
-  if (base === 'energy' || base === undefined) return base;
+): CardCost | undefined {
+  if (base === 'energy' || base === undefined || typeof base === 'object') return base;
   let cost = base;
   for (const rule of activeRules(card, rules, timings)) {
     const operand = evaluateNumericExpression(rule.value, context.state, context.effect, `dynamic_cost.${rule.id}`);
@@ -99,7 +100,7 @@ export function resolveDynamicCardCost(
   card: DynamicCostLifecycleCard,
   rules: readonly DynamicCardCostRule[],
   context: DynamicCardCostContext,
-): number | 'energy' | undefined {
+): CardCost | undefined {
   const base = context.timing === 'on_draw' ? card.cost : card.drawCostOverride ?? card.cost;
   return resolveFromBase(card, base, rules, context, new Set([context.timing]));
 }
@@ -123,7 +124,7 @@ export function resolveDynamicCardCostAtPlay(
   card: DynamicCostLifecycleCard,
   rules: readonly DynamicCardCostRule[],
   context: Omit<DynamicCardCostContext, 'timing'>,
-): number | 'energy' | undefined {
+): CardCost | undefined {
   return resolveFromBase(
     card,
     card.drawCostOverride ?? card.cost,

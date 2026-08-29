@@ -3,10 +3,18 @@
  */
 
 import { DynamicStatusManager } from '../combat/dynamicStatusManager';
+import { CardSystem } from '../combat/cardSystem';
 import { UnifiedEffectExecutor } from '../combat/unifiedEffectExecutor';
 import { GameStateManager } from '../core/gameStateManager';
 import { escapeHtml, escapeHtmlAttribute } from '../shared/html';
-import { roundBattleDisplayValue, type Card } from '../../game-core';
+import {
+  describeCardCost,
+  normalizeCardCost,
+  resourcePoolFromCombatant,
+  roundBattleDisplayValue,
+  type Card,
+  type CardResourcePayment,
+} from '../../game-core';
 import { CardPlayMode } from './cardPlayMode';
 import { EnemyIntentPresenter } from './enemyIntentPresenter';
 import { PileStatsDisplay } from './pileViewer';
@@ -21,6 +29,28 @@ export class BattleUI {
 
   private static displayBattleValue(value: unknown, fallback = 0): number {
     return typeof value === 'number' && Number.isFinite(value) ? roundBattleDisplayValue(value) : fallback;
+  }
+
+  private static renderCardCost(
+    cost: Card['cost'],
+    player: ReturnType<GameStateManager['getPlayer']>,
+    payment?: CardResourcePayment,
+  ): string {
+    const components = normalizeCardCost(cost);
+    if (Object.keys(components).length <= 1 && typeof cost === 'number' && (!payment || payment.waived.length === 0))
+      return escapeHtml(String(cost));
+    const pool = resourcePoolFromCombatant(player.energy || 0, player.resources);
+    return Object.entries(components)
+      .map(([id, amount]) => {
+        const definition = player.resources?.[id];
+        const emoji = id === 'energy' ? '💎' : definition?.emoji || '◆';
+        const name = id === 'energy' ? '能量' : definition?.name || id;
+        const waived = payment?.waived.includes(id) === true;
+        const required = waived || amount === 'all' ? 0 : amount;
+        const insufficient = required > (pool[id] || 0);
+        return `<span class="card-cost-component${insufficient ? ' insufficient' : ''}${waived ? ' waived' : ''}" data-resource-id="${escapeHtmlAttribute(id)}" title="${escapeHtmlAttribute(`${name} ${pool[id] || 0}${definition ? `/${definition.max}` : ''}${waived ? '（本次免除）' : ''}`)}">${escapeHtml(waived ? '免' : amount === 'all' ? 'X' : String(amount))}${escapeHtml(emoji)}</span>`;
+      })
+      .join('');
   }
   /**
    * 翻译卡牌类型
@@ -74,6 +104,7 @@ export class BattleUI {
       const player = gameState.player;
 
       this.updateEnemyRoster(enemies, enemy?.id || null);
+      this.updateSummonDisplays(gameState.summons);
 
       // 更新敌人信息
       if (enemy) {
@@ -143,9 +174,17 @@ export class BattleUI {
     } else {
       enemyBlockContainer.hide();
     }
+    const resources = Object.values(enemy.resources || {}) as Array<{ id: string; name: string; emoji: string; current: number; max: number }>;
+    $('#enemy-combat-resources').html(resources.map(resource => `
+      <span class="combat-resource-chip" data-resource-id="${escapeHtmlAttribute(resource.id)}" title="${escapeHtmlAttribute(resource.name)}">
+        <span>${escapeHtml(resource.emoji)}</span><span>${escapeHtml(resource.name)}</span>
+        <b>${this.displayBattleValue(resource.current)}/${this.displayBattleValue(resource.max)}</b>
+      </span>
+    `).join('')).toggle(resources.length > 0);
 
     // 更新敌人状态效果
     this.updateStatusEffects('enemy', enemy.statusEffects || []);
+    this.updateSpecialContainers('enemy', enemy.stance, enemy.orbs);
 
     // 更新敌人欲望效果显示
     this.updateLustEffectDisplay('enemy', enemy.lustEffect);
@@ -179,6 +218,100 @@ export class BattleUI {
     });
   }
 
+  private static updateSummonDisplays(collection: any): void {
+    const living = Array.isArray(collection?.living) ? collection.living : [];
+    for (const owner of ['player', 'enemy'] as const) {
+      const units = living.filter((unit: any) => unit?.owner === owner && (unit.hasHp === false || Number(unit.currentHp) > 0));
+      const container = $(`#${owner}-summons`);
+      if (!container.length) continue;
+      container.html(units.map((unit: any, index: number) => {
+        const hp = unit.hasHp === false ? '' : this.displayBattleValue(unit.currentHp);
+        const maxHp = unit.hasHp === false ? '' : this.displayBattleValue(unit.maxHp, 1);
+        const title = `${unit.name || unit.templateId} · ${unit.hasHp === false ? '无生命，不承受攻击' : `生命 ${hp}/${maxHp}${Number(unit.block) > 0 ? ` · 格挡 ${this.displayBattleValue(unit.block)}` : ''}`}`;
+        let ring = 0;
+        let ringIndex = index;
+        let ringCapacity = 8;
+        while (ringIndex >= ringCapacity) {
+          ringIndex -= ringCapacity;
+          ring += 1;
+          ringCapacity = 8 + ring * 4;
+        }
+        const ringStart = index - ringIndex;
+        const ringItemCount = Math.max(1, Math.min(ringCapacity, units.length - ringStart));
+        const angle = -90 + (360 * ringIndex) / ringItemCount;
+        const xRadius = 35 + ring * 19;
+        const yRadius = 27 + ring * 15;
+        const x = Math.round(Math.cos((angle * Math.PI) / 180) * xRadius);
+        const y = Math.round(Math.sin((angle * Math.PI) / 180) * yRadius);
+        return `<button type="button" class="stage-summon-unit" data-summon-index="${index}" data-summon-id="${escapeHtmlAttribute(String(unit.instanceId || ''))}"
+          style="--summon-x:${x}px;--summon-y:${y}px;--summon-order:${index}"
+          aria-label="查看召唤单位：${escapeHtmlAttribute(title)}" title="${escapeHtmlAttribute(title)}">
+          <span class="stage-summon-emoji" aria-hidden="true">${escapeHtml(String(unit.emoji || '◆'))}</span>
+        </button>`;
+      }).join('')).toggle(units.length > 0);
+      container.find('.stage-summon-unit').each((index, element) => {
+        $(element).data('summon', units[index]);
+      });
+      container.off('click.mwgSummon').on('click.mwgSummon', '.stage-summon-unit', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        BattleUI.showSummonDetails($(this), $(this).data('summon'));
+      });
+    }
+  }
+
+  private static showSummonDetails(anchor: JQuery, unit: any): void {
+    $('.support-details-popover').remove();
+    if (!unit) return;
+    const context = unit.owner === 'enemy'
+      ? { selfLabel: '敌方', opponentLabel: '我方' }
+      : { selfLabel: '我方', opponentLabel: '敌方' };
+    const actions = Array.isArray(unit.actions) && unit.actions.length
+      ? unit.actions
+      : unit.actionProgram
+        ? [{ id: `${unit.templateId || unit.id}_action`, name: '自动行动', emoji: unit.emoji, effectProgram: unit.actionProgram }]
+        : [];
+    const abilities = Array.isArray(unit.abilities) ? unit.abilities : [];
+    const resources = Object.values(unit.resources || {}) as Array<{ name?: string; emoji?: string; current?: number; max?: number }>;
+    const statuses = Array.isArray(unit.statusEffects) ? unit.statusEffects : [];
+    const details = [
+      `<div class="summon-detail-stats">${unit.hasHp === false ? '<span>无生命 · 不承受攻击与援护</span>' : `<span>生命 ${escapeHtml(this.displayBattleValue(unit.currentHp))}/${escapeHtml(this.displayBattleValue(unit.maxHp, 1))}</span>${Number(unit.block) > 0 ? `<span>格挡 ${escapeHtml(this.displayBattleValue(unit.block))}</span>` : ''}`}<span>每次行动 ${escapeHtml(this.displayBattleValue(unit.actionsPerActivation, 1))} 次</span></div>`,
+      resources.length ? `<div class="summon-detail-resources">${resources.map(resource => `<span>${escapeHtml(String(resource.emoji || '◆'))}${escapeHtml(String(resource.name || '资源'))} ${escapeHtml(this.displayBattleValue(resource.current))}/${escapeHtml(this.displayBattleValue(resource.max))}</span>`).join('')}</div>` : '',
+      statuses.length ? `<div class="summon-detail-statuses">${statuses.map((status: any) => `<span>${escapeHtml(String(status.emoji || '◆'))}${escapeHtml(String(status.name || status.id))} ${escapeHtml(this.displayBattleValue(status.stacks, 1))}层</span>`).join('')}</div>` : '',
+    ].join('');
+    const actionDetails = actions.map((action: any) => {
+      const tags = this.effectDisplay.programToTags(action.effectProgram, context);
+      return `<section class="summon-detail-program"><div class="summon-detail-program-title"><span>${escapeHtml(String(action.emoji || unit.emoji || '◆'))}</span><strong>${escapeHtml(String(action.name || action.id || '行动'))}</strong>${action.fixed === true ? '<small class="summon-fixed-effect">固定效果</small>' : ''}${Number(action.weight) > 0 ? `<small>权重 ${escapeHtml(this.displayBattleValue(action.weight, 1))}</small>` : ''}</div>${action.description ? `<p>${escapeHtml(String(action.description))}</p>` : ''}${tags.length ? this.effectDisplay.createWrappedEffectTagsHTML(tags) : '<div class="status-no-effect">没有可执行效果。</div>'}</section>`;
+    }).join('');
+    const abilityDetails = abilities.map((ability: any) => {
+      const tags = this.effectDisplay.triggeredProgramToTags(ability.trigger, ability.effectProgram, context);
+      return `<section class="summon-detail-program summon-detail-ability"><div class="summon-detail-program-title"><span>${escapeHtml(String(ability.emoji || '⚡'))}</span><strong>${escapeHtml(String(ability.name || ability.id || '触发能力'))}</strong>${ability.fixed === true ? '<small class="summon-fixed-effect">固定效果</small>' : ''}</div>${ability.description ? `<p>${escapeHtml(String(ability.description))}</p>` : ''}${tags.length ? this.effectDisplay.createWrappedEffectTagsHTML(tags) : '<div class="status-no-effect">没有可执行效果。</div>'}</section>`;
+    }).join('');
+    const popover = $(`
+      <div class="support-details-popover summon-details-popover" role="dialog" aria-label="${escapeHtmlAttribute(String(unit.name || '召唤单位'))}">
+        <div class="support-details-heading"><span>${escapeHtml(String(unit.emoji || '◆'))}</span><strong>${escapeHtml(String(unit.name || unit.templateId || '召唤单位'))}</strong><small>${unit.owner === 'enemy' ? '敌方召唤单位' : '我方召唤单位'}</small></div>
+        ${unit.description ? `<div class="support-details-description">${escapeHtml(String(unit.description))}</div>` : ''}
+        ${details}
+        <div class="support-details-effects">${actionDetails || '<div class="status-no-effect">该单位没有自动行动。</div>'}${abilityDetails}</div>
+      </div>`);
+    $('body').append(popover);
+    const width = Math.min(430, ($(window).width() || 446) - 16);
+    popover.css({ width });
+    const offset = anchor.offset();
+    const height = popover.outerHeight() || 180;
+    const viewportWidth = $(window).width() || width;
+    const viewportHeight = $(window).height() || height;
+    const left = offset
+      ? Math.max(8, Math.min(offset.left + (anchor.outerWidth() || 0) / 2 - width / 2, viewportWidth - width - 8))
+      : Math.max(8, (viewportWidth - width) / 2);
+    const preferredTop = offset ? offset.top + (anchor.outerHeight() || 0) + 6 : (viewportHeight - height) / 2;
+    popover.css({ left, top: Math.max(8, Math.min(preferredTop, viewportHeight - height - 8)) });
+    $(document).off('click.mwgSummonPopover').on('click.mwgSummonPopover', () => {
+      popover.remove();
+      $(document).off('click.mwgSummonPopover');
+    });
+  }
+
   /**
    * 更新玩家显示
    */
@@ -206,6 +339,13 @@ export class BattleUI {
 
     // 更新能量显示
     $('#player-energy').text(`${playerEnergy}/${this.displayBattleValue(player.maxEnergy, 3)}`);
+    const resources = Object.values(player.resources || {}) as Array<{ id: string; name: string; emoji: string; current: number; max: number }>;
+    $('#player-combat-resources').html(resources.map(resource => `
+      <span class="combat-resource-chip" data-resource-id="${escapeHtmlAttribute(resource.id)}" title="${escapeHtmlAttribute(resource.name)}">
+        <span>${escapeHtml(resource.emoji)}</span><span>${escapeHtml(resource.name)}</span>
+        <b>${this.displayBattleValue(resource.current)}/${this.displayBattleValue(resource.max)}</b>
+      </span>
+    `).join('')).toggle(resources.length > 0);
 
     // 更新格挡显示 - 条件显示
     $('#player-block').text(playerBlock);
@@ -223,6 +363,7 @@ export class BattleUI {
 
     // 更新玩家状态效果
     this.updateStatusEffects('player', player.statusEffects || []);
+    this.updateSpecialContainers('player', player.stance, player.orbs);
 
     // 更新玩家欲望效果显示（从GameStateManager获取）
     const gameStateManager = GameStateManager.getInstance();
@@ -360,7 +501,7 @@ export class BattleUI {
     const cardData: Card = {
       id: card.id || card.originalId || `card_${index}`,
       name: card.name || '未知卡牌',
-      cost: card.cost || 0,
+      cost: card.cost ?? 0,
       type: card.type || 'Skill',
       rarity: card.rarity || 'Common',
       emoji: card.emoji || '🃏',
@@ -375,43 +516,48 @@ export class BattleUI {
 
     // 不在卡面显示效果解析，仅在悬停工具提示中显示
 
-    // 检查能量是否足够
+    // 使用与真正出牌相同的动态费用、限制、免费窗口和资源检查。
     const gameState = GameStateManager.getInstance().getGameState();
-    const playerEnergy = gameState.player?.energy || 0;
-
-    // 检查玩家是否被眩晕
-    const executor = UnifiedEffectExecutor.getInstance();
-    const isStunned = executor.isStunned('player');
+    const player = gameState.player;
+    const preview = CardSystem.getInstance().previewCardPlay(cardData.id);
+    const previewCard = preview.ok
+      ? preview.card
+      : preview.effectiveCost === undefined
+        ? cardData
+        : { ...cardData, cost: preview.effectiveCost };
+    const previewPayment = preview.payment;
 
     // 处理动态能量消耗
-    let actualCost: number;
     let displayCost: string;
+    let displayCostHtml: string;
 
     if (cardData.type === 'Curse') {
-      actualCost = 0;
       displayCost = '—';
-    } else if (cardData.cost === 'energy') {
-      actualCost = Math.max(0, playerEnergy); // 允许0能量
-      displayCost = 'X';
+      displayCostHtml = '—';
     } else {
-      actualCost = (cardData.cost as number) ?? 0;
-      displayCost = actualCost.toString();
+      displayCost = typeof previewCard.cost === 'number'
+        ? String(previewCard.cost)
+        : previewCard.cost === 'energy'
+          ? 'X'
+          : describeCardCost(previewCard.cost, player?.resources).replace(/能量/g, '').replace(/\s\+\s/g, '+');
+      displayCostHtml = this.renderCardCost(previewCard.cost, player, previewPayment);
     }
 
-    const canAfford = cardData.type === 'Curse' ? false : playerEnergy >= actualCost;
+    const shortage = !preview.ok && (preview.code === 'INSUFFICIENT_ENERGY' || preview.code === 'INSUFFICIENT_RESOURCE');
+    const canAfford = !shortage;
     const isPlayerTurn = gameState.phase === 'player_turn';
     const isCurse = cardData.type === 'Curse';
     // 如果被眩晕，所有卡牌都不可点击
-    const isClickable = isPlayerTurn && canAfford && !isCurse && !isStunned;
+    const isClickable = isPlayerTurn && preview.ok && !isCurse;
 
     // 创建完整的卡牌元素
     const cardElement = $(`
       <div class="card enhanced-card rarity-${escapeHtmlAttribute(cardData.rarity)} card-type-${escapeHtmlAttribute(cardData.type)} ${
-        isClickable ? 'clickable' : 'unaffordable'
+        isClickable ? 'clickable' : shortage ? 'unaffordable' : 'blocked'
       }"
            data-card-id="${escapeHtmlAttribute(cardData.id)}">
         <div class="card-header">
-          <div class="card-cost ${canAfford ? '' : 'insufficient-energy'}">${escapeHtml(displayCost)}</div>
+          <div class="card-cost ${typeof previewCard.cost === 'object' && previewCard.cost !== null || (previewPayment && previewPayment.waived.length > 0) ? 'composite-card-cost' : ''} ${canAfford ? '' : 'insufficient-cost'}" aria-label="${escapeHtmlAttribute(displayCost)}">${displayCostHtml}</div>
           <div class="card-rarity-badge"><span class="card-rarity-gem"></span>${escapeHtml(this.translateRarity(cardData.rarity))}</div>
         </div>
         <div class="card-artwork">
@@ -488,17 +634,21 @@ export class BattleUI {
     const wrappedDiscardHTML = discardEffectTags.length
       ? BattleUI.effectDisplay.createWrappedEffectTagsHTML(discardEffectTags)
       : '';
+    const wrappedAttachmentHTML = BattleUI.effectDisplay.createWrappedEffectTagsHTML(
+      BattleUI.effectDisplay.attachmentToTags(card.attachments),
+    );
 
     const tooltip = $(`
       <div class="card-tooltip" id="mwg-active-card-tooltip">
         <div class="tooltip-header">${escapeHtml(card.name)}</div>
         <div class="tooltip-meta">
-          <span class="tooltip-cost">💎${escapeHtml(card.cost)}</span>
+          <span class="tooltip-cost">${escapeHtml(describeCardCost(card.cost, GameStateManager.getInstance().getPlayer().resources))}</span>
           <span class="tooltip-type">${escapeHtml(this.translateCardType(card.type))}</span>
           <span class="tooltip-rarity">${escapeHtml(this.translateRarity(card.rarity))}</span>
         </div>
         ${wrappedEffectHTML ? `<div class="tooltip-effects">${wrappedEffectHTML}</div>` : ''}
         ${wrappedDiscardHTML ? `<div class="tooltip-effects"><div class="tooltip-subtitle">此牌被战斗效果弃掉后：</div>${wrappedDiscardHTML}</div>` : ''}
+        ${wrappedAttachmentHTML ? `<div class="tooltip-effects"><div class="tooltip-subtitle">卡牌附着：</div>${wrappedAttachmentHTML}</div>` : ''}
         ${card.description ? `<div class="tooltip-description">${escapeHtml(card.description)}</div>` : ''}
         ${
           card.innate || card.retain || card.exhaust || card.ethereal
@@ -536,9 +686,21 @@ export class BattleUI {
     const rect = element.getBoundingClientRect();
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
-    const width = Math.min(360, Math.max(260, viewportWidth - 16));
-    tooltip.css({ position: 'fixed', width, visibility: 'hidden', display: 'block', zIndex: 5000 });
-    const height = Math.min(tooltip.outerHeight() || 220, viewportHeight - 16);
+    const availableWidth = Math.max(220, viewportWidth - 16);
+    const contentLength = tooltip.text().replace(/\s+/g, '').length;
+    const width = Math.min(availableWidth, Math.max(Math.min(280, availableWidth), 286 + Math.min(240, contentLength * 1.35)));
+    tooltip.css({
+      position: 'fixed',
+      width,
+      minWidth: Math.min(280, availableWidth),
+      maxWidth: availableWidth,
+      maxHeight: 'none',
+      overflow: 'visible',
+      visibility: 'hidden',
+      display: 'block',
+      zIndex: 5000,
+    });
+    const height = tooltip.outerHeight() || 220;
     const left = Math.max(8, Math.min(rect.left + rect.width / 2 - width / 2, viewportWidth - width - 8));
     const top =
       rect.top >= height + 10
@@ -553,7 +715,7 @@ export class BattleUI {
       .css({
         left,
         top,
-        maxHeight: viewportHeight - 16,
+        maxHeight: 'none',
         visibility: 'visible',
         '--tooltip-arrow-left': `${arrowLeft}px`,
       });
@@ -693,6 +855,107 @@ export class BattleUI {
       });
   }
 
+  private static updateSpecialContainers(target: 'player' | 'enemy', stance: any, orbContainer: any): void {
+    const container = $(`#${target}-special-containers`);
+    if (!container.length) return;
+    const orbs = Array.isArray(orbContainer?.orbs) ? orbContainer.orbs : [];
+    const slots = Number.isInteger(orbContainer?.slots) ? Math.max(0, orbContainer.slots) : 0;
+    const stanceHtml = stance?.name
+      ? `<button type="button" class="special-container-toggle stance-toggle" data-special-kind="stance"
+          aria-label="查看姿态：${escapeHtmlAttribute(String(stance.name))}" title="姿态：${escapeHtmlAttribute(String(stance.name))}">
+          <span aria-hidden="true">${escapeHtml(String(stance.emoji || '◈'))}</span><b>${escapeHtml(String(stance.name))}</b>
+        </button>`
+      : '';
+    const orbHtml = slots > 0
+      ? `<div class="orb-strip" aria-label="Orb ${orbs.length}/${slots}">
+          <span class="orb-count">Orb ${orbs.length}/${slots}</span>
+          ${orbs.map((orb: any, index: number) => `
+            <button type="button" class="special-container-toggle orb-toggle" data-special-kind="orb" data-orb-index="${index}"
+              aria-label="查看 Orb：${escapeHtmlAttribute(String(orb.name || orb.id || index))}，数值 ${escapeHtml(this.displayBattleValue(orb.value))}"
+              title="${escapeHtmlAttribute(String(orb.name || orb.id || 'Orb'))} · ${escapeHtmlAttribute(String(this.displayBattleValue(orb.value)))}">
+              <span aria-hidden="true">${escapeHtml(String(orb.emoji || '◆'))}</span><b>${escapeHtml(this.displayBattleValue(orb.value))}</b>
+            </button>`).join('')}
+        </div>`
+      : '';
+    container.html(`${stanceHtml}${orbHtml}`).toggle(Boolean(stanceHtml || orbHtml));
+    container.find('.stance-toggle').data('special-value', stance);
+    container.find('.orb-toggle').each((index, element) => {
+      $(element).data('special-value', orbs[index]);
+    });
+    container
+      .find('.special-container-toggle')
+      .off('click.mwgSpecialContainer')
+      .on('click.mwgSpecialContainer', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        BattleUI.showSpecialContainerDetails(
+          $(this),
+          $(this).data('special-value'),
+          String($(this).data('special-kind')) === 'orb' ? 'orb' : 'stance',
+          target,
+        );
+      });
+  }
+
+  private static showSpecialContainerDetails(
+    anchor: JQuery,
+    value: any,
+    kind: 'stance' | 'orb',
+    target: 'player' | 'enemy',
+  ): void {
+    $('.support-details-popover').remove();
+    if (!value) return;
+    const context = target === 'enemy'
+      ? { selfLabel: '敌方', opponentLabel: '我方' }
+      : { selfLabel: '自身', opponentLabel: '敌方' };
+    const groups = kind === 'stance'
+      ? [
+          ['进入时', value.enterEffects],
+          ['持续生效', value.passiveEffects],
+          ['退出时', value.exitEffects],
+        ] as const
+      : [
+          ['回合被动', value.passiveEffects],
+          ['激发时', value.evokeEffects],
+        ] as const;
+    const groupHtml = groups
+      .filter(([, effects]) => Array.isArray(effects) && effects.length > 0)
+      .map(([label, effects]) => {
+        const tags = this.effectDisplay.programToTags({ spec: 'mwg.effect/v1', steps: effects }, context);
+        return `<section class="special-details-group"><strong>${escapeHtml(label)}</strong>${this.effectDisplay.createWrappedEffectTagsHTML(tags)}</section>`;
+      })
+      .join('');
+    const sourceName = typeof value.source?.name === 'string' ? value.source.name : '';
+    const popover = $(`
+      <div class="support-details-popover special-container-popover" role="dialog" aria-label="${escapeHtmlAttribute(String(value.name || kind))}">
+        <div class="support-details-heading">
+          <span>${escapeHtml(String(value.emoji || (kind === 'stance' ? '◈' : '◆')))}</span>
+          <strong>${escapeHtml(String(value.name || (kind === 'stance' ? '姿态' : 'Orb')))}</strong>
+          <small>${kind === 'stance' ? '姿态' : `Orb · 数值 ${escapeHtml(this.displayBattleValue(value.value))}`}</small>
+        </div>
+        ${value.description ? `<div class="support-details-description">${escapeHtml(String(value.description))}</div>` : ''}
+        ${sourceName ? `<div class="support-details-source">来源：${escapeHtml(sourceName)}</div>` : ''}
+        <div class="support-details-effects">${groupHtml || '<div class="status-no-effect">没有额外效果。</div>'}</div>
+      </div>
+    `);
+    $('body').append(popover);
+    const offset = anchor.offset();
+    const width = Math.min(430, ($(window).width() || 446) - 16);
+    popover.css({ width });
+    const height = popover.outerHeight() || 160;
+    const viewportWidth = $(window).width() || width;
+    const viewportHeight = $(window).height() || height;
+    const left = offset
+      ? Math.max(8, Math.min(offset.left + (anchor.outerWidth() || 0) / 2 - width / 2, viewportWidth - width - 8))
+      : Math.max(8, (viewportWidth - width) / 2);
+    const preferredTop = offset ? offset.top + (anchor.outerHeight() || 0) + 6 : (viewportHeight - height) / 2;
+    popover.css({ left, top: Math.max(8, Math.min(preferredTop, viewportHeight - height - 8)) });
+    $(document).off('click.mwgSpecialPopover').on('click.mwgSpecialPopover', () => {
+      popover.remove();
+      $(document).off('click.mwgSpecialPopover');
+    });
+  }
+
   /**
    * 计算状态效果的实际数值显示
    */
@@ -727,7 +990,7 @@ export class BattleUI {
     if (enemyAbilitiesContainer) {
       if (enemyAbilities.length > 0) {
         enemyAbilitiesContainer.innerHTML = enemyAbilities.map(ability => this.createAbilityHTML(ability)).join('');
-        this.bindAbilityDetails($('#enemy-abilities'), enemyAbilities, '敌人能力');
+        this.bindAbilityDetails($('#enemy-abilities'), enemyAbilities, '敌方被动');
       } else {
         enemyAbilitiesContainer.innerHTML = '';
       }
@@ -736,14 +999,14 @@ export class BattleUI {
 
   private static bindEnemyIntentDetails(enemy: any): void {
     const action = enemy?.nextAction || (Array.isArray(enemy?.actions) ? enemy.actions[0] : null);
-    const intent = $('.enemy-intent');
+    const intent = $('.enemy-intent, #enemy-intent-summary');
     intent.toggleClass('clickable', !!action).attr('tabindex', action ? '0' : '-1');
     intent.off('.mwgIntentDetail');
     if (!action) return;
     const open = (event: JQuery.TriggeredEvent): void => {
       event.preventDefault();
       event.stopPropagation();
-      BattleUI.showSupportDetails(intent, action, '敌方行动');
+      BattleUI.showSupportDetails($(event.currentTarget), action, '敌方行动');
     };
     intent.on('click.mwgIntentDetail', open);
     intent.on('keydown.mwgIntentDetail', event => {

@@ -14,6 +14,27 @@ export interface BattleEndPromptAsset {
     count?: number;
     description?: string;
 }
+export interface BattleEndPromptResource {
+    name: string;
+    emoji?: string;
+    current: number;
+    max: number;
+}
+export interface BattleEndPromptEnemy {
+    name: string;
+    hp: number;
+    maxHp: number;
+    lust: number;
+    maxLust: number;
+    energy?: number;
+    maxEnergy?: number;
+    resources?: readonly BattleEndPromptResource[];
+    block?: number;
+    statuses: readonly BattleEndPromptStatus[];
+    actions?: readonly BattleEndPromptAsset[];
+    abilities?: readonly BattleEndPromptAsset[];
+    desireEffect?: string;
+}
 export type BattleContinuationMode = 'ordinary' | 'run';
 export interface BattleEndPromptInput {
     result: BattleEndResult;
@@ -27,6 +48,7 @@ export interface BattleEndPromptInput {
         maxLust: number;
         energy: number;
         maxEnergy?: number;
+        resources?: readonly BattleEndPromptResource[];
         drawPerTurn?: number;
         block?: number;
         statuses: readonly BattleEndPromptStatus[];
@@ -40,20 +62,9 @@ export interface BattleEndPromptInput {
         items?: readonly BattleEndPromptAsset[];
         desireEffect?: string;
     };
-    enemy?: {
-        name: string;
-        hp: number;
-        maxHp: number;
-        lust: number;
-        maxLust: number;
-        energy?: number;
-        maxEnergy?: number;
-        block?: number;
-        statuses: readonly BattleEndPromptStatus[];
-        actions?: readonly BattleEndPromptAsset[];
-        abilities?: readonly BattleEndPromptAsset[];
-        desireEffect?: string;
-    } | null;
+    enemy?: BattleEndPromptEnemy | null;
+    /** Complete encounter party. enemy remains the compatibility fallback. */
+    enemies?: readonly BattleEndPromptEnemy[];
     turns: number;
     battleLog?: string;
     narrativeCards?: readonly BattleEndPromptCard[];

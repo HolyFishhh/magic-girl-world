@@ -232,4 +232,32 @@ assert.equal(
   'formula-heavy cards receive a fully Chinese rules fallback',
 );
 
+assert.equal(
+  describeCompactEffectList([{
+    attach_card: {
+      id: 'named_bundle',
+      kind: 'affliction',
+      name: '迟滞附着',
+      scope: 'combat',
+      remove_on: 'discarded',
+      remaining: 2,
+      discard_reasons: ['player_choice'],
+      changes: [
+        { kind: 'cost', operator: 'add', value: 1 },
+        {
+          kind: 'discard_auto_play',
+          reasons: ['player_choice', 'random_effect'],
+          failure_destination: 'exhaust',
+          only_player_turn: true,
+        },
+      ],
+    },
+    from: 'hand',
+    pick: 'choose',
+    count: 1,
+  }]),
+  '使选择1张手牌获得负面附着“迟滞附着”（符合弃牌原因后移除，剩余2次）：费用增加1，因主动选择弃牌、随机效果弃牌从手牌弃掉时免费自动打出，失败后移至消耗堆',
+  'named attachment bundles expose their actual rules and lifetime in Chinese',
+);
+
 console.log('Compact card rules generate deterministic player-facing descriptions without AI prose.');

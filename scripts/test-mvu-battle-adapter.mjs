@@ -36,6 +36,11 @@ const enemy = adapter.convertMvuEnemy(
     abilities: [{ id: 'guarded', name: '防守', trigger: 'turn_start', effects: { block: 2 } }],
     status_effects: [],
     lust_effect: { name: '反噬', effects: { damage: 2 } },
+    stance: { id: 'guard_mode', name: '守势', enter: { block: 2 }, passive: { modify: 'block', add: 1 } },
+    orb_slots: 2,
+    orbs: [
+      { id: 'ember', name: '余烬', value: 3, passive: { block: 'orb_value' }, evoke: { damage: 'orb_value' } },
+    ],
   },
   () => 0,
 );
@@ -44,6 +49,18 @@ assert.equal(enemy.intent.type, 'attack');
 assert.equal(enemy.actions[0].effectProgram.steps[0].op, 'damage');
 assert.equal(enemy.abilities[0].effectProgram.steps[0].op, 'gain_block');
 assert.equal(enemy.lustEffect.effectProgram.steps[0].op, 'damage');
+assert.equal(enemy.stance.id, 'guard_mode');
+assert.equal(enemy.stance.enterEffects[0].op, 'gain_block');
+assert.equal(enemy.orbs.slots, 2);
+assert.equal(enemy.orbs.orbs[0].id, 'ember');
+assert.deepEqual(enemy.orbs.orbs[0].passiveEffects[0].amount, { op: 'var', path: 'context.orb_value' });
+
+assert.equal(adapter.convertMvuStance({ id: 'bad-id', name: '错误' }), null);
+assert.equal(adapter.convertMvuOrbContainer(1, [{ id: 'bad-id', name: '错误', value: 1 }]).orbs.length, 0);
+assert.equal(adapter.convertMvuOrbContainer(1, [
+  { id: 'a', name: '甲', value: 1 },
+  { id: 'b', name: '乙', value: 2 },
+]).orbs.length, 1, 'initial Orb state is bounded by authored slots');
 
 const display = adapter.buildMvuStatusDisplayContext([
   { id: 'focus', name: '专注', emoji: '✨', type: 'buff', triggers: { hold: { modify: 'damage', add: 1 } } },

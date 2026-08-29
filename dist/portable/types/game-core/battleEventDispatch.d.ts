@@ -1,4 +1,5 @@
 import { type AbilityTrigger, type StatusOwnershipChange } from './battleTriggers';
+import type { BattleTriggerEventContext } from './battleEventJournal';
 export type BattleSide = 'player' | 'enemy';
 export type TriggerConsumer = 'ability' | 'relic';
 export type TriggeredAttribute = 'hp' | 'lust' | 'block';
@@ -13,6 +14,7 @@ export interface AttributeTriggerContext {
     change: number;
     target: BattleSide;
     source: BattleSide;
+    eventContext?: BattleTriggerEventContext;
 }
 /** Resolve the shared ability-first, relic-second order for one player-owned event. */
 export declare function resolvePlayerTriggerDispatch(trigger: AbilityTrigger, context?: Readonly<Record<string, unknown>>): BattleTriggerDispatch[];

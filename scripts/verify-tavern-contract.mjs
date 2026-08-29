@@ -382,7 +382,10 @@ assert.ok(
   'character runtime must follow MVU global extra-analysis lifecycle and capture the parsed update block',
 );
 
-const patchedCardPath = resolve(root, '魔法少女世界.png');
+const cardArgumentIndex = process.argv.indexOf('--card');
+const patchedCardPath = cardArgumentIndex >= 0 && process.argv[cardArgumentIndex + 1]
+  ? resolve(process.argv[cardArgumentIndex + 1])
+  : resolve(root, '魔法少女世界.png');
 const patchedChunks = extractPngChunks(new Uint8Array(await readFile(patchedCardPath)));
 const patchedMetadata = patchedChunks
   .filter(chunk => chunk.name === 'tEXt')
@@ -391,6 +394,12 @@ const patchedMetadata = patchedChunks
 assert.ok(patchedMetadata, 'patched card must contain ccv3 metadata');
 const patchedCard = JSON.parse(Buffer.from(patchedMetadata.text, 'base64').toString('utf8'));
 const patchedExtensions = patchedCard.data.extensions;
+assert.equal(
+  patchedExtensions.magic_girl_world?.design_assistant_scope,
+  'mwg.design-assistant-card/v1',
+  'patched card must opt into the external design assistant explicitly',
+);
+assert.equal(patchedExtensions.magic_girl_world?.card_version, releaseConfig.cardVersion);
 assert.equal(patchedCard.name, releaseConfig.characterName);
 assert.equal(patchedCard.data.name, releaseConfig.characterName);
 assert.equal(patchedCard.data.character_version, releaseConfig.cardVersion);

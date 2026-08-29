@@ -2,12 +2,13 @@ import { settleCurrentMessageBattle } from '../../runtime/battleSettlementAdapte
 import { getCurrentMessageVariables, replaceCurrentMessageVariables } from '../../runtime/messageVariables';
 import { TavernContinuationHost } from '../../runtime/tavernContinuation';
 import {
+  cleanupCardProgression,
+  completeRunNode,
   formatBattleEndPrompt,
   effectProgramToDisplayTags,
-  formatBuildGuidance,
+  assessContentDesign,
   readBattleEndResult,
   recommendBattleRewardBudget,
-  recommendBuildGuidance,
   summarizeBuildBudget,
   triggeredEffectProgramToDisplayTags,
   type BattleEndResult,
@@ -18,15 +19,44 @@ import { TavernBattleEffectPresenter, type BattleEndDialogRequest } from '../ui/
 import { DynamicStatusManager } from '../combat/dynamicStatusManager';
 import { GameStateManager } from './gameStateManager';
 import { BattleLog } from '../modules/battleLog';
+import { readRunState } from '../../runtime/runStateAdapter';
+import { writeBackMvuCardProgression } from './mvuBattleAdapter';
 
 export interface TavernBattleEndPorts {
   getState(): GameState;
+  saveBattleSession?(): Promise<void>;
+  finalizeCardProgression?(runEnded: boolean): Record<string, any>[];
   clearBattleSession(): Promise<void>;
   reloadBattleState(): Promise<boolean>;
   readVariables(): Record<string, any>;
   replaceVariables(variables: Record<string, any>): Promise<unknown>;
   settleBattle(input: Parameters<typeof settleCurrentMessageBattle>[0]): Promise<void>;
   reloadPage(): void;
+}
+
+function battleEndsRun(variables: Record<string, any>, result: BattleEndResult): boolean {
+  const run = readRunState(variables.stat_data);
+  if (!run || run.phase !== 'in_node' || !run.currentNode) return false;
+  const outcome = result === 'victory' ? 'cleared' : result === 'defeat' ? 'failed' : 'escaped';
+  const next = completeRunNode(run, { outcome });
+  return next.phase === 'won' || next.phase === 'lost';
+}
+
+function finalizeRuntimeCardProgression(
+  gameStateManager: GameStateManager,
+  variables: Record<string, any>,
+  runEnded: boolean,
+): Record<string, any>[] {
+  gameStateManager.cleanupOwnedCardProgression('combat_end');
+  if (runEnded) gameStateManager.cleanupOwnedCardProgression('run_end');
+
+  let runCards = gameStateManager.getPlayer().deck.map(card => cleanupCardProgression(card, 'combat_end'));
+  if (runEnded) runCards = runCards.map(card => cleanupCardProgression(card, 'run_end'));
+  gameStateManager.updatePlayer({ deck: runCards });
+  const zones = gameStateManager.readCardZoneState();
+  const combatCards = [...zones.hand, ...zones.drawPile, ...zones.discardPile, ...zones.exhaustPile];
+  const mvuCards = variables.stat_data?.battle?.cards;
+  return writeBackMvuCardProgression(mvuCards, runCards, combatCards).cards;
 }
 
 export interface TavernBattleEndPresentationPorts {
@@ -97,6 +127,18 @@ function compactNamedEffect(
   return asset ? `${asset.name}${asset.description ? `（${asset.description}）` : ''}` : '';
 }
 
+function compactResources(value: unknown): Array<{ name: string; emoji?: string; current: number; max: number }> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  return Object.values(value as Record<string, any>).flatMap(resource => {
+    if (!resource || typeof resource !== 'object') return [];
+    const name = String(resource.name || resource.id || '').trim();
+    const current = Number(resource.current);
+    const max = Number(resource.max);
+    if (!name || !Number.isFinite(current) || !Number.isFinite(max)) return [];
+    return [{ name, emoji: String(resource.emoji || '').trim() || undefined, current, max }];
+  });
+}
+
 /** Tavern-only continuation boundary for leaving a completed battle message. */
 export class TavernBattleEndHost {
   private static instance: TavernBattleEndHost;
@@ -107,6 +149,9 @@ export class TavernBattleEndHost {
       const gameStateManager = GameStateManager.getInstance();
       return {
         getState: () => gameStateManager.getGameState(),
+        saveBattleSession: () => gameStateManager.saveToSillyTavern(),
+        finalizeCardProgression: runEnded =>
+          finalizeRuntimeCardProgression(gameStateManager, getCurrentMessageVariables(), runEnded),
         clearBattleSession: () => gameStateManager.clearBattleSession(),
         reloadBattleState: () => gameStateManager.loadFromSillyTavern(),
         readVariables: () => getCurrentMessageVariables(),
@@ -129,7 +174,7 @@ export class TavernBattleEndHost {
     rewardRequest?: Record<string, unknown> | null,
   ): Promise<void> {
     const gameState = this.ports.getState();
-    const settlement = {
+    const settlement: Parameters<TavernBattleEndPorts['settleBattle']>[0] = {
       result,
       request: gameState.battleRequest,
       player: gameState.player,
@@ -141,8 +186,11 @@ export class TavernBattleEndHost {
     await this.continuationHost.continueWithPrompt({
       prompt: battleSummary,
       prepare: async () => {
+        await this.ports.saveBattleSession?.();
         const snapshot = cloneVariables(this.ports.readVariables());
         try {
+          const persistentCards = this.ports.finalizeCardProgression?.(battleEndsRun(snapshot, result));
+          if (persistentCards) settlement.persistentCards = persistentCards;
           // Clear the private session before settling MUV so the next assistant
           // floor cannot inherit a terminal runtime snapshot.
           await this.ports.clearBattleSession();
@@ -166,6 +214,10 @@ export class TavernBattleEndHost {
       const gameState = this.ports.getState();
       const player = gameState.player;
       const enemy = gameState.enemy;
+      const enemies = [
+        ...(gameState.defeatedEnemies || []),
+        ...(gameState.enemies?.length ? gameState.enemies : enemy ? [enemy] : []),
+      ];
       const statusManager = DynamicStatusManager.getInstance();
       const resolveStatusName = (statusId: string): string | undefined =>
         statusManager.getStatusDefinition(statusId)?.name?.trim() || undefined;
@@ -176,7 +228,34 @@ export class TavernBattleEndHost {
           ? summarizeBuildBudget(request.content, { hp: player.currentHp, maxHp: player.maxHp })
           : null;
       const rewardBudget = result === 'victory' ? recommendBattleRewardBudget(request?.route || null) : null;
-      const guidance = request && budget ? formatBuildGuidance(recommendBuildGuidance(request.content, budget)) : '';
+      const previousDesignContext = this.ports.readVariables()?.stat_data?.battle?.design_context;
+      const outcomeMaxHp = Math.max(1, Number(request?.player?.maxHp) || Number(player.maxHp) || 1);
+      const outcomeMaxLust = Math.max(1, Number(request?.player?.maxLust) || Number(player.maxLust) || 100);
+      const outcomeFeedback = request
+        ? {
+            outcome: result,
+            turns: Math.max(0, Math.floor(Number(gameState.currentTurn) || 0)),
+            hpRatio: player.currentHp / outcomeMaxHp,
+            lustRatio: player.currentLust / outcomeMaxLust,
+          }
+        : undefined;
+      const guidance =
+        request && budget
+          ? assessContentDesign({
+              pack: request.content,
+              budget,
+              player: {
+                hp: player.currentHp,
+                maxHp: player.maxHp,
+                lust: player.currentLust,
+                maxLust: player.maxLust,
+              },
+              danger: request.route?.danger ?? 1,
+              act: request.route?.act ?? 1,
+              previous: previousDesignContext,
+              outcome: outcomeFeedback,
+            }).context.brief
+          : '';
       const limits: Record<string, number> = {};
       if (rewardBudget) {
         limits.cards = rewardBudget.cards.pick;
@@ -198,8 +277,23 @@ export class TavernBattleEndHost {
               marker: '[MVU_BATTLE_SETTLEMENT]',
               result,
               penalty: true,
-              enemy: enemy ? { name: enemy.name } : null,
+              enemy: enemies.length ? { names: enemies.map(entry => entry.name) } : null,
             };
+      const promptEnemies = enemies.map(entry => ({
+        name: entry.name,
+        hp: entry.currentHp,
+        maxHp: entry.maxHp,
+        lust: entry.currentLust,
+        maxLust: entry.maxLust,
+        energy: entry.energy,
+        maxEnergy: entry.maxEnergy,
+        resources: compactResources(entry.resources),
+        block: entry.block,
+        statuses: entry.statusEffects,
+        actions: compactNamedAssets(entry.actions, false, resolveStatusName),
+        abilities: compactNamedAssets(entry.abilities, false, resolveStatusName),
+        desireEffect: compactNamedEffect(entry.lustEffect, resolveStatusName),
+      }));
       const promptInput = {
         result,
         continuation: request?.route ? 'run' : 'ordinary',
@@ -211,6 +305,7 @@ export class TavernBattleEndHost {
           maxLust: player.maxLust,
           energy: player.energy,
           maxEnergy: player.maxEnergy,
+          resources: compactResources(player.resources),
           drawPerTurn: player.drawPerTurn,
           block: player.block,
           statuses: player.statusEffects,
@@ -224,22 +319,8 @@ export class TavernBattleEndHost {
           items: compactNamedAssets(player.items, true, resolveStatusName),
           desireEffect: compactNamedEffect(gameState.battle?.player_lust_effect, resolveStatusName),
         },
-        enemy: enemy
-          ? {
-              name: enemy.name,
-              hp: enemy.currentHp,
-              maxHp: enemy.maxHp,
-              lust: enemy.currentLust,
-              maxLust: enemy.maxLust,
-              energy: enemy.energy,
-              maxEnergy: enemy.maxEnergy,
-              block: enemy.block,
-              statuses: enemy.statusEffects,
-              actions: compactNamedAssets(enemy.actions, false, resolveStatusName),
-              abilities: compactNamedAssets(enemy.abilities, false, resolveStatusName),
-              desireEffect: compactNamedEffect(enemy.lustEffect, resolveStatusName),
-            }
-          : null,
+        enemy: promptEnemies[0] || null,
+        enemies: promptEnemies,
         turns: gameState.currentTurn,
         battleLog: BattleLog.buildTurnSummaryReport(),
         narrativeCards,

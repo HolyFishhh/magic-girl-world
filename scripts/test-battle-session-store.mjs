@@ -42,6 +42,9 @@ const state = {
     currentLust: 0,
     energy: 3,
     maxEnergy: 3,
+    resources: {
+      stars: { id: 'stars', name: '星能', emoji: '⭐', current: 2, max: 5, refresh: 'retain' },
+    },
     block: 0,
     deck: [runtimeCard('strike_1')],
     hand: [runtimeCard('strike_1')],
@@ -61,6 +64,9 @@ const state = {
     currentLust: 0,
     energy: 0,
     maxEnergy: 0,
+    resources: {
+      rage: { id: 'rage', name: '怒气', emoji: '🔥', current: 1, max: 4, refresh: 'reset' },
+    },
     block: 0,
     statusEffects: [],
     actions: [],
@@ -88,6 +94,12 @@ const saved = session.readBattleSessionSnapshot(variables);
 assert.ok(saved);
 assert.equal(saved.state.currentTurn, 1);
 assert.deepEqual(saved.state.random, { schemaVersion: 1, seed: 1234, cursor: 9 });
+assert.equal(saved.state.player.resources.stars.current, 2);
+assert.equal(saved.state.enemy.resources.rage.refresh, 'reset');
+
+const corruptResourceVariables = clone(variables);
+corruptResourceVariables[session.BATTLE_SESSION_NAMESPACE][session.BATTLE_SESSION_KEY].state.player.resources.stars.current = 9;
+assert.equal(session.readBattleSessionSnapshot(corruptResourceVariables), null, 'corrupt resource pools must not restore');
 
 const restore = store.prepare(storage.read(), battleA);
 assert.deepEqual(restore, state);

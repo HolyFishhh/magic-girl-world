@@ -1,4 +1,5 @@
 import { resolveStatusOwnershipTriggers, type AbilityTrigger, type StatusOwnershipChange } from './battleTriggers';
+import type { BattleTriggerEventContext } from './battleEventJournal';
 
 export type BattleSide = 'player' | 'enemy';
 export type TriggerConsumer = 'ability' | 'relic';
@@ -16,6 +17,7 @@ export interface AttributeTriggerContext {
   change: number;
   target: BattleSide;
   source: BattleSide;
+  eventContext?: BattleTriggerEventContext;
 }
 
 const ATTRIBUTE_TRIGGERS: Readonly<
@@ -58,7 +60,10 @@ export function resolveAttributeTriggerDispatch(context: AttributeTriggerContext
   const direction = context.change > 0 ? 'increase' : 'decrease';
   const [receiverTrigger, sourceTrigger] = ATTRIBUTE_TRIGGERS[context.attribute][direction];
   const amount = Math.abs(context.change);
-  const triggerContext = context.attribute === 'hp' && direction === 'decrease' ? { damage: amount } : { amount };
+  const triggerContext = {
+    ...(context.eventContext || {}),
+    ...(context.attribute === 'hp' && direction === 'decrease' ? { damage: amount } : { amount }),
+  };
   const dispatches: BattleTriggerDispatch[] = [
     { consumer: 'ability', target: context.target, trigger: receiverTrigger, context: triggerContext },
   ];

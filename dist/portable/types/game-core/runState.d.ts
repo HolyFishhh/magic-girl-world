@@ -1,4 +1,4 @@
-export declare const RUN_STATE_SCHEMA_VERSION: 1;
+export declare const RUN_STATE_SCHEMA_VERSION: 2;
 export declare const RUN_NODE_KINDS: readonly ["battle", "elite", "event", "rest", "shop", "boss"];
 export type RunNodeKind = (typeof RUN_NODE_KINDS)[number];
 export type RunPhase = 'awaiting_choice' | 'in_node' | 'won' | 'lost';
@@ -51,5 +51,7 @@ export declare function enterRunNode(input: RunState, choiceId: string): RunStat
 export declare function requireActiveRunNode(input: RunState, kind?: RunNodeKind): RunNodeChoice;
 export declare function completeRunNode(input: RunState, options: CompleteRunNodeOptions): RunState;
 export declare function spendRunGold(input: RunState, amount: number): RunState;
+/** Migrate persisted run snapshots without using route RNG or host state. */
+export declare function migrateRunState(value: unknown): unknown;
 /** Strict reader for adapters restoring RunState from MUV, a website, or a Mod save. */
 export declare function validateRunState(value: unknown): RunStateValidationResult;

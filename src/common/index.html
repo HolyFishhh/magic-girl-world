@@ -73,6 +73,7 @@
               </section>
             </div>
             <div class="reward-actions">
+              <button class="btn btn-secondary" id="reroll-reward-btn" type="button" style="display: none">重投候选</button>
               <button class="btn btn-primary" id="confirm-btn" type="button" disabled>确认领取</button>
             </div>
           </div>
@@ -136,6 +137,15 @@
               <div class="info-item"><span class="label">生命</span><span class="value" id="battle-hp">未知</span></div>
               <div class="info-item"><span class="label">欲望</span><span class="value" id="battle-desire">未知</span></div>
               <div class="info-item"><span class="label">删卡次数</span><span class="value" id="battle-card-remove">0</span></div>
+            </section>
+            <section class="status-group deck-archetype-profile" id="deck-archetype-profile" hidden>
+              <div class="group-heading">
+                <h3>构筑流派</h3>
+                <span class="archetype-caption" id="deck-archetype-caption"></span>
+              </div>
+              <div class="archetype-share-bar" id="deck-archetype-share-bar" aria-label="当前卡组流派占比"></div>
+              <div class="archetype-legend" id="deck-archetype-legend"></div>
+              <div class="archetype-evolution" id="deck-archetype-evolution"></div>
             </section>
             <section class="status-group">
               <div class="group-heading">

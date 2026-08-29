@@ -71,6 +71,7 @@ const [image, interfaceTexts, worldbookManifestText, worldbookEntryConfigText, r
 const releaseConfig = JSON.parse(releaseConfigText);
 const CARD_VERSION = releaseConfig.cardVersion;
 const CHARACTER_NAME = releaseConfig.characterName || `${releaseConfig.worldbookPrefix} ${CARD_VERSION}`;
+const DESIGN_ASSISTANT_CARD_SCOPE = 'mwg.design-assistant-card/v1';
 const CHARACTER_RUNTIME_ID = `magic-girl-world-runtime-${CARD_VERSION.replace(/[^a-z0-9]+/gi, '-')}`;
 const WORLDBOOK_NAME = `${releaseConfig.worldbookPrefix}${CARD_VERSION}`;
 const MVU_URL = `https://testingcf.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate@${releaseConfig.mvuVersion}/artifact/bundle.js`;
@@ -84,6 +85,14 @@ const card = decodeCard(chunks);
 const interfacePayloads = interfaceTexts.map(JSON.parse);
 const extensions = card.data?.extensions;
 if (!extensions) throw new Error('Character card has no data.extensions object');
+extensions.magic_girl_world = {
+  ...(extensions.magic_girl_world && typeof extensions.magic_girl_world === 'object'
+    ? extensions.magic_girl_world
+    : {}),
+  spec: 'mwg.character-extension/v1',
+  card_version: CARD_VERSION,
+  design_assistant_scope: DESIGN_ASSISTANT_CARD_SCOPE,
+};
 
 const worldbookEntries = card.data?.character_book?.entries;
 if (!Array.isArray(worldbookEntries)) throw new Error('Character card has no embedded character-book entries');

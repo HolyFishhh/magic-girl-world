@@ -29,11 +29,18 @@ export interface ContentModifier {
     value: number;
 }
 export interface ContentAnalysisOptions {
+    /** Relative side that represents the enemy entity collection for source-aware analysis. */
+    enemyCollectionTarget?: EffectTarget;
     statusStacks?: Readonly<Record<string, number>>;
     selfStatusStacks?: Readonly<Record<string, number>>;
     opponentStatusStacks?: Readonly<Record<string, number>>;
     currentStatusStacks?: number;
     spentEnergy?: number;
+    /** Exact payment context for composite and custom-resource costs. */
+    spentResources?: Readonly<Record<string, number>>;
+    /** Exact X values resolved from every `all` cost component. */
+    xValues?: Readonly<Record<string, number>>;
+    xValue?: number;
     /** Optional detached-state overrides used by the shared scenario sampler. */
     selfHp?: number;
     selfMaxHp?: number;
@@ -41,6 +48,10 @@ export interface ContentAnalysisOptions {
     opponentMaxHp?: number;
     selfEnergy?: number;
     selfMaxEnergy?: number;
+    selfResources?: Readonly<Record<string, number>>;
+    selfMaxResources?: Readonly<Record<string, number>>;
+    opponentResources?: Readonly<Record<string, number>>;
+    opponentMaxResources?: Readonly<Record<string, number>>;
     currentTurn?: number;
     cardsPlayedThisTurn?: number;
     attacksPlayedThisTurn?: number;
@@ -56,8 +67,9 @@ export interface ContentScenarioRange {
     lustMax: number;
 }
 export declare function analyzeEffectProgram(program: EffectProgram, options?: ContentAnalysisOptions, directWeight?: number): ContentAnalysis | null;
-/** Analyze one shallow card/relic/ability/action without mutating runtime state. */
+/** Analyze one shallow definition with a bounded mechanics/state cache. */
 export declare function analyzeContentDefinition(value: unknown, options?: ContentAnalysisOptions): ContentAnalysis;
+export declare function clearContentAnalysisCache(): void;
 export interface ContentAnalysisScenario {
     weight: number;
     options: ContentAnalysisOptions;

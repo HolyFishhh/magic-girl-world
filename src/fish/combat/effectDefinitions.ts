@@ -25,6 +25,7 @@ const ATTRIBUTE_NAMES: Readonly<Record<string, string>> = {
   lust_damage_modifier: '欲望伤害修饰符',
   lust_damage_taken_modifier: '受欲望伤害修饰符',
   block_modifier: '格挡修饰符',
+  summon_capacity_modifier: '召唤容量修饰符',
   heal_modifier: '治疗修饰符',
 };
 
@@ -52,6 +53,7 @@ export const TRIGGER_DEFINITIONS: Readonly<Record<string, TriggerDefinition>> = 
   deal_lust_decrease: { id: 'deal_lust_decrease', name: '造成欲望减少时', icon: '🧊', color: '#0284c7' },
   gain_block: { id: 'gain_block', name: '获得格挡时', icon: '🛡️', color: '#2563eb' },
   lose_block: { id: 'lose_block', name: '失去格挡时', icon: '💨', color: '#4b5563' },
+  defeated: { id: 'defeated', name: '被击败时', icon: '💀', color: '#991b1b' },
   gain_buff: { id: 'gain_buff', name: '获得增益时', icon: '✨', color: '#059669' },
   gain_debuff: { id: 'gain_debuff', name: '获得减益时', icon: '🌫️', color: '#dc2626' },
   lose_buff: { id: 'lose_buff', name: '失去增益时', icon: '💨', color: '#4b5563' },

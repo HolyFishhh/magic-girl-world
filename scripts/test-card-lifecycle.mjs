@@ -5,7 +5,15 @@ import { resolve } from 'node:path';
 import ts from 'typescript';
 
 const lifecyclePath = resolve('src/game-core/cardRules.ts');
-const source = await readFile(lifecyclePath, 'utf8');
+const resourcePath = resolve('src/game-core/combatResource.ts');
+const resourceOutput = ts.transpileModule(await readFile(resourcePath, 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+}).outputText;
+const resourceUrl = `data:text/javascript;base64,${Buffer.from(resourceOutput).toString('base64')}`;
+const source = (await readFile(lifecyclePath, 'utf8')).replace(
+  "from './combatResource';",
+  `from '${resourceUrl}';`,
+);
 const output = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 }).outputText;

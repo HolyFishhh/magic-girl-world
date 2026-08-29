@@ -45,6 +45,10 @@ const requiredIds = [
   'status-job-name',
   'battle-level',
   'battle-exp',
+  'deck-archetype-profile',
+  'deck-archetype-share-bar',
+  'deck-archetype-legend',
+  'deck-archetype-evolution',
   'battle-deck',
   'battle-artifacts',
   'battle-items',
@@ -67,6 +71,9 @@ assert.match(styleSource, /background-image:[\s\S]*repeating-linear-gradient/);
 assert.match(styleSource, /--bookmark-pink:\s*#ffd9e2/);
 assert.match(scriptSource, /compactContentToDisplayTags/);
 assert.match(scriptSource, /reward-effect-summary/);
+assert.match(scriptSource, /function renderDeckArchetypeProfile/);
+assert.match(scriptSource, /design_context\?\.archetypes/);
+assert.match(styleSource, /\.archetype-share-bar/);
 assert.ok(
   htmlSource.indexOf('id="run-opt-in"') < htmlSource.indexOf('id="battle-hp"'),
   'the optional expedition entry must be the first card/resource control',
@@ -92,9 +99,12 @@ assert.doesNotMatch(
 );
 assert.match(runActionHostSource, /enterRunNodeInStat/);
 assert.match(runPromptSource, /danger=\$\{node\.danger\}/);
-assert.match(runActionHostSource, /settleRestUpgradeInStat/);
-assert.match(runActionHostSource, /settleShopSelectionsInStat/);
-assert.match(runActionHostSource, /settleEventRewardSelectionsInStat/);
+assert.match(runActionHostSource, /executeUnifiedRunTransactionInStat/);
+assert.match(runActionHostSource, /rest_upgrade_card/);
+assert.match(runActionHostSource, /rest_transform_card/);
+assert.match(runActionHostSource, /rest_duplicate_card/);
+assert.match(runActionHostSource, /rest_remove_card/);
+assert.match(runActionHostSource, /reward_pool/);
 assert.match(runActionHostSource, /pendingEventRewards/);
 assert.match(runActionHostSource, /stat\.run_result != null && !pendingEventRewards/);
 assert.doesNotMatch(
@@ -121,7 +131,11 @@ assert.match(scriptSource, /retryCurrentMessageWithExtraModel\(prompt\)/);
 assert.doesNotMatch(scriptSource, /requestInitialContentRepair[\s\S]{0,500}commonActionHost\.continueWithPrompt/);
 assert.match(scriptSource, /请求 AI 修复/);
 assert.match(scriptSource, /function contentDescriptionStatusNames/);
-assert.match(scriptSource, /describeCompactCard\(card, \{ statusNames: contentDescriptionStatusNames\(card\) \}\)/);
+assert.match(scriptSource, /function contentDescriptionResourceNames/);
+assert.match(
+  scriptSource,
+  /describeCompactCard\(card, \{\s*statusNames: contentDescriptionStatusNames\(card\),\s*resourceNames: contentDescriptionResourceNames\(\),\s*\}\)/,
+);
 assert.match(scriptSource, /function contentRuleDescription/);
 assert.match(scriptSource, /canGenerateCompactStatusDescription\(status\)/);
 assert.match(scriptSource, /describeCompactStatus\(status, \{ statusNames \}\)/);

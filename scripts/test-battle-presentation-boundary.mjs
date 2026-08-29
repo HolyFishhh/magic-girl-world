@@ -9,6 +9,7 @@ const cardSystemPath = resolve('src/fish/combat/cardSystem.ts');
 const cardPresenterPath = resolve('src/fish/ui/cardInteractionPresenter.ts');
 const cardPlayModePath = resolve('src/fish/ui/cardPlayMode.ts');
 const battleUiPath = resolve('src/fish/ui/battleUI.ts');
+const summonChoicePath = resolve('src/fish/ui/summonChoicePresenter.ts');
 const enemyIntentPresenterPath = resolve('src/fish/ui/enemyIntentPresenter.ts');
 const cardSelectionHostPath = resolve('src/fish/core/cardSelectionHost.ts');
 const relicHostPath = resolve('src/fish/core/relicTriggerHost.ts');
@@ -30,6 +31,7 @@ const [
   cardPresenter,
   cardPlayMode,
   battleUi,
+  summonChoice,
   enemyIntentPresenter,
   cardSelectionHost,
   relicTriggerHost,
@@ -52,6 +54,7 @@ const [
     cardPresenterPath,
     cardPlayModePath,
     battleUiPath,
+    summonChoicePath,
     enemyIntentPresenterPath,
     cardSelectionHostPath,
     relicHostPath,
@@ -140,6 +143,10 @@ assert.match(battleUi, /requestAnimationFrame\(\(\) =>/);
 assert.match(battleUi, /\.card-tooltip'\)\.stop\(true, true\)\.remove\(\)/);
 assert.match(battleUi, /public static repositionCardTooltip/);
 assert.match(battleUi, /createWrappedEffectTagsHTML\(triggerTags\)/);
+assert.match(battleUi, /previewPayment\.waived\.length/);
+assert.match(battleUi, /card-cost-component\$\{insufficient/);
+assert.match(presenter, /previewCard\?\.\(card\.id\)/);
+assert.match(presenter, /toggleClass\('waived', waived\)/);
 assert.match(battleUi, /class="status-trigger-group"/);
 assert.match(battleUi, /class="status-detail-effects"/);
 assert.match(battleUi, /showSupportDetails/);
@@ -173,6 +180,17 @@ assert.match(battleHtml, /id="stage-player-emoji"/);
 assert.match(battleHtml, /id="stage-enemy-emoji"/);
 assert.match(battleHtml, /class="enemy-avatar-stack"/);
 assert.match(battleHtml, /id="enemy-intent-summary"/);
+const stageEnemyStart = battleHtml.indexOf('class="stage-combatant stage-enemy"');
+const stageIntent = battleHtml.indexOf('id="enemy-intent-summary"');
+const stageEnemyEmoji = battleHtml.indexOf('id="stage-enemy-emoji"');
+assert.ok(
+  stageEnemyStart >= 0 && stageIntent > stageEnemyStart && stageIntent < stageEnemyEmoji,
+  'the next enemy action belongs above the enemy inside the central battle stage',
+);
+assert.ok(
+  stageIntent > battleHtml.indexOf('class="enemy-avatar-stack"'),
+  'the stage intent is not attached to the header avatar stack',
+);
 assert.doesNotMatch(battleHtml, /class="intent-icon"|class="intent-effects"/);
 assert.doesNotMatch(battleHtml, /stage-action-caption|stage-enemy-name|class="stage-name"/);
 assert.match(battleHtml, /class="compact-support-row" aria-label="我方附加效果"/);
@@ -181,7 +199,17 @@ assert.match(battleStyles, /\.battle-stage\s*\{/);
 assert.match(battleStyles, /\.top-info-bar\s*\{[^}]*grid-template-columns:\s*auto auto minmax\(0, 1fr\)/s);
 assert.match(battleStyles, /\.enemy-intent-summary\s*\{/);
 assert.match(battleStyles, /\.intent-badge\s*\{/);
+assert.match(
+  battleStyles,
+  /\.stage-intent-summary[\s\S]*?top:\s*50%[\s\S]*?transform:\s*translate\(-50%,\s*calc\(-100%\s*-\s*22px\)\)/,
+  'the next-action badge is anchored above the enemy actor instead of overlapping its emoji',
+);
 assert.match(battleStyles, /\.stage-action-token\s*\{/);
+assert.match(
+  battleStyles,
+  /\.compact-support-row\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) minmax\(68px, 10\.8em\) auto auto/s,
+  'status icons keep the flexible space while the lust-effect name stays compact',
+);
 assert.doesNotMatch(
   battleStyles,
   /\.enemy-action-popup,[\s\S]{0,100}position:\s*fixed/,
@@ -202,6 +230,23 @@ assert.match(battleUi, /class="lust-effect-label">欲望效果：<\/span>/);
 assert.doesNotMatch(battleUi, /class="lust-effect-toggle support-icon-button"/);
 assert.match(battleUi, /class="status-effect-item support-icon-button clickable"/);
 assert.match(battleUi, /showSupportDetails\(\$\(this\), lustEffect/);
+assert.doesNotMatch(battleUi, /\.slice\(0,\s*10\)/, 'the stage must not impose an old ten-summon render cap');
+assert.match(battleUi, /let ringCapacity = 8/);
+assert.match(battleUi, /ringCapacity = 8 \+ ring \* 4/);
+assert.match(battleUi, /data-summon-id="\$\{escapeHtmlAttribute/);
+assert.match(battleUi, /Math\.cos\(\(angle \* Math\.PI\) \/ 180\)/);
+assert.match(battleUi, /Math\.sin\(\(angle \* Math\.PI\) \/ 180\)/);
+assert.doesNotMatch(battleUi, /stage-summon-(?:hp|block)/, 'summon stage actors remain borderless emoji rather than stat chips');
+assert.match(summonChoice, /data-summon-id/);
+assert.match(summonChoice, /aria-pressed="false"/);
+assert.match(summonChoice, /selected\.size !== amount/);
+assert.doesNotMatch(summonChoice, /\.first\(\)\.trigger\(['"]click/, 'manual summon selection must not auto-pick the first candidate');
+assert.match(battleUi, /unit\.actions/);
+assert.match(battleUi, /unit\.abilities/);
+assert.match(battleUi, /triggeredProgramToTags\(ability\.trigger, ability\.effectProgram/);
+assert.match(battleUi, /const contentLength = tooltip\.text\(\)\.replace/);
+assert.match(battleUi, /maxHeight: 'none'/);
+assert.match(battleUi, /overflow: 'visible'/);
 assert.match(animation, /playCombatAction\(/);
 assert.match(animation, /#stage-player-emoji/);
 assert.match(animation, /#stage-enemy-emoji/);
@@ -212,6 +257,15 @@ assert.match(animation, /return Promise\.resolve\(\)/);
 assert.match(animation, /resolveCombatAnimationTarget/);
 assert.match(animation, /stage-aura/);
 assert.match(animation, /damageTimer/);
+assert.match(animation, /DAMAGE_INTERVAL = 95/);
+assert.match(animation, /ACTION_LEAD_IN = 150/);
+assert.match(animation, /showStageEffect\(/);
+assert.match(animation, /tone: 'damage' \| 'heal' \| 'lust' \| 'block' \| 'energy' \| 'status' \| 'resource'/);
+assert.match(animation, /showStatusEffect\(/);
+assert.match(presenter, /showBlockChange\(/);
+assert.match(presenter, /showEnergyChange\(/);
+assert.match(presenter, /showResourceChange\(/);
+assert.match(presenter, /showSummonAction\(/);
 assert.doesNotMatch(animation, /const duration = 3000|requestAnimationFrame\(animate\)/);
 assert.match(battleStyles, /\.card-game-container\s*\{[^}]*height:\s*640px;[^}]*min-height:\s*640px/s);
 assert.match(battleStyles, /\.battle-main-grid\s*\{[^}]*grid-template-rows:\s*96px minmax\(0, 1fr\) 96px/s);
@@ -232,6 +286,11 @@ assert.match(battleStyles, /\.status-detail-effects\s*\{[^}]*max-height:\s*none[
 assert.match(battleStyles, /\.modifier-compare-row\s*\{/);
 assert.match(battleStyles, /\.modifier-display-panel\s*\{[^}]*background:\s*transparent\s*!important/);
 assert.match(battleStyles, /\.card-tooltip\.is-card-attached::after/);
+assert.match(
+  battleStyles,
+  /\.card-tooltip\s*\{[^}]*min-height:\s*118px;[^}]*max-height:\s*none;[^}]*overflow:\s*visible;[^}]*pointer-events:\s*none/s,
+  'card details grow with content, avoid a side scrollbar, and never block card input',
+);
 assert.match(battleStyles, /html\.mwg-fullscreen-active \.card-game-container/);
 assert.match(battleStyles, /\.card-drag-slot\s*\{/);
 assert.match(battleStyles, /\.enhanced-card\.selected:not\(\.dragging\)/);

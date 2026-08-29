@@ -53,4 +53,29 @@ settleTavernBattleVariables(victoryWithRequest, {
 });
 assert.equal(victoryWithRequest.stat_data.battle.exp, 35, 'ordinary victory experience is program-owned');
 
+const promotionWithoutCommonUi = {
+  stat_data: {
+    battle: {
+      ...root(),
+      level: 1,
+      exp: 90,
+      core: { ...root().core, card_removal_count: 0 },
+    },
+  },
+};
+settleTavernBattleVariables(promotionWithoutCommonUi, {
+  result: 'victory',
+  request: { player: { hp: 20, maxHp: 20, lust: 0, maxLust: 100, level: 1 }, route: null },
+  player: { currentHp: 12, currentLust: 7 },
+  items: [],
+  turns: 3,
+});
+assert.equal(promotionWithoutCommonUi.stat_data.battle.level, 2, 'battle settlement promotes without mounting common UI');
+assert.equal(promotionWithoutCommonUi.stat_data.battle.exp, 15, 'promotion consumes the current level requirement');
+assert.equal(
+  promotionWithoutCommonUi.stat_data.battle.core.card_removal_count,
+  1,
+  'reaching an even level immediately grants one removal use',
+);
+
 console.log('The Tavern settlement adapter cleans the canonical MUV root.');

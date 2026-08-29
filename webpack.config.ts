@@ -30,7 +30,8 @@ const config: Config = YAML.parse(String(fs.readFileSync(path.resolve(__dirname,
 
 let io: Server;
 function watch_it(compiler: webpack.Compiler) {
-  if (compiler.options.watch) {
+  const watchEnabled = Boolean(compiler.options.watch) || process.argv.includes('--watch');
+  if (watchEnabled) {
     if (!io) {
       const port = config.port ?? 6621;
       io = new Server(port, { cors: { origin: '*' } });

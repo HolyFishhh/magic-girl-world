@@ -4,9 +4,14 @@ import { resolve } from 'node:path';
 import ts from 'typescript';
 
 const source = await readFile(resolve('src/fish/core/battleDataContract.ts'), 'utf8');
-const output = ts.transpileModule(source, {
+const combatResourceSource = await readFile(resolve('src/game-core/combatResource.ts'), 'utf8');
+const combatResourceOutput = ts.transpileModule(combatResourceSource, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 }).outputText;
+const combatResourceUrl = `data:text/javascript;base64,${Buffer.from(combatResourceOutput).toString('base64')}`;
+const output = ts.transpileModule(source, {
+  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+}).outputText.replace("from '../../game-core'", `from '${combatResourceUrl}'`);
 const contract = await import(`data:text/javascript;base64,${Buffer.from(output).toString('base64')}`);
 
 const battle = {

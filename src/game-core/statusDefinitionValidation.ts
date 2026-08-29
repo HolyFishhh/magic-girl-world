@@ -46,7 +46,7 @@ function stunHasDecay(value: unknown): boolean {
 function nestedNodes(node: EffectNode): EffectNode[] {
   if (node.op === 'if') return [...node.then, ...(node.else || [])];
   if (node.op === 'register_trigger') return node.effects;
-  if (node.op === 'add_card') {
+  if (node.op === 'add_card' || node.op === 'ensure_card') {
     return [...node.card.program.steps, ...(node.card.discardProgram?.steps || [])];
   }
   return [];

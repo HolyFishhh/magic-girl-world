@@ -72,14 +72,93 @@ export function readRunState(statValue: unknown): RunState | null {
   return parsed.ok ? parsed.value : null;
 }
 
+/** Persist schema migrations and initialize program-owned transaction fields for old chats. */
+export function migrateRunProgramStateInStat(statValue: unknown): RunState | null {
+  const stat = requireRecord(statValue, 'stat_data is unavailable');
+  const run = readRunState(stat);
+  if (run && stat.run?.schemaVersion !== run.schemaVersion) stat.run = run;
+  if (stat.run_upgrade_target === undefined) stat.run_upgrade_target = null;
+  if (stat.run_transform === undefined) stat.run_transform = null;
+  if (stat.run_transform_target === undefined) stat.run_transform_target = null;
+  if (stat.run_reward_reroll === undefined) stat.run_reward_reroll = null;
+  if (!Array.isArray(stat.run_rules)) stat.run_rules = [];
+  if (!Array.isArray(stat.run_trigger_invocations)) stat.run_trigger_invocations = [];
+  if (!stat.run_trigger_counters || typeof stat.run_trigger_counters !== 'object' || Array.isArray(stat.run_trigger_counters)) {
+    stat.run_trigger_counters = { total: 0, by_trigger: {}, by_source_kind: {}, by_source: {} };
+  } else {
+    if (!Number.isInteger(stat.run_trigger_counters.total) || stat.run_trigger_counters.total < 0) {
+      stat.run_trigger_counters.total = 0;
+    }
+    if (
+      !stat.run_trigger_counters.by_trigger ||
+      typeof stat.run_trigger_counters.by_trigger !== 'object' ||
+      Array.isArray(stat.run_trigger_counters.by_trigger)
+    ) {
+      stat.run_trigger_counters.by_trigger = {};
+    }
+    if (
+      !stat.run_trigger_counters.by_source_kind ||
+      typeof stat.run_trigger_counters.by_source_kind !== 'object' ||
+      Array.isArray(stat.run_trigger_counters.by_source_kind)
+    ) {
+      stat.run_trigger_counters.by_source_kind = {};
+    }
+    if (
+      !stat.run_trigger_counters.by_source ||
+      typeof stat.run_trigger_counters.by_source !== 'object' ||
+      Array.isArray(stat.run_trigger_counters.by_source)
+    ) {
+      stat.run_trigger_counters.by_source = {};
+    }
+  }
+  if (!Number.isInteger(stat.run_transaction_revision) || stat.run_transaction_revision < 0) {
+    stat.run_transaction_revision = 0;
+  }
+  if (!Array.isArray(stat.run_transaction_log)) stat.run_transaction_log = [];
+  if (!Array.isArray(stat.run_transaction_events)) stat.run_transaction_events = [];
+  if (!stat.run_transaction_counters || typeof stat.run_transaction_counters !== 'object' || Array.isArray(stat.run_transaction_counters)) {
+    stat.run_transaction_counters = { total: 0, by_event: {}, by_source: {} };
+  } else {
+    if (!Number.isInteger(stat.run_transaction_counters.total) || stat.run_transaction_counters.total < 0) {
+      stat.run_transaction_counters.total = 0;
+    }
+    if (
+      !stat.run_transaction_counters.by_event ||
+      typeof stat.run_transaction_counters.by_event !== 'object' ||
+      Array.isArray(stat.run_transaction_counters.by_event)
+    ) {
+      stat.run_transaction_counters.by_event = {};
+    }
+    if (
+      !stat.run_transaction_counters.by_source ||
+      typeof stat.run_transaction_counters.by_source !== 'object' ||
+      Array.isArray(stat.run_transaction_counters.by_source)
+    ) {
+      stat.run_transaction_counters.by_source = {};
+    }
+  }
+  const reward = stat.reward && typeof stat.reward === 'object' && !Array.isArray(stat.reward) ? stat.reward : null;
+  if (reward) {
+    if (!Array.isArray(reward.disabled_categories)) reward.disabled_categories = [];
+    if (!Number.isInteger(reward.pool_revision) || reward.pool_revision < 0) reward.pool_revision = 0;
+    if (!Number.isInteger(reward.reroll_count) || reward.reroll_count < 0) reward.reroll_count = 0;
+  }
+  return run;
+}
+
 /** Initialize an absent/corrupt run in an adapter-owned transaction. */
 export function ensureRunStateInStat(statValue: unknown, seed: number): RunMutationResult {
   const stat = requireRecord(statValue, 'stat_data is unavailable');
+  migrateRunProgramStateInStat(stat);
   const previous = readRunState(stat);
   if (previous) return { previous, run: previous };
   const run = createRunState({ seed });
   stat.run = run;
   stat.run_upgrade = null;
+  stat.run_transform = null;
+  stat.run_transform_target = null;
+  stat.run_trigger_invocations = [];
+  stat.run_trigger_counters = { total: 0, by_trigger: {}, by_source_kind: {}, by_source: {} };
   return { previous: run, run };
 }
 
@@ -90,6 +169,8 @@ export function enterRunNodeInStat(statValue: unknown, choiceId: string): RunMut
   const run = enterRunNode(previous, choiceId);
   stat.run = run;
   stat.run_upgrade = null;
+  stat.run_transform = null;
+  stat.run_transform_target = null;
   return { previous, run };
 }
 
@@ -104,6 +185,8 @@ export function completeRunNodeInStat(
   const run = completeRunNode(previous, { outcome, goldDelta });
   stat.run = run;
   stat.run_upgrade = null;
+  stat.run_transform = null;
+  stat.run_transform_target = null;
   return { previous, run };
 }
 
@@ -123,6 +206,16 @@ export function restartRunInStat(statValue: unknown): RunState {
   const run = createRunState({ seed });
   stat.run = run;
   stat.run_upgrade = null;
+  stat.run_upgrade_target = null;
+  stat.run_transform = null;
+  stat.run_transform_target = null;
+  stat.run_reward_reroll = null;
+  stat.run_trigger_invocations = [];
+  stat.run_trigger_counters = { total: 0, by_trigger: {}, by_source_kind: {}, by_source: {} };
+  stat.run_transaction_revision = 0;
+  stat.run_transaction_log = [];
+  stat.run_transaction_events = [];
+  stat.run_transaction_counters = { total: 0, by_event: {}, by_source: {} };
   const core = stat.battle?.core;
   if (core && typeof core === 'object') {
     const maxHp = Number(core.max_hp);
@@ -135,6 +228,9 @@ export function restartRunInStat(statValue: unknown): RunState {
     reward.artifact = [];
     reward.item = [];
     reward.limits = {};
+    reward.disabled_categories = [];
+    reward.pool_revision = 0;
+    reward.reroll_count = 0;
   }
   return run;
 }
@@ -163,6 +259,8 @@ export function consumePendingRunResultInStat(statValue: unknown): RunMutationRe
   stat.run = settlement.run;
   stat.run_result = null;
   stat.run_upgrade = null;
+  stat.run_transform = null;
+  stat.run_transform_target = null;
   return { previous, run: settlement.run };
 }
 
@@ -182,5 +280,7 @@ export function settleBattleRunInStat(
   const run = completeRunNode(previous, { outcome, goldDelta });
   stat.run = run;
   stat.run_upgrade = null;
+  stat.run_transform = null;
+  stat.run_transform_target = null;
   return { previous, run };
 }

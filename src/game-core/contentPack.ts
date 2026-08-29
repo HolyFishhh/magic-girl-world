@@ -10,6 +10,7 @@ import {
   CONTENT_DESIRE_EFFECT_WEIGHT,
 } from './contentAnalysis';
 import { applyModifierOperation, MODIFIER_SYMBOL_BY_OPERATOR } from './modifierMath';
+import { normalizeCardCost, normalizeCombatResourceStates, type CardCost } from './combatResource';
 
 export const CONTENT_PACK_SCHEMA_VERSION = 1 as const;
 
@@ -23,6 +24,8 @@ export interface ContentPack {
   items: ContentDefinition[];
   abilities: ContentDefinition[];
   activeStatuses: ContentDefinition[];
+  /** Player-owned custom combat resources used by budgets and shadow simulation. */
+  playerResources?: ContentDefinition[];
   enemy: ContentDefinition | null;
   /** Ordered enemy party. enemy remains the first-entry compatibility alias. */
   enemies?: ContentDefinition[];
@@ -39,6 +42,7 @@ export interface CreateContentPackInput {
   items?: unknown;
   abilities?: unknown;
   activeStatuses?: unknown;
+  playerResources?: unknown;
   enemy?: unknown;
   enemies?: unknown;
   playerDesireEffect?: unknown;
@@ -93,6 +97,7 @@ export function createContentPack(input: CreateContentPackInput): ContentPack {
     items: definitionList(input.items),
     abilities: definitionList(input.abilities),
     activeStatuses: definitionList(input.activeStatuses),
+    playerResources: definitionList(input.playerResources),
     enemy,
     enemies,
     desireEffects: {
@@ -108,6 +113,7 @@ export function isContentPack(value: unknown): value is ContentPack {
   return (
     pack.schemaVersion === CONTENT_PACK_SCHEMA_VERSION &&
     ['cards', 'statuses', 'relics', 'items', 'abilities', 'activeStatuses'].every(key => Array.isArray(pack[key])) &&
+    (pack.playerResources === undefined || Array.isArray(pack.playerResources)) &&
     (pack.enemy === null || (!!pack.enemy && typeof pack.enemy === 'object' && !Array.isArray(pack.enemy))) &&
     (pack.enemies === undefined || Array.isArray(pack.enemies)) &&
     !!pack.desireEffects &&
@@ -205,7 +211,7 @@ interface RawBuildBudget {
 
 interface BudgetCardEntry {
   quantity: number;
-  cost: number | 'energy';
+  cost: CardCost;
   metrics: Record<ContentMetric, number>;
 }
 
@@ -213,10 +219,6 @@ const BASE_HAND_SIZE = 5;
 const MAX_HAND_SIZE = 10;
 const DEFAULT_TURN_ENERGY = 3;
 const MAX_ESTIMATED_EXTRA_ENERGY = 3;
-
-function estimatedCardCost(entry: BudgetCardEntry, availableEnergy: number): number {
-  return entry.cost === 'energy' ? availableEnergy : entry.cost;
-}
 
 /**
  * Estimate the best useful portion of a random hand for each independent budget metric.
@@ -227,7 +229,7 @@ function estimatePlayableCardMetrics(
   entries: readonly BudgetCardEntry[],
   deck: number,
   handSize: number,
-  availableEnergy: number,
+  availableResources: Readonly<Record<string, number>>,
 ): Record<ContentMetric, number> {
   const result = { attack: 0, defense: 0, sustain: 0, draw: 0, energy: 0 };
   if (deck <= 0 || handSize <= 0) return result;
@@ -236,19 +238,27 @@ function estimatePlayableCardMetrics(
   for (const metric of Object.keys(result) as ContentMetric[]) {
     let freeValue = 0;
     let paidValue = 0;
-    let paidDemand = 0;
+    const paidDemand: Record<string, number> = {};
     for (const entry of entries) {
       const value = Math.max(0, entry.metrics[metric] || 0);
       if (value <= 0) continue;
       const expectedCopies = entry.quantity * handRatio;
-      const cost = estimatedCardCost(entry, availableEnergy);
-      if (cost <= 0) freeValue += value * expectedCopies;
+      const cost = Object.fromEntries(Object.entries(normalizeCardCost(entry.cost)).map(([resource, component]) => [
+        resource,
+        component === 'all' ? Math.max(0, availableResources[resource] || 0) : component,
+      ]));
+      if (Object.values(cost).every(amount => amount <= 0)) freeValue += value * expectedCopies;
       else {
         paidValue += value * expectedCopies;
-        paidDemand += cost * expectedCopies;
+        for (const [resource, amount] of Object.entries(cost)) {
+          paidDemand[resource] = (paidDemand[resource] || 0) + amount * expectedCopies;
+        }
       }
     }
-    const paidScale = paidDemand > availableEnergy && paidDemand > 0 ? availableEnergy / paidDemand : 1;
+    const paidScale = Object.entries(paidDemand).reduce((scale, [resource, demand]) => {
+      if (demand <= 0) return scale;
+      return Math.min(scale, Math.max(0, availableResources[resource] || 0) / demand);
+    }, 1);
     result[metric] = freeValue + paidValue * paidScale;
   }
   return result;
@@ -265,7 +275,18 @@ function rawBuildBudgetAtScenario(
     const stacks = Number(active.stacks);
     if (id && Number.isFinite(stacks) && stacks > 0) activeStatusStacks[id] = stacks;
   }
-  const options: ContentAnalysisOptions = { ...analysisOptions, selfStatusStacks: activeStatusStacks };
+  const customResources = normalizeCombatResourceStates(pack.playerResources || []);
+  const resourceCurrent = Object.fromEntries(Object.entries(customResources).map(([id, resource]) => [
+    id,
+    resource.refresh === 'reset' ? resource.max : resource.current,
+  ]));
+  const resourceMax = Object.fromEntries(Object.entries(customResources).map(([id, resource]) => [id, resource.max]));
+  const options: ContentAnalysisOptions = {
+    ...analysisOptions,
+    selfStatusStacks: activeStatusStacks,
+    selfResources: resourceCurrent,
+    selfMaxResources: resourceMax,
+  };
   const supportAnalyses = [...pack.relics, ...pack.abilities].map(definition => ({
     definition,
     analysis: analyzeContentDefinition(definition, options),
@@ -294,8 +315,7 @@ function rawBuildBudgetAtScenario(
     const quantity = Number.isInteger(card.quantity) && card.quantity > 0 ? Math.min(100, card.quantity) : 1;
     deck += quantity;
     if (card.type === 'Curse') continue;
-    const numericCost = Number(card.cost ?? 0);
-    const cost = card.cost === 'energy' ? 'energy' : Number.isFinite(numericCost) ? Math.max(0, numericCost) : 0;
+    const cost = (card.cost ?? 0) as CardCost;
     cardEntries.push({
       quantity,
       cost,
@@ -319,7 +339,14 @@ function rawBuildBudgetAtScenario(
     typeof analysisOptions.selfMaxEnergy === 'number' && Number.isFinite(analysisOptions.selfMaxEnergy)
       ? Math.max(0, analysisOptions.selfMaxEnergy)
       : DEFAULT_TURN_ENERGY;
-  const firstPass = estimatePlayableCardMetrics(cardEntries, deck, BASE_HAND_SIZE, baseEnergy);
+  const baseResources: Record<string, number> = {
+    energy: baseEnergy,
+    ...Object.fromEntries(Object.entries(customResources).map(([id, resource]) => [
+      id,
+      resource.refresh === 'reset' ? resource.max : resource.current,
+    ])),
+  };
+  const firstPass = estimatePlayableCardMetrics(cardEntries, deck, BASE_HAND_SIZE, baseResources);
   const effectiveHandSize = Math.min(
     MAX_HAND_SIZE,
     BASE_HAND_SIZE + Math.max(0, firstPass.draw + support.draw),
@@ -327,7 +354,10 @@ function rawBuildBudgetAtScenario(
   const effectiveEnergy =
     baseEnergy +
     Math.min(MAX_ESTIMATED_EXTRA_ENERGY, Math.max(0, firstPass.energy + support.energy));
-  const playable = estimatePlayableCardMetrics(cardEntries, deck, effectiveHandSize, effectiveEnergy);
+  const playable = estimatePlayableCardMetrics(cardEntries, deck, effectiveHandSize, {
+    ...baseResources,
+    energy: effectiveEnergy,
+  });
   return {
     deck,
     attack: playable.attack + support.attack,

@@ -54,7 +54,12 @@ const initializedHarness = createHarness({
   battle: { cards: [] },
 });
 const initialized = await initializedHarness.host.syncPendingRunState();
-assert.deepEqual(initialized, { consumedRunResult: false, restUpgrade: null });
+assert.deepEqual(initialized, {
+  consumedRunResult: false,
+  restUpgrade: null,
+  restTransform: null,
+  rewardReroll: false,
+});
 assert.equal(initializedHarness.stat().run, undefined, 'ordinary roleplay must not auto-create an expedition');
 assert.equal(initializedHarness.updates(), 1, 'pending-state sync stays inside one bounded MUV transaction');
 const started = await initializedHarness.host.startRun();
@@ -65,6 +70,8 @@ const historicalHarness = createHarness({}, { latest: false });
 assert.deepEqual(await historicalHarness.host.syncPendingRunState(), {
   consumedRunResult: false,
   restUpgrade: null,
+  restTransform: null,
+  rewardReroll: false,
 });
 assert.equal(historicalHarness.updates(), 0, 'historical common floors remain read-only');
 
@@ -131,7 +138,15 @@ await assert.rejects(retryRollbackHarness.host.retryRunNode(restRetry.currentNod
 assert.equal(Object.hasOwn(retryRollbackHarness.stat(), 'run_result'), false);
 assert.equal(Object.hasOwn(retryRollbackHarness.stat(), 'run_upgrade'), false);
 
-const upgradeRequestHarness = createHarness({ run: restRetry }, { failBeforeSend: true });
+const upgradeRequestHarness = createHarness({
+  run: restRetry,
+  battle: {
+    cards: [{
+      id: 'guard', name: '守护', description: 'old prose', type: 'Skill', rarity: 'Common',
+      cost: 1, effects: [{ block: 5 }], quantity: 2,
+    }],
+  },
+}, { failBeforeSend: true });
 await assert.rejects(
   upgradeRequestHarness.host.requestRestUpgrade(restRetry.currentNode, {
     id: 'guard', name: '守护', description: 'old prose', cost: 1, effects: [{ block: 5 }], quantity: 2,
@@ -141,6 +156,79 @@ await assert.rejects(
 assert.equal(Object.hasOwn(upgradeRequestHarness.stat(), 'run_upgrade'), false);
 assert.match(upgradeRequestHarness.prompts[0], /^\[营火升级\]/);
 assert.doesNotMatch(upgradeRequestHarness.prompts[0], /old prose|quantity/);
+
+const transformRollbackHarness = createHarness({
+  run: restRetry,
+  battle: {
+    cards: [{
+      id: 'guard', name: '守护', type: 'Skill', rarity: 'Common', cost: 1, quantity: 1,
+      description: '获得格挡。', effects: [{ block: 5 }],
+    }],
+    statuses: [],
+  },
+}, { failBeforeSend: true });
+await assert.rejects(
+  transformRollbackHarness.host.requestRestTransform(restRetry.currentNode, transformRollbackHarness.stat().battle.cards[0]),
+  /simulated send failure/,
+);
+assert.equal(Object.hasOwn(transformRollbackHarness.stat(), 'run_transform'), false);
+assert.equal(Object.hasOwn(transformRollbackHarness.stat(), 'run_transform_target'), false);
+assert.equal(transformRollbackHarness.stat().battle.cards[0].runInstanceId, undefined, 'send rollback restores the legacy deck shape');
+
+const transformCommitHarness = createHarness({
+  run: restRetry,
+  battle: {
+    cards: [{
+      id: 'guard', name: '守护', type: 'Skill', rarity: 'Common', cost: 1, quantity: 1,
+      description: '获得格挡。', effects: [{ block: 5 }],
+    }],
+    statuses: [],
+    core: {},
+  },
+});
+await transformCommitHarness.host.requestRestTransform(restRetry.currentNode, transformCommitHarness.stat().battle.cards[0]);
+const transformTarget = transformCommitHarness.stat().run_transform_target.run_instance_id;
+assert.equal(transformCommitHarness.stat().run_transform, null);
+assert.match(transformCommitHarness.prompts[0], /^\[营火变形\]/);
+transformCommitHarness.stat().run_transform = {
+  id: 'rest_attack', name: '营火斩击', type: 'Attack', rarity: 'Common', cost: 1, quantity: 1,
+  description: '造成伤害。', effects: [{ damage: 8 }],
+};
+const transformedSync = await transformCommitHarness.host.syncPendingRunState();
+assert.deepEqual(transformedSync.restTransform, { runInstanceId: transformTarget, cardName: '营火斩击' });
+assert.equal(transformCommitHarness.stat().battle.cards[0].id, 'rest_attack');
+assert.equal(transformCommitHarness.stat().battle.cards[0].runInstanceId, transformTarget);
+assert.equal(transformCommitHarness.stat().run_transform_target, undefined);
+assert.equal(transformCommitHarness.stat().run.phase, 'awaiting_choice');
+
+const rerollRun = core.createRunState({ seed: 63 });
+rerollRun.gold = 20;
+const rerollHarness = createHarness({
+  run: rerollRun,
+  battle: { cards: [], artifacts: [], items: [], statuses: [], core: {} },
+  reward: {
+    card: [{
+      id: 'old_card', name: '旧候选', type: 'Attack', rarity: 'Common', cost: 1, quantity: 1,
+      effects: [{ damage: 5 }],
+    }],
+    artifact: [], item: [], limits: { cards: 1 },
+    disabled_categories: [], pool_revision: 0, reroll_count: 0,
+  },
+});
+await rerollHarness.host.requestRewardReroll(['cards'], '[奖励重投]', 5);
+assert.deepEqual(rerollHarness.stat().reward.card, []);
+assert.equal(rerollHarness.stat().run.gold, 20, 'reroll preparation never spends gold');
+rerollHarness.stat().reward.card = [{
+  id: 'new_card', name: '新候选', type: 'Skill', rarity: 'Common', cost: 1, quantity: 1,
+  effects: [{ block: 6 }],
+}];
+const rerolledSync = await rerollHarness.host.syncPendingRunState();
+assert.equal(rerolledSync.rewardReroll, true);
+assert.equal(rerollHarness.stat().run.gold, 15);
+assert.equal(rerollHarness.stat().reward.card[0].id, 'new_card');
+assert.equal(rerollHarness.stat().reward.reroll_count, 1);
+assert.equal(rerollHarness.stat().run_reward_reroll, undefined);
+assert.equal(rerollHarness.stat().run_transaction_events.at(-1).type, 'reward_pool_changed');
 
 const normalRewardHarness = createHarness({
   battle: { cards: [], artifacts: [], items: [], statuses: [], core: {} },
@@ -207,11 +295,20 @@ const restartHarness = createHarness({
   run: core.createRunState({ seed: 9 }),
   battle: { core: { hp: 1, max_hp: 80, lust: 50, max_lust: 100 } },
   reward: { card: [], artifact: [], item: [], limits: {} },
+  run_trigger_invocations: [{ id: 'old' }],
+  run_trigger_counters: { total: 1, by_trigger: { old: 1 } },
 });
 const restarted = await restartHarness.host.restartRun();
 assert.notEqual(restarted.seed, 9);
 assert.equal(restartHarness.stat().battle.core.hp, 80);
 assert.equal(restartHarness.stat().battle.core.lust, 0);
+assert.deepEqual(restartHarness.stat().run_trigger_invocations, []);
+assert.deepEqual(restartHarness.stat().run_trigger_counters, {
+  total: 0,
+  by_trigger: {},
+  by_source_kind: {},
+  by_source: {},
+});
 
 const removalHarness = createHarness({
   battle: {

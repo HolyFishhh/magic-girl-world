@@ -8,7 +8,7 @@ import { runTriggerTransaction, type TriggerTransactionPorts } from './triggerTr
 
 type MaybePromise<T> = T | Promise<T>;
 export type StatusLifecycleTarget = 'player' | 'enemy';
-export type StatusLifecycleActiveTrigger = Exclude<StatusTrigger, 'hold'>;
+export type StatusLifecycleActiveTrigger = Exclude<StatusTrigger, 'hold' | 'threshold_execute'>;
 
 export type StatusLifecycleState = Pick<
   BattleStateStore,

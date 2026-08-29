@@ -574,4 +574,71 @@ const structuredTriggerInspections = rewards.inspectRewardCandidates(structuredT
 assert.equal(structuredTriggerInspections.cards[0].ok, true);
 assert.equal(structuredTriggerInspections.artifacts[0].ok, true);
 
+const mutablePool = {
+  battle: { core: {}, cards: [], artifacts: [], items: [], statuses: [] },
+  reward: {
+    card: [{ ...strike, id: 'pool_start', name: '初始候选', quantity: 1 }],
+    artifact: [],
+    item: [{ ...potion, id: 'pool_potion', name: '池中药剂' }],
+    limits: { cards: 1, artifacts: 1, items: 1 },
+  },
+};
+const poolReplacement = rewards.mutateRewardPoolInStat(mutablePool, {
+  kind: 'replace',
+  category: 'cards',
+  index: 0,
+  candidate: { ...strike, id: 'pool_replacement', name: '替换候选', quantity: 1 },
+});
+assert.equal(poolReplacement.revision, 1);
+assert.equal(mutablePool.reward.card[0].id, 'pool_replacement');
+assert.equal(mutablePool.reward.pool_revision, 1);
+
+const poolBeforeFailure = structuredClone(mutablePool);
+assert.throws(
+  () => rewards.mutateRewardPoolInStat(mutablePool, {
+    kind: 'replace',
+    category: 'cards',
+    index: 0,
+    candidate: { ...strike, id: 'broken_pool_card', effects: { damage: 'unknown + 1' } },
+  }),
+  /Unsupported variable: unknown/,
+);
+assert.deepEqual(mutablePool, poolBeforeFailure, 'invalid replacement must preserve candidates and pool metadata');
+
+const rerolled = rewards.mutateRewardPoolInStat(mutablePool, {
+  kind: 'reroll',
+  categories: ['cards'],
+  candidates: {
+    cards: [
+      { ...strike, id: 'reroll_a', name: '重投甲', quantity: 1 },
+      { ...strike, id: 'reroll_b', name: '重投乙', quantity: 1 },
+    ],
+  },
+});
+assert.equal(rerolled.rerolls, 1);
+assert.deepEqual(mutablePool.reward.card.map(card => card.id), ['reroll_a', 'reroll_b']);
+
+const modified = rewards.mutateRewardPoolInStat(mutablePool, {
+  kind: 'modify',
+  category: 'cards',
+  removeIndices: [0],
+  add: [{ ...strike, id: 'pool_added', name: '池中新增', quantity: 1 }],
+});
+assert.deepEqual(mutablePool.reward.card.map(card => card.id), ['reroll_b', 'pool_added']);
+assert.equal(modified.revision, 3);
+
+const disabled = rewards.mutateRewardPoolInStat(mutablePool, {
+  kind: 'disable_category',
+  category: 'items',
+});
+assert.deepEqual(disabled.disabledCategories, ['items']);
+assert.deepEqual(mutablePool.reward.item, []);
+assert.equal(rewards.readRewardLimits(mutablePool).items, 0);
+assert.throws(
+  () => rewards.mutateRewardPoolInStat(mutablePool, {
+    kind: 'modify', category: 'items', add: [{ ...potion, id: 'forbidden_item' }],
+  }),
+  /disabled/,
+);
+
 console.log('Atomic reward selection, stack merging, skipping, and single-card removal passed.');

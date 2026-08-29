@@ -10,6 +10,7 @@ import { resolveTriggerInput } from './triggerInput';
 export interface CompactCardDescriptionOptions {
   includeKeywords?: boolean;
   statusNames?: Readonly<Record<string, string>>;
+  resourceNames?: Readonly<Record<string, string>>;
 }
 
 const TRIGGER_LABELS: Record<string, string> = {
@@ -44,6 +45,7 @@ const TRIGGER_LABELS: Record<string, string> = {
   enemy_lose_debuff: '敌方失去减益',
   gain_block: '获得格挡',
   lose_block: '失去格挡',
+  defeated: '被击败',
 };
 
 const STATUS_TRIGGER_LABELS: Record<string, string> = {
@@ -102,6 +104,10 @@ function formula(value: unknown, options: CompactCardDescriptionOptions = {}): s
     (_match, target: string, statusId: string) =>
       `${target === 'self' ? '自身' : '敌方'}${displayStatusName(statusId, options)}层数`,
   );
+  text = text.replace(/\bspent_resource\.([A-Za-z_][A-Za-z0-9_]*)\b/g, (_match, id: string) => `使用${options.resourceNames?.[id] || id}`);
+  text = text.replace(/\bx_resource\.([A-Za-z_][A-Za-z0-9_]*)\b/g, (_match, id: string) => `${options.resourceNames?.[id] || id}的X值`);
+  text = text.replace(/\b(self|opponent)\.resource\.([A-Za-z_][A-Za-z0-9_]*)\.(current|max)\b/g, (_match, target: string, id: string, field: string) =>
+    `${target === 'self' ? '自身' : '敌方'}${options.resourceNames?.[id] || id}${field === 'max' ? '上限' : '数量'}`);
   for (const [pattern, label] of VARIABLE_LABELS) text = text.replace(pattern, label);
   return text;
 }
@@ -148,6 +154,82 @@ function displayStatusName(id: unknown, options: CompactCardDescriptionOptions):
   return options.statusNames?.[value]?.trim() || '未注册状态';
 }
 
+function describeCardAttachmentChange(
+  change: Record<string, unknown>,
+  options: CompactCardDescriptionOptions,
+): string {
+  const operators: Record<string, string> = {
+    add: '增加',
+    subtract: '减少',
+    multiply: '乘以',
+    divide: '除以',
+    set: '设为',
+    min: '上限设为',
+    max: '下限设为',
+  };
+  const stats: Record<string, string> = {
+    damage: '伤害',
+    block: '格挡',
+    lust: '欲望',
+    stacks: '状态层数',
+  };
+  const keywords: Record<string, string> = {
+    retain: '保留',
+    exhaust: '消耗',
+    ethereal: '空灵',
+    innate: '固有',
+  };
+  const timings: Record<string, string> = {
+    on_draw: '抽到时',
+    while_in_hand: '留在手牌时',
+    on_play: '打出时',
+  };
+  const kind = String(change.kind ?? '');
+  if (kind === 'numeric') {
+    return `${stats[String(change.stat)] || '数值'}${operators[String(change.operator)] || '调整为'}${formula(change.value, options)}`;
+  }
+  if (kind === 'cost' || kind === 'x_value') {
+    return `${kind === 'cost' ? '费用' : 'X值'}${operators[String(change.operator)] || '调整为'}${formula(change.value, options)}`;
+  }
+  if (kind === 'keyword') {
+    return `${change.enabled === false ? '移除' : '获得'}“${keywords[String(change.keyword)] || '卡牌关键词'}”`;
+  }
+  if (kind === 'replay') return `额外完整结算${formula(change.extra, options)}次`;
+  if (kind === 'dynamic_cost') {
+    return `${timings[String(change.timing)] || '结算时'}费用${operators[String(change.operator)] || '调整为'}${formula(change.value, options)}`;
+  }
+  if (kind === 'play_access') return change.mode === 'deny' ? '不可主动打出' : '允许主动打出';
+  if (kind === 'discard_auto_play') {
+    const reasonNames: Record<string, string> = {
+      player_choice: '主动选择弃牌',
+      random_effect: '随机效果弃牌',
+      effect: '战斗效果弃牌',
+      turn_cleanup: '回合结束弃牌',
+      scry: '预见弃牌',
+      recover: '取回移动',
+      exhaust: '消耗移动',
+      generate: '生成移动',
+      copy: '复制移动',
+      transform: '变形移动',
+      auto_play: '自动打出移动',
+      other: '其他移动',
+    };
+    const reasons = Array.isArray(change.reasons)
+      ? change.reasons.map(reason => reasonNames[String(reason)] || String(reason)).join('、')
+      : '指定原因';
+    const destinations: Record<string, string> = {
+      discard: '弃牌堆',
+      exhaust: '消耗堆',
+      draw_top: '抽牌堆顶',
+      draw_bottom: '抽牌堆底',
+      hand: '手牌',
+      remove: '移出本场战斗',
+    };
+    return `因${reasons}从手牌弃掉时免费自动打出，失败后移至${destinations[String(change.failure_destination)] || '指定牌区'}`;
+  }
+  return '';
+}
+
 /** Keep internal IDs and formula paths out of player-facing AI prose. */
 export function normalizeChinesePlayerDescription(value: unknown): string {
   if (typeof value !== 'string') return '';
@@ -174,16 +256,25 @@ function describeSingleOperation(
   const amount = formula(value[operation], options);
   const target = targetPrefix(
     value.to,
-    ['damage', 'lust', 'apply_status', 'remove_status'].includes(operation) ? 'opponent' : 'self',
+    ['damage', 'execute', 'kill', 'lust', 'apply_status', 'remove_status'].includes(operation) ? 'opponent' : 'self',
   );
   let text = '';
 
   switch (operation) {
     case 'damage':
-      text =
-        target === '自身'
+      text = value.damage_type === 'hp_loss'
+        ? `使${target === '自身' ? '自身' : '敌方'}失去${Number(value.hits) > 1 ? `${value.hits}次` : ''}${amount}点生命`
+        : target === '自身'
           ? `对自身造成${Number(value.hits) > 1 ? `${value.hits}次` : ''}${amount}点伤害`
           : `对敌方造成${Number(value.hits) > 1 ? `${value.hits}次` : ''}${amount}点伤害`;
+      if (value.bypass_block === true || value.damage_type === 'hp_loss') text += '，无视格挡';
+      if (value.lifesteal !== undefined) text += `，并按实际生命损失的${formula(value.lifesteal, options)}倍恢复生命`;
+      break;
+    case 'execute':
+      text = `当${target === '自身' ? '自身' : '敌方'}生命不高于${formula(value.execute, options)}${value.threshold_mode === 'hp_percent' ? '%' : '点'}时将其处决`;
+      break;
+    case 'kill':
+      text = `直接击杀${target === '自身' ? '自身' : '敌方'}`;
       break;
     case 'heal':
       text = target === '自身' ? `恢复${amount}点生命` : `使敌方恢复${amount}点生命`;
@@ -194,6 +285,19 @@ function describeSingleOperation(
     case 'energy':
       text = target === '自身' ? `获得${amount}点能量` : `使敌方获得${amount}点能量`;
       break;
+    case 'resource': {
+      const resource = isRecord(value.resource) ? value.resource : {};
+      const name = options.resourceNames?.[String(resource.id)] || String(resource.id || '资源');
+      const resourceAmount = formula(resource.amount, options);
+      text = target === '自身' ? `获得${resourceAmount}点${name}` : `使敌方获得${resourceAmount}点${name}`;
+      break;
+    }
+    case 'set_resource': {
+      const resource = isRecord(value.set_resource) ? value.set_resource : {};
+      const name = options.resourceNames?.[String(resource.id)] || String(resource.id || '资源');
+      text = `将${target}${name}设为${formula(resource.value, options)}`;
+      break;
+    }
     case 'lust':
       text = target === '自身' ? `增加${amount}点欲望` : `使敌方增加${amount}点欲望`;
       break;
@@ -279,6 +383,12 @@ function describeSingleOperation(
       text = `将${formula(value.count ?? 1, options)}张${cardName}加入${destination}`;
       break;
     }
+    case 'ensure_card': {
+      const id = String(value.ensure_card);
+      const cardName = templates.get(id) || id;
+      text = `本场战斗中确保至少有${formula(value.minimum ?? 1, options)}张${cardName}`;
+      break;
+    }
     case 'modify': {
       const subjects: Record<string, string> = {
         damage: `${target}造成的伤害`,
@@ -300,11 +410,52 @@ function describeSingleOperation(
       break;
     }
     case 'card_rule': {
-      const scope = value.limit === 'all' ? '所有牌' : `前${formula(value.limit, options)}张牌`;
-      text =
-        value.card_rule === 'free'
-          ? `每回合${scope}不消耗能量`
-          : `每回合${scope}额外结算${formula(value.extra ?? 1, options)}次`;
+      const scope = value.limit === 'all' ? '所有牌' : value.limit !== undefined ? `前${formula(value.limit, options)}张牌` : '卡牌';
+      const ruleText: Record<string, string> = {
+        retain_hand: '回合结束时保留全部手牌',
+        retain_block: '回合开始时保留格挡',
+        limit_draw: `每次至多抽${formula(value.limit, options)}张牌`,
+        limit_block_gain: `每次至多获得${formula(value.limit, options)}点格挡`,
+        limit_energy_gain: `每次至多获得${formula(value.limit, options)}点能量`,
+        deny_card_play: '禁止打出符合条件的卡牌',
+        allow_card_play: '允许打出符合条件但通常不可打出的卡牌',
+        limit_card_play: `每回合至多打出${formula(value.limit, options)}张符合条件的卡牌`,
+        card_destination: '符合条件的卡牌结算后改为移至指定区域',
+      };
+      text = value.card_rule === 'free'
+        ? `每回合${scope}不消耗${Array.isArray(value.resources) ? value.resources.join('、') : '任何资源'}`
+        : value.card_rule === 'replay'
+          ? `每回合${scope}额外结算${formula(value.extra ?? 1, options)}次`
+          : ruleText[String(value.card_rule)] || '';
+      break;
+    }
+    case 'attach_card': {
+      if (!isRecord(value.attach_card)) break;
+      const attachment = value.attach_card;
+      const kind = attachment.kind === 'enchantment' ? '附魔' : '负面附着';
+      const removal: Record<string, string> = {
+        played: '打出后移除',
+        discarded: '符合弃牌原因后移除',
+        turn_end: '回合结束移除',
+        combat_end: '持续本场战斗',
+        run_end: '持续本次流程',
+        manual: '持续存在',
+      };
+      const defaultRemoval: Record<string, string> = {
+        resolution: 'played',
+        turn: 'turn_end',
+        until_played: 'played',
+        combat: 'combat_end',
+        run: 'run_end',
+        permanent: 'manual',
+      };
+      const removeOn = String(attachment.remove_on ?? defaultRemoval[String(attachment.scope)] ?? 'manual');
+      const changes = Array.isArray(attachment.changes)
+        ? attachment.changes.filter(isRecord).map(change => describeCardAttachmentChange(change, options)).filter(Boolean)
+        : [];
+      const remaining = Number(attachment.remaining) > 1 ? `，剩余${attachment.remaining}次` : '';
+      text = `使${selectionText(value, 'choose', value.count ?? 1, options)}获得${kind}“${String(attachment.name ?? '')}”（${removal[removeOn] || '按规则移除'}${remaining}）`;
+      if (changes.length > 0) text += `：${changes.join('，')}`;
       break;
     }
   }

@@ -1,9 +1,10 @@
 import { hasContentMetric, type ContentAnalysis } from './contentAnalysis';
+import type { CardCost } from './combatResource';
 
 /** Host-neutral card data used by the minimum deck diagnostics. */
 export interface DeckPlayabilityCard {
   type?: string;
-  cost?: number | 'energy';
+  cost?: CardCost;
   quantity?: number;
   analysis?: Pick<ContentAnalysis, 'metrics' | 'dynamicMetrics'> | null;
 }
@@ -33,7 +34,12 @@ function cardHasMetric(card: DeckPlayabilityCard, metric: Parameters<typeof hasC
 function canPlayAtBaseEnergy(card: DeckPlayabilityCard, baseEnergy: number): boolean {
   if (card.type === 'Curse') return false;
   if (card.cost === 'energy') return true;
-  return typeof card.cost === 'number' && Number.isFinite(card.cost) && card.cost <= baseEnergy;
+  if (typeof card.cost === 'number') return Number.isFinite(card.cost) && card.cost <= baseEnergy;
+  if (card.cost && typeof card.cost === 'object') {
+    const energy = card.cost.energy;
+    return energy === undefined || energy === 'all' || energy <= baseEnergy;
+  }
+  return false;
 }
 
 /** Assess minimum deck properties without reading a host runtime or simulating combat. */

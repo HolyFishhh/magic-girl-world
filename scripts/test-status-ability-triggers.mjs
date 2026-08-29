@@ -65,8 +65,14 @@ const routeEffectCommand = readClassMethod(
 );
 assert.match(routeEffectCommand, /ports\.applyStatus\(commandTarget\(command\.target, sourceIsPlayer\), command\.status, command\.stacks\)/);
 assert.match(routeEffectCommand, /ports\.removeStatuses\(/);
-assert.match(executorSource, /applyStatus: \(target, status, stacks\) => this\.triggerHost\.applyStatus\(target, status, stacks\)/);
-assert.match(executorSource, /removeStatuses: \(target, selection\) => this\.triggerHost\.removeStatuses\(target, selection\)/);
+assert.match(
+  executorSource,
+  /applyStatus: \(target, status, stacks\) => \{[\s\S]*applyStatusToSummons\([\s\S]*return this\.triggerHost\.applyStatus\(target, status, stacks\);/,
+);
+assert.match(
+  executorSource,
+  /removeStatuses: \(target, selection\) => \{[\s\S]*removeStatusesFromSummons\([\s\S]*return this\.triggerHost\.removeStatuses\(target, selection\);/,
+);
 assert.doesNotMatch(executorSource, /processStatusOwnershipAbilityTriggers|applyStatusStacksDecay/);
 
 console.log('Status gain/loss abilities are wired for holders and their opponents.');

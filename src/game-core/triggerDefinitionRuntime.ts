@@ -1,6 +1,7 @@
 import type { Ability, Relic } from './battleState';
 import { normalizeAbilityTrigger, type AbilityTrigger } from './battleTriggers';
 import type { EffectProgram } from './effectDsl';
+import { matchesEventTriggerQuery, type BattleTriggerEventContext } from './battleEventJournal';
 
 type MaybePromise<T> = T | Promise<T>;
 export type TriggerExecutionContext = Readonly<Record<string, unknown>>;
@@ -18,27 +19,37 @@ export interface RelicTriggerPlan {
 }
 
 /** Resolve one ability without executing or translating modern programs. */
-export function resolveAbilityTriggerPlan(ability: Ability, requestedTrigger: string): AbilityTriggerPlan | null {
+export function resolveAbilityTriggerPlan(
+  ability: Ability,
+  requestedTrigger: string,
+  context: TriggerExecutionContext = {},
+): AbilityTriggerPlan | null {
   const trigger = normalizeAbilityTrigger(requestedTrigger);
   if (!trigger || trigger === 'passive') return null;
 
-  return normalizeAbilityTrigger(ability.trigger || '') === trigger
+  return normalizeAbilityTrigger(ability.trigger || '') === trigger &&
+    matchesEventTriggerQuery(context as BattleTriggerEventContext, ability.eventQuery)
     ? { source: ability, trigger, program: ability.effectProgram }
     : null;
 }
 
 /** Resolve one relic without executing or translating modern programs. */
-export function resolveRelicTriggerPlan(relic: Relic, requestedTrigger: string): RelicTriggerPlan | null {
+export function resolveRelicTriggerPlan(
+  relic: Relic,
+  requestedTrigger: string,
+  context: TriggerExecutionContext = {},
+): RelicTriggerPlan | null {
   const trigger = normalizeAbilityTrigger(requestedTrigger);
   if (!trigger || trigger === 'passive') return null;
 
-  return normalizeAbilityTrigger(relic.trigger || '') === trigger
+  return normalizeAbilityTrigger(relic.trigger || '') === trigger &&
+    matchesEventTriggerQuery(context as BattleTriggerEventContext, relic.eventQuery)
     ? { source: relic, trigger, program: relic.effectProgram }
     : null;
 }
 
 export interface AbilityTriggerRuntimePorts {
-  readAbilities(target: 'player' | 'enemy'): readonly Ability[] | undefined;
+  readAbilities(target: 'player' | 'enemy', context?: TriggerExecutionContext): readonly Ability[] | undefined;
   execute(
     target: 'player' | 'enemy',
     plan: AbilityTriggerPlan,
@@ -59,13 +70,14 @@ export class AbilityTriggerRuntime {
   ): Promise<void> {
     const trigger = normalizeAbilityTrigger(requestedTrigger);
     if (!trigger || trigger === 'passive') return;
-    const activeKey = `${target}:${trigger}`;
+    const ownerId = typeof context.enemyId === 'string' ? context.enemyId : target;
+    const activeKey = `${target}:${ownerId}:${trigger}`;
     if (this.active.has(activeKey)) return;
 
     this.active.add(activeKey);
     try {
-      for (const ability of [...(this.ports.readAbilities(target) || [])]) {
-        const plan = resolveAbilityTriggerPlan(ability, trigger);
+      for (const ability of [...(this.ports.readAbilities(target, context) || [])]) {
+        const plan = resolveAbilityTriggerPlan(ability, trigger, context);
         if (plan) await this.ports.execute(target, plan, context);
       }
     } finally {
@@ -92,7 +104,7 @@ export class RelicTriggerRuntime {
     this.active.add(trigger);
     try {
       for (const relic of [...(this.ports.readRelics() || [])]) {
-        const plan = resolveRelicTriggerPlan(relic, trigger);
+        const plan = resolveRelicTriggerPlan(relic, trigger, context);
         if (plan) await this.ports.execute(plan, context);
       }
     } finally {

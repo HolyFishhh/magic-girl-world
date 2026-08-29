@@ -11,7 +11,14 @@ import {
 } from '../runtime/messageVariables';
 import { readRunState } from '../runtime/runStateAdapter';
 import { retryCurrentMessageWithExtraModel } from '../runtime/mvuExtraModelRepair';
+import { registerNaturalLanguageCardRepairHandler } from '../runtime/naturalLanguageCardRepair';
 import { createContentPackFromMvuBattle } from '../runtime/contentPackAdapter';
+import {
+  isMvuDeckPowerProfileCurrent,
+  profileMvuDeckPower,
+  refreshMvuContentDesignContext,
+} from '../runtime/contentDesignContextAdapter';
+import { isExternalDesignAssistantActive, readRuntimeContentDesignSettings } from '../runtime/contentDesignSettings';
 import { flattenMvuArray, normalizeMvuStatusDefinitions } from '../runtime/mvuArrays';
 import {
   canGenerateCompactStatusDescription,
@@ -20,6 +27,7 @@ import {
   describeCompactCard,
   describeCompactContent,
   describeCompactStatus,
+  describeCardCost,
   normalizeChinesePlayerDescription,
   resolveCompactCardDescription,
   resolveCompactContentDescription,
@@ -31,6 +39,8 @@ import {
   formatWorldContinuityHint,
   formatPlayerContentReadiness,
   formatPlayerContentRepairPrompt,
+  formatContentDesignDiagnostics,
+  migratePersistentRunDeck,
   createRunPacingContext,
   recommendBuildGuidance,
   recommendEnemyBudget,
@@ -198,6 +208,15 @@ async function ensureAndConsumeRunState(): Promise<void> {
     if (result.restUpgrade) {
       __USER_MUTATION_PILLS.push(`卡牌升级：${result.restUpgrade.cardName}`);
       __PENDING_RUN_SUMMARY = `{{user}}在营火升级了${result.restUpgrade.cardName}`;
+      __RUN_ERROR = null;
+    }
+    if (result.restTransform) {
+      __USER_MUTATION_PILLS.push(`卡牌变形：${result.restTransform.cardName}`);
+      __PENDING_RUN_SUMMARY = `{{user}}在营火将卡牌变形成了${result.restTransform.cardName}`;
+      __RUN_ERROR = null;
+    }
+    if (result.rewardReroll) {
+      __USER_MUTATION_PILLS.push('奖励候选已重投');
       __RUN_ERROR = null;
     }
   } catch (error) {
@@ -422,6 +441,7 @@ function computeChangePillsByDelta(delta: any, stat: any): string[] {
 
 async function applyRewardSelectionsInline(selections: RewardSelections) {
   const settlement = await runActionHost.settleRewardSelections(selections);
+  await synchronizeContentDesignContext();
   const settledSummary = settlement.summary;
   settledSummary.cards.forEach(name => __USER_MUTATION_PILLS.push(`新增卡牌：${name}`));
   settledSummary.artifacts.forEach(name => __USER_MUTATION_PILLS.push(`新增遗物：${name}`));
@@ -608,18 +628,16 @@ function renderChoiceModule() {
           const invalid = !inspection?.ok;
           // 处理费用显示
           const cost = card.cost;
-          let costDisplay = '';
-          if (cost === 'energy') {
-            costDisplay = '消耗: 全部能量';
-          } else if (typeof cost === 'number') {
-            costDisplay = `消耗: ${cost}`;
-          } else if (cost !== undefined && cost !== null) {
-            costDisplay = `消耗: ${cost}`;
-          }
+          const costDisplay = cost === undefined || cost === null
+            ? ''
+            : `消耗: ${describeCardCost(cost, contentDescriptionResourceDefinitions())}`;
           const priceDisplay = isShop ? `价格: ${recommendShopPrice('cards', card, run.act)} 金币` : '';
           const cardDescription =
             normalizeChinesePlayerDescription(card.description) ||
-            describeCompactCard(card, { statusNames: contentDescriptionStatusNames(card) }) ||
+            describeCompactCard(card, {
+              statusNames: contentDescriptionStatusNames(card),
+              resourceNames: contentDescriptionResourceNames(),
+            }) ||
             '效果见卡牌规则';
           const effectTags = compactContentEffectTagsHtml(card);
 
@@ -734,11 +752,64 @@ function renderChoiceModule() {
   }
 }
 
+function rewardRerollPrompt(
+  categories: Array<'cards' | 'artifacts' | 'items'>,
+  counts: Record<string, number>,
+): string {
+  const run = readRunState(__STAT__);
+  const nodeId = run?.currentNode?.id || 'reward';
+  return [
+    `[奖励重投] node_id=${nodeId} categories=${categories.join(',')}`,
+    `[重投数量] ${categories.map(category => `${category}=${counts[category]}`).join(' ')}`,
+    '只重新生成指定类别的候选并更新变量，不续写剧情，不修改金币、牌组、选择上限或其他类别。',
+  ].join('\n');
+}
+
+async function requestRewardRerollFromUi(
+  categories: Array<'cards' | 'artifacts' | 'items'>,
+  counts: Record<string, number>,
+  retry: boolean,
+): Promise<void> {
+  if (__IS_SENDING_ACTION || categories.length === 0) return;
+  setSendingState(true);
+  try {
+    const prompt = rewardRerollPrompt(categories, counts);
+    if (retry) await runActionHost.retryPendingRewardReroll(prompt);
+    else await runActionHost.requestRewardReroll(categories, prompt, 0);
+    __RUN_ERROR = null;
+  } catch (error) {
+    showRunError(error, retry ? '重试奖励重投失败' : '请求奖励重投失败');
+  } finally {
+    setSendingState(false);
+  }
+}
+
 // 设置选择事件
 function setupChoiceEvents(cards: any[], artifacts: any[], items: any[], limits: any) {
   const selections = { cards: [] as number[], artifacts: [] as number[], items: [] as number[] };
   const activeRun = readRunState(__STAT__);
   const isShop = activeRun?.phase === 'in_node' && activeRun.currentNode?.kind === 'shop';
+  const rerollCategories = ([
+    cards.length > 0 ? 'cards' : null,
+    artifacts.length > 0 ? 'artifacts' : null,
+    items.length > 0 ? 'items' : null,
+  ] as const).filter((value): value is 'cards' | 'artifacts' | 'items' => value !== null);
+  const rerollCounts = { cards: cards.length, artifacts: artifacts.length, items: items.length };
+  const pendingReroll = __STAT__?.run_reward_reroll;
+
+  const oldReroll = document.getElementById('reroll-reward-btn') as HTMLButtonElement | null;
+  if (oldReroll) {
+    const rerollButton = oldReroll.cloneNode(true) as HTMLButtonElement;
+    oldReroll.parentNode?.replaceChild(rerollButton, oldReroll);
+    rerollButton.style.display = activeRun && rerollCategories.length > 0 ? '' : 'none';
+    rerollButton.textContent = pendingReroll ? '重试重投' : '重投候选';
+    rerollButton.disabled = __isMutating || __IS_SENDING_ACTION;
+    rerollButton.addEventListener('click', () => {
+      const categories = pendingReroll?.categories || rerollCategories;
+      const counts = pendingReroll?.expected_counts || rerollCounts;
+      void requestRewardRerollFromUi(categories, counts, Boolean(pendingReroll));
+    });
+  }
 
   const idFor = (type: 'cards' | 'artifacts' | 'items', part: 'options' | 'selected') => {
     if (type === 'cards') return `card-${part}`;
@@ -991,8 +1062,26 @@ function contentDescriptionStatusNames(content?: Record<string, any>): Record<st
   return names;
 }
 
+function contentDescriptionResourceDefinitions(): Record<string, { name: string; emoji: string }> {
+  const definitions: Record<string, { name: string; emoji: string }> = {};
+  for (const resource of normalizeOptionsList<any>(__STAT__?.battle?.core?.resources)) {
+    const id = typeof resource?.id === 'string' ? resource.id : '';
+    const name = typeof resource?.name === 'string' ? resource.name.trim() : '';
+    if (!id || !name) continue;
+    definitions[id] = { name, emoji: typeof resource?.emoji === 'string' ? resource.emoji : '' };
+  }
+  return definitions;
+}
+
+function contentDescriptionResourceNames(): Record<string, string> {
+  return Object.fromEntries(Object.entries(contentDescriptionResourceDefinitions()).map(([id, value]) => [id, value.name]));
+}
+
 function contentRuleDescription(content: Record<string, any>, fallback = ''): string {
-  const options = { statusNames: contentDescriptionStatusNames(content) };
+  const options = {
+    statusNames: contentDescriptionStatusNames(content),
+    resourceNames: contentDescriptionResourceNames(),
+  };
   const description =
     typeof content?.type === 'string'
       ? resolveCompactCardDescription(content, { ...options, includeKeywords: false })
@@ -1012,7 +1101,10 @@ function effectTagsHtml(tags: readonly EffectDisplayTag[]): string {
 
 function compactContentEffectTagsHtml(content: Record<string, any>): string {
   return effectTagsHtml(
-    compactContentToDisplayTags(content, { statusNames: contentDescriptionStatusNames(content) }),
+    compactContentToDisplayTags(content, {
+      statusNames: contentDescriptionStatusNames(content),
+      resourceNames: contentDescriptionResourceNames(),
+    }),
   );
 }
 
@@ -1161,6 +1253,45 @@ async function requestRestUpgrade(node: RunNodeChoice, card: Record<string, any>
   }
 }
 
+async function requestRestTransform(node: RunNodeChoice, card: Record<string, any>): Promise<void> {
+  if (__IS_SENDING_ACTION) return;
+  setSendingState(true);
+  setRunButtonsDisabled(true);
+  try {
+    await runActionHost.requestRestTransform(node, card);
+    __RUN_ERROR = null;
+  } catch (error) {
+    showRunError(error, '变形请求失败');
+    setRunButtonsDisabled(false);
+  } finally {
+    setSendingState(false);
+  }
+}
+
+async function removeRestCard(card: Record<string, any>): Promise<void> {
+  try {
+    const result = await runActionHost.removeCardAtRest(String(card.runInstanceId || ''));
+    __USER_MUTATION_PILLS.push(`移除卡牌：${result.cardName}`);
+    __PENDING_RUN_SUMMARY = `{{user}}在营火移除了${result.cardName}`;
+    __RUN_ERROR = null;
+    await loadGameData();
+  } catch (error) {
+    showRunError(error, '营火删卡失败');
+  }
+}
+
+async function duplicateRestCard(card: Record<string, any>): Promise<void> {
+  try {
+    const result = await runActionHost.duplicateCardAtRest(String(card.runInstanceId || ''));
+    __USER_MUTATION_PILLS.push(`复制卡牌：${result.cardName}`);
+    __PENDING_RUN_SUMMARY = `{{user}}在营火复制了${result.cardName}`;
+    __RUN_ERROR = null;
+    await loadGameData();
+  } catch (error) {
+    showRunError(error, '营火复制失败');
+  }
+}
+
 async function healAtRest(): Promise<void> {
   try {
     const result = await runActionHost.healAtRest();
@@ -1276,6 +1407,17 @@ function renderRunData(stat: any): void {
     return;
   }
 
+  const pendingReroll = stat?.run_reward_reroll;
+  if (pendingReroll && Array.isArray(pendingReroll.categories)) {
+    currentEl.textContent = __RUN_ERROR ? '奖励重投需要重试' : '正在等待奖励重投结果';
+    addButton('重试重投', 'run-choice', () => void requestRewardRerollFromUi(
+      pendingReroll.categories,
+      pendingReroll.expected_counts || {},
+      true,
+    ));
+    return;
+  }
+
   if (hasRewards) {
     currentEl.textContent = run.currentNode?.kind === 'shop' ? '商店结算' : '先完成本次奖励结算';
     return;
@@ -1302,17 +1444,17 @@ function renderRunData(stat: any): void {
   currentEl.textContent = runNodeSummary(node);
   if (node.kind === 'rest') {
     addButton('恢复 30% 最大生命', 'run-choice run-rest', () => void healAtRest());
-    const cards = normalizeOptionsList<Record<string, any>>(stat?.battle?.cards).filter(
-      card => Number(card.upgrade_level || 0) < 1,
-    );
-    cards.forEach(card =>
-      addButton(
-        `升级 · ${String(card.name || card.id)}`,
-        'run-choice run-upgrade',
-        () => void requestRestUpgrade(node, card),
-      ),
-    );
-    if (cards.length === 0) currentEl.textContent += ' · 没有可升级卡牌';
+    const cards = migratePersistentRunDeck(normalizeOptionsList<Record<string, any>>(stat?.battle?.cards));
+    cards.forEach(card => {
+      const name = String(card.name || card.id);
+      if (Number(card.upgrade_level || 0) < 1) {
+        addButton(`升级 · ${name}`, 'run-choice run-upgrade', () => void requestRestUpgrade(node, card));
+      }
+      addButton(`复制 · ${name}`, 'run-choice run-duplicate', () => void duplicateRestCard(card));
+      addButton(`移除 · ${name}`, 'run-choice run-remove', () => void removeRestCard(card));
+      addButton(`变形 · ${name}`, 'run-choice run-transform', () => void requestRestTransform(node, card));
+    });
+    if (cards.length === 0) currentEl.textContent += ' · 没有可处理的卡牌';
     return;
   }
   if (node.kind === 'shop') {
@@ -1373,6 +1515,61 @@ async function synchronizeSelectedGameMode(): Promise<void> {
   __PENDING_RUN_SUMMARY = '{{user}}选择了远征模式';
 }
 
+let __CONTENT_PROFILE_SEQUENCE = 0;
+let __CONTENT_PROFILE_TIMER: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleBackgroundDeckPowerProfile(): void {
+  if (!isCurrentMessageLatest()) return;
+  if (isExternalDesignAssistantActive()) return;
+  if (__CONTENT_PROFILE_TIMER !== null) clearTimeout(__CONTENT_PROFILE_TIMER);
+  const sequence = ++__CONTENT_PROFILE_SEQUENCE;
+  __CONTENT_PROFILE_TIMER = setTimeout(() => {
+    __CONTENT_PROFILE_TIMER = null;
+    if (sequence !== __CONTENT_PROFILE_SEQUENCE || !isCurrentMessageLatest()) return;
+    let snapshot: any;
+    try {
+      snapshot = getCurrentMessageVariables();
+      const persisted = snapshot?.stat_data?.battle?.design_context?.balance?.deckProfile;
+      if (persisted && isMvuDeckPowerProfileCurrent(snapshot, persisted, { simulationSeeds: 8 })) return;
+    } catch {
+      return;
+    }
+
+    // This is deliberately outside updateVariablesWith: the seeded simulation is
+    // CPU-heavy, while the MVU write transaction must stay short and responsive.
+    const profile = profileMvuDeckPower(snapshot, { simulationSeeds: 8 });
+    if (!profile || sequence !== __CONTENT_PROFILE_SEQUENCE || !isCurrentMessageLatest()) return;
+    void commonActionHost.updateVariablesWith((variables: any) => {
+      if (!isMvuDeckPowerProfileCurrent(variables, profile, { simulationSeeds: 8 })) return variables;
+      refreshMvuContentDesignContext(variables, {
+        ...readRuntimeContentDesignSettings(),
+        simulationSeeds: 8,
+        deckPowerProfile: profile,
+      });
+      return variables;
+    }).catch(error => console.warn('后台卡组评分写回失败：', error));
+  }, 180);
+}
+
+async function synchronizeContentDesignContext(): Promise<void> {
+  if (!isCurrentMessageLatest()) return;
+  let diagnosticText = '';
+  try {
+    await commonActionHost.updateVariablesWith((variables: any) => {
+      const result = refreshMvuContentDesignContext(variables, readRuntimeContentDesignSettings());
+      diagnosticText = result.assessment
+        ? formatContentDesignDiagnostics(result.assessment.diagnostics.filter(issue => issue.severity !== 'advice'))
+        : '';
+      return variables;
+    });
+    if (diagnosticText) console.warn(`[MagicGirlWorld] 内容设计诊断：${diagnosticText}`);
+  } catch (error) {
+    console.warn('同步内容设计辅助信息失败：', error);
+  } finally {
+    scheduleBackgroundDeckPowerProfile();
+  }
+}
+
 // 加载游戏数据
 async function loadGameData() {
   try {
@@ -1420,6 +1617,8 @@ async function loadGameData() {
     } catch (e) {
       console.warn('结算升级异常:', e);
     }
+
+    await synchronizeContentDesignContext();
 
     // 结算后重新获取最新变量快照
     try {
@@ -1588,13 +1787,83 @@ function renderStatusData(rpgData: any) {
   }
 }
 
-// 渲染战斗数据
+// 渲染构筑流派占比和相邻演化方向。
+function renderDeckArchetypeProfile(battle: any): void {
+  const section = document.getElementById('deck-archetype-profile');
+  const bar = document.getElementById('deck-archetype-share-bar');
+  const legend = document.getElementById('deck-archetype-legend');
+  const caption = document.getElementById('deck-archetype-caption');
+  const evolution = document.getElementById('deck-archetype-evolution');
+  if (!section || !bar || !legend || !caption || !evolution) return;
+  const context = battle?.design_context;
+  const archetypes = battle?.design_context?.archetypes;
+  const affinities = Array.isArray(archetypes?.affinities)
+    ? archetypes.affinities
+        .filter((entry: any) => entry && Number(entry.share) > 0)
+        .slice(0, 5)
+    : [];
+  const scatterShare = Math.max(0, Math.min(100, Number(archetypes?.scatterShare) || 0));
+  if (affinities.length === 0 && scatterShare <= 0) {
+    section.hidden = true;
+    bar.innerHTML = '';
+    legend.innerHTML = '';
+    caption.textContent = '';
+    evolution.textContent = '';
+    return;
+  }
+
+  const palette = ['#c8698d', '#6f8fc7', '#77a487', '#9a7bbb', '#c69558'];
+  const segments: Array<{
+    label: string;
+    description: string;
+    share: number;
+    cards: string[];
+    color: string;
+  }> = affinities.map((entry: any, index: number) => ({
+    label: String(entry.label || entry.id || '未命名流派'),
+    description: String(entry.description || ''),
+    share: Math.max(0, Math.min(100, Number(entry.share) || 0)),
+    cards: Array.isArray(entry.supportingCards) ? entry.supportingCards.map(String).slice(0, 5) : [],
+    color: palette[index % palette.length],
+  }));
+  if (scatterShare > 0) segments.push({
+    label: '通用散卡',
+    description: '不强绑定当前主流派，但能提供独立价值或为后续转向留出空间。',
+    share: scatterShare,
+    cards: [],
+    color: '#a59d98',
+  });
+  const total = segments.reduce((sum, entry) => sum + entry.share, 0) || 1;
+  bar.innerHTML = segments.map(entry => {
+    const normalized = entry.share / total * 100;
+    const title = `${entry.label} ${entry.share.toFixed(1).replace(/\.0$/, '')}%${entry.description ? `：${entry.description}` : ''}`;
+    return `<span class="archetype-share-segment" style="--share:${normalized};--segment-color:${entry.color}" title="${escapeHtml(title)}"><span>${escapeHtml(entry.label)}</span></span>`;
+  }).join('');
+  legend.innerHTML = segments.map(entry => {
+    const cards = entry.cards.length ? ` · ${entry.cards.join('、')}` : '';
+    return `<div class="archetype-legend-item" title="${escapeHtml(`${entry.description}${cards}`)}"><i style="--segment-color:${entry.color}"></i><span>${escapeHtml(entry.label)}</span><strong>${escapeHtml(entry.share.toFixed(1).replace(/\.0$/, ''))}%</strong></div>`;
+  }).join('');
+  const score = Number(context?.balance?.deckProfile?.totalScore ?? context?.balance?.deck?.totalScore);
+  const confidence = Number(context?.balance?.deckProfile?.confidence);
+  caption.textContent = Number.isFinite(score)
+    ? `综合 ${score.toFixed(1).replace(/\.0$/, '')} 分${Number.isFinite(confidence) ? ` · 置信度 ${Math.round(confidence * 100)}%` : ''}`
+    : `散卡 ${scatterShare.toFixed(1).replace(/\.0$/, '')}%`;
+  const suggestions = Array.isArray(archetypes?.evolutionSuggestions)
+    ? archetypes.evolutionSuggestions.slice(0, 3)
+    : [];
+  evolution.innerHTML = suggestions.length
+    ? `<span>相邻演化</span>${suggestions.map((entry: any) => `<span class="archetype-evolution-chip" title="${escapeHtml(String(entry.description || ''))}">${escapeHtml(String(entry.label || entry.to || '新方向'))}</span>`).join('')}`
+    : '<span>当前构筑可继续深化，也允许保留通用散卡。</span>';
+  section.hidden = false;
+}
+
 function renderBattleData(rpgData: any) {
   const battle = rpgData.battle || {};
   const core = battle.core || {};
   const cards = normalizeOptionsList<any>(battle.cards);
   const artifacts = normalizeOptionsList<any>(battle.artifacts);
   const items = normalizeOptionsList<any>(battle.items);
+  renderDeckArchetypeProfile(battle);
 
   // 渲染核心属性 - 适配新的数据结构
   const battleHpElement = document.getElementById('battle-hp');
@@ -1645,6 +1914,11 @@ function renderBattleData(rpgData: any) {
   const deckContainer = document.getElementById('battle-deck');
   const artifactsContainer = document.getElementById('battle-artifacts');
   const itemsContainer = document.getElementById('battle-items');
+  const cardArchetypeProfiles = new Map<string, any>(
+    (Array.isArray(battle?.design_context?.archetypes?.cards) ? battle.design_context.archetypes.cards : [])
+      .map((entry: any) => [String(entry?.id || ''), entry] as const)
+      .filter(([id]: readonly [string, any]) => id.length > 0),
+  );
 
   // 普通页面与奖励、战斗页面共享同一个效果解析器，避免出现只有描述、没有实际效果的卡牌。
   if (deckContainer) {
@@ -1656,6 +1930,17 @@ function renderBattleData(rpgData: any) {
           const description = contentRuleDescription(card, '');
           const effectTags = compactContentEffectTagsHtml(card);
           const cost = card.cost === 'energy' ? '全部能量' : card.cost ?? 0;
+          const profile = cardArchetypeProfiles.get(String(card.id || ''));
+          const score = Number(profile?.scoreContribution);
+          const affinityChips = Array.isArray(profile?.affinities)
+            ? profile.affinities.slice(0, 3).map((entry: any) => {
+                const affinityScore = Number(entry?.score);
+                return `<span title="${escapeHtml(String(entry?.label || entry?.id || '流派'))}亲和度 ${Number.isFinite(affinityScore) ? affinityScore : 0}">${escapeHtml(String(entry?.label || entry?.id || '流派'))} ${Number.isFinite(affinityScore) ? affinityScore : 0}</span>`;
+              }).join('')
+            : '';
+          const archetypeMeta = Number.isFinite(score) || affinityChips
+            ? `<div class="card-archetype-meta">${Number.isFinite(score) ? `<strong title="移除一张后与当前构筑总分的差值">构筑贡献 ${score > 0 ? '+' : ''}${escapeHtml(score)}</strong>` : ''}${affinityChips}</div>`
+            : '';
           return `
           <div class="card" data-card-id="${escapeHtml(card.id || '')}">
             <button type="button" class="card-delete-btn" data-card-id="${escapeHtml(card.id || '')}" title="删除一张" style="display: none;">
@@ -1663,6 +1948,7 @@ function renderBattleData(rpgData: any) {
             </button>
             <div class="card-name">${escapeHtml(card.emoji || '🃏')} ${escapeHtml(card.name || '未知')}</div>
             <div class="card-meta"><span>消耗 ${escapeHtml(cost)}</span><span>${escapeHtml(translateCardType(card.type || 'Skill'))}</span><span>数量 ${escapeHtml(card.quantity || 1)}</span></div>
+            ${archetypeMeta}
             ${effectTags}
             ${description ? `<div class="card-description">${escapeHtml(description)}</div>` : ''}
           </div>`;
@@ -2140,10 +2426,18 @@ function toggleStatusDetail(detailId: string): void {
 }
 
 let __commonViewInitialized = false;
+let __disposeCardRepairHandler: (() => void) | null = null;
 
 function initializeCommonView(): void {
   if (__commonViewInitialized) return;
   __commonViewInitialized = true;
+  if (isCurrentMessageLatest()) {
+    try {
+      __disposeCardRepairHandler = registerNaturalLanguageCardRepairHandler();
+    } catch (error) {
+      console.warn('自然语言卡牌修复入口注册失败:', error);
+    }
+  }
   setSendingState(false);
   initializeUI();
   void loadGameData();
@@ -2164,6 +2458,8 @@ if (typeof window !== 'undefined') {
     () => {
       __stopLatestMessageGuard?.();
       __stopLatestMessageGuard = null;
+      __disposeCardRepairHandler?.();
+      __disposeCardRepairHandler = null;
     },
     { once: true },
   );

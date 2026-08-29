@@ -14,6 +14,29 @@ assert.equal(formula.metrics.attack, 12, 'formula estimates use the same compact
 assert.equal(formula.dynamicMetrics.has('attack'), true);
 assert.equal(formula.damageKnown, false, 'formula damage stays diagnostic-unknown despite its conservative estimate');
 
+const fixedCompositeResource = core.analyzeContentDefinition(
+  { cost: { energy: 1, stars: 2 }, effects: [{ damage: 'spent_resource.stars * 5 + spent_energy' }] },
+  { selfResources: { stars: 4 }, selfMaxResources: { stars: 6 } },
+);
+assert.equal(fixedCompositeResource.metrics.attack, 11, 'composite payment formulas use every paid resource component');
+
+const customXResource = core.analyzeContentDefinition(
+  { cost: { stars: 'all' }, effects: [{ damage: 'x_resource.stars * 4' }] },
+  { selfResources: { stars: 3 }, selfMaxResources: { stars: 8 } },
+);
+assert.equal(customXResource.metrics.attack, 12, 'custom-resource X formulas use the resolved all-cost value');
+
+const resourceStateFormula = core.analyzeContentDefinition(
+  { effects: [{ block: 'self.resource.stars.current + self.resource.stars.max + opponent.resource.rage.current' }] },
+  {
+    selfResources: { stars: 2 },
+    selfMaxResources: { stars: 7 },
+    opponentResources: { rage: 3 },
+    opponentMaxResources: { rage: 5 },
+  },
+);
+assert.equal(resourceStateFormula.metrics.defense, 12, 'detached analysis exposes registered self and opponent resource state');
+
 const scenarioFormula = core.analyzeContentScenarioRange({
   effects: [{ damage: 'self.hp < self.max_hp / 2 ? 12 : 3' }],
 });

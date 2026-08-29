@@ -100,6 +100,9 @@ assert.equal(variables.stat_data.battle.items[0].count, 1);
 assert.equal(variables.stat_data.battle.enemy.name, '');
 assert.deepEqual(variables.stat_data.battle.player_abilities, []);
 assert.deepEqual(variables.stat_data.battle.player_status_effects, []);
+assert.equal(variables.stat_data.battle.level, 3, 'battle settlement immediately applies earned promotions');
+assert.equal(variables.stat_data.battle.exp, 0);
+assert.equal(variables.stat_data.battle.core.card_removal_count, 1, 'the even-level removal use is immediately available');
 
 // Experience was already settled by the battle runtime; MVU only creates candidates.
 variables.stat_data.reward.card = [rewardCard];
@@ -111,10 +114,10 @@ assert.doesNotMatch(prompt.promptedBattleSummary, /<Options>|<Option>/);
 assert.equal(rewards.hasSelectableRewards(variables.stat_data), true, 'rewards temporarily gate custom actions');
 
 assert.deepEqual(settleBattleProgression(variables.stat_data.battle), {
-  before: { level: 1, exp: 250 },
+  before: { level: 3, exp: 0 },
   after: { level: 3, exp: 0 },
-  promotions: 2,
-  cardRemovalsGranted: 1,
+  promotions: 0,
+  cardRemovalsGranted: 0,
 });
 assert.equal(variables.stat_data.battle.core.card_removal_count, 1);
 

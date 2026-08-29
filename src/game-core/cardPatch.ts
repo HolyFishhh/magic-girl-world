@@ -1,6 +1,7 @@
 import type { CardSelectorFilter, CardValueOperator, CardValueStat, EffectProgram, NumericExpression } from './effectDsl';
 import { cardMatchesSelectorFilter, type SelectableCard } from './cardSelectorRuntime';
 import { transformCardEffectProgram } from './cardValueTransform';
+import type { CardCost } from './combatResource';
 
 export type CardPatchScope = 'resolution' | 'turn' | 'until_played' | 'combat' | 'run' | 'permanent';
 export type CardKeyword = 'retain' | 'exhaust' | 'ethereal' | 'innate';
@@ -11,6 +12,8 @@ export type CardPatchSourceKind =
   | 'status'
   | 'ability'
   | 'system'
+  | 'enemy_action'
+  | 'summon'
   | 'enchantment'
   | 'affliction';
 
@@ -73,7 +76,7 @@ export type CardPatch =
 
 export interface CardPatchBaseSnapshot {
   effectProgram: EffectProgram;
-  cost?: number | 'energy';
+  cost?: CardCost;
   retain?: boolean;
   exhaust?: boolean;
   ethereal?: boolean;
@@ -93,6 +96,7 @@ export interface PatchableCard extends SelectableCard {
   doubleEffect?: boolean;
   patchBase?: CardPatchBaseSnapshot;
   patches?: CardPatch[];
+  attachments?: import('./cardAttachment').CardAttachment[];
 }
 
 export interface CardPatchLedger {
@@ -201,10 +205,10 @@ export function cardPatchApplies(card: PatchableCard, patch: CardPatch): boolean
 }
 
 function applyCost(
-  current: number | 'energy' | undefined,
+  current: CardCost | undefined,
   patch: Extract<CardPatch, { kind: 'cost' | 'x_value' }>,
-): number | 'energy' | undefined {
-  if (current === 'energy') return current;
+): CardCost | undefined {
+  if (current === 'energy' || typeof current === 'object') return current;
   const value = typeof current === 'number' && Number.isFinite(current) ? current : 0;
   let next: number;
   if (patch.operator === 'add') next = value + patch.value;

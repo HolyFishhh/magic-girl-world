@@ -7,6 +7,7 @@
 //
 import '../runtime/bootstrap';
 import { ensureMvuRuntimeReady } from '../runtime/messageVariables';
+import { registerNaturalLanguageCardRepairHandler } from '../runtime/naturalLanguageCardRepair';
 import {
   formatBoundedContentIssueSummary,
   runBattleSessionAtomicAction,
@@ -45,6 +46,7 @@ class FishRPGCoordinator {
   private shellPresenter: TavernBattleShellPresenter;
   private refreshTimer: any = null;
   private readonly disposeStateListeners: Array<() => void> = [];
+  private disposeCardRepairHandler: (() => void) | null = null;
   private destroyed = false;
 
   constructor() {
@@ -67,6 +69,11 @@ class FishRPGCoordinator {
     try {
       // Wait for the real MVU/Tavern Helper bridge before reading the battle floor.
       await ensureMvuRuntimeReady();
+      try {
+        this.disposeCardRepairHandler = registerNaturalLanguageCardRepairHandler();
+      } catch (error) {
+        console.warn('自然语言卡牌修复入口注册失败:', error);
+      }
 
       this.shellPresenter.initialize({
         onPlayCard: cardId => this.playCard(cardId),
@@ -253,6 +260,18 @@ class FishRPGCoordinator {
 
   private async executeBattleStartFlowStep(step: BattleStartFlowStep): Promise<void> {
     switch (step) {
+      case 'player_stance_battle_start':
+        await this.effectExecutor.processInitialStance('player');
+        return;
+      case 'enemy_stance_battle_start': {
+        const previous = this.gameStateManager.getGameState().activeEnemyId;
+        for (const enemy of this.gameStateManager.getEnemies({ livingOnly: true })) {
+          this.gameStateManager.setActiveEnemy(enemy.id);
+          await this.effectExecutor.processInitialStance('enemy');
+        }
+        if (previous) this.gameStateManager.setActiveEnemy(previous);
+        return;
+      }
       case 'player_abilities_battle_start':
         await this.effectExecutor.processAbilitiesByTrigger('player', 'battle_start');
         return;
@@ -411,6 +430,8 @@ class FishRPGCoordinator {
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.refreshTimer = null;
     for (const dispose of this.disposeStateListeners.splice(0)) dispose();
+    this.disposeCardRepairHandler?.();
+    this.disposeCardRepairHandler = null;
     this.shellPresenter.destroy();
   }
 }

@@ -1,6 +1,6 @@
-export declare const ABILITY_TRIGGERS: readonly ["battle_start", "ability_gain", "turn_start", "turn_end", "card_played", "attack_played", "skill_played", "power_played", "on_discard", "on_exhaust", "on_draw", "on_shuffle", "passive", "take_damage", "take_heal", "deal_damage", "deal_heal", "lust_increase", "lust_decrease", "deal_lust_increase", "deal_lust_decrease", "gain_buff", "gain_debuff", "lose_buff", "lose_debuff", "enemy_gain_buff", "enemy_gain_debuff", "enemy_lose_buff", "enemy_lose_debuff", "gain_block", "lose_block"];
+export declare const ABILITY_TRIGGERS: readonly ["battle_start", "ability_gain", "turn_start", "turn_end", "card_played", "attack_played", "skill_played", "power_played", "on_discard", "on_exhaust", "on_draw", "on_shuffle", "passive", "take_damage", "take_heal", "deal_damage", "deal_heal", "lust_increase", "lust_decrease", "deal_lust_increase", "deal_lust_decrease", "gain_buff", "gain_debuff", "lose_buff", "lose_debuff", "enemy_gain_buff", "enemy_gain_debuff", "enemy_lose_buff", "enemy_lose_debuff", "gain_block", "lose_block", "defeated"];
 export type AbilityTrigger = (typeof ABILITY_TRIGGERS)[number];
-export declare const STATUS_TRIGGERS: readonly ["apply", "stack", "tick", "remove", "hold"];
+export declare const STATUS_TRIGGERS: readonly ["apply", "stack", "tick", "remove", "hold", "threshold_execute"];
 export type StatusTrigger = (typeof STATUS_TRIGGERS)[number];
 export type BattleTrigger = AbilityTrigger | StatusTrigger;
 export declare const ABILITY_TRIGGER_SET: ReadonlySet<string>;

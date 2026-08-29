@@ -1,4 +1,4 @@
-export const RUN_STATE_SCHEMA_VERSION = 1 as const;
+export const RUN_STATE_SCHEMA_VERSION = 2 as const;
 
 export const RUN_NODE_KINDS = ['battle', 'elite', 'event', 'rest', 'shop', 'boss'] as const;
 export type RunNodeKind = (typeof RUN_NODE_KINDS)[number];
@@ -252,6 +252,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+/** Migrate persisted run snapshots without using route RNG or host state. */
+export function migrateRunState(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  if (value.schemaVersion === 1) {
+    return { ...value, schemaVersion: RUN_STATE_SCHEMA_VERSION };
+  }
+  return value;
+}
+
 function isNodeChoice(value: unknown): value is RunNodeChoice {
   return (
     isRecord(value) &&
@@ -267,6 +276,7 @@ function isNodeChoice(value: unknown): value is RunNodeChoice {
 
 /** Strict reader for adapters restoring RunState from MUV, a website, or a Mod save. */
 export function validateRunState(value: unknown): RunStateValidationResult {
+  value = migrateRunState(value);
   if (!isRecord(value)) return { ok: false, message: 'run state must be an object' };
   if (value.schemaVersion !== RUN_STATE_SCHEMA_VERSION) return { ok: false, message: 'unsupported run schema version' };
   if (!Number.isInteger(value.seed) || Number(value.seed) < 0 || Number(value.seed) > UINT32_MAX) {

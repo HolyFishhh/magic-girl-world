@@ -68,6 +68,42 @@
       "ai_operations": ["set"]
     },
     {
+      "id": "initial_stance",
+      "paths": ["battle.core.stance", "battle.enemy.stance"],
+      "shape": "nullable-object",
+      "owner": "ai",
+      "lifecycle": "battle-temporary",
+      "writers": ["ai:battle-scene", "program:battle-session"],
+      "ai_operations": ["set"]
+    },
+    {
+      "id": "initial_orb_slots",
+      "paths": ["battle.core.orb_slots", "battle.enemy.orb_slots"],
+      "shape": "number",
+      "owner": "ai",
+      "lifecycle": "battle-temporary",
+      "writers": ["ai:battle-scene", "program:battle-session"],
+      "ai_operations": ["set"]
+    },
+    {
+      "id": "initial_orbs",
+      "paths": ["battle.core.orbs", "battle.enemy.orbs"],
+      "shape": "array",
+      "owner": "ai",
+      "lifecycle": "battle-temporary",
+      "writers": ["ai:battle-scene", "program:battle-session"],
+      "ai_operations": ["set", "assign"]
+    },
+    {
+      "id": "combat_resources",
+      "paths": ["battle.core.resources", "battle.enemy.resources"],
+      "shape": "array",
+      "owner": "ai",
+      "lifecycle": "persistent",
+      "writers": ["ai:init", "ai:battle-scene", "program:battle-session"],
+      "ai_operations": ["set", "assign"]
+    },
+    {
       "id": "persistent_battle_content",
       "paths": ["battle.cards", "battle.artifacts", "battle.items", "battle.statuses"],
       "shape": "array",
@@ -104,12 +140,45 @@
       "ai_operations": ["set", "add"]
     },
     {
+      "id": "content_design_context",
+      "paths": ["battle.design_context"],
+      "shape": "nullable-object",
+      "extensible": false,
+      "owner": "program",
+      "lifecycle": "persistent",
+      "writers": ["program:content-design", "program:battle-settlement"],
+      "ai_operations": []
+    },
+    {
+      "id": "encounter_lineage_memory",
+      "paths": ["battle.lineage_memory"],
+      "shape": "nullable-object",
+      "extensible": false,
+      "owner": "program",
+      "lifecycle": "persistent",
+      "writers": ["program:content-design"],
+      "ai_operations": []
+    },
+    {
       "id": "enemy_scalar",
       "paths": [
         "battle.enemy.name",
         "battle.enemy.emoji",
         "battle.enemy.description",
         "battle.enemy.action_mode"
+      ],
+      "shape": "string",
+      "owner": "ai",
+      "lifecycle": "battle-temporary",
+      "writers": ["ai:battle-scene", "program:battle-settlement"],
+      "ai_operations": ["set"]
+    },
+    {
+      "id": "enemy_lineage_metadata",
+      "paths": [
+        "battle.enemy.family_id",
+        "battle.enemy.family_name",
+        "battle.enemy.evolution_stage"
       ],
       "shape": "string",
       "owner": "ai",
@@ -263,6 +332,15 @@
       "ai_operations": ["set"]
     },
     {
+      "id": "reward_pool_program_state",
+      "paths": ["reward.disabled_categories", "reward.pool_revision", "reward.reroll_count"],
+      "shape": "program-managed",
+      "owner": "program",
+      "lifecycle": "candidate",
+      "writers": ["program:reward-pool"],
+      "ai_operations": []
+    },
+    {
       "id": "run",
       "paths": ["run"],
       "shape": "nullable-object",
@@ -288,6 +366,88 @@
       "lifecycle": "optional-run",
       "writers": ["ai:run-rest", "program:run"],
       "ai_operations": ["set"]
+    },
+    {
+      "id": "run_transform",
+      "paths": ["run_transform"],
+      "shape": "nullable-object",
+      "owner": "shared",
+      "lifecycle": "optional-run",
+      "writers": ["ai:run-rest", "program:run"],
+      "ai_operations": ["set"]
+    },
+    {
+      "id": "run_pending_program_state",
+      "paths": ["run_upgrade_target", "run_transform_target", "run_reward_reroll"],
+      "shape": "nullable-object",
+      "owner": "program",
+      "lifecycle": "one-shot-request",
+      "writers": ["program:run"],
+      "ai_operations": []
+    },
+    {
+      "id": "run_rules",
+      "paths": ["run_rules"],
+      "shape": "array",
+      "owner": "shared",
+      "lifecycle": "persistent",
+      "writers": ["ai:content", "program:run-transaction"],
+      "ai_operations": ["set", "assign", "remove"],
+      "extensible": false
+    },
+    {
+      "id": "run_trigger_state",
+      "paths": [
+        "run_trigger_invocations",
+        "run_trigger_counters.total",
+        "run_trigger_counters.by_trigger",
+        "run_trigger_counters.by_source_kind",
+        "run_trigger_counters.by_source"
+      ],
+      "shape": "program-managed",
+      "owner": "program",
+      "lifecycle": "optional-run",
+      "writers": ["program:run-transaction"],
+      "ai_operations": []
+    },
+    {
+      "id": "run_transaction_state",
+      "paths": [
+        "run_transaction_revision",
+        "run_transaction_log",
+        "run_transaction_events",
+        "run_transaction_counters.total",
+        "run_transaction_counters.by_event",
+        "run_transaction_counters.by_source"
+      ],
+      "shape": "program-managed",
+      "owner": "program",
+      "lifecycle": "optional-run",
+      "writers": ["program:run-transaction"],
+      "ai_operations": []
+    },
+    {
+      "id": "persistent_card_identity",
+      "paths": [
+        "battle.cards[].templateId",
+        "battle.cards[].runInstanceId",
+        "battle.cards[].origin",
+        "battle.cards[].parentRunInstanceId"
+      ],
+      "shape": "optional-program-fields",
+      "owner": "program",
+      "lifecycle": "persistent",
+      "writers": ["program:run-transaction", "program:battle-settlement"],
+      "ai_operations": []
+    },
+    {
+      "id": "persistent_card_progression_metadata",
+      "paths": ["battle.cards[].$meta.mwg_card_progression"],
+      "shape": "program-managed",
+      "owner": "program",
+      "lifecycle": "persistent",
+      "writers": ["program:battle-settlement", "program:run-transaction"],
+      "ai_operations": []
     },
     {
       "id": "game_mode",
@@ -316,6 +476,7 @@
     { "source": "content.effect", "replacement": "content.effects", "policy": "removed" },
     { "source": "content.discard_effect", "replacement": "content.discard_effects", "policy": "removed" },
     { "source": "battle.items[].quantity", "replacement": "battle.items[].count", "policy": "removed" },
-    { "source": "battle (flat variables root)", "replacement": "stat_data.battle", "policy": "removed" }
+    { "source": "battle (flat variables root)", "replacement": "stat_data.battle", "policy": "removed" },
+    { "source": "run.schemaVersion:1", "replacement": "run.schemaVersion:2", "policy": "program-migrated" }
   ]
 }

@@ -6,6 +6,11 @@ const REQUEST_BEGIN = '[MWG_REPAIR_REQUEST_BEGIN]';
 const REQUEST_END = '[MWG_REPAIR_REQUEST_END]';
 
 export interface ExtraModelRepairOptions {
+  /** Keep only the repair scope authorized by the caller before variables are written back. */
+  reconcileVariables?: (
+    originalVariables: Record<string, any>,
+    repairedVariables: Record<string, any>,
+  ) => Record<string, any>;
   /** Reject the repaired snapshot before it replaces the current message/chat variables. */
   validateVariables?: (variables: Record<string, any>) => void;
 }
@@ -214,15 +219,19 @@ export async function retryCurrentMessageWithExtraModel(
     const retryEvent = resolveExtraModelRetryEvent(runtime);
     await runtime.eventEmit(retryEvent);
     const updated = readMessageText(runtime, messageId as number);
-    repairedUpdateBlock = extractNewUpdateBlock(original, updated);
+    repairedUpdateBlock = extractNewUpdateBlock(original, removeInjectedRequest(updated));
     const updatedVariables = runtime.getVariables(variableOptions);
     const variablesChanged = !valuesEqual(updatedVariables, baselineVariables);
     if (!variablesChanged) throw new Error('MVU 额外模型没有写回修复后的变量');
     const mergedVariables = applyStructuralDelta(originalVariables, baselineVariables, updatedVariables);
     if (!isPlainRecord(mergedVariables)) throw new Error('MVU 额外模型返回的变量根不是对象');
-    options.validateVariables?.(mergedVariables);
-    await runtime.replaceVariables(mergedVariables, variableOptions);
-    await runtime.replaceVariables(mergedVariables, { type: 'chat' });
+    const reconciledVariables = options.reconcileVariables
+      ? options.reconcileVariables(cloneValue(originalVariables), cloneValue(mergedVariables))
+      : mergedVariables;
+    if (!isPlainRecord(reconciledVariables)) throw new Error('MVU 修复范围处理后的变量根不是对象');
+    options.validateVariables?.(reconciledVariables);
+    await runtime.replaceVariables(reconciledVariables, variableOptions);
+    await runtime.replaceVariables(reconciledVariables, { type: 'chat' });
     succeeded = true;
   } catch (error) {
     await runtime.replaceVariables(originalVariables, variableOptions);

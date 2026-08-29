@@ -20,6 +20,18 @@ const xCost = compile([{ damage: 'spent_energy * 4' }]);
 assert.equal(validateEffectProgramPolicy(xCost, { allowSpentEnergy: true, triggerPolicy: 'forbid' }).ok, true);
 assert.ok(codes(validateEffectProgramPolicy(xCost, { triggerPolicy: 'forbid' })).includes('SPENT_ENERGY_NOT_ALLOWED'));
 
+const resourceCost = compile([{ damage: 'spent_resource.stars + x_resource.stars' }]);
+assert.equal(validateEffectProgramPolicy(resourceCost, {
+  triggerPolicy: 'forbid',
+  allowSpentResources: new Set(['stars']),
+  allowXResources: new Set(['stars']),
+}).ok, true);
+assert.ok(codes(validateEffectProgramPolicy(resourceCost, {
+  triggerPolicy: 'forbid',
+  allowSpentResources: new Set(['stars']),
+})).includes('X_RESOURCE_NOT_ALLOWED'));
+assert.ok(codes(validateEffectProgramPolicy(resourceCost, { triggerPolicy: 'forbid' })).includes('SPENT_RESOURCE_NOT_ALLOWED'));
+
 const statusFormula = compile([{ block: 'stacks * 2' }]);
 assert.equal(validateEffectProgramPolicy(statusFormula, { allowStatusStacks: true }).ok, true);
 assert.ok(codes(validateEffectProgramPolicy(statusFormula)).includes('STATUS_STACKS_NOT_ALLOWED'));

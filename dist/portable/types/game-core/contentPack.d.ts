@@ -8,6 +8,8 @@ export interface ContentPack {
     items: ContentDefinition[];
     abilities: ContentDefinition[];
     activeStatuses: ContentDefinition[];
+    /** Player-owned custom combat resources used by budgets and shadow simulation. */
+    playerResources?: ContentDefinition[];
     enemy: ContentDefinition | null;
     /** Ordered enemy party. enemy remains the first-entry compatibility alias. */
     enemies?: ContentDefinition[];
@@ -23,6 +25,7 @@ export interface CreateContentPackInput {
     items?: unknown;
     abilities?: unknown;
     activeStatuses?: unknown;
+    playerResources?: unknown;
     enemy?: unknown;
     enemies?: unknown;
     playerDesireEffect?: unknown;

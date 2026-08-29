@@ -7,6 +7,7 @@ import { isContentPack, type ContentDefinition, type ContentPack } from './conte
 import { ABILITY_TRIGGER_SET } from './battleTriggers';
 import { resolveTriggerInput } from './triggerInput';
 import { CARD_RARITY_SET, CARD_TYPE_SET, RELIC_RARITY_SET } from './contentCatalog';
+import { normalizeCardCost, validateCardCost } from './combatResource';
 
 export interface ContentContractIssue {
   path: string;
@@ -65,6 +66,7 @@ function validateEffectSource(
   issues: ContentContractIssue[],
   options: EffectProgramPolicyOptions,
   required: boolean,
+  compilation: { enemyCollectionTarget?: 'self' | 'opponent' } = {},
 ): void {
   const resolvedTrigger = resolveTriggerInput(value);
   const hasTriggeredEffects = resolvedTrigger.triggeredEffects !== undefined;
@@ -87,8 +89,12 @@ function validateEffectSource(
 
   if (resolvedTrigger.structured) {
     const triggerObject = value.trigger as Record<string, unknown>;
+    const supportedTriggerFields = new Set([
+      'on', 'effects', 'scope', 'ordinal', 'n', 'event', 'phase', 'reason', 'source_kind', 'source_id',
+      'damage_type', 'card_type', 'template_id', 'card_instance_id', 'actor_id', 'target_id',
+    ]);
     for (const key of Object.keys(triggerObject)) {
-      if (key !== 'on' && key !== 'effects') {
+      if (!supportedTriggerFields.has(key)) {
         addIssue(issues, `${path}.trigger.${key}`, 'UNKNOWN_FIELD', `unsupported trigger field: ${key}`);
       }
     }
@@ -102,8 +108,10 @@ function validateEffectSource(
     }
     const compiled = compileCompactEffectList(source, {
       trigger,
+      triggerQuery: trigger ? resolvedTrigger.eventQuery : undefined,
       when: trigger ? undefined : value.when,
       creates: value.creates,
+      enemyCollectionTarget: compilation.enemyCollectionTarget,
     });
     if (!compiled.ok) {
       compiled.issues.forEach(issue =>
@@ -183,8 +191,8 @@ function validateCard(
     addIssue(issues, `${path}.quantity`, 'INVALID_QUANTITY', 'quantity must be an integer from 1 to 100');
   if (type === 'Curse') {
     if (value.cost !== undefined) addIssue(issues, `${path}.cost`, 'INVALID_CURSE_COST', 'Curse cards cannot contain cost');
-  } else if (value.cost !== 'energy' && (!Number.isInteger(value.cost ?? 0) || Number(value.cost ?? 0) < 0)) {
-    addIssue(issues, `${path}.cost`, 'INVALID_CARD_COST', 'cost must be a non-negative integer or energy');
+  } else if (validateCardCost(value.cost ?? 0)) {
+    addIssue(issues, `${path}.cost`, 'INVALID_CARD_COST', 'cost must be a non-negative integer, energy, or a valid resource map');
   }
   for (const flag of ['retain', 'exhaust', 'ethereal', 'innate']) {
     if (value[flag] !== undefined && typeof value[flag] !== 'boolean') {
@@ -199,10 +207,13 @@ function validateCard(
       'discard_requirement is no longer supported',
     );
   }
+  const costComponents = normalizeCardCost(value.cost ?? 0);
   const policy: EffectProgramPolicyOptions = {
     triggerPolicy: type === 'Power' ? 'require_root_or_status' : 'forbid',
     modifierPolicy: 'forbid',
-    allowSpentEnergy: value.cost === 'energy',
+    allowSpentEnergy: costComponents.energy === 'all',
+    allowSpentResources: new Set(Object.keys(costComponents)),
+    allowXResources: new Set(Object.entries(costComponents).filter(([, component]) => component === 'all').map(([id]) => id)),
     allowNarrate: type === 'Event',
     requireSingleNarrate: type === 'Event',
     knownStatusIds,
@@ -253,7 +264,11 @@ function validateNamedExecutable(
   issues: ContentContractIssue[],
   options: EffectProgramPolicyOptions,
   required: boolean,
-  requirements: { requireName?: boolean; requireModernTrigger?: boolean } = {},
+  requirements: {
+    requireName?: boolean;
+    requireModernTrigger?: boolean;
+    enemyCollectionTarget?: 'self' | 'opponent';
+  } = {},
 ): void {
   if (!isRecord(value)) {
     addIssue(issues, path, 'INVALID_ENTRY', 'executable definitions must be objects');
@@ -270,7 +285,14 @@ function validateNamedExecutable(
   if (requirements.requireModernTrigger && (hasOwn(value, 'effects') || resolvedTrigger.structured) && resolvedTrigger.trigger === undefined) {
     addIssue(issues, `${path}.trigger`, 'MISSING_TRIGGER', 'modern effects require a trigger');
   }
-  validateEffectSource(value, path, issues, options, required);
+  validateEffectSource(
+    value,
+    path,
+    issues,
+    options,
+    required,
+    { enemyCollectionTarget: requirements.enemyCollectionTarget },
+  );
 }
 
 function validateStatusList(
@@ -403,7 +425,14 @@ export function validateContentPackContract(
         const weight = action.weight ?? 1;
         if (typeof weight !== 'number' || !Number.isFinite(weight) || weight <= 0)
           addIssue(issues, `${path}.weight`, 'INVALID_WEIGHT', 'action weight must be positive');
-        validateNamedExecutable(action, path, issues, { triggerPolicy: 'forbid', modifierPolicy: 'forbid', knownStatusIds: statusIds }, required);
+        validateNamedExecutable(
+          action,
+          path,
+          issues,
+          { triggerPolicy: 'forbid', modifierPolicy: 'forbid', knownStatusIds: statusIds },
+          required,
+          { enemyCollectionTarget: 'self' },
+        );
       });
     }
     const enemyAbilities = validateIdList(enemy.abilities ?? [], 'enemy.abilities', issues, { requireId: true });
@@ -418,7 +447,7 @@ export function validateContentPackContract(
           knownStatusIds: statusIds,
         },
         required,
-        { requireModernTrigger: true },
+        { requireModernTrigger: true, enemyCollectionTarget: 'self' },
       ),
     );
     const enemyDesire = enemy.lust_effect;
@@ -431,7 +460,7 @@ export function validateContentPackContract(
           issues,
           { triggerPolicy: 'forbid', modifierPolicy: 'forbid', knownStatusIds: statusIds },
           required,
-          { requireName: true },
+          { requireName: true, enemyCollectionTarget: 'self' },
         );
     }
   }
@@ -452,7 +481,7 @@ export function validateContentPackContract(
       issues,
       { triggerPolicy: 'forbid', modifierPolicy: 'forbid', knownStatusIds: statusIds },
       required,
-      { requireName: true },
+      { requireName: true, enemyCollectionTarget: 'self' },
     );
 
   // Validate every additional enemy with the same executable contract while

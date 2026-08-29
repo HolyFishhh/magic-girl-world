@@ -248,21 +248,39 @@ function summarizeMvuUpdate(result: unknown): string[] {
     lastError: '',
     battleHandoffReady: false,
   };
+  let cardRepairHandler: ((requirement: string) => Promise<void>) | null = null;
 
   type MvuMonitorSettings = {
     showMvuWindow: boolean;
+    difficultyPercent: number;
+    autoCalibration: boolean;
+    designAssistantEnabled: boolean;
+    simulationSeeds: number;
+    showNotifications: boolean;
   };
 
   const installMvuMonitor = () => {
     const storageKey = 'mwg:settings-center:v2';
     const defaultSettings: MvuMonitorSettings = {
       showMvuWindow: true,
+      difficultyPercent: 80,
+      autoCalibration: true,
+      designAssistantEnabled: true,
+      simulationSeeds: 8,
+      showNotifications: true,
     };
     let settings = { ...defaultSettings };
     let orbPosition: { x: number; y: number } | null = null;
     try {
       const stored = JSON.parse(String(host.localStorage?.getItem(storageKey) || '{}'));
       settings = { ...settings, ...(stored && typeof stored === 'object' ? stored : {}) };
+      settings.difficultyPercent = Math.max(10, Math.min(110, Math.round(Number(settings.difficultyPercent) || 80)));
+      settings.autoCalibration = settings.autoCalibration === true;
+      settings.designAssistantEnabled = settings.designAssistantEnabled !== false;
+      settings.simulationSeeds = [8, 12, 16, 24].includes(Number(settings.simulationSeeds))
+        ? Number(settings.simulationSeeds)
+        : 8;
+      settings.showNotifications = settings.showNotifications !== false;
       if (Number.isFinite(stored?.orbPosition?.x) && Number.isFinite(stored?.orbPosition?.y)) {
         orbPosition = { x: Number(stored.orbPosition.x), y: Number(stored.orbPosition.y) };
       }
@@ -274,23 +292,40 @@ function summarizeMvuUpdate(result: unknown): string[] {
       phase: 'idle' as 'idle' | 'generating' | 'applying' | 'success' | 'error',
       generationId: '',
       output: '',
+      rawOutput: '',
       pendingOutput: '',
       reasoning: '',
+      timeline: [] as Array<{ label: string; detail: string; at: number }>,
       detail: '等待下一次变量更新',
       startedAt: 0,
       finishedAt: 0,
       open: false,
       settingsVisible: false,
+      cardRepairFormVisible: false,
     };
     let root: HTMLElement | null = null;
     let timer: number | undefined;
     let lifecycleTimer: number | undefined;
     let applyTimer: number | undefined;
+    let streamRenderTimer: number | undefined;
     let extraAnalysisActive = false;
+    let manualRepairActive = false;
+    let cardRepairPending = false;
+    let designAssistant: any = null;
+    let designDashboard: any = null;
+    let designSettingsSynchronized = false;
 
     const clearApplyTimer = (): void => {
       if (applyTimer !== undefined) host.clearTimeout?.(applyTimer);
       applyTimer = undefined;
+    };
+
+    const queueStreamRender = (): void => {
+      if (streamRenderTimer !== undefined) return;
+      streamRenderTimer = host.setTimeout?.(() => {
+        streamRenderTimer = undefined;
+        render();
+      }, 80) as number | undefined;
     };
 
     const stopElapsedTimer = (): void => {
@@ -333,6 +368,41 @@ function summarizeMvuUpdate(result: unknown): string[] {
       syncThinkingSetting();
     };
 
+    const applyRemoteSettings = (value: unknown): void => {
+      if (!value || typeof value !== 'object') return;
+      const remote = value as Record<string, unknown>;
+      const next = {
+        ...settings,
+        difficultyPercent: Math.max(10, Math.min(110, Math.round(Number(remote.difficultyPercent) || settings.difficultyPercent))),
+        autoCalibration: remote.autoCalibration !== false,
+        designAssistantEnabled: remote.enabled !== false,
+        simulationSeeds: [8, 12, 16, 24].includes(Number(remote.simulationSeeds))
+          ? Number(remote.simulationSeeds)
+          : settings.simulationSeeds,
+        showNotifications: remote.showNotifications !== false,
+      };
+      const changed = Object.keys(next).some(key => (next as any)[key] !== (settings as any)[key]);
+      settings = next;
+      if (changed) saveSettings();
+    };
+
+    const updateDesignSettings = (patch: Record<string, unknown>): void => {
+      try {
+        const updated = designAssistant?.updateSettings?.(patch);
+        if (updated) applyRemoteSettings(updated);
+        designDashboard = designAssistant?.getDashboard?.() || designDashboard;
+      } catch (error) {
+        console.warn('[MagicGirlWorld] 设计辅助器设置同步失败', error);
+      }
+    };
+
+    const pushTimeline = (label: string, detail = ''): void => {
+      const previous = monitorState.timeline.at(-1);
+      if (previous?.label === label && previous.detail === detail) return;
+      monitorState.timeline.push({ label, detail, at: Date.now() });
+      monitorState.timeline = monitorState.timeline.slice(-12);
+    };
+
     const phaseLabel = (): string => {
       if (monitorState.phase === 'generating') return '正在生成变量';
       if (monitorState.phase === 'applying') return '正在应用变量';
@@ -361,6 +431,148 @@ function summarizeMvuUpdate(result: unknown): string[] {
       return blocks.at(-1)?.[0] || text;
     };
 
+    const setAllText = (selector: string, value: string): void => {
+      root?.querySelectorAll<HTMLElement>(selector).forEach(element => {
+        element.textContent = value;
+      });
+    };
+
+    const replaceLines = (
+      selector: string,
+      lines: Array<{ title: string; detail?: string; value?: number }>,
+      empty: string,
+    ): void => {
+      root?.querySelectorAll<HTMLElement>(selector).forEach(container => {
+        const doc = container.ownerDocument;
+        container.replaceChildren();
+        if (lines.length === 0) {
+          const note = doc.createElement('small');
+          note.className = 'mwg-empty-note';
+          note.textContent = empty;
+          container.appendChild(note);
+          return;
+        }
+        for (const line of lines) {
+          const item = doc.createElement('div');
+          item.className = 'mwg-data-line';
+          const copy = doc.createElement('div');
+          const title = doc.createElement('strong');
+          title.textContent = line.title;
+          copy.appendChild(title);
+          if (line.detail) {
+            const detail = doc.createElement('small');
+            detail.textContent = line.detail;
+            copy.appendChild(detail);
+          }
+          item.appendChild(copy);
+          if (Number.isFinite(line.value)) {
+            const score = doc.createElement('span');
+            score.className = 'mwg-data-score';
+            score.textContent = String(Math.round(Number(line.value) * 10) / 10);
+            item.appendChild(score);
+          }
+          container.appendChild(item);
+        }
+      });
+    };
+
+    const renderMvuProcess = (): void => {
+      const elapsedBase = monitorState.startedAt || Date.now();
+      const timeline = monitorState.timeline.map(entry => {
+        const seconds = Math.max(0, Math.round((entry.at - elapsedBase) / 100) / 10);
+        return `${seconds.toFixed(1)}s  ${entry.label}${entry.detail ? ` · ${entry.detail}` : ''}`;
+      }).join('\n');
+      const liveOrRaw = monitorState.rawOutput || monitorState.pendingOutput;
+      setAllText('[data-mwg-mvu-timeline]', timeline || '尚未开始新的 MVU 请求');
+      setAllText('[data-mwg-mvu-summary]', monitorState.output || (monitorState.phase === 'generating' ? '等待模型返回…' : '本次尚无变量变化摘要'));
+      setAllText('[data-mwg-mvu-raw]', liveOrRaw || '模型尚未返回完整内容');
+      setAllText(
+        '[data-mwg-mvu-reasoning]',
+        monitorState.reasoning || '本次请求没有返回可展示的分析内容；非流式或关闭 reasoning 时属于正常情况。',
+      );
+      if (root) root.dataset.mvuHistory = monitorState.startedAt || liveOrRaw ? 'true' : 'false';
+    };
+
+    const renderDesignAssistant = (): void => {
+      const dashboard = designDashboard;
+      const available = dashboard?.available === true;
+      const snapshot = available ? dashboard.snapshot : null;
+      const profile = snapshot?.deckProfile;
+      const lineage = snapshot?.lineage || dashboard?.state?.lineage;
+      if (root) {
+        root.dataset.designAvailable = available ? 'true' : 'false';
+        root.dataset.deckAvailable = profile ? 'true' : 'false';
+        root.dataset.lineageAvailable = Array.isArray(lineage?.families) && lineage.families.length > 0 ? 'true' : 'false';
+      }
+      const remoteSettings = dashboard?.settings;
+      if (remoteSettings) applyRemoteSettings(remoteSettings);
+      setAllText('[data-mwg-design-status]', dashboard?.status?.message || '等待设计辅助器连接');
+      setAllText(
+        '[data-mwg-design-runtime]',
+        available
+          ? `${dashboard.threaded ? '后台模拟' : '兼容计算'} · 图谱 ${dashboard.graph?.nodes || 0} 节点 / ${dashboard.graph?.edges || 0} 关系`
+          : '当前没有可用的角色卡专属设计组件',
+      );
+      setAllText('[data-mwg-deck-score]', profile ? String(profile.totalScore) : '—');
+      setAllText(
+        '[data-mwg-deck-confidence]',
+        profile
+          ? `置信度 ${Math.round(Number(profile.confidence || 0) * 100)}% · 牌库质量 ${Math.round(Number(profile.deckQuality?.multiplier ?? 1) * 100)}%`
+          : '等待卡组评分',
+      );
+      const labels: Record<string, string> = {
+        burst: '爆发', sustainedOutput: '持续', survival: '生存', economy: '经济',
+        consistency: '稳定', scaling: '成长', control: '控制', combo: '组合', flexibility: '灵活',
+      };
+      for (const [key, label] of Object.entries(labels)) {
+        setAllText(`[data-mwg-dimension="${key}"]`, profile ? `${label} ${profile.dimensions?.[key] ?? 0}` : `${label} —`);
+      }
+      const horizons = profile?.horizons || {};
+      const horizonLines = [1, 3, 5, 8].flatMap(turn => {
+        const point = horizons[turn];
+        return point
+          ? [{
+              title: `第 ${turn} 回合`,
+              detail: `生命输出 ${point.hpDamage?.p50 ?? 0} · 欲望 ${point.lustPressure?.p50 ?? 0} · 防护 ${point.mitigation?.p50 ?? 0} · 治疗 ${point.healing?.p50 ?? 0}`,
+            }]
+          : [];
+      });
+      replaceLines('[data-mwg-horizon-list]', horizonLines, '尚未生成回合曲线');
+      const archetypes = Array.isArray(profile?.archetypes) ? profile.archetypes.slice(0, 10) : [];
+      replaceLines(
+        '[data-mwg-archetype-list]',
+        archetypes.map((entry: any) => ({
+          title: String(entry.label || entry.id || '未命名流派'),
+          detail: Array.isArray(entry.missingPayoffs) && entry.missingPayoffs.length
+            ? `待补收益：${entry.missingPayoffs.slice(0, 3).join('、')}`
+            : '当前机制可以稳定识别',
+          value: Number(entry.score || 0),
+        })),
+        '当前构筑尚未形成稳定流派，通用散卡仍可正常使用。',
+      );
+      setAllText('[data-mwg-scatter-share]', profile ? `通用散卡占比 ${Math.round(Number(profile.scatterShare || 0))}%` : '');
+      const graphNodes = Array.isArray(snapshot?.knowledgeGraph?.nodes)
+        ? snapshot.knowledgeGraph.nodes.filter((node: any) => node?.kind === 'archetype').slice(0, 8)
+        : [];
+      replaceLines(
+        '[data-mwg-evolution-list]',
+        graphNodes.map((node: any) => ({ title: String(node.label || node.id), detail: String(node.data?.description || '') })),
+        '暂无可展示的邻接流派路径。',
+      );
+      const families = Array.isArray(lineage?.families) ? lineage.families.slice(-8).reverse() : [];
+      replaceLines(
+        '[data-mwg-lineage-list]',
+        families.map((family: any) => ({
+          title: String(family.name || family.label || family.id || family.familyId || '未命名敌人族群'),
+          detail: [
+            Array.isArray(family.themeAxes) ? family.themeAxes.slice(0, 4).join('、') : '',
+            Array.isArray(family.signatureActions) ? `招牌行动：${family.signatureActions.slice(0, 3).map((entry: any) => entry.name || entry.id || entry).join('、')}` : '',
+          ].filter(Boolean).join(' · '),
+        })),
+        '尚未建立敌人谱系；只有剧情明确属于同族、上下位或首领关系时才会记录。',
+      );
+    };
+
     const render = (): void => {
       if (!root) return;
       root.dataset.phase = monitorState.phase;
@@ -368,6 +580,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
       root.dataset.settingsOpen = monitorState.settingsVisible ? 'true' : 'false';
       root.dataset.busy = ['generating', 'applying'].includes(monitorState.phase) ? 'true' : 'false';
       root.style.display = '';
+      renderDesignAssistant();
       const title = root.querySelector<HTMLElement>('[data-mwg-monitor-title]');
       const detail = root.querySelector<HTMLElement>('[data-mwg-monitor-detail]');
       const elapsed = root.querySelector<HTMLElement>('[data-mwg-monitor-elapsed]');
@@ -375,6 +588,9 @@ function summarizeMvuUpdate(result: unknown): string[] {
       const loadingTitle = root.querySelector<HTMLElement>('[data-mwg-monitor-loading-title]');
       const loadingDetail = root.querySelector<HTMLElement>('[data-mwg-monitor-loading-detail]');
       const completeState = root.querySelector<HTMLElement>('[data-mwg-monitor-complete]');
+      const cardRepairForm = root.querySelector<HTMLElement>('[data-mwg-card-repair-form]');
+      const cardRepairSubmit = root.querySelector<HTMLButtonElement>('[data-action="submit-card-repair"]');
+      const cardRepairOpen = root.querySelector<HTMLButtonElement>('[data-action="open-card-repair"]');
       if (title) title.textContent = phaseLabel();
       if (detail) detail.textContent = monitorState.detail;
       if (elapsed) {
@@ -393,10 +609,22 @@ function summarizeMvuUpdate(result: unknown): string[] {
             : '剧情正文已经完成，额外模型正在整理变量。非流式请求期间不会逐字显示。';
       }
       if (completeState) completeState.style.display = monitorState.phase === 'success' ? 'grid' : 'none';
+      if (cardRepairForm) cardRepairForm.style.display = monitorState.cardRepairFormVisible ? 'grid' : 'none';
+      if (cardRepairSubmit) cardRepairSubmit.disabled = cardRepairPending;
+      if (cardRepairOpen) cardRepairOpen.disabled = cardRepairPending;
       root.querySelectorAll<HTMLInputElement>('[data-mwg-monitor-setting]').forEach(input => {
         const key = input.dataset.mwgMonitorSetting as keyof MvuMonitorSettings;
         input.checked = !!settings[key];
       });
+      const difficulty = root.querySelector<HTMLSelectElement>('[data-mwg-difficulty]');
+      if (difficulty) difficulty.value = String(settings.difficultyPercent);
+      root.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-mwg-design-setting]').forEach(input => {
+        const key = input.dataset.mwgDesignSetting as keyof MvuMonitorSettings;
+        const value = settings[key];
+        if (input instanceof HTMLInputElement && input.type === 'checkbox') input.checked = Boolean(value);
+        else input.value = String(value);
+      });
+      renderMvuProcess();
     };
 
     const ensureDom = (): void => {
@@ -418,7 +646,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
 #mwg-mvu-monitor .mwg-tool-orb:hover{transform:translateY(-2px) rotate(-4deg);box-shadow:0 12px 28px #3f27384a,0 0 0 5px #fff8fbc7!important}
 #mwg-mvu-monitor[data-busy="true"] .mwg-tool-orb{box-shadow:0 8px 24px #3f27383d,0 0 0 4px #fff8fb9c,0 0 0 8px #d989a42e!important}
 #mwg-mvu-monitor[data-busy="true"] .mwg-tool-orb::after{content:"";border:3px solid #f8dfe7;border-top-color:#963c64;background:#fff;animation:mwgMonitorSpin .8s linear infinite}
-#mwg-mvu-monitor .mwg-settings-sheet{position:absolute;top:60px;right:0;display:none;width:min(390px,calc(100vw - 24px));overflow:hidden;pointer-events:auto;border:1px solid #e2c8bd;border-radius:18px;background:#fffaf7;box-shadow:0 18px 50px #38252f45}
+#mwg-mvu-monitor .mwg-settings-sheet{position:absolute;top:60px;right:0;display:none;width:min(540px,calc(100vw - 24px));max-height:min(82vh,820px);overflow:hidden;pointer-events:auto;border:1px solid #e2c8bd;border-radius:18px;background:#fffaf7;box-shadow:0 18px 50px #38252f45}
 #mwg-mvu-monitor[data-anchor="left"] .mwg-settings-sheet{right:auto;left:0}
 #mwg-mvu-monitor[data-vertical="bottom"] .mwg-settings-sheet{top:auto;bottom:60px}
 #mwg-mvu-monitor[data-settings-open="true"] .mwg-settings-sheet{display:block}
@@ -429,7 +657,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
 #mwg-mvu-monitor .mwg-sheet-title small,#mwg-mvu-monitor .mwg-monitor-title small{margin-top:4px!important;color:#937d83;font:400 12px/1.45 var(--mwg-body);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #mwg-mvu-monitor .mwg-icon-button{display:grid!important;width:34px!important;height:34px!important;min-width:34px!important;padding:0!important;place-items:center;border:1px solid #e2c8bd!important;border-radius:11px!important;background:#fffdfb!important;color:#854462!important;box-shadow:0 2px 7px #68445914!important;font-size:20px!important;cursor:pointer}
 #mwg-mvu-monitor .mwg-icon-button:hover{border-color:#b66b89!important;background:#fff4f7!important}
-#mwg-mvu-monitor .mwg-settings-body{display:block!important;width:100%!important;padding:12px;background-image:repeating-linear-gradient(to bottom,transparent 0 31px,#7ea4be10 32px)}
+#mwg-mvu-monitor .mwg-settings-body{display:block!important;width:100%!important;max-height:calc(min(82vh,820px) - 66px);padding:12px;overflow:auto;scrollbar-color:#d9a9bc transparent;scrollbar-width:thin;background-image:repeating-linear-gradient(to bottom,transparent 0 31px,#7ea4be10 32px)}
 #mwg-mvu-monitor .mwg-setting-row{display:grid!important;width:100%!important;min-height:62px!important;margin:0 0 8px!important;padding:10px 12px!important;grid-template-columns:minmax(0,1fr) 44px!important;align-items:center!important;gap:12px!important;border:1px solid #eadbd3!important;border-radius:13px!important;background:#fffefdde!important;color:#654f58!important;cursor:pointer}
 #mwg-mvu-monitor .mwg-setting-row:last-child{margin-bottom:0!important}
 #mwg-mvu-monitor .mwg-setting-copy{display:block!important;min-width:0!important}
@@ -442,6 +670,55 @@ function summarizeMvuUpdate(result: unknown): string[] {
 #mwg-mvu-monitor .mwg-setting-row input:checked + .mwg-switch{border-color:#b85f83!important;background:#d989a4!important}
 #mwg-mvu-monitor .mwg-setting-row input:checked + .mwg-switch::after{transform:translateX(18px)}
 #mwg-mvu-monitor .mwg-setting-row input:focus-visible + .mwg-switch{outline:3px solid #d989a455;outline-offset:2px}
+#mwg-mvu-monitor .mwg-difficulty-row{display:grid!important;width:100%!important;margin:0 0 8px!important;padding:11px 12px!important;grid-template-columns:minmax(0,1fr) minmax(112px,142px)!important;align-items:center!important;gap:12px!important;border:1px solid #eadbd3!important;border-radius:13px!important;background:#fffefdde!important}
+#mwg-mvu-monitor .mwg-difficulty-select{display:block!important;width:100%!important;min-height:38px!important;margin:0!important;padding:0 31px 0 11px!important;border:1px solid #d9c4cb!important;border-radius:10px!important;outline:none;background:#fff9fb!important;color:#7c3f5a!important;font:500 12px/1 var(--mwg-body)!important;cursor:pointer}
+#mwg-mvu-monitor .mwg-difficulty-select:focus{border-color:#b96587!important;box-shadow:0 0 0 3px #d989a426!important}
+#mwg-mvu-monitor .mwg-setting-action{display:flex!important;width:100%!important;min-height:62px!important;margin:0 0 8px!important;padding:10px 12px!important;align-items:center!important;justify-content:space-between!important;gap:12px!important;border:1px solid #eadbd3!important;border-radius:13px!important;background:#fffefdde!important;color:#654f58!important;text-align:left!important;cursor:pointer}
+#mwg-mvu-monitor .mwg-setting-action:hover{border-color:#c9839e!important;background:#fff5f8!important}#mwg-mvu-monitor .mwg-setting-action:disabled{opacity:.58;cursor:wait}
+#mwg-mvu-monitor .mwg-setting-action::after{flex:0 0 auto;color:#a74d72;font:500 19px/1 var(--mwg-display);content:"›"}
+#mwg-mvu-monitor .mwg-card-repair-form{display:none;margin:0 0 8px;padding:11px;border:1px solid #e5d1d7;border-radius:13px;background:#fff8fa;gap:9px}
+#mwg-mvu-monitor .mwg-card-repair-form textarea{display:block!important;width:100%!important;min-height:92px!important;max-height:210px!important;margin:0!important;padding:10px 11px!important;resize:vertical;border:1px solid #dbc8ce!important;border-radius:10px!important;outline:none;background:#fff!important;color:#5f4c53!important;font:400 13px/1.55 var(--mwg-body)!important;box-shadow:inset 0 1px 3px #59394410!important}
+#mwg-mvu-monitor .mwg-card-repair-form textarea:focus{border-color:#bc7290!important;box-shadow:0 0 0 3px #d989a429!important}
+#mwg-mvu-monitor .mwg-card-repair-actions{display:flex!important;justify-content:flex-end!important;gap:8px!important}
+#mwg-mvu-monitor .mwg-card-repair-button{display:inline-flex!important;min-height:34px!important;padding:0 14px!important;align-items:center!important;justify-content:center!important;border:1px solid #dbc8ce!important;border-radius:10px!important;background:#fff!important;color:#795363!important;font:500 12px/1 var(--mwg-body)!important;cursor:pointer}
+#mwg-mvu-monitor .mwg-card-repair-button[data-kind="primary"]{border-color:#a95377!important;background:linear-gradient(135deg,#b66083,#914262)!important;color:#fff!important;box-shadow:0 4px 12px #7f38552e!important}.mwg-card-repair-button:disabled{opacity:.55;cursor:wait}
+#mwg-mvu-monitor .mwg-card-repair-error{display:none;color:#b33d4e;font:400 11px/1.45 var(--mwg-body)!important}
+#mwg-mvu-monitor [data-mwg-component]{display:none}
+#mwg-mvu-monitor[data-design-available="true"] [data-mwg-component="design"]{display:block}
+#mwg-mvu-monitor[data-deck-available="true"] [data-mwg-component="deck"],#mwg-mvu-monitor[data-deck-available="true"] [data-mwg-component="archetype"]{display:block}
+#mwg-mvu-monitor[data-lineage-available="true"] [data-mwg-component="lineage"]{display:block}
+#mwg-mvu-monitor[data-mvu-history="true"] [data-mwg-component="mvu-history"]{display:block}
+#mwg-mvu-monitor .mwg-settings-group{margin:0 0 9px!important;border:1px solid #eadbd3!important;border-radius:14px!important;background:#fffefdde!important;overflow:hidden}
+#mwg-mvu-monitor .mwg-settings-group>summary{display:flex!important;min-height:46px;padding:10px 13px;align-items:center;gap:9px;color:#74455a;font:500 14px/1.35 var(--mwg-body);cursor:pointer;list-style:none}
+#mwg-mvu-monitor .mwg-settings-group>summary::-webkit-details-marker{display:none}
+#mwg-mvu-monitor .mwg-settings-group>summary::after{margin-left:auto;color:#a74d72;font:500 18px/1 var(--mwg-body);content:"＋"}
+#mwg-mvu-monitor .mwg-settings-group[open]>summary::after{content:"－"}
+#mwg-mvu-monitor .mwg-group-body{padding:0 10px 10px;border-top:1px dashed #e6d5ce}
+#mwg-mvu-monitor .mwg-design-status-card{margin:10px 0;padding:10px 11px;border:1px solid #e5d3d9;border-radius:11px;background:linear-gradient(135deg,#fff7fa,#fffbe9)}
+#mwg-mvu-monitor .mwg-design-status-card strong,#mwg-mvu-monitor .mwg-design-status-card small{display:block!important;margin:0!important}
+#mwg-mvu-monitor .mwg-design-status-card strong{color:#7e3e5a;font:500 13px/1.45 var(--mwg-body)}
+#mwg-mvu-monitor .mwg-design-status-card small{margin-top:3px!important;color:#998087;font:400 11px/1.45 var(--mwg-body)}
+#mwg-mvu-monitor .mwg-deck-overview{display:grid!important;margin:10px 0;grid-template-columns:112px minmax(0,1fr);gap:10px;align-items:stretch}
+#mwg-mvu-monitor .mwg-deck-score-card{display:grid!important;place-items:center;padding:12px;border:1px solid #e5d1da;border-radius:13px;background:radial-gradient(circle at 50% 20%,#fff,#fff0f6)}
+#mwg-mvu-monitor .mwg-deck-score-card strong{color:#913f63;font:400 30px/1 var(--mwg-display)}
+#mwg-mvu-monitor .mwg-deck-score-card small{margin-top:5px;color:#927a82;font:400 10px/1.35 var(--mwg-body)}
+#mwg-mvu-monitor .mwg-dimension-grid{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+#mwg-mvu-monitor .mwg-dimension-chip{display:block!important;padding:7px 5px;border:1px solid #e8d9d2;border-radius:9px;background:#fff;color:#73535f;font:500 10px/1.2 var(--mwg-body);text-align:center}
+#mwg-mvu-monitor .mwg-subsection-title{display:block!important;margin:11px 2px 6px!important;color:#89516a;font:500 12px/1.3 var(--mwg-body)}
+#mwg-mvu-monitor .mwg-data-list{display:grid!important;gap:6px}
+#mwg-mvu-monitor .mwg-data-line{display:flex!important;min-width:0;padding:8px 9px;align-items:center;gap:10px;border:1px solid #eadfd9;border-radius:10px;background:#fff}
+#mwg-mvu-monitor .mwg-data-line>div{min-width:0;flex:1}
+#mwg-mvu-monitor .mwg-data-line strong,#mwg-mvu-monitor .mwg-data-line small{display:block!important;margin:0!important}
+#mwg-mvu-monitor .mwg-data-line strong{color:#6e4b59;font:500 12px/1.35 var(--mwg-body)}
+#mwg-mvu-monitor .mwg-data-line small{margin-top:2px!important;color:#99868b;font:400 10px/1.45 var(--mwg-body);overflow-wrap:anywhere}
+#mwg-mvu-monitor .mwg-data-score{min-width:38px;padding:4px 7px;border-radius:999px;background:#f4dbe5;color:#8a3d5d;font:600 11px/1 var(--mwg-body);text-align:center}
+#mwg-mvu-monitor .mwg-empty-note{display:block!important;padding:10px;color:#9a858b;font:400 11px/1.5 var(--mwg-body)}
+#mwg-mvu-monitor .mwg-inline-note{display:block!important;margin:8px 2px 0;color:#947c83;font:400 10px/1.4 var(--mwg-body)}
+#mwg-mvu-monitor .mwg-process-grid{display:grid!important;gap:8px;margin-top:9px}
+#mwg-mvu-monitor .mwg-process-block{min-width:0;border:1px solid #e7d8d2;border-radius:11px;background:#fff;overflow:hidden}
+#mwg-mvu-monitor .mwg-process-block>summary{padding:9px 11px;color:#7b4a60;font:500 11px/1.35 var(--mwg-body);cursor:pointer}
+#mwg-mvu-monitor .mwg-process-block pre{display:block!important;max-height:230px;margin:0!important;padding:10px 11px!important;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;border-top:1px dashed #eadbd5;background:#fffdfc;color:#67545b;font:400 10px/1.55 var(--mwg-body)!important;scrollbar-width:thin}
+#mwg-mvu-monitor .mwg-refresh-design{display:flex!important;width:100%!important;min-height:36px!important;margin:9px 0 0!important;padding:0 12px!important;align-items:center!important;justify-content:center!important;border:1px solid #d9bdc8!important;border-radius:10px!important;background:#fff7fa!important;color:#88405f!important;font:500 12px/1 var(--mwg-body)!important;cursor:pointer}
 #mwg-mvu-monitor .mwg-mvu-panel{position:fixed;top:max(12px,env(safe-area-inset-top));left:50%;display:none;width:min(700px,calc(100vw - 24px));max-height:min(74vh,720px);overflow:hidden;pointer-events:auto;transform:translateX(-50%);border:1px solid #e2c8bd;border-radius:18px;background:#fffaf7;box-shadow:0 20px 60px #30202a55}
 #mwg-mvu-monitor[data-mvu-open="true"] .mwg-mvu-panel{display:block}
 #mwg-mvu-monitor .mwg-monitor-pulse{width:11px;height:11px;flex:0 0 auto;border:2px solid #fffaf7;border-radius:50%;background:#a64c72;box-shadow:0 0 0 0 #a64c7270}
@@ -457,9 +734,10 @@ function summarizeMvuUpdate(result: unknown): string[] {
 #mwg-mvu-monitor .mwg-monitor-complete{display:none;min-height:120px;place-items:center;padding:24px;text-align:center;border:1px solid #d8eadc;border-radius:14px;background:linear-gradient(145deg,#fffefd,#f1faf3)}
 #mwg-mvu-monitor .mwg-monitor-complete strong{display:block;color:#477761;font:400 19px/1.35 var(--mwg-display)}
 #mwg-mvu-monitor .mwg-monitor-complete small{display:block;margin-top:7px;color:#7c8c82;font:400 12px/1.6 var(--mwg-body)}
+#mwg-mvu-monitor .mwg-monitor-process{margin-top:10px}
 @keyframes mwgMonitorPulse{70%{box-shadow:0 0 0 9px #a64c7200}100%{box-shadow:0 0 0 0 #a64c7200}}
 @keyframes mwgMonitorSpin{to{transform:rotate(360deg)}}
-@media(max-width:520px){#mwg-mvu-monitor{right:9px}#mwg-mvu-monitor .mwg-tool-orb{width:46px!important;height:46px!important;min-width:46px!important;min-height:46px!important}#mwg-mvu-monitor .mwg-settings-sheet{top:55px;width:calc(100vw - 18px)}#mwg-mvu-monitor .mwg-mvu-panel{top:max(8px,env(safe-area-inset-top));width:calc(100vw - 12px);max-height:84vh}#mwg-mvu-monitor .mwg-monitor-head{padding:11px}#mwg-mvu-monitor .mwg-monitor-body{max-height:calc(84vh - 58px)}}
+@media(max-width:520px){#mwg-mvu-monitor{right:9px}#mwg-mvu-monitor .mwg-tool-orb{width:46px!important;height:46px!important;min-width:46px!important;min-height:46px!important}#mwg-mvu-monitor .mwg-settings-sheet{top:55px;width:calc(100vw - 18px)}#mwg-mvu-monitor .mwg-difficulty-row{grid-template-columns:1fr!important}#mwg-mvu-monitor .mwg-deck-overview{grid-template-columns:88px minmax(0,1fr)}#mwg-mvu-monitor .mwg-dimension-grid{grid-template-columns:repeat(2,minmax(0,1fr))}#mwg-mvu-monitor .mwg-mvu-panel{top:max(8px,env(safe-area-inset-top));width:calc(100vw - 12px);max-height:84vh}#mwg-mvu-monitor .mwg-monitor-head{padding:11px}#mwg-mvu-monitor .mwg-monitor-body{max-height:calc(84vh - 58px)}}
 `;
         doc.head?.appendChild(style);
       }
@@ -469,14 +747,55 @@ function summarizeMvuUpdate(result: unknown): string[] {
       root.innerHTML = `
 <button class="mwg-tool-orb" type="button" data-action="open-settings" title="打开魔法少女世界设置" aria-label="打开魔法少女世界设置"><span aria-hidden="true">✦</span></button>
 <section class="mwg-settings-sheet" aria-label="魔法少女世界设置">
-  <header class="mwg-sheet-head"><div class="mwg-sheet-title"><strong>魔法少女世界设置</strong><small>界面偏好只保存在当前浏览器</small></div><button class="mwg-icon-button" type="button" data-action="close-settings" title="关闭设置" aria-label="关闭设置">×</button></header>
+  <header class="mwg-sheet-head"><div class="mwg-sheet-title"><strong>魔法少女世界控制台</strong><small>只显示当前角色卡已经加载的功能组件</small></div><button class="mwg-icon-button" type="button" data-action="close-settings" title="关闭设置" aria-label="关闭设置">×</button></header>
   <div class="mwg-settings-body">
-    <label class="mwg-setting-row"><span class="mwg-setting-copy"><strong>自动显示变量生成窗</strong><small>剧情完成后自动显示独立的 MVU 二阶段状态</small></span><input type="checkbox" data-mwg-monitor-setting="showMvuWindow"><span class="mwg-switch" aria-hidden="true"></span></label>
+    <details class="mwg-settings-group" open>
+      <summary>界面与修复</summary>
+      <div class="mwg-group-body">
+        <label class="mwg-setting-row"><span class="mwg-setting-copy"><strong>自动显示变量生成窗</strong><small>剧情完成后自动显示独立的 MVU 二阶段状态</small></span><input type="checkbox" data-mwg-monitor-setting="showMvuWindow"><span class="mwg-switch" aria-hidden="true"></span></label>
+        <button class="mwg-setting-action" type="button" data-action="open-card-repair"><span class="mwg-setting-copy"><strong>自然语言修复卡牌</strong><small>描述想调整的卡牌，交给第二轮 MVU 原楼层增量修复</small></span></button>
+        <div class="mwg-card-repair-form" data-mwg-card-repair-form>
+          <textarea data-mwg-card-repair-input maxlength="4000" placeholder="描述你希望调整的卡牌、效果或数值"></textarea>
+          <small class="mwg-card-repair-error" data-mwg-card-repair-error></small>
+          <div class="mwg-card-repair-actions"><button class="mwg-card-repair-button" type="button" data-action="cancel-card-repair">取消</button><button class="mwg-card-repair-button" data-kind="primary" type="button" data-action="submit-card-repair">开始修复</button></div>
+        </div>
+      </div>
+    </details>
+    <details class="mwg-settings-group" data-mwg-component="design" open>
+      <summary>难度与设计辅助器</summary>
+      <div class="mwg-group-body">
+        <div class="mwg-design-status-card"><strong data-mwg-design-status>等待设计辅助器连接</strong><small data-mwg-design-runtime></small></div>
+        <label class="mwg-setting-row"><span class="mwg-setting-copy"><strong>启用第二轮设计辅助</strong><small>只在本角色卡的 MVU 第二轮注入评分、流派与敌人预算</small></span><input type="checkbox" data-mwg-design-setting="designAssistantEnabled"><span class="mwg-switch" aria-hidden="true"></span></label>
+        <label class="mwg-difficulty-row"><span class="mwg-setting-copy"><strong>剧情战斗强度</strong><small>相对当前卡组评分；100%为极限发挥，110%允许有限资源损耗</small></span><select class="mwg-difficulty-select" data-mwg-difficulty aria-label="剧情战斗强度"><option value="10">10% 剧情体验</option><option value="50">50% 轻松</option><option value="80">80% 标准</option><option value="100">100% 极限平衡</option><option value="110">110% 高压</option></select></label>
+        <label class="mwg-setting-row"><span class="mwg-setting-copy"><strong>程序自动校准</strong><small>生成后只调整敌人数值，不改身份、招式、行动顺序或攻击次数</small></span><input type="checkbox" data-mwg-design-setting="autoCalibration"><span class="mwg-switch" aria-hidden="true"></span></label>
+        <label class="mwg-difficulty-row"><span class="mwg-setting-copy"><strong>模拟精度</strong><small>精度越高，随机牌序覆盖越多，后台计算耗时也会增加</small></span><select class="mwg-difficulty-select" data-mwg-design-setting="simulationSeeds" aria-label="模拟精度"><option value="8">快速 · 8组</option><option value="12">均衡 · 12组</option><option value="16">精细 · 16组</option><option value="24">深入 · 24组</option></select></label>
+        <label class="mwg-setting-row"><span class="mwg-setting-copy"><strong>显示校准提示</strong><small>只在敌人数值被实际调整时显示提示</small></span><input type="checkbox" data-mwg-design-setting="showNotifications"><span class="mwg-switch" aria-hidden="true"></span></label>
+        <button class="mwg-refresh-design" type="button" data-action="refresh-design">立即重新评估卡组</button>
+      </div>
+    </details>
+    <details class="mwg-settings-group" data-mwg-component="deck">
+      <summary>卡组评分总览</summary>
+      <div class="mwg-group-body">
+        <div class="mwg-deck-overview"><div class="mwg-deck-score-card"><strong data-mwg-deck-score>—</strong><small data-mwg-deck-confidence>等待卡组评分</small></div><div class="mwg-dimension-grid"><span class="mwg-dimension-chip" data-mwg-dimension="burst"></span><span class="mwg-dimension-chip" data-mwg-dimension="sustainedOutput"></span><span class="mwg-dimension-chip" data-mwg-dimension="survival"></span><span class="mwg-dimension-chip" data-mwg-dimension="economy"></span><span class="mwg-dimension-chip" data-mwg-dimension="consistency"></span><span class="mwg-dimension-chip" data-mwg-dimension="scaling"></span><span class="mwg-dimension-chip" data-mwg-dimension="control"></span><span class="mwg-dimension-chip" data-mwg-dimension="combo"></span><span class="mwg-dimension-chip" data-mwg-dimension="flexibility"></span></div></div>
+        <strong class="mwg-subsection-title">回合能力曲线</strong><div class="mwg-data-list" data-mwg-horizon-list></div>
+      </div>
+    </details>
+    <details class="mwg-settings-group" data-mwg-component="archetype">
+      <summary>流派总览与演变方向</summary>
+      <div class="mwg-group-body"><small class="mwg-inline-note" data-mwg-scatter-share></small><strong class="mwg-subsection-title">当前流派倾向</strong><div class="mwg-data-list" data-mwg-archetype-list></div><strong class="mwg-subsection-title">邻接与桥接方向</strong><div class="mwg-data-list" data-mwg-evolution-list></div></div>
+    </details>
+    <details class="mwg-settings-group" data-mwg-component="lineage">
+      <summary>敌人谱系记忆</summary><div class="mwg-group-body"><div class="mwg-data-list" data-mwg-lineage-list></div></div>
+    </details>
+    <details class="mwg-settings-group" data-mwg-component="mvu-history">
+      <summary>最近一次 MVU 生成全过程</summary>
+      <div class="mwg-group-body"><div class="mwg-process-grid"><details class="mwg-process-block" open><summary>阶段时间线</summary><pre data-mwg-mvu-timeline></pre></details><details class="mwg-process-block" open><summary>变量变化摘要</summary><pre data-mwg-mvu-summary></pre></details><details class="mwg-process-block"><summary>模型返回原文</summary><pre data-mwg-mvu-raw></pre></details><details class="mwg-process-block"><summary>服务返回的分析内容</summary><pre data-mwg-mvu-reasoning></pre></details></div></div>
+    </details>
   </div>
 </section>
 <section class="mwg-mvu-panel" aria-label="MVU 二阶段生成状态">
   <header class="mwg-monitor-head"><span class="mwg-monitor-pulse"></span><div class="mwg-monitor-title"><strong data-mwg-monitor-title></strong><small data-mwg-monitor-detail></small></div><span class="mwg-monitor-time" data-mwg-monitor-elapsed></span><button class="mwg-icon-button" type="button" data-action="close-mvu" title="收起变量生成窗" aria-label="收起变量生成窗">×</button></header>
-  <div class="mwg-monitor-body"><div class="mwg-monitor-loading" data-mwg-monitor-loading><div><span class="mwg-monitor-spinner" aria-hidden="true"></span><strong data-mwg-monitor-loading-title>正在生成变量</strong><small data-mwg-monitor-loading-detail></small></div></div><div class="mwg-monitor-complete" data-mwg-monitor-complete><div><strong>变量更新已完成</strong><small>完整更新内容已显示在本条消息下方。</small></div></div></div>
+  <div class="mwg-monitor-body"><div class="mwg-monitor-loading" data-mwg-monitor-loading><div><span class="mwg-monitor-spinner" aria-hidden="true"></span><strong data-mwg-monitor-loading-title>正在生成变量</strong><small data-mwg-monitor-loading-detail></small></div></div><div class="mwg-monitor-complete" data-mwg-monitor-complete><div><strong>变量更新已完成</strong><small>可以在下方查看变化摘要与模型完整返回。</small></div></div><div class="mwg-monitor-process mwg-process-grid"><details class="mwg-process-block" open><summary>阶段时间线</summary><pre data-mwg-mvu-timeline></pre></details><details class="mwg-process-block" open><summary>变量变化摘要</summary><pre data-mwg-mvu-summary></pre></details><details class="mwg-process-block"><summary>模型返回原文</summary><pre data-mwg-mvu-raw></pre></details><details class="mwg-process-block"><summary>服务返回的分析内容</summary><pre data-mwg-mvu-reasoning></pre></details></div></div>
 </section>`;
       doc.body.appendChild(root);
       root.querySelector('[data-action="open-settings"]')?.addEventListener('click', () => {
@@ -489,7 +808,54 @@ function summarizeMvuUpdate(result: unknown): string[] {
       });
       root.querySelector('[data-action="close-settings"]')?.addEventListener('click', () => {
         monitorState.settingsVisible = false;
+        monitorState.cardRepairFormVisible = false;
         render();
+      });
+      root.querySelector('[data-action="open-card-repair"]')?.addEventListener('click', () => {
+        monitorState.cardRepairFormVisible = !monitorState.cardRepairFormVisible;
+        const error = root?.querySelector<HTMLElement>('[data-mwg-card-repair-error]');
+        if (error) error.style.display = 'none';
+        render();
+        if (monitorState.cardRepairFormVisible) {
+          root?.querySelector<HTMLTextAreaElement>('[data-mwg-card-repair-input]')?.focus();
+        }
+      });
+      root.querySelector('[data-action="cancel-card-repair"]')?.addEventListener('click', () => {
+        if (cardRepairPending) return;
+        monitorState.cardRepairFormVisible = false;
+        render();
+      });
+      root.querySelector('[data-action="submit-card-repair"]')?.addEventListener('click', async () => {
+        if (cardRepairPending) return;
+        const input = root?.querySelector<HTMLTextAreaElement>('[data-mwg-card-repair-input]');
+        const error = root?.querySelector<HTMLElement>('[data-mwg-card-repair-error]');
+        const requirement = input?.value.trim() || '';
+        if (!requirement || !cardRepairHandler) {
+          if (error) {
+            error.textContent = requirement ? '当前页面尚未完成第二轮修复接口加载，请稍后重试。' : '请先输入修复要求。';
+            error.style.display = 'block';
+          }
+          return;
+        }
+        if (error) error.style.display = 'none';
+        const generationId = `card-repair-${Date.now()}`;
+        cardRepairPending = true;
+        manualRepairActive = true;
+        api.begin({ generationId });
+        monitorState.detail = '正在按你的要求增量修复卡牌';
+        monitorState.open = true;
+        render();
+        try {
+          await api.requestCardRepair(requirement);
+          if (input) input.value = '';
+          api.success();
+        } catch (repairError) {
+          api.fail(repairError, generationId);
+        } finally {
+          manualRepairActive = false;
+          cardRepairPending = false;
+          render();
+        }
       });
       root.querySelector('[data-action="close-mvu"]')?.addEventListener('click', () => {
         monitorState.open = false;
@@ -502,6 +868,35 @@ function summarizeMvuUpdate(result: unknown): string[] {
           saveSettings();
           render();
         });
+      });
+      root.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-mwg-design-setting]').forEach(input => {
+        input.addEventListener('change', () => {
+          const localKey = input.dataset.mwgDesignSetting as keyof MvuMonitorSettings;
+          const value = input instanceof HTMLInputElement && input.type === 'checkbox'
+            ? input.checked
+            : Number(input.value);
+          settings = { ...settings, [localKey]: value };
+          saveSettings();
+          const remoteKey = localKey === 'designAssistantEnabled' ? 'enabled' : localKey;
+          updateDesignSettings({ [remoteKey]: value });
+          render();
+        });
+      });
+      root.querySelector<HTMLSelectElement>('[data-mwg-difficulty]')?.addEventListener('change', event => {
+        const target = event.currentTarget as HTMLSelectElement;
+        settings = { ...settings, difficultyPercent: Math.max(10, Math.min(110, Math.round(Number(target.value) || 80))) };
+        saveSettings();
+        updateDesignSettings({ difficultyPercent: settings.difficultyPercent });
+        render();
+      });
+      root.querySelector('[data-action="refresh-design"]')?.addEventListener('click', async () => {
+        try {
+          await designAssistant?.warmup?.();
+          designDashboard = designAssistant?.getDashboard?.() || designDashboard;
+          render();
+        } catch (error) {
+          console.warn('[MagicGirlWorld] 重新评估卡组失败', error);
+        }
       });
       const orb = root.querySelector<HTMLElement>('.mwg-tool-orb');
       const applyOrbPosition = (x: number, y: number): void => {
@@ -567,13 +962,16 @@ function summarizeMvuUpdate(result: unknown): string[] {
         monitorState.phase = 'generating';
         monitorState.generationId = String(meta.generationId || '');
         monitorState.output = '';
+        monitorState.rawOutput = '';
         monitorState.pendingOutput = '';
         monitorState.reasoning = '';
+        monitorState.timeline = [];
         monitorState.detail = '剧情已完成，正在进行第二轮变量整理';
         monitorState.startedAt = Date.now();
         monitorState.finishedAt = 0;
         monitorState.open = settings.showMvuWindow;
         monitorState.settingsVisible = false;
+        pushTimeline('第二轮请求开始', '读取剧情与最新 MVU 变量');
         ensureDom();
         startElapsedTimer();
         render();
@@ -581,18 +979,22 @@ function summarizeMvuUpdate(result: unknown): string[] {
       stream(text: unknown, generationId?: string) {
         if (generationId && monitorState.generationId && generationId !== monitorState.generationId) return;
         monitorState.pendingOutput = typeof text === 'string' ? text : JSON.stringify(text, null, 2);
+        queueStreamRender();
       },
       reasoning(text: unknown) {
         if (monitorState.phase === 'idle') return;
         monitorState.reasoning = typeof text === 'string' ? text : '';
+        if (monitorState.reasoning) pushTimeline('收到分析内容');
         render();
       },
       complete(result: unknown, generationId?: string) {
         if (generationId && monitorState.generationId && generationId !== monitorState.generationId) return;
         if (monitorState.phase === 'idle') return;
+        monitorState.rawOutput = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
         monitorState.output = summarizeMvuUpdate(extractUpdateOutput(result)).join('\n');
         monitorState.pendingOutput = '';
         if (!monitorState.reasoning) monitorState.reasoning = extractReturnedReasoning(result);
+        pushTimeline('模型返回完成', `${monitorState.rawOutput.length} 字符`);
         // COMMAND_PARSED may arrive after VARIABLE_UPDATE_ENDED in some MVU builds.
         // Preserve the completed state while still capturing the final source text.
         if (monitorState.phase === 'success') {
@@ -601,6 +1003,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
         }
         monitorState.phase = 'applying';
         monitorState.detail = '模型已返回，正在校验并写入当前楼层';
+        pushTimeline('开始解析变量', '校验 UpdateVariable 并写入当前楼层');
         clearApplyTimer();
         applyTimer = host.setTimeout?.(() => {
           if (monitorState.phase !== 'applying') return;
@@ -616,6 +1019,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
         if (monitorState.phase === 'idle' || monitorState.phase === 'success' || monitorState.phase === 'error') return;
         monitorState.phase = 'applying';
         monitorState.detail = detail;
+        pushTimeline('正在应用变量', detail);
         clearApplyTimer();
         applyTimer = host.setTimeout?.(() => {
           if (monitorState.phase !== 'applying') return;
@@ -631,6 +1035,12 @@ function summarizeMvuUpdate(result: unknown): string[] {
         const nextActive = active === true;
         if (nextActive === extraAnalysisActive) return;
         extraAnalysisActive = nextActive;
+        if (manualRepairActive) {
+          if (!nextActive && monitorState.phase === 'generating') {
+            api.applying('模型请求已返回，等待 MVU 解析卡牌更新');
+          }
+          return;
+        }
         if (nextActive) {
           api.begin({ generationId: `mvu-extra-${Date.now()}` });
           return;
@@ -644,6 +1054,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
         clearApplyTimer();
         monitorState.phase = 'success';
         monitorState.detail = '第二轮变量已写入，可继续游玩';
+        pushTimeline('变量应用完成', '当前楼层 MVU 已更新');
         finishElapsedTimer();
         render();
       },
@@ -652,6 +1063,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
         clearApplyTimer();
         monitorState.phase = 'error';
         monitorState.detail = error instanceof Error ? error.message : String(error || '额外模型请求失败');
+        pushTimeline('生成或解析失败', monitorState.detail);
         monitorState.open = settings.showMvuWindow;
         finishElapsedTimer();
         ensureDom();
@@ -659,6 +1071,27 @@ function summarizeMvuUpdate(result: unknown): string[] {
       },
       getSettings: () => ({ ...settings }),
       getSnapshot: () => ({ ...monitorState }),
+      setDesignAssistant(provider: any) {
+        if (designAssistant === provider) return;
+        designSettingsSynchronized = false;
+        designAssistant = provider || null;
+        designDashboard = designAssistant?.getDashboard?.() || null;
+        if (designAssistant && !designSettingsSynchronized) {
+          designSettingsSynchronized = true;
+          updateDesignSettings({
+            difficultyPercent: settings.difficultyPercent,
+            autoCalibration: settings.autoCalibration,
+          });
+        }
+        ensureDom();
+        render();
+      },
+      receiveDesignAssistantDashboard(value: unknown) {
+        if (!value || typeof value !== 'object') return;
+        designDashboard = value;
+        ensureDom();
+        render();
+      },
       openSettings() {
         monitorState.settingsVisible = true;
         ensureDom();
@@ -667,6 +1100,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
       destroy() {
         stopElapsedTimer();
         if (lifecycleTimer !== undefined) host.clearInterval?.(lifecycleTimer);
+        if (streamRenderTimer !== undefined) host.clearTimeout?.(streamRenderTimer);
         clearApplyTimer();
         root?.remove();
         root = null;
@@ -674,12 +1108,16 @@ function summarizeMvuUpdate(result: unknown): string[] {
     };
 
     host.MagicGirlWorldMvuMonitor = api;
+    api.setDesignAssistant(host.MagicGirlDesignAssistant || null);
     syncThinkingSetting();
     ensureDom();
     listen('js_stream_token_received_fully', (text: string, generationId: string) => api.stream(text, generationId));
     listen('stream_reasoning_done', (reasoning: string) => api.reasoning(reasoning));
     const syncExtraAnalysis = (): void => {
       try {
+        if ((host.MagicGirlDesignAssistant || null) !== designAssistant) {
+          api.setDesignAssistant(host.MagicGirlDesignAssistant || null);
+        }
         const globalVariables = host.getVariables?.({ type: 'global' });
         api.syncExtraAnalysis(globalVariables?.extra_analysis === true);
       } catch {
@@ -1016,6 +1454,17 @@ function summarizeMvuUpdate(result: unknown): string[] {
     },
     waitForMessageReady,
     getMessageText,
+    requestCardRepair(requirement: string): Promise<void> {
+      if (!cardRepairHandler) return Promise.reject(new Error('当前页面尚未完成第二轮修复接口加载'));
+      return cardRepairHandler(requirement);
+    },
+    registerCardRepairHandler(handler: (requirement: string) => Promise<void>): () => void {
+      if (typeof handler !== 'function') throw new Error('卡牌修复处理器无效');
+      cardRepairHandler = handler;
+      return () => {
+        if (cardRepairHandler === handler) cardRepairHandler = null;
+      };
+    },
   });
 
   const destroyRuntime = (): void => {
@@ -1024,6 +1473,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
     state.status = 'closed';
     removeEventBindings();
     mvuMonitor.destroy();
+    cardRepairHandler = null;
     if (registryHost[stateKey]?.instanceId === instanceId) delete registryHost[stateKey];
   };
 

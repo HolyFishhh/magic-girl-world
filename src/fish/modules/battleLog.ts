@@ -55,7 +55,7 @@ export class BattleLog {
     message: string,
     type: 'info' | 'damage' | 'heal' | 'action' | 'system' = 'info',
     source?: { type: 'card' | 'relic' | 'ability' | 'status'; name: string; details?: string },
-    action?: { actor: 'player' | 'enemy'; name: string },
+    action?: { actor: 'player' | 'enemy'; name: string; actorId?: string; actorName?: string },
   ): void {
     if (!this.logContainer) {
       this.init();
@@ -74,6 +74,8 @@ export class BattleLog {
       source: source ? { ...source } : undefined,
       actor: action?.actor,
       actionName: action?.name,
+      actorId: action?.actorId,
+      actorName: action?.actorName,
     });
     if (this.entries.length > 600) this.entries.splice(0, this.entries.length - 600);
     this.persistEntries();
@@ -163,8 +165,18 @@ export class BattleLog {
   /**
    * 记录敌人行动
    */
-  static logEnemyAction(actionName: string, description: string): void {
-    this.addLog(`敌人使用了 ${actionName}: ${description}`, 'action', undefined, { actor: 'enemy', name: actionName });
+  static logEnemyAction(
+    actionName: string,
+    description: string,
+    enemy?: { id?: string; name?: string },
+  ): void {
+    const actorName = String(enemy?.name || '敌人').trim() || '敌人';
+    this.addLog(`${actorName}使用了 ${actionName}: ${description}`, 'action', undefined, {
+      actor: 'enemy',
+      name: actionName,
+      actorId: enemy?.id,
+      actorName,
+    });
   }
 
   /**
@@ -239,7 +251,25 @@ export class BattleLog {
    */
   static buildTurnSummaryReport(): string {
     this.restorePersistedEntries();
-    if (this.entries.length === 0) return '- 无可用战斗事件记录';
+    const gameState = GameStateManager.getInstance().getGameState();
+    const customResources = new Map<string, string>();
+    for (const [id, resource] of Object.entries(gameState.player?.resources || {})) {
+      customResources.set(id, resource.name || id);
+    }
+    for (const enemy of [...(gameState.defeatedEnemies || []), ...(gameState.enemies || [])]) {
+      for (const [id, resource] of Object.entries(enemy.resources || {})) {
+        if (!customResources.has(id)) customResources.set(id, resource.name || id);
+      }
+    }
+    const journalResourceSpends = new Map<number, string[]>();
+    for (const event of gameState.eventJournal?.events || []) {
+      if (event.kind !== 'resource_spent' || event.resource === 'energy' || event.spent <= 0) continue;
+      const turn = Math.max(1, Math.floor(event.turn || 1));
+      const entries = journalResourceSpends.get(turn) || [];
+      entries.push(`消耗${event.spent}点${customResources.get(event.resource) || event.resource}`);
+      journalResourceSpends.set(turn, entries);
+    }
+    if (this.entries.length === 0 && journalResourceSpends.size === 0) return '- 无可用战斗事件记录';
 
     const grouped = new Map<number, BattleHistoryEntry[]>();
     for (const entry of this.entries) {
@@ -247,6 +277,9 @@ export class BattleLog {
       const current = grouped.get(turn) || [];
       current.push(entry);
       grouped.set(turn, current);
+    }
+    for (const turn of journalResourceSpends.keys()) {
+      if (!grouped.has(turn)) grouped.set(turn, []);
     }
 
     const unique = (values: string[]): string[] => [...new Set(values.map(value => value.trim()).filter(Boolean))];
@@ -268,7 +301,9 @@ export class BattleLog {
           entries.filter(entry => entry.actor === 'player').map(entry => entry.actionName || ''),
         );
         const enemyActions = countActions(
-          entries.filter(entry => entry.actor === 'enemy').map(entry => entry.actionName || ''),
+          entries
+            .filter(entry => entry.actor === 'enemy')
+            .map(entry => entry.actorName ? `${entry.actorName}：${entry.actionName || ''}` : entry.actionName || ''),
         );
         const triggers = countActions(
           entries
@@ -283,8 +318,19 @@ export class BattleLog {
             .filter(entry => entry.type === 'system' && !/回合(?:开始|结束)|战斗胜利|战斗失败/.test(entry.message))
             .map(entry => entry.message),
         );
+        const resourceChanges = unique([
+          ...(journalResourceSpends.get(turn) || []),
+          ...entries
+            .filter(entry =>
+              entry.type === 'info' &&
+              [...customResources.values()].some(name => entry.message.includes(name)) &&
+              /消耗|获得|设置|→/.test(entry.message),
+            )
+            .map(entry => entry.message),
+        ]);
         const parts = [`玩家使用：${playerActions.join('、') || '无'}`, `敌人使用：${enemyActions.join('、') || '无'}`];
         if (triggers.length > 0) parts.push(`触发：${triggers.join('、')}`);
+        if (resourceChanges.length > 0) parts.push(`资源：${resourceChanges.join('、')}`);
         if (decisive.length > 0) parts.push(`关键事件：${decisive.join('、')}`);
         return `- 回合${turn}：${parts.join('；')}`;
       })

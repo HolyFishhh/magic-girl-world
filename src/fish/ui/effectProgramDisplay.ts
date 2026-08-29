@@ -1,5 +1,6 @@
 import {
   effectProgramToDisplayTags,
+  cardAttachmentsToDisplayTags,
   summarizeEffectProgram as summarizeCoreEffectProgram,
   triggeredEffectProgramToDisplayTags,
   type EffectDisplayTag,
@@ -7,8 +8,10 @@ import {
   type EffectProgram,
   type EffectProgramSummary,
   type EffectDisplayContext,
+  type CardAttachment,
 } from '../../game-core';
 import { DynamicStatusManager } from '../combat/dynamicStatusManager';
+import { GameStateManager } from '../core/gameStateManager';
 import { escapeHtml } from '../shared/html';
 
 export type IntentType = EffectIntentType;
@@ -16,6 +19,16 @@ export type { EffectDisplayTag, EffectProgramSummary };
 
 function resolveStatusName(statusId: string): string | undefined {
   return DynamicStatusManager.getInstance().getStatusDefinition(statusId)?.name?.trim();
+}
+
+function resolveResourceNames(): Record<string, string> {
+  const state = GameStateManager.getInstance().getGameState();
+  const entities = [state.player, ...(state.enemies || []), ...(state.enemy ? [state.enemy] : [])];
+  const names: Record<string, string> = {};
+  for (const entity of entities) {
+    for (const [id, resource] of Object.entries(entity?.resources || {})) names[id] ||= resource.name;
+  }
+  return names;
 }
 
 export function summarizeEffectProgram(program: EffectProgram): EffectProgramSummary {
@@ -36,17 +49,21 @@ export class EffectProgramDisplay {
 
   public programToTags(
     program?: EffectProgram | null,
-    context: Pick<EffectDisplayContext, 'selfLabel' | 'opponentLabel'> = {},
+    context: Pick<EffectDisplayContext, 'selfLabel' | 'opponentLabel' | 'resourceNames'> = {},
   ): EffectDisplayTag[] {
-    return effectProgramToDisplayTags(program, { resolveStatusName, ...context });
+    return effectProgramToDisplayTags(program, { resolveStatusName, resourceNames: resolveResourceNames(), ...context });
   }
 
   public triggeredProgramToTags(
     trigger: string,
     program?: EffectProgram | null,
-    context: Pick<EffectDisplayContext, 'selfLabel' | 'opponentLabel'> = {},
+    context: Pick<EffectDisplayContext, 'selfLabel' | 'opponentLabel' | 'resourceNames'> = {},
   ): EffectDisplayTag[] {
-    return triggeredEffectProgramToDisplayTags(trigger, program, { resolveStatusName, ...context });
+    return triggeredEffectProgramToDisplayTags(trigger, program, { resolveStatusName, resourceNames: resolveResourceNames(), ...context });
+  }
+
+  public attachmentToTags(attachments?: readonly CardAttachment[]): EffectDisplayTag[] {
+    return cardAttachmentsToDisplayTags(attachments);
   }
 
   public createEffectTagsHTML(tags: EffectDisplayTag[]): string {

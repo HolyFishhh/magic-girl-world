@@ -7,10 +7,13 @@ import {
   resolveCompactContentDescription,
   normalizeAbilityTrigger,
   normalizeCompactNamedEffectInput,
+  restorePersistentCardProgression,
   resolveTriggerInput,
   RELIC_RARITY_SET,
+  validateCardCost,
   type Ability,
   type Card,
+  type CardCost,
   type EffectProgram,
   type EnemyAction,
   type Item,
@@ -37,7 +40,11 @@ function hasRemovedEffectFields(value: Record<string, any>): boolean {
 
 function compileEffects(
   value: Record<string, any>,
-  options: { requireTrigger?: boolean; forbidTrigger?: boolean } = {},
+  options: {
+    requireTrigger?: boolean;
+    forbidTrigger?: boolean;
+    enemyCollectionTarget?: 'self' | 'opponent';
+  } = {},
 ): EffectProgram | null {
   if (hasRemovedEffectFields(value)) return null;
   const resolved = resolveTriggerInput(value);
@@ -48,6 +55,7 @@ function compileEffects(
   const compiled = compileCompactEffectList(resolved.triggeredEffects, {
     creates: value.creates,
     when: resolved.structured ? undefined : value.when,
+    enemyCollectionTarget: options.enemyCollectionTarget,
   });
   return compiled.ok ? compiled.value : null;
 }
@@ -79,6 +87,7 @@ function compileCardEffects(
   if (resolved.triggeredEffects !== undefined) {
     const triggered = compileCompactEffectList(resolved.triggeredEffects, {
       trigger: resolved.trigger,
+      triggerQuery: resolved.eventQuery,
       creates: value.creates,
       statusNames: options.statusNames,
     });
@@ -111,13 +120,12 @@ export function normalizeCardDefinition(
   const quantity = Number(value.quantity ?? 1);
   if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100) return null;
 
-  let cost: number | 'energy' | undefined;
+  let cost: CardCost | undefined;
   if (type === 'Curse') cost = undefined;
-  else if (value.cost === 'energy') cost = 'energy';
   else {
-    const numericCost = Number(value.cost ?? 0);
-    if (!Number.isInteger(numericCost) || numericCost < 0) return null;
-    cost = numericCost;
+    const candidate = value.cost ?? 0;
+    if (validateCardCost(candidate)) return null;
+    cost = typeof candidate === 'object' ? structuredClone(candidate) as CardCost : candidate as CardCost;
   }
 
   if (['discard_effect', 'discardEffect', 'on_discard', 'onDiscard', 'discardEffectProgram'].some(key => key in value)) {
@@ -134,7 +142,7 @@ export function normalizeCardDefinition(
   }
   if (Object.prototype.hasOwnProperty.call(value, 'discard_requirement')) return null;
 
-  return {
+  const normalized = {
     id,
     name,
     emoji: readText(value, 'emoji', '🃏'),
@@ -152,7 +160,18 @@ export function normalizeCardDefinition(
     exhaust: type === 'Power' || value.exhaust === true,
     ethereal: value.ethereal === true,
     innate: value.innate === true,
-  };
+    ...(typeof value.templateId === 'string' && value.templateId.trim() ? { templateId: value.templateId.trim() } : {}),
+    ...(typeof value.runInstanceId === 'string' && value.runInstanceId.trim()
+      ? { runInstanceId: value.runInstanceId.trim() }
+      : {}),
+    ...(typeof value.origin === 'string' && ['deck', 'generated', 'copied', 'transformed'].includes(value.origin)
+      ? { origin: value.origin as Card['origin'] }
+      : {}),
+    ...(typeof value.parentRunInstanceId === 'string' && value.parentRunInstanceId.trim()
+      ? { parentRunInstanceId: value.parentRunInstanceId.trim() }
+      : {}),
+  } satisfies NormalizedCardDefinition;
+  return restorePersistentCardProgression(normalized, value);
 }
 
 export function normalizeRelicDefinition(
@@ -175,6 +194,7 @@ export function normalizeRelicDefinition(
     effectProgram,
     rarity: rarity as Relic['rarity'],
     trigger,
+    ...(resolvedTrigger.eventQuery ? { eventQuery: resolvedTrigger.eventQuery } : {}),
   };
 }
 
@@ -200,13 +220,19 @@ export function normalizeItemDefinition(
 
 export function normalizeAbilityDefinition(
   value: unknown,
-  options: { statusNames?: Readonly<Record<string, string>> } = {},
+  options: {
+    statusNames?: Readonly<Record<string, string>>;
+    enemyCollectionTarget?: 'self' | 'opponent';
+  } = {},
 ): Ability | null {
   if (!isContentRecord(value)) return null;
   const id = readText(value, 'id');
   const resolvedTrigger = resolveTriggerInput(value);
   const trigger = normalizeAbilityTrigger(typeof resolvedTrigger.trigger === 'string' ? resolvedTrigger.trigger : '');
-  const effectProgram = compileEffects(value, { requireTrigger: true });
+  const effectProgram = compileEffects(value, {
+    requireTrigger: true,
+    enemyCollectionTarget: options.enemyCollectionTarget,
+  });
   if (!hasValidId(id) || !trigger || !effectProgram) return null;
   return {
     id,
@@ -215,17 +241,24 @@ export function normalizeAbilityDefinition(
     description: resolveCompactContentDescription(value, { statusNames: options.statusNames }),
     source: readText(value, 'source', '剧情获得'),
     trigger,
+    ...(resolvedTrigger.eventQuery ? { eventQuery: resolvedTrigger.eventQuery } : {}),
     effectProgram,
   };
 }
 
 export function normalizeEnemyAction(
   value: unknown,
-  options: { statusNames?: Readonly<Record<string, string>> } = {},
+  options: {
+    statusNames?: Readonly<Record<string, string>>;
+    enemyCollectionTarget?: 'self' | 'opponent';
+  } = {},
 ): EnemyAction | null {
   if (!isContentRecord(value)) return null;
   const name = readText(value, 'name');
-  const effectProgram = compileEffects(value, { forbidTrigger: true });
+  const effectProgram = compileEffects(value, {
+    forbidTrigger: true,
+    enemyCollectionTarget: options.enemyCollectionTarget ?? 'self',
+  });
   const weight = Number(value.weight ?? 1);
   if (!name || !effectProgram || !Number.isFinite(weight) || weight <= 0) return null;
   return {
@@ -244,12 +277,19 @@ export interface NormalizedNamedEffect {
 
 export function normalizeNamedEffectDefinition(
   value: unknown,
-  options: { statusNames?: Readonly<Record<string, string>>; fallbackName?: string } = {},
+  options: {
+    statusNames?: Readonly<Record<string, string>>;
+    fallbackName?: string;
+    enemyCollectionTarget?: 'self' | 'opponent';
+  } = {},
 ): NormalizedNamedEffect | null {
   const normalized = normalizeCompactNamedEffectInput(value, options.fallbackName || '欲望效果');
   if (!isContentRecord(normalized)) return null;
   const name = readText(normalized, 'name');
-  const effectProgram = compileEffects(normalized, { forbidTrigger: true });
+  const effectProgram = compileEffects(normalized, {
+    forbidTrigger: true,
+    enemyCollectionTarget: options.enemyCollectionTarget,
+  });
   if (!name || !effectProgram) return null;
   return {
     name,

@@ -1,11 +1,21 @@
 import {
   advanceCardDrawLifecycle,
+  advanceCardAttachments,
+  battleTriggerContextFromEvent,
+  describeCardAttachmentRemaining,
+  describeCardCost,
   CardEffectRuntime,
   clearCardPatches,
   clearDynamicCardCostAfterPlay,
   playBattleSessionCard,
   prepareCardPlay,
-  resolveCardEnergyPayment,
+  resolveCardResourcePayment,
+  resourcePoolFromCombatant,
+  applyCardResourcePayment,
+  applyResourcePoolToStates,
+  resolveActiveCardPlayRules,
+  resolveCardDiscardLifecycle,
+  findRecentBattleEvent,
   resolvePlayerTriggerDispatch,
   resolvePlayedCardDestination,
   resolvePlayedCardTriggers,
@@ -21,6 +31,8 @@ import {
   type CardEffectRuntimeEvent,
   type AbilityTrigger,
   type CardPileZone,
+  type CardMoveReason,
+  type CardResourcePayment,
 } from '../../game-core';
 import { BattleSessionHost } from '../core/battleSessionHost';
 import { TavernCardSelectionHost } from '../core/cardSelectionHost';
@@ -58,12 +70,13 @@ export class CardSystem {
           maximum: request.maximum,
           allowCancel: request.allowCancel,
           title: this.cardEffectChoiceTitle(request.purpose),
+          resources: this.gameStateManager.getPlayer().resources,
         });
         if (selected.status === 'invalid') throw new Error(`卡牌选择无效: ${selected.code}`);
         return selected.status === 'selected' ? selected.selectedIds : null;
       },
-      onCardDiscarded: card => this.notifyCardDiscarded(card),
-      onCardExhausted: card => this.triggerCardExhausted(card),
+      onCardDiscarded: (card, reason, source) => this.notifyCardDiscarded(card, reason, source),
+      onCardExhausted: (card, source) => this.triggerCardExhausted(card, source),
       autoPlayCard: (card, source, free) => this.autoPlayCard(card, source, free),
       present: event => this.presentCardEffectEvent(event),
     });
@@ -79,7 +92,14 @@ export class CardSystem {
   // 抽牌逻辑
   public async drawCards(count: number): Promise<Card[]> {
     const drawn: Card[] = [];
-    const target = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
+    const requested = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
+    const continuousRules = resolveActiveCardPlayRules(
+      UnifiedEffectExecutor.getInstance().getCardPlayRules('player'),
+      this.gameStateManager.getGameState().cardRuleUsesThisTurn || 0,
+    );
+    const target = continuousRules.drawLimit === undefined
+      ? requested
+      : Math.min(requested, continuousRules.drawLimit);
     while (drawn.length < target) {
       const step = advanceCardDrawLifecycle(
         {
@@ -105,7 +125,23 @@ export class CardSystem {
         ['hand'],
       )[0] || step.event.card;
       drawn.push(updated);
-      await this.triggerCardDrawLifecycle('on_draw', { card: updated });
+      const drawState = this.gameStateManager.getGameState();
+      const drawEvent = this.gameStateManager.recordBattleEvent({
+        turn: drawState.currentTurn,
+        phase: 'after',
+        kind: 'card_drawn',
+        cause: { source: { kind: 'system', id: 'draw', name: '抽牌' } },
+        actorId: 'player',
+        cardInstanceId: updated.combatInstanceId || updated.id,
+        templateId: updated.templateId || updated.originalId || updated.id,
+        cardType: updated.type,
+        from: 'drawPile',
+        to: 'hand',
+      });
+      await this.triggerCardDrawLifecycle('on_draw', {
+        card: updated,
+        ...(drawEvent.ok ? battleTriggerContextFromEvent(drawEvent.event, drawEvent.state) : {}),
+      });
       if (this.gameStateManager.isGameOver()) break;
     }
     return drawn;
@@ -149,7 +185,12 @@ export class CardSystem {
           await this.presentation.animateCardPlay(cardId, cardBeforePlay);
         },
         applyCardPlayCommit: committed => {
-          this.gameStateManager.updatePlayer({ energy: committed.energy, hand: committed.hand });
+          const player = this.gameStateManager.getPlayer();
+          this.gameStateManager.updatePlayer({
+            energy: committed.energy,
+            resources: applyResourcePoolToStates(player.resources, committed.resources),
+            hand: committed.hand,
+          });
           this.gameStateManager.setCardPlayCounters(committed);
         },
         beginCardTransit: card => this.gameStateManager.beginCardTransit(card),
@@ -174,36 +215,48 @@ export class CardSystem {
             cardInstanceId: card.combatInstanceId || card.id,
             templateId: card.templateId || card.originalId || card.id,
             cardType: card.type,
+            cardName: card.name,
+            rarity: card.rarity,
+            ...(card.cost !== undefined ? { cost: card.cost } : {}),
+            ...(card.tags ? { tags: [...card.tags] } : {}),
+            ...(card.origin ? { origin: card.origin } : {}),
+            upgraded: card.upgraded === true || (card.upgradeLevel || 0) > 0,
             automatic: event.automatic,
             replayIndex: event.replayIndex,
           });
         },
         recordCardResourceSpent: (card, payment) => {
-          if (payment.spentEnergy <= 0) return;
           const state = this.gameStateManager.getGameState();
-          this.gameStateManager.recordBattleEvent({
-            turn: state.currentTurn,
-            phase: 'after',
-            kind: 'resource_spent',
-            cause: { source: { kind: 'card', id: card.templateId || card.originalId || card.id, name: card.name } },
-            actorId: 'player',
-            resource: 'energy',
-            requested: payment.requiredEnergy,
-            spent: payment.spentEnergy,
-          });
+          const definitions = this.gameStateManager.getPlayer().resources || {};
+          for (const [resource, spent] of Object.entries(payment.spent)) {
+            if (spent <= 0) continue;
+            this.gameStateManager.recordBattleEvent({
+              turn: state.currentTurn,
+              phase: 'after',
+              kind: 'resource_spent',
+              cause: { source: { kind: 'card', id: card.templateId || card.originalId || card.id, name: card.name } },
+              actorId: 'player',
+              resource,
+              requested: payment.required[resource] || spent,
+              spent,
+            });
+            const label = resource === 'energy' ? '能量' : definitions[resource]?.name || resource;
+            this.presentation.addLog(`消耗${spent}点${label}`, 'info', { type: 'card', name: card.name });
+          }
         },
         movePlayedCard: async (card, destination) => {
-          if (destination === 'exhaust') await this.exhaustCard(card);
+          if (destination === 'exhaust') await this.exhaustCard(card, 'hand');
           else this.gameStateManager.placeResolvedCard(card, destination);
         },
         resolvePlayedCardDestination: (_card, defaultDestination) => destinationOverride || defaultDestination,
         recordPlayedCardMoved: (card, destination) => {
+          if (destination === 'exhaust') return;
           const state = this.gameStateManager.getGameState();
           this.gameStateManager.recordBattleEvent({
             turn: state.currentTurn,
             phase: 'after',
             kind: 'card_moved',
-            cause: { source: { kind: 'card', id: card.templateId || card.originalId || card.id, name: card.name }, reason: destination === 'exhaust' ? 'exhaust' : 'player_choice' },
+            cause: { source: { kind: 'card', id: card.templateId || card.originalId || card.id, name: card.name }, reason: 'player_choice' },
             actorId: 'player',
             cardInstanceId: card.combatInstanceId || card.id,
             templateId: card.templateId || card.originalId || card.id,
@@ -211,13 +264,12 @@ export class CardSystem {
             from: 'hand',
             to: ({
               discard: 'discardPile',
-              exhaust: 'exhaustPile',
               draw_top: 'drawPile',
               draw_bottom: 'drawPile',
               hand: 'hand',
               remove: 'removed',
             } as const)[destination],
-            moveReason: destination === 'exhaust' ? 'exhaust' : 'player_choice',
+            moveReason: 'player_choice',
           });
         },
         triggerPostCardPlay: card => this.triggerPostCardPlayEffects(card),
@@ -255,43 +307,73 @@ export class CardSystem {
 
   private cardPlayFailureReason(code: string): string | null {
     if (code === 'INSUFFICIENT_ENERGY') return '能量不足';
+    if (code === 'INSUFFICIENT_RESOURCE') return '特殊资源不足';
     if (code === 'CURSE_UNPLAYABLE') return '诅咒牌无法被打出';
     if (code === 'STUNNED') return '无法行动';
     if (code === 'DOMINATED_ATTACK') return '被支配状态下无法使用攻击牌';
     if (code === 'SILENCED_SKILL') return '被沉默状态下无法使用技能牌';
+    if (code === 'RULE_DENIED') return '当前规则禁止打出这张牌';
+    if (code === 'RULE_LIMIT_REACHED') return '本回合此类卡牌的打出次数已达上限';
     return null;
   }
 
   private cardPlayState(player: Player, hasOpponent: boolean) {
+    const state = this.gameStateManager.getGameState();
+    const playedCardsThisTurn = (state.eventJournal?.events || [])
+      .filter((event): event is Extract<typeof event, { kind: 'card_played' }> =>
+        event.kind === 'card_played' &&
+        event.turn === state.currentTurn &&
+        event.phase === 'before' &&
+        event.replayIndex === 0 &&
+        !event.automatic,
+      )
+      .map(event => ({
+        id: event.cardInstanceId,
+        name: event.cardName || event.templateId,
+        type: event.cardType,
+        rarity: event.rarity,
+        cost: event.cost,
+        tags: event.tags,
+        templateId: event.templateId,
+        origin: event.origin,
+        upgraded: event.upgraded,
+      }));
     return {
       phase: this.gameStateManager.getCurrentPhase(),
       hasOpponent,
       hand: player.hand,
       energy: player.energy,
-      cardsPlayedThisTurn: this.gameStateManager.getGameState().cardsPlayedThisTurn,
-      cardRuleUsesThisTurn: this.gameStateManager.getGameState().cardRuleUsesThisTurn,
-      attacksPlayedThisTurn: this.gameStateManager.getGameState().attacksPlayedThisTurn,
-      skillsPlayedThisTurn: this.gameStateManager.getGameState().skillsPlayedThisTurn,
+      resources: Object.fromEntries(Object.entries(player.resources || {}).map(([id, resource]) => [id, resource.current])),
+      cardsPlayedThisTurn: state.cardsPlayedThisTurn,
+      cardRuleUsesThisTurn: state.cardRuleUsesThisTurn,
+      attacksPlayedThisTurn: state.attacksPlayedThisTurn,
+      skillsPlayedThisTurn: state.skillsPlayedThisTurn,
       stunned: UnifiedEffectExecutor.getInstance().isStunned('player'),
       statusIds: player.statusEffects.map(status => status.id),
       cardPlayRules: UnifiedEffectExecutor.getInstance().getCardPlayRules('player'),
+      playedCardsThisTurn,
       dynamicCostRules: [],
       dynamicCostState: UnifiedEffectExecutor.getInstance().getCoreEffectState(true),
       dynamicCostContext: { spentEnergy: 0, xValue: 0 },
     };
   }
 
+  /** Read-only UI preview using the exact same rules and dynamic costs as commit. */
+  public previewCardPlay(cardId: string) {
+    const player = this.gameStateManager.getPlayer();
+    return prepareCardPlay(cardId, this.cardPlayState(player, this.gameStateManager.getEnemy() !== null));
+  }
+
   private async executeCardEffect(
     card: Card,
     targetType?: 'player' | 'enemy',
-    energyPayment?: ReturnType<typeof resolveCardEnergyPayment>,
+    energyPayment?: CardResourcePayment,
     setCardDestination?: (destination: import('../../game-core').PlayedCardDestination) => void,
   ): Promise<void> {
     try {
       // 诅咒牌不可被打出（双重保护）
-      if (card.type === 'Curse') {
-        throw new Error('诅咒牌无法被打出');
-      }
+      // Playability is decided atomically by prepare/commitCardPlay. A second
+      // type-only Curse guard here would invalidate allow_card_play.
       // 特殊处理事件卡
       if (card.type === 'Event') {
         await this.handleEventCard(card, energyPayment);
@@ -311,6 +393,8 @@ export class CardSystem {
         const context = {
           spentEnergy: energyPayment?.spentEnergy ?? 0,
           xValue: energyPayment?.xValue ?? energyPayment?.spentEnergy ?? 0,
+          spentResources: energyPayment?.spent ?? {},
+          xValues: energyPayment?.xValues ?? {},
           cardContext: card,
           setCardDestination,
         };
@@ -330,7 +414,7 @@ export class CardSystem {
 
   private async handleEventCard(
     card: Card,
-    energyPayment?: ReturnType<typeof resolveCardEnergyPayment>,
+    energyPayment?: CardResourcePayment,
   ): Promise<void> {
     if (!card.effectProgram) {
       throw new Error('事件卡效果格式无效');
@@ -340,6 +424,8 @@ export class CardSystem {
       isEventCard: true,
       spentEnergy: energyPayment?.spentEnergy ?? 0,
       xValue: energyPayment?.xValue ?? energyPayment?.spentEnergy ?? 0,
+      spentResources: energyPayment?.spent ?? {},
+      xValues: energyPayment?.xValues ?? {},
     };
     const executor = UnifiedEffectExecutor.getInstance();
     await executor.executeEffectProgram(card.effectProgram, true, context);
@@ -349,14 +435,9 @@ export class CardSystem {
   private async autoPlayCard(card: Card, source: CardPileZone, free: boolean): Promise<boolean> {
     if (this.gameStateManager.isGameOver() || this.activeAutoPlayIds.has(card.id)) return false;
     const player = this.gameStateManager.getPlayer();
-    const payment = free
-      ? {
-          requiredEnergy: 0,
-          spentEnergy: 0,
-          xValue: card.cost === 'energy' ? Math.max(0, Math.floor(card.xValueBonus || 0)) : 0,
-        }
-      : resolveCardEnergyPayment(card, player.energy);
-    if (player.energy < payment.requiredEnergy) return false;
+    const resourcePool = resourcePoolFromCombatant(player.energy, player.resources);
+    const payment = resolveCardResourcePayment(card.cost, resourcePool, free ? 'all' : undefined, card.xValueBonus);
+    if (!payment.affordable) return false;
     const detached = this.gameStateManager.removeOwnedCardFromZone(card.id, source);
     if (!detached) return false;
 
@@ -365,24 +446,31 @@ export class CardSystem {
     try {
       await this.presentation.animateTriggeredCard(detached);
       const state = this.gameStateManager.getGameState();
-      this.gameStateManager.updatePlayer({ energy: player.energy - payment.spentEnergy });
+      const remainingResources = applyCardResourcePayment(resourcePool, payment);
+      this.gameStateManager.updatePlayer({
+        energy: remainingResources.energy || 0,
+        resources: applyResourcePoolToStates(player.resources, remainingResources),
+      });
       this.gameStateManager.setCardPlayCounters({
         cardsPlayedThisTurn: state.cardsPlayedThisTurn + 1,
         attacksPlayedThisTurn: state.attacksPlayedThisTurn + (detached.type === 'Attack' ? 1 : 0),
         skillsPlayedThisTurn: state.skillsPlayedThisTurn + (detached.type === 'Skill' ? 1 : 0),
         cardRuleUsesThisTurn: state.cardRuleUsesThisTurn ?? state.cardsPlayedThisTurn,
       });
-      if (payment.spentEnergy > 0) {
+      for (const [resource, spent] of Object.entries(payment.spent)) {
+        if (spent <= 0) continue;
         this.gameStateManager.recordBattleEvent({
           turn: state.currentTurn,
           phase: 'after',
           kind: 'resource_spent',
           cause: { source: { kind: 'card', id: detached.templateId || detached.originalId || detached.id, name: detached.name }, reason: 'auto_play' },
           actorId: 'player',
-          resource: 'energy',
-          requested: payment.requiredEnergy,
-          spent: payment.spentEnergy,
+          resource,
+          requested: payment.required[resource] || spent,
+          spent,
         });
+        const label = resource === 'energy' ? '能量' : player.resources?.[resource]?.name || resource;
+        this.presentation.addLog(`消耗${spent}点${label}`, 'info', { type: 'card', name: detached.name });
       }
 
       const repeatCount = 1 + Math.min(20, Math.max(0, Math.trunc(detached.replayCount ?? (detached.doubleEffect ? 1 : 0))));
@@ -406,15 +494,21 @@ export class CardSystem {
             cardInstanceId: detached.combatInstanceId || detached.id,
             templateId: detached.templateId || detached.originalId || detached.id,
             cardType: detached.type,
+            cardName: detached.name,
+            rarity: detached.rarity,
+            ...(detached.cost !== undefined ? { cost: detached.cost } : {}),
+            ...(detached.tags ? { tags: [...detached.tags] } : {}),
+            ...(detached.origin ? { origin: detached.origin } : {}),
+            upgraded: detached.upgraded === true || (detached.upgradeLevel || 0) > 0,
             automatic: true,
             replayIndex,
           });
         }
       }
 
-      const played = clearDynamicCardCostAfterPlay(clearCardPatches(detached, 'played'));
+      const played = clearDynamicCardCostAfterPlay(advanceCardAttachments(clearCardPatches(detached, 'played'), 'played'));
       const destination = destinationOverride || resolvePlayedCardDestination(played);
-      if (destination === 'exhaust') await this.exhaustCard(played);
+      if (destination === 'exhaust') await this.exhaustCard(played, source);
       else this.gameStateManager.placeResolvedCard(played, destination);
       const after = this.gameStateManager.getGameState();
       this.gameStateManager.recordBattleEvent({
@@ -446,27 +540,78 @@ export class CardSystem {
   }
 
   // 弃牌逻辑
-  public async discardCard(cardId: string): Promise<boolean> {
+  public async discardCard(cardId: string, reason: CardMoveReason = 'player_choice'): Promise<boolean> {
     const card = this.gameStateManager.removeCardFromHand(cardId);
     if (card) {
       // 先移入弃牌堆，再触发弃牌效果（不在弃牌堆不触发）
       this.gameStateManager.moveCardToDiscard(card);
-      await this.notifyCardDiscarded(card);
+      await this.notifyCardDiscarded(card, reason, 'hand');
       return true;
     }
     return false;
   }
 
-  private async notifyCardDiscarded(card: Card): Promise<void> {
-    await this.triggerDiscardEffect(card);
+  private async notifyCardDiscarded(
+    card: Card,
+    reason: CardMoveReason,
+    source: CardPileZone = 'hand',
+  ): Promise<void> {
+    const state = this.gameStateManager.getGameState();
+    const movedEvent = this.gameStateManager.recordBattleEvent({
+      turn: state.currentTurn,
+      phase: 'after',
+      kind: 'card_moved',
+      cause: {
+        source: { kind: 'card', id: card.templateId || card.originalId || card.id, name: card.name },
+        reason,
+      },
+      actorId: 'player',
+      cardInstanceId: card.combatInstanceId || card.id,
+      templateId: card.templateId || card.originalId || card.id,
+      cardType: card.type,
+      from: source,
+      to: 'discardPile',
+      moveReason: reason,
+    });
+
+    // Only a true hand discard produces discard programs, relic triggers or Sly-style auto-play.
+    const lifecycle = resolveCardDiscardLifecycle(
+      card,
+      reason,
+      source,
+      this.gameStateManager.getCurrentPhase(),
+    );
+    if (!lifecycle.triggersDiscardLifecycle) return;
+    const autoPlay = lifecycle.autoPlay;
+    const triggerContext = {
+      card,
+      ...(movedEvent.ok ? battleTriggerContextFromEvent(movedEvent.event, movedEvent.state) : {}),
+    };
+    await this.triggerDiscardEffect(card, triggerContext);
     try {
-      await this.relicTriggerHost.triggerRelics('on_discard', { card });
+      await this.relicTriggerHost.triggerRelics('on_discard', triggerContext);
     } catch (error) {
       console.warn('触发遗物弃牌检测失败:', error);
     }
 
+    const updated = this.gameStateManager.updateOwnedCards(
+      [card.id],
+      owned => advanceCardAttachments(owned, 'discarded', reason),
+      ['discardPile'],
+    )[0] || card;
+    if (autoPlay) {
+      const played = await this.autoPlayCard(updated, 'discardPile', true);
+      if (!played && autoPlay.rule.failureDestination !== 'discard') {
+        const stranded = this.gameStateManager.removeOwnedCardFromZone(updated.id, 'discardPile');
+        if (stranded) {
+          if (autoPlay.rule.failureDestination === 'exhaust') await this.exhaustCard(stranded, 'discardPile');
+          else this.gameStateManager.placeResolvedCard(stranded, autoPlay.rule.failureDestination);
+        }
+      }
+    }
+
     const cardName = card.name || '未知卡牌';
-    const costText = card.cost === 'energy' ? 'X' : String(card.cost ?? 0);
+    const costText = describeCardCost(card.cost, this.gameStateManager.getPlayer().resources);
     this.presentation.logDiscardCardDetail(cardName, costText, card.description || '');
   }
 
@@ -474,34 +619,70 @@ export class CardSystem {
    * 触发弃牌效果
    */
   private async triggerPostCardPlayEffects(card: Card): Promise<void> {
+    const journal = this.gameStateManager.getGameState().eventJournal;
+    const event = journal
+      ? findRecentBattleEvent(journal, {
+          scope: 'combat',
+          filter: {
+            kind: 'card_played',
+            phase: 'after',
+            cardInstanceId: card.combatInstanceId || card.id,
+          },
+        })
+      : undefined;
+    const context = {
+      card,
+      ...(event && journal ? battleTriggerContextFromEvent(event, journal) : {}),
+    };
     // Generic card-play effects resolve first; type-specific effects reuse the same guarded trigger path.
     for (const trigger of resolvePlayedCardTriggers(card.type)) {
-      await this.dispatchPlayerTrigger(trigger, { card });
+      await this.dispatchPlayerTrigger(trigger, context);
       if (this.gameStateManager.isGameOver()) break;
     }
   }
 
   public async discardHand(): Promise<void> {
     const player = this.gameStateManager.getPlayer();
-    const disposition = resolveTurnEndHandDisposition(player.hand);
+    const continuousRules = resolveActiveCardPlayRules(
+      UnifiedEffectExecutor.getInstance().getCardPlayRules('player'),
+      this.gameStateManager.getGameState().cardRuleUsesThisTurn || 0,
+    );
+    const disposition = resolveTurnEndHandDisposition(player.hand, continuousRules.retainHand);
 
     // 先移除本回合手牌，再触发消耗通知，防止触发器读取或覆盖旧手牌快照。
     this.gameStateManager.updatePlayer({ hand: disposition.keep });
-    for (const card of disposition.exhaust) await this.exhaustCard(card);
+    for (const card of disposition.exhaust) await this.exhaustCard(card, 'hand');
 
     // 回合结束的系统弃牌不触发卡牌弃牌程序、能力或遗物弃牌触发器。
     for (const card of disposition.discard) {
       // 回合结束弃牌不触发弃牌效果（仅通过效果弃牌才触发）
       this.gameStateManager.moveCardToDiscard(card);
+      const state = this.gameStateManager.getGameState();
+      this.gameStateManager.recordBattleEvent({
+        turn: state.currentTurn,
+        phase: 'after',
+        kind: 'card_moved',
+        cause: {
+          source: { kind: 'system', id: 'turn_cleanup', name: '回合清理' },
+          reason: 'turn_cleanup',
+        },
+        actorId: 'player',
+        cardInstanceId: card.combatInstanceId || card.id,
+        templateId: card.templateId || card.originalId || card.id,
+        cardType: card.type,
+        from: 'hand',
+        to: 'discardPile',
+        moveReason: 'turn_cleanup',
+      });
     }
 
     // 弃牌完成 - 移除日志减少输出
   }
 
   /** A detached played/ethereal card enters the exhaust pile, then emits one shared notification. */
-  public async exhaustCard(card: Card): Promise<void> {
+  public async exhaustCard(card: Card, source: CardPileZone = 'hand'): Promise<void> {
     this.gameStateManager.moveCardToExhaust(card);
-    await this.triggerCardExhausted(card);
+    await this.triggerCardExhausted(card, source);
   }
 
   public async executeCardEffectCommand(
@@ -526,14 +707,21 @@ export class CardSystem {
       move: '选择要移动的卡牌',
       remove: '选择要移除的卡牌',
       transform: '选择要变形的卡牌',
+      attachment: '选择要附加规则的卡牌',
+      upgrade: '选择要升级的卡牌',
     };
     return titles[purpose] || '选择要操作的卡牌';
   }
 
   private presentCardEffectEvent(event: CardEffectRuntimeEvent): void {
     if (event.type === 'card_added') {
+      const destination = event.zone === 'hand'
+        ? ''
+        : event.zone === 'draw'
+          ? '（加入抽牌堆）'
+          : '（手牌已满，置入弃牌堆）';
       this.presentation.addLog(
-        event.zone === 'hand' ? `获得卡牌：${event.card.name}` : `获得卡牌: ${event.card.name} (加入抽牌堆)`,
+        `获得卡牌：${event.card.name}${destination}`,
         'info',
         event.zone === 'hand'
           ? { type: 'card', name: event.card.name, details: event.card.description || '' }
@@ -583,14 +771,52 @@ export class CardSystem {
       });
       return;
     }
+    if (event.type === 'card_upgraded') {
+      this.presentation.addLog(`升级卡牌：${event.card.name}（等级 ${event.card.upgradeLevel || 0}）`, 'action', {
+        type: 'card', name: event.card.name, details: event.card.description || '',
+      });
+      return;
+    }
+    if (event.type === 'card_attachment_applied') {
+      const attachment = event.card.attachments?.find(entry => entry.id === event.attachmentId);
+      const kind = event.attachmentKind === 'enchantment' ? '附魔' : '负面附着';
+      this.presentation.addLog(`${kind}：${event.card.name}获得${attachment?.name || event.attachmentId}`, 'action', {
+        type: 'card',
+        name: event.card.name,
+        details: attachment
+          ? [attachment.description, describeCardAttachmentRemaining(attachment)].filter(Boolean).join('；')
+          : '',
+      });
+      return;
+    }
     this.presentation.addLog(`预见弃置：${event.card.name}`, 'action', {
       type: 'card',
       name: event.card.name,
     });
   }
 
-  private async triggerCardExhausted(card: Card): Promise<void> {
-    await this.dispatchPlayerTrigger('on_exhaust', { card });
+  private async triggerCardExhausted(card: Card, source: CardPileZone): Promise<void> {
+    const state = this.gameStateManager.getGameState();
+    const movedEvent = this.gameStateManager.recordBattleEvent({
+      turn: state.currentTurn,
+      phase: 'after',
+      kind: 'card_moved',
+      cause: {
+        source: { kind: 'card', id: card.templateId || card.originalId || card.id, name: card.name },
+        reason: 'exhaust',
+      },
+      actorId: 'player',
+      cardInstanceId: card.combatInstanceId || card.id,
+      templateId: card.templateId || card.originalId || card.id,
+      cardType: card.type,
+      from: source,
+      to: 'exhaustPile',
+      moveReason: 'exhaust',
+    });
+    await this.dispatchPlayerTrigger('on_exhaust', {
+      card,
+      ...(movedEvent.ok ? battleTriggerContextFromEvent(movedEvent.event, movedEvent.state) : {}),
+    });
   }
 
   // 卡牌效果检查
@@ -609,7 +835,10 @@ export class CardSystem {
   /**
    * 触发弃牌效果
    */
-  private async triggerDiscardEffect(card: Card): Promise<void> {
+  private async triggerDiscardEffect(
+    card: Card,
+    triggerContext: Readonly<Record<string, unknown>>,
+  ): Promise<void> {
     const result = await runTriggerTransaction(
       'card_discard',
       this.sessionHost.triggerTransactionPorts(),
@@ -623,7 +852,7 @@ export class CardSystem {
         }
 
         // 2. 触发on_discard能力效果（通过能力系统处理）
-        await UnifiedEffectExecutor.getInstance().processAbilitiesByTrigger('player', 'on_discard');
+        await UnifiedEffectExecutor.getInstance().processAbilitiesByTrigger('player', 'on_discard', triggerContext);
 
       },
       'recover-and-continue',
@@ -643,7 +872,15 @@ export class CardSystem {
   public async onTurnStart(): Promise<void> {
     // 抽牌
     const player = this.gameStateManager.getPlayer();
-    await this.drawCards(player.drawPerTurn);
+    const continuousRules = resolveActiveCardPlayRules(
+      UnifiedEffectExecutor.getInstance().getCardPlayRules('player'),
+      this.gameStateManager.getGameState().cardRuleUsesThisTurn || 0,
+    );
+    await this.drawCards(
+      continuousRules.drawLimit === undefined
+        ? player.drawPerTurn
+        : Math.min(player.drawPerTurn, continuousRules.drawLimit),
+    );
 
     // 不在这里触发遗物效果，由 battleManager 统一管理
   }
@@ -669,8 +906,8 @@ export class CardSystem {
     context: Readonly<Record<string, unknown>>,
   ): Promise<void> {
     await runBattleTriggerDispatches(resolvePlayerTriggerDispatch(trigger, context), {
-      runAbility: (target, resolvedTrigger) =>
-        UnifiedEffectExecutor.getInstance().processAbilitiesByTrigger(target, resolvedTrigger),
+      runAbility: (target, resolvedTrigger, resolvedContext) =>
+        UnifiedEffectExecutor.getInstance().processAbilitiesByTrigger(target, resolvedTrigger, resolvedContext),
       runRelic: (resolvedTrigger, resolvedContext) =>
         this.relicTriggerHost.triggerRelics(resolvedTrigger, { ...resolvedContext }),
     });
@@ -690,6 +927,7 @@ export class CardSystem {
     await this.discardHand();
     if (this.gameStateManager.isGameOver()) return;
     this.gameStateManager.clearOwnedCardPatches('turn_end');
+    this.gameStateManager.advanceOwnedCardAttachments('turn_end');
   }
 
   private async executeCurseTurnEndTransaction(curse: Card): Promise<void> {
