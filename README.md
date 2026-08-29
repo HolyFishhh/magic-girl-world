@@ -130,7 +130,7 @@ npm run tavern:battle-repair-chat -- status "魔法少女世界 0.5.93.png" ordi
 npm run measure:worldbook-roles
 ```
 
-当前正式角色卡仍不强制依赖卡牌与敌人生成知识库；可选扩展的设计、安装和降级边界见 `docs/sillytavern-design-assistant-plugin.md`。
+当前正式角色卡不依赖设计辅助扩展。该组件仍处于内部验证阶段，不属于 0.5.155 的玩家发布内容；玩家只需下载并导入角色卡。
 
 ## 维护原则
 
