@@ -160,11 +160,21 @@ const controller = new DesignAssistantController({
   createChatMessages: async () => { createChatMessageCalls += 1; },
   generate: async config => {
     modelCalls.push(['structured', structuredClone(config)]);
+    const firstAttempt = modelCalls.filter(([kind]) => kind === 'structured').length === 1;
+    const playerBattle = structuredClone(initialContent.battle);
+    if (firstAttempt) {
+      playerBattle.cards[0].effects = [{ damage: 7 }, { discard: 1, to: 'opponent' }];
+      playerBattle.cards[1].effects = [{ block: 6, amount: 6 }];
+      playerBattle.statuses = [{
+        id: 'bad_tick', name: '错误状态', emoji: '⚠️', type: 'buff',
+        triggers: { tick: { effects: { block: 2 }, target: 'self' } },
+      }];
+    }
     return JSON.stringify({
       narrative: '雾中的高塔吞没了归路，守门人告诉旅者：只有连续越过三幕试炼，出口才会重新出现。',
       player: {
         status: initialContent.status,
-        ...initialContent.battle,
+        ...playerBattle,
       },
       opening: {
         title: '守门人的星火馈赠',
@@ -200,16 +210,25 @@ try {
   assert.equal(context.chat.length, floorCountBefore, 'silent initialization must not append a Tavern floor');
   assert.equal(createChatMessageCalls, 0, 'single-floor start must never use createChatMessages');
   assert.equal(modelCalls.filter(([kind]) => kind === 'unexpected-narrative').length, 0);
-  assert.equal(modelCalls.filter(([kind]) => kind === 'structured').length, 1);
+  assert.equal(modelCalls.filter(([kind]) => kind === 'structured').length, 2);
   const structuredConfig = modelCalls.find(([kind]) => kind === 'structured')[1];
+  const repairedConfig = modelCalls.filter(([kind]) => kind === 'structured')[1][1];
   assert.equal(structuredConfig.should_silence, true);
   assert.equal(structuredConfig.max_chat_history, 0);
   assert.equal(structuredConfig.json_schema.name, 'mwg_tower_single_floor_initial_content');
   assert.deepEqual(structuredConfig.json_schema.value.required, ['narrative', 'player', 'opening']);
   assert.equal('battle' in structuredConfig.json_schema.value.properties, false);
   assert.match(structuredConfig.user_input, /CURRENT_START_STATE=/);
+  assert.match(structuredConfig.user_input, /\[浅层 effects 精确语法\]/);
+  assert.match(structuredConfig.user_input, /不存在通用 amount\/value\/target\/operation\/source 字段/);
+  assert.match(structuredConfig.user_input, /\{apply_status:"状态ID",stacks\?:层数,to\?:目标\}/);
+  assert.match(structuredConfig.user_input, /triggers 只含 apply\/stack\/tick\/remove\/hold\/threshold_execute/);
   assert.doesNotMatch(structuredConfig.user_input, /CURRENT_STAT_DATA=/);
   assert.doesNotMatch(structuredConfig.user_input, /stale_star_strike|旧模板星火斩/);
+  assert.match(repairedConfig.user_input, /上一份结果未通过程序校验/);
+  assert.match(repairedConfig.user_input, /battle\.statuses\[0\]\.triggers\.tick：状态定义不合法（具体原因：/);
+  assert.match(repairedConfig.user_input, /battle\.cards\[0\]\.effects\[1\]\.to：/);
+  assert.match(repairedConfig.user_input, /battle\.cards\[1\]\.effects\[0\]\.amount：/);
   assert.equal(mvuWrites.length, 1);
   assert.equal(chatVariableWrites.length, 1);
   assert.equal(variables.stat_data.battle.cards.reduce((sum, card) => sum + card.quantity, 0), 10);
@@ -226,4 +245,4 @@ try {
   else globalThis.TavernHelper = previousTavernHelper;
 }
 
-console.log('Tower single-floor start performs one silent call, persists the deck/gift/map, and rewrites only the greeting floor.');
+console.log('Tower single-floor start repairs invalid DSL in place, persists the deck/gift/map, and rewrites only the greeting floor.');

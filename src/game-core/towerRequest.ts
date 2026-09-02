@@ -145,16 +145,35 @@ function resultContractFor(scope: TowerNodeScope): string {
 }
 
 /**
- * The tower worker does not inherit the story preset/worldbook. Keep the
- * executable boundary beside the JSON request so a provider cannot silently
- * fall back to its own nested "target / operator / condition" vocabulary.
- * This is deliberately structural: themes, mechanics and numbers remain free.
+ * `generateRaw` intentionally does not inherit the story preset or lorebook.
+ * Keep the public AI grammar beside every structured worker request so models
+ * never have to infer a generic `{ operation, target, amount }` vocabulary.
+ * This is a syntax contract only: themes, mechanics and numbers remain free.
  */
+export function formatCompactEffectAuthoringContract(): string {
+  return [
+    '[浅层 effects 精确语法]',
+    'effects 只能是一个浅层对象或浅层对象数组。数组中每项通常只有一个主操作；damage/heal/block/energy/lust/apply_status/remove_status/draw 可在确实同时结算时合并。前一步会影响后一步时必须拆成数组。',
+    '不存在通用 amount/value/target/operation/source 字段。操作名本身就是字段名，操作结果直接写在该字段的值里；目标只在该操作允许时写同级 to:"self"/"opponent"，条件只写同级 when。不要把 trigger、effects 或另一套规则对象塞进 effects 数组项。',
+    '基础数值形状：{damage:数值或公式,hits?:正整数,to?:目标}；{heal:数值或公式,to?:目标}；{block:数值或公式,to?:目标}；{energy:数值或公式,to?:目标}；{lust:数值或公式,to?:目标}；{set_hp|set_lust|set_energy|set_block:数值或公式,to?:目标}。damage/lust 默认对方，heal/block/energy 默认自身。',
+    '抽牌与牌库查看：{draw:数量}、{scry:数量}、{seek:数量} 只允许同级 when，不允许 to、targets、from、pick、count 或 amount。',
+    '状态操作的唯一规范形状是 {apply_status:"状态ID",stacks?:层数,to?:目标} 与 {remove_status:"状态ID|all|buffs|debuffs",to?:目标}；apply_status/remove_status 的值不是对象，stacks/to 也绝不能放进它们的值里。',
+    '牌区操作必须独占数组项：{discard|exhaust:数量或"all",from?:牌区,pick?:方式}；{recover:数量或"all",from:"discard"|"exhaust",pick?:方式}；{reduce_cost:数值,count?:数量,from?:牌区,pick?:方式}；{copy|double:数量或"all",from?:牌区,pick?:方式}；{modify_card:"damage"|"block"|"lust"|"stacks",add|subtract|multiply|divide:数值,from?:牌区,pick?:方式,count?:数量}。这些操作不写 to 或 amount。',
+    '自定义资源先在 core.resources 注册；效果只写 {resource:{id:"资源ID",amount:数值},to?:目标} 或 {set_resource:{id:"资源ID",value:数值},to?:目标}。amount 只属于 resource 内部以及明确声明 amount 的召唤专用对象，不能作为普通 effects 项的同级通用字段。',
+    '临时牌模板放在内容对象同级 creates；生成只写 {add_card:"模板ID",to?:"hand"|"deck",count?:正整数} 或 {ensure_card:"模板ID",to?:"hand"|"deck",minimum:正整数}。',
+    '持续修饰只写 {modify:"damage"|"damage_taken"|"lust"|"lust_taken"|"heal"|"block"|"summon_capacity",add|subtract|multiply|divide|set:数值}；持续出牌规则写 {card_rule:"replay"|"free"|其他公开规则,limit:数量或"all",extra?:正整数}。两者只能位于 passive 触发器或状态 triggers.hold，不能放进普通卡牌即时 effects、行动或欲望效果。',
+    '预约效果写 {schedule:等待回合,phase:"turn_start"|"before_draw"|"after_draw"|"turn_end",effects:届时执行的浅层效果}；选择效果写 {choose:"稳定英文ID",options:[{id,label,effects},...]}; stance、channel_orb、spawn_summon 的完整定义直接作为各自操作值，不得改写成 operation/target/amount AST。',
+    '卡牌的 trigger 只写在卡牌根：trigger:{on:"触发时机",effects:浅层效果}。Power 若依赖持续触发就使用根 trigger；遗物和独立能力必须使用根 trigger；道具和欲望效果只使用根 effects，不写 trigger。',
+    '状态定义固定为 {id,name,emoji,type,description?,stacks_change?,maxStacks?,stun?,triggers}，type 只用 buff/debuff/neutral。triggers 只含 apply/stack/tick/remove/hold/threshold_execute，各触发值直接是浅层效果对象或数组，禁止写成 {effects:...}；hold 只含 modify/card_rule，其他触发不含持续规则。',
+    '所有公式只使用受支持变量与 + - * /、比较、逻辑、括号和三元表达式；不要生成函数、对象表达式、内部 op/steps AST 或自然语言效果。',
+  ].join('\n');
+}
+
 function towerBattleDslContract(): string {
   return [
     '[战斗效果结构边界]',
-    '所有 effects 都是浅层对象或浅层对象数组；连续、条件不同或触发不同的操作拆成数组项。禁止旧 effect、内部 spec/op/steps，以及 target、condition、operator、value 字段。',
-    '目标只用同级 to:"self"/"opponent"，条件只用同级 when 字符串；数值运算直接写 add/subtract/multiply/divide/set。敌人来源中 self=该敌人，opponent=玩家。',
+    formatCompactEffectAuthoringContract(),
+    '敌人来源中 self=该敌人，opponent=玩家；玩家来源中 self=玩家，opponent=敌人。不要按叙述句子的主语猜目标。',
     '多个敌人时，enemies 每项必须有互不重复的稳定英文 id，只能使用字母、数字和下划线且不能以数字开头；不要使用冒号、短横线、空格或中文。敌人 action 只写 effects，不写 trigger。敌人 abilities 每项必须有稳定英文 id、中文 name/source/description，以及 trigger:{on:"触发时机",effects:浅层效果}；不得把 trigger 塞进 effects 数组项，也不得同时保留同级 effects。',
     '敌人行动模式只允许 random、probability、sequence、sequence_then_probability。random 不需要配置；probability 使用 action_config:{probability:{"行动名":正数权重}}；sequence 使用 action_config:{sequence:["行动名"]}；混合模式同时提供两项。',
     '持续被动使用 trigger:{on:"passive",effects:{modify:"damage|damage_taken|lust|lust_taken|heal|block|summon_capacity",add|subtract|multiply|divide|set:数值}}；modify 不得是对象。',

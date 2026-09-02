@@ -103,11 +103,35 @@ function issueLabel(issue: Pick<PlayerContentReadinessIssue, 'code'>): string {
   return ISSUE_LABELS[issue.code] || '规则字段不符合浅层 effects 契约';
 }
 
+const DETAILED_ISSUE_CODES = new Set([
+  'INVALID_STATUS',
+  'INVALID_EFFECT',
+  'INVALID_EFFECT_BUNDLE',
+  'INVALID_EFFECT_SOURCE',
+  'UNKNOWN_EFFECT',
+  'UNKNOWN_FIELD',
+]);
+
+function issueDetail(message: unknown): string {
+  let detail = typeof message === 'string' ? message.trim().replace(/\s+/g, ' ').slice(0, 240) : '';
+  if (!detail) return '';
+  const unknownField = detail.match(/^Unknown (?:bundle )?field:\s*([A-Za-z_][A-Za-z0-9_]*)$/i);
+  if (unknownField) return `该效果不允许字段 ${unknownField[1]}`;
+  detail = detail
+    .replace(/Effect must contain one operation plus optional to\/when fields/gi, '每个效果项必须只有一个主操作，可选字段只能按该操作契约填写')
+    .replace(/Unknown compact effect:\s*([A-Za-z_][A-Za-z0-9_]*)/gi, '不支持的效果操作 $1')
+    .replace(/This operation must remain a separate effect object/gi, '该操作必须单独占一个 effects 数组项')
+    .replace(/Only common numeric, status, and draw effects may share one object; use separate array entries for other operations/gi, '只有基础数值、状态和抽牌操作可以安全合并；其他操作必须拆成数组项');
+  return detail;
+}
+
 function portableIssue(issue: ContentContractIssue): PlayerContentReadinessIssue {
+  const label = issueLabel(issue);
+  const detail = DETAILED_ISSUE_CODES.has(issue.code) ? issueDetail(issue.message) : '';
   return {
     path: contentPathToBattlePath(issue.path),
     code: issue.code,
-    message: issueLabel(issue),
+    message: detail && detail !== label ? `${label}（具体原因：${detail}）` : label,
   };
 }
 

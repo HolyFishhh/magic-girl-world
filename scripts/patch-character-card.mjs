@@ -282,7 +282,7 @@ card.data.character_version = CARD_VERSION;
 card.name = CHARACTER_NAME;
 card.data.name = CHARACTER_NAME;
 card.data.creator_notes =
-  '剧情模式可直接开始游玩；角色卡已内置世界书、MVU 变量框架与交互界面。爬塔模式需要另行安装 0.3.2 或更高版本的“魔法少女世界设计辅助器”扩展。';
+  '剧情模式可直接开始游玩；角色卡已内置世界书、MVU 变量框架与交互界面。爬塔模式需要另行安装 0.3.3 或更高版本的“魔法少女世界设计辅助器”扩展。';
 // The start regex targets the marker itself. A Markdown fence here is parsed
 // as a second code block by SillyTavern and can turn the replacement HTML into
 // JavaScript, producing `Unexpected token '<'` in the message iframe.

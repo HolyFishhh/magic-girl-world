@@ -202,6 +202,8 @@ function createRepairHelper({
   assert.equal(generationConfig.max_chat_history, 0);
   assert.equal(generationConfig.should_silence, true);
   assert.equal(generationConfig.json_schema.name, 'mwg_initial_battle_repair');
+  assert.match(generationConfig.user_input, /\[浅层 effects 精确语法\]/);
+  assert.match(generationConfig.user_input, /不存在通用 amount\/value\/target\/operation\/source 字段/);
   assert.match(state.message, /_\.set\('battle',/);
   assert.doesNotMatch(state.message, /MWG_REPAIR_REQUEST/);
   assert.equal(state.refreshes.at(-1), 'affected');

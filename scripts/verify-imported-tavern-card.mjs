@@ -26,7 +26,7 @@ assert.equal(character?.name || character?.data?.name, releaseConfig.characterNa
 assert.equal(character?.data?.character_version, releaseConfig.cardVersion);
 assert.equal(
   character?.data?.creator_notes,
-  '剧情模式可直接开始游玩；角色卡已内置世界书、MVU 变量框架与交互界面。爬塔模式需要另行安装 0.3.2 或更高版本的“魔法少女世界设计辅助器”扩展。',
+  '剧情模式可直接开始游玩；角色卡已内置世界书、MVU 变量框架与交互界面。爬塔模式需要另行安装 0.3.3 或更高版本的“魔法少女世界设计辅助器”扩展。',
 );
 assert.equal(worldbook?.name, `${releaseConfig.worldbookPrefix}${releaseConfig.cardVersion}`);
 assert.equal(

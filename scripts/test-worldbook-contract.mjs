@@ -312,8 +312,9 @@ assert.match(battleGuide, /禁止旧 `effect` 字符串、内部 `spec\/op\/step
 assert.match(battleGuide, /单个或可同时结算的效果写一个对象/);
 assert.match(battleGuide, /基础键：`damage\/heal\/block\/energy\/lust\/set_hp\/draw`/);
 assert.match(battleGuide, /禁止把内部动作名 `gain_block\/gain_energy\/gain_lust` 写进 AI 输出/);
-assert.match(battleGuide, /状态操作使用 `apply_status\/remove_status` 对象/);
-assert.match(battleGuide, /不要在状态对象之外重复层数或目标/);
+assert.match(battleGuide, /状态操作的固定写法是 `\{apply_status:\"状态ID\"/);
+assert.match(battleGuide, /`stacks\/to` 与操作同级/);
+assert.doesNotMatch(battleGuide, /`apply_status\/remove_status` 对象，其中 `id`/);
 assert.match(battleGuide, /禁止把 `attribute\/operation\/value` 对象嵌套进 `modify`/);
 assert.match(battleGuide, /递归预检会拒绝未知字段、未知状态/);
 assert.match(battleGuide, /`scope\/ordinal\/n\/event\/phase\/reason\/source_kind\/source_id\/damage_type\/card_type\/template_id\/card_instance_id\/actor_id\/target_id`/);

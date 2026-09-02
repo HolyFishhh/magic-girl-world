@@ -268,7 +268,7 @@ let towerPersistenceRequest = null;
 let towerRetryRequest = null;
 let towerArchiveCalls = 0;
 let towerWakeReason = null;
-let extensionCapabilitiesVersion = '0.3.2';
+let extensionCapabilitiesVersion = '0.3.3';
 let extensionSupportsSingleFloor = true;
 const officialInstallCalls = [];
 const extensionUpdateRequests = [];
@@ -277,7 +277,7 @@ let installedExtensionNames = ['third-party/magic-girl-world'];
 let installedExtensionTypes = { 'third-party/magic-girl-world': 'local' };
 context.window.parent.fetch = async (url, options = {}) => {
   if (String(url).includes('raw.githubusercontent.com')) {
-    return { ok: true, json: async () => ({ version: '0.3.2' }) };
+    return { ok: true, json: async () => ({ version: '0.3.3' }) };
   }
   if (url === '/api/extensions/update') {
     extensionUpdateRequests.push(JSON.parse(options.body));
@@ -360,14 +360,14 @@ assert.equal(towerArchiveCalls, 1);
 assert.equal(sharedRuntime.getTowerCoordinatorStatus().phase, 'waiting');
 assert.deepEqual(JSON.parse(JSON.stringify(sharedRuntime.getDesignAssistantCapabilities())), {
   spec: 'mwg.design-assistant/v1',
-  version: '0.3.2',
+  version: '0.3.3',
   towerGeneration: true,
   towerCoordinator: true,
   towerArchive: true,
   singleFloorStart: true,
 });
 assert.equal((await sharedRuntime.checkTowerExtensionVersion(true)).status, 'current');
-extensionCapabilitiesVersion = '0.3.1';
+extensionCapabilitiesVersion = '0.3.2';
 extensionSupportsSingleFloor = false;
 const outdatedExtension = await sharedRuntime.checkTowerExtensionVersion(true);
 assert.equal(outdatedExtension.status, 'outdated');
@@ -388,7 +388,7 @@ assert.deepEqual(officialInstallCalls, [[
 ]]);
 assert.equal(extensionUpdateRequests.length, 1, 'a copied legacy folder must migrate instead of calling git update');
 
-extensionCapabilitiesVersion = '0.3.2';
+extensionCapabilitiesVersion = '0.3.3';
 extensionSupportsSingleFloor = true;
 context.MagicGirlWorldMvuMonitor.receiveTowerGenerationStatus({ phase: 'running' });
 context.MagicGirlWorldMvuMonitor.receiveTowerGenerationCompleted({ nodeId: 'act-1-floor-1-col-1' });

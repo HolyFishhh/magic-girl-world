@@ -16,6 +16,7 @@ import {
   createTowerNodeBatchJsonSchema,
   createTowerNodeJsonSchema,
   createTowerOpeningJsonSchema,
+  formatCompactEffectAuthoringContract,
   formatTowerBattleBalanceRepairPrompt,
   formatTowerNodeBatchStructureRepairPrompt,
   formatTowerNodeStructureRepairPrompt,
@@ -412,8 +413,7 @@ function towerSingleFloorInitialContentPrompt(input: {
     'opening 包含 title、narrative、choices；choices 为 2-4 项，每项含唯一 id、label、可选 description 与 outcome。outcome 只可使用 hp、max_hp、gold、card_removals、reward；reward 只含 cards、artifacts、items 数组。馈赠可以无代价，也可以用合理代价换取更好收益。',
     '初始牌组总 quantity 至少 10，数量没有上限校验；至少有一种能结束战斗的真实输出路径。卡组是否包含格挡或治疗由设计自由决定，不以此判错。',
     '卡牌 type 只能是 Attack、Skill、Power、Event、Curse；rarity 只能是 Common、Uncommon、Rare、Epic、Legendary、Corrupt；Curse 省略 cost，其他卡 cost 为非负整数或 energy。',
-    '每个 effects 项必须是浅层执行对象，例如操作名与其数值、to、from、pick、when 等同级；禁止 source、operation、target、value 这套抽象字段，禁止在 effects 项内再写 trigger。多步效果使用数组并按顺序逐项结算。',
-    'Power、遗物和独立能力使用 trigger:{on, effects}；状态先在 statuses 完整登记再由 apply_status 引用。自定义资源、临时牌模板、召唤物或卡牌修改也必须先定义再引用。',
+    formatCompactEffectAuthoringContract(),
     '若玩家明确指定流派，必须用真实 effects、trigger、状态、资源、牌区、召唤或选择机制形成“启动→运转→收益”；只有名称、emoji 和描述符合主题视为未实现。召唤流必须真实使用 spawn_summon 并让召唤物参与收益循环。',
     '至少生成一件可执行遗物、一个可执行道具和一个具名且可执行的玩家欲望满溢效果。所有 id 使用以字母或下划线开头的稳定英文标识。地图由程序在本次结果通过后生成，绝对不要输出地图结构。',
     input.validationError ? `上一份结果未通过程序校验：${input.validationError}` : '',
@@ -846,7 +846,7 @@ export class DesignAssistantController {
   getCapabilities() {
     return {
       spec: 'mwg.design-assistant/v1' as const,
-      version: '0.3.2' as const,
+      version: '0.3.3' as const,
       towerGeneration: true as const,
       towerCoordinator: true as const,
       towerArchive: true as const,

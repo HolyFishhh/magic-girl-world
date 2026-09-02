@@ -2316,7 +2316,7 @@ function towerExtensionReadiness(): { ready: boolean; message: string } {
     .map((part: string) => Number(part) || 0);
   const supported = (version[0] || 0) > 0
     || (version[1] || 0) > 3
-    || (version[1] || 0) === 3 && (version[2] || 0) >= 2;
+    || (version[1] || 0) === 3 && (version[2] || 0) >= 3;
   if (
     !supported
     || capabilities.towerGeneration !== true
@@ -2325,7 +2325,7 @@ function towerExtensionReadiness(): { ready: boolean; message: string } {
   ) {
     return {
       ready: false,
-      message: `设计辅助器版本过低（当前 ${capabilities.version || '未知'}，至少需要 0.3.2）。`,
+      message: `设计辅助器版本过低（当前 ${capabilities.version || '未知'}，至少需要 0.3.3）。`,
     };
   }
   return { ready: true, message: '' };

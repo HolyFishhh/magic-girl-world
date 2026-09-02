@@ -460,7 +460,7 @@ assert.equal(patchedCard.data.name, releaseConfig.characterName);
 assert.equal(patchedCard.data.character_version, releaseConfig.cardVersion);
 assert.equal(
   patchedCard.data.creator_notes,
-  '剧情模式可直接开始游玩；角色卡已内置世界书、MVU 变量框架与交互界面。爬塔模式需要另行安装 0.3.2 或更高版本的“魔法少女世界设计辅助器”扩展。',
+  '剧情模式可直接开始游玩；角色卡已内置世界书、MVU 变量框架与交互界面。爬塔模式需要另行安装 0.3.3 或更高版本的“魔法少女世界设计辅助器”扩展。',
   'patched card creator notes must describe the embedded current architecture',
 );
 assert.equal(

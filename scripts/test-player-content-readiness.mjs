@@ -207,4 +207,31 @@ const removedFormat = core.assessInitialPlayerContent(
 assert.equal(removedFormat.ok, false, 'removed effect strings must be rejected');
 assert.ok(removedFormat.issues.some(issue => issue.code === 'REMOVED_EFFECT_FIELD'));
 
+const malformedDsl = core.assessInitialPlayerContent(
+  core.createContentPack({
+    cards: [
+      {
+        id: 'bad_amount', name: '错误数值字段', type: 'Attack', rarity: 'Common', cost: 1, quantity: 5,
+        effects: [{ damage: 7 }, { block: 4, amount: 4 }],
+      },
+      {
+        id: 'valid_attack', name: '正常攻击', type: 'Attack', rarity: 'Common', cost: 1, quantity: 5,
+        effects: { damage: 7 },
+      },
+    ],
+    statuses: [{
+      id: 'bad_tick', name: '错误状态', emoji: '⚠️', type: 'buff',
+      triggers: { tick: { effects: { block: 2 } } },
+    }],
+    relics: readyPack.relics,
+    items: readyPack.items,
+    playerDesireEffect: readyPack.desireEffects.player,
+  }),
+  { emoji: '🧙', hp: 50, maxHp: 50, lust: 0, maxLust: 100, level: 1, exp: 0 },
+);
+const malformedSummary = core.formatPlayerContentReadiness(malformedDsl, 8);
+assert.match(malformedSummary, /battle\.statuses\[0\]\.triggers\.tick：状态定义不合法（具体原因：/);
+assert.match(malformedSummary, /battle\.cards\[0\]\.effects\[1\]/);
+assert.doesNotMatch(malformedSummary, /battle\.statuses\[0\]：状态定义不合法；/);
+
 console.log('Initial player content is gated by one portable contract and a bounded AI repair request.');
