@@ -6,11 +6,14 @@ import {
 import { refreshMvuContentDesignContext } from '../../runtime/contentDesignContextAdapter';
 import { readRuntimeContentDesignSettings } from '../../runtime/contentDesignSettings';
 import { maybeRequestAutomaticBalanceCalibration } from '../../runtime/automaticBalanceCalibration';
+import { normalizeTowerBattleEnemyIdentifiers } from '../../runtime/towerContentActivation';
 import {
   assessEnemyBudget,
   BattleStateStore,
   countCardOwnership,
   createBattleRandomState,
+  isBattleRunNode,
+  readGameMode,
   resolveStartingHand,
   shuffleCards,
   type BattleRequest,
@@ -21,6 +24,7 @@ import {
   normalizeOrbContainer,
   normalizeTurnControl,
   normalizeCombatResourceStates,
+  validateRunState,
   type Card,
   type Enemy,
   type GameState,
@@ -200,7 +204,40 @@ export class GameStateManager extends BattleStateStore {
     this.lastLoadIssues = [];
     try {
       // 首次读取：从MVU变量加载战斗数据
-      const variables = getCurrentMessageVariables();
+      let variables = getCurrentMessageVariables();
+
+      // The fish/common bundles share one GameStateManager singleton while the
+      // tower stays on the same Tavern message.  A failed node generation can
+      // therefore remount the battle view after the route has already moved on.
+      // Clear the old in-memory fight before inspecting the (intentionally
+      // empty) canonical enemy root, otherwise the previous node can be played
+      // and persisted over a newer run revision.
+      const stat = variables?.stat_data;
+      if (readGameMode(stat) === 'tower') {
+        const runResult = validateRunState(stat?.run);
+        const run = runResult.ok ? runResult.value : null;
+        const hasActiveBattleNode =
+          run?.phase === 'in_node' && !!run.currentNode && isBattleRunNode(run.currentNode.kind);
+        if (!hasActiveBattleNode) {
+          this.battleSessionStore.prepare(variables, null);
+          this.resetGame();
+          return false;
+        }
+        // Saves created before the tower boundary enforced runtime-safe enemy
+        // IDs may already be inside a room with namespaced IDs such as
+        // `machine:front:1`. Normalize a local view before validation so the
+        // interrupted fight remains resumable; new rooms are normalized before
+        // activation and therefore persist the canonical IDs directly.
+        if (hasActiveBattleNode && stat?.battle) {
+          variables = {
+            ...variables,
+            stat_data: {
+              ...stat,
+              battle: normalizeTowerBattleEnemyIdentifiers(stat.battle),
+            },
+          };
+        }
+      }
 
       const battleInspection = inspectBattleDataContract(variables);
       if (!battleInspection.ok && battleInspection.issue.code !== 'MISSING_BATTLE') {

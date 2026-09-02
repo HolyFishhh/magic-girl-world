@@ -208,6 +208,7 @@ export class TavernBattleShellPresenter {
     root.on('click.mwgBattleShell', '.end-turn-button', () => void handlers.onEndTurn());
     root.on('click.mwgBattleShell', '#exit-battle-btn', () => void handlers.onExitBattle());
     root.on('click.mwgBattleShell', '#battle-log-btn', () => $('#battle-log').fadeToggle(200));
+    root.on('click.mwgBattleShell', '#close-battle-log', () => $('#battle-log').fadeOut(200));
     root.on('click.mwgBattleShell', '#use-item-btn', () => void handlers.onShowItems());
     root.on('click.mwgBattleShell', '.item-use-btn', event => {
       const itemId = String($(event.currentTarget).data('item-id') || '');

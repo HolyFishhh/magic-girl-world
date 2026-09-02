@@ -31,12 +31,28 @@ assert.match(runtimeSource, /data-mwg-difficulty/);
 for (const difficultyPercent of [10, 50, 80, 100, 110]) {
   assert.match(runtimeSource, new RegExp(`<option value="${difficultyPercent}">`));
 }
-assert.match(runtimeSource, /data-mwg-monitor-setting="autoCalibration"/);
+assert.match(runtimeSource, /data-mwg-design-setting="autoCalibration"/);
+assert.doesNotMatch(
+  runtimeSource,
+  /input instanceof HTMLInputElement/,
+  'settings controls are created in the parent document and must not use cross-realm instanceof checks',
+);
 assert.match(runtimeSource, /difficultyPercent:\s*80/);
 assert.match(runtimeSource, /autoCalibration:\s*true/);
 assert.match(runtimeSource, /data-action="open-card-repair"/);
+assert.doesNotMatch(
+  runtimeSource,
+  /if \(!failed\?\.nodeId\) return;/,
+  'the retry button must fall back to the persisted MVU failure after a page reload',
+);
+assert.match(
+  runtimeSource,
+  /const provider = registryHost\.MagicGirlDesignAssistant \|\| host\.MagicGirlDesignAssistant \|\| designAssistant;/,
+  'the retry button must resolve the extension dynamically through the public runtime bridge',
+);
 assert.match(runtimeSource, /data-mwg-card-repair-input/);
 assert.match(runtimeSource, /正在按你的要求增量修复卡牌/);
+assert.match(runtimeSource, /getMvuMonitorSnapshot/);
 assert.doesNotMatch(runtimeSource, /mwg-card-repair-(?:form|error)\{display:none!important/);
 assert.match(runtimeSource, /data-mwg-monitor-loading-title>正在生成变量/);
 assert.match(runtimeSource, /setPointerCapture/);
@@ -62,15 +78,61 @@ assert.match(
 );
 assert.doesNotMatch(runtimeSource, /mwg-monitor-launcher/, 'the old text-wrapped settings button must stay removed');
 
+const monitorTemplate = runtimeSource.match(/root\.innerHTML\s*=\s*`([\s\S]*?)`;\s*doc\.body\.appendChild\(root\)/)?.[1];
+assert.ok(monitorTemplate, 'the exported runtime must contain one parseable floating settings template');
+const monitorNodes = collectNodes(parseFragment(monitorTemplate));
+const attribute = (node, name) => node.attrs?.find(entry => entry.name === name)?.value;
+const nodesWithAttribute = (name, value) => monitorNodes.filter(node =>
+  attribute(node, name) !== undefined && (value === undefined || attribute(node, name) === value),
+);
+assert.equal(
+  monitorNodes.filter(node => attribute(node, 'class')?.split(/\s+/).includes('mwg-tool-orb')).length,
+  1,
+  'the settings orb and MVU progress window must not be duplicated',
+);
+assert.equal(nodesWithAttribute('data-mwg-component', 'design').length, 1);
+assert.equal(nodesWithAttribute('data-mwg-component', 'deck').length, 1);
+assert.equal(nodesWithAttribute('data-mwg-component', 'archetype').length, 1);
+assert.equal(nodesWithAttribute('data-mwg-component', 'lineage').length, 1);
+assert.equal(nodesWithAttribute('data-mwg-component', 'tower').length, 1);
+assert.equal(nodesWithAttribute('data-mwg-component', 'tower-install').length, 1);
+assert.equal(nodesWithAttribute('data-mwg-tower-extension').length, 2);
+assert.equal(nodesWithAttribute('data-mwg-tower-requirement').length, 1);
+assert.equal(nodesWithAttribute('data-action', 'install-tower-extension').length, 1);
+assert.match(
+  runtimeSource,
+  /https:\/\/github\.com\/HolyFishhh\/magic-girl-world\/releases\/latest/,
+  'the missing or outdated tower extension panel must link to the project release page',
+);
+assert.match(runtimeSource, /installExtension\([\s\S]*magic-girl-world\.git[\s\S]*extension/);
+assert.match(
+  runtimeSource,
+  /compareSemanticVersions\(extensionVersion, requiredTowerExtensionVersion\) >= 0/,
+  'tower capability detection must reject extensions below the required version',
+);
+assert.equal(nodesWithAttribute('data-mwg-design-setting', 'designAssistantEnabled').length, 1);
+assert.equal(nodesWithAttribute('data-mwg-design-setting', 'autoCalibration').length, 1);
+assert.equal(nodesWithAttribute('data-mwg-design-setting', 'simulationSeeds').length, 1);
+assert.equal(nodesWithAttribute('data-mwg-design-setting', 'showNotifications').length, 1);
+assert.equal(nodesWithAttribute('data-mwg-difficulty').length, 1);
+assert.equal(nodesWithAttribute('data-mwg-monitor-loading').length, 1);
+
 let sharedName = '';
 let sharedRuntime;
 let readinessOptions;
+let readinessReadCount = 0;
 let chatMessageOptions;
 let beforeMessageUpdateListener;
 let variableUpdateStartedListener;
 let commandParsedListener;
 let variableUpdateEndedListener;
 let globalExtraAnalysis = false;
+let authoritativeRuntimeVariables = {
+  stat_data: {
+    battle: {},
+    run: { act: 3, floor: 15, stateRevision: 99 },
+  },
+};
 const intervalCallbacks = [];
 const clearedIntervals = [];
 const context = {
@@ -84,13 +146,20 @@ const context = {
           COMMAND_PARSED: 'mag_command_parsed',
           VARIABLE_UPDATE_ENDED: 'mag_variable_update_ended',
         },
-        getMvuData() {},
-        replaceMvuData() {},
+        getMvuData(options) {
+          readinessOptions = options;
+          return JSON.parse(JSON.stringify(authoritativeRuntimeVariables));
+        },
+        async replaceMvuData(variables, options) {
+          readinessOptions = options;
+          authoritativeRuntimeVariables = JSON.parse(JSON.stringify(variables));
+        },
       },
     },
   },
   getVariables(options) {
     if (options?.type === 'global') return { extra_analysis: globalExtraAnalysis };
+    readinessReadCount += 1;
     readinessOptions = options;
     return { stat_data: { battle: {} } };
   },
@@ -138,19 +207,47 @@ vm.runInNewContext(runtimeSource, context);
 assert.equal(sharedName, 'MagicGirlWorld');
 assert.equal(sharedRuntime.spec, 'mwg.tavern-runtime/v1');
 assert.equal(sharedRuntime.version, releaseConfig.cardVersion);
+assert.equal(typeof sharedRuntime.installTowerExtension, 'function');
 assert.deepEqual(Array.from(sharedRuntime.getDiagnostics().views), ['start', 'common', 'fish', 'update']);
 await sharedRuntime.waitForMessageReady(7);
 assert.equal(readinessOptions.type, 'message');
 assert.equal(readinessOptions.message_id, 7);
+const readsBeforeHostOnlySetup = readinessReadCount;
+await sharedRuntime.waitForMessageReady(7, { requireBattleData: false });
+assert.equal(
+  readinessReadCount,
+  readsBeforeHostOnlySetup,
+  'first-message setup must not deadlock while waiting for battle data that opening generation creates',
+);
 assert.equal(sharedRuntime.getMessageText(7), '纯剧情正文');
 assert.equal(chatMessageOptions, 7);
+assert.equal(sharedRuntime.getMessageVariables(7).stat_data.run.act, 3);
+await sharedRuntime.updateMessageVariablesWith(7, variables => {
+  variables.__magic_girl_world = { battle_session: { nodeId: 'act-3-boss' } };
+  return variables;
+});
+assert.equal(authoritativeRuntimeVariables.stat_data.run.act, 3);
+assert.equal(authoritativeRuntimeVariables.stat_data.run.stateRevision, 99);
+assert.equal(authoritativeRuntimeVariables.__magic_girl_world.battle_session.nodeId, 'act-3-boss');
+await assert.rejects(
+  sharedRuntime.replaceMessageVariables(7, {
+    stat_data: { battle: {}, run: { act: 1, floor: 10, stateRevision: 21 } },
+  }),
+  /拒绝替换为旧爬塔状态/,
+);
 assert.equal(typeof beforeMessageUpdateListener, 'function');
 assert.equal(typeof variableUpdateStartedListener, 'function');
 assert.equal(typeof commandParsedListener, 'function');
 assert.equal(typeof variableUpdateEndedListener, 'function');
 assert.equal(typeof context.MagicGirlWorldMvuMonitor?.begin, 'function');
+assert.equal(
+  context.window.parent.MagicGirlWorldMvuMonitor,
+  context.MagicGirlWorldMvuMonitor,
+  'the iframe runtime must publish its monitor bridge on the SillyTavern parent window',
+);
 assert.equal(typeof sharedRuntime.registerCardRepairHandler, 'function');
 assert.equal(typeof sharedRuntime.requestCardRepair, 'function');
+assert.equal(typeof sharedRuntime.reportMvuValidationFailure, 'function');
 let cardRepairRequirement = '';
 const disposeCardRepairHandler = sharedRuntime.registerCardRepairHandler(async requirement => {
   cardRepairRequirement = requirement;
@@ -159,10 +256,86 @@ await sharedRuntime.requestCardRepair('把星火改成两段攻击');
 assert.equal(cardRepairRequirement, '把星火改成两段攻击');
 disposeCardRepairHandler();
 await assert.rejects(sharedRuntime.requestCardRepair('再次修复'), /尚未完成第二轮修复接口加载/);
+let towerGenerationRequest = null;
+let towerPersistenceRequest = null;
+let towerRetryRequest = null;
+let towerArchiveCalls = 0;
+let towerWakeReason = null;
+context.window.parent.MagicGirlDesignAssistant = {
+  requestTowerGeneration: async request => {
+    towerGenerationRequest = request;
+    return { response: '预生成完成', generationId: 'tower-generation-1' };
+  },
+  persistTowerGeneration: async request => {
+    towerPersistenceRequest = request;
+    return true;
+  },
+  retryTowerGeneration: async request => {
+    towerRetryRequest = request;
+    return true;
+  },
+  scheduleTowerGeneration: async reason => {
+    towerWakeReason = reason;
+    return true;
+  },
+  archiveTowerRun: async () => {
+    towerArchiveCalls += 1;
+    return 3;
+  },
+  getTowerCoordinatorStatus: () => ({ phase: 'waiting', message: '等待路线选择' }),
+  getCapabilities: () => ({
+    spec: 'mwg.design-assistant/v1',
+    version: '0.2.0',
+    towerGeneration: true,
+    towerCoordinator: true,
+    towerArchive: true,
+  }),
+};
+const towerGenerationEvents = [];
+const disposeTowerGenerationListener = sharedRuntime.registerTowerGenerationListener(event => {
+  towerGenerationEvents.push(event);
+});
+const towerGenerationResult = await sharedRuntime.requestTowerGeneration({
+  nodeId: 'act-1-floor-1-col-1',
+  requestId: 'request-1',
+  prompt: '生成当前节点',
+});
+assert.equal(towerGenerationRequest.nodeId, 'act-1-floor-1-col-1');
+assert.equal(towerGenerationResult.response, '预生成完成');
+assert.equal(await sharedRuntime.persistTowerGeneration({ nodeId: 'act-1-floor-1-col-1', requestId: 'request-1' }), true);
+assert.equal(towerPersistenceRequest.requestId, 'request-1');
+assert.equal(await sharedRuntime.retryTowerGeneration({ nodeId: 'act-1-floor-2-col-1' }), true);
+assert.equal(towerRetryRequest.nodeId, 'act-1-floor-2-col-1');
+assert.equal(await sharedRuntime.scheduleTowerGeneration('run-created'), true);
+assert.equal(towerWakeReason, 'run-created');
+assert.equal(await sharedRuntime.archiveTowerRun(), 3);
+assert.equal(towerArchiveCalls, 1);
+assert.equal(sharedRuntime.getTowerCoordinatorStatus().phase, 'waiting');
+assert.deepEqual(JSON.parse(JSON.stringify(sharedRuntime.getDesignAssistantCapabilities())), {
+  spec: 'mwg.design-assistant/v1',
+  version: '0.2.0',
+  towerGeneration: true,
+  towerCoordinator: true,
+  towerArchive: true,
+});
+context.MagicGirlWorldMvuMonitor.receiveTowerGenerationStatus({ phase: 'running' });
+context.MagicGirlWorldMvuMonitor.receiveTowerGenerationCompleted({ nodeId: 'act-1-floor-1-col-1' });
+context.MagicGirlWorldMvuMonitor.receiveTowerGenerationFailed({ nodeId: 'act-1-floor-2-col-1', error: '测试失败' });
+assert.deepEqual(
+  Array.from(towerGenerationEvents, event => event.type),
+  ['status', 'completed', 'failed'],
+  'the parent extension must return tower lifecycle events through the existing iframe monitor bridge',
+);
+assert.equal(sharedRuntime.getTowerGenerationSnapshot().status.phase, 'running');
+disposeTowerGenerationListener();
 assert.deepEqual(JSON.parse(JSON.stringify(context.MagicGirlWorldMvuMonitor.getSettings())), {
   showMvuWindow: true,
   difficultyPercent: 80,
   autoCalibration: true,
+  designAssistantEnabled: true,
+  simulationSeeds: 8,
+  showNotifications: true,
+  debug: false,
 });
 assert.doesNotThrow(() => {
   globalExtraAnalysis = true;
@@ -185,15 +358,27 @@ assert.doesNotThrow(() => {
     '当前时间：old → new',
     'MVU COMMAND_PARSED must expose a natural-language change summary instead of raw commands',
   );
+  assert.equal(
+    context.MagicGirlWorldMvuMonitor.getSnapshot().rawOutput,
+    '<UpdateVariable><Analysis>Update.</Analysis>\n_.set(\'status.time\', \'old\', \'new\');\n</UpdateVariable>',
+    'the raw-output panel must show only the second-stage update instead of repeating first-stage prose',
+  );
   context.MagicGirlWorldMvuMonitor.success();
   assert.equal(context.MagicGirlWorldMvuMonitor.getSnapshot().phase, 'success');
   assert.ok(context.MagicGirlWorldMvuMonitor.getSnapshot().finishedAt > 0);
   assert.ok(clearedIntervals.length > 0, 'the elapsed timer must stop when the second-stage update succeeds');
 });
+sharedRuntime.reportMvuValidationFailure(new Error('候选变量未通过最终校验'));
+assert.equal(context.MagicGirlWorldMvuMonitor.getSnapshot().phase, 'error');
+assert.match(context.MagicGirlWorldMvuMonitor.getSnapshot().detail, /候选变量未通过最终校验/);
 assert.doesNotThrow(() => {
   context.MagicGirlWorldMvuMonitor.begin({ generationId: 'reverse-event-order' });
   variableUpdateEndedListener({ stat_data: { battle: { cards: [] } } });
-  assert.equal(context.MagicGirlWorldMvuMonitor.getSnapshot().phase, 'success');
+  assert.equal(
+    context.MagicGirlWorldMvuMonitor.getSnapshot().phase,
+    'applying',
+    'a variable event without a model update block must remain pending instead of reporting false success',
+  );
   commandParsedListener(
     {},
     [],
@@ -202,8 +387,15 @@ assert.doesNotThrow(() => {
   assert.equal(
     context.MagicGirlWorldMvuMonitor.getSnapshot().phase,
     'success',
-    'late COMMAND_PARSED must not move an already-completed update back to applying',
+    'late COMMAND_PARSED must complete the pending update only after a valid block is observed',
   );
+});
+assert.doesNotThrow(() => {
+  context.MagicGirlWorldMvuMonitor.begin({ generationId: 'missing-update-block' });
+  variableUpdateEndedListener({ stat_data: { battle: { cards: [] } } });
+  commandParsedListener({}, [], '只有剧情正文，没有变量更新块');
+  assert.equal(context.MagicGirlWorldMvuMonitor.getSnapshot().phase, 'error');
+  assert.match(context.MagicGirlWorldMvuMonitor.getSnapshot().detail, /没有返回可解析的 <UpdateVariable>/);
 });
 assert.doesNotThrow(() => {
   context.MagicGirlWorldMvuMonitor.begin({ generationId: 'extra-test' });
@@ -488,11 +680,97 @@ assert.match(interfacePayloads.common.replaceString, /recent-only/);
 assert.match(interfacePayloads.fish.replaceString, /messageId === latestMessageId/);
 assert.match(interfacePayloads.fish.replaceString, /latest-only/);
 
+async function resolveFishBootstrapView(statData) {
+  const scriptSource = interfacePayloads.fish.replaceString.match(/<script>([\s\S]*)<\/script>/)?.[1] || '';
+  const selectedViews = [];
+  const createNode = tagName => {
+    const node = {
+      tagName,
+      dataset: {},
+      style: {},
+      textContent: '',
+      innerHTML: '',
+      children: [],
+      setAttribute() {},
+      replaceChildren(...children) {
+        this.children = children;
+      },
+      appendChild(child) {
+        this.children.push(child);
+      },
+    };
+    return node;
+  };
+  const document = {
+    title: '',
+    documentElement: { dataset: {} },
+    head: createNode('head'),
+    body: createNode('body'),
+    createElement: createNode,
+  };
+  const runtime = {
+    spec: 'mwg.tavern-runtime/v1',
+    version: releaseConfig.cardVersion,
+    getMessageVariables: () => ({ stat_data: statData }),
+    getViewAsset: view => {
+      selectedViews.push(view);
+      return { title: view, bodyHtml: `<main>${view}</main>`, styles: 'body{}', script: 'void 0;' };
+    },
+  };
+  vm.runInNewContext(scriptSource, {
+    document,
+    window: { setTimeout: () => 0 },
+    waitGlobalInitialized: async () => runtime,
+    getCurrentMessageId: () => 4,
+    getLastMessageId: () => 4,
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(
+    selectedViews.length,
+    1,
+    `the lightweight bootstrap must mount exactly one resolved view: ${document.body.children.map(node => node.textContent).join(' | ')}`,
+  );
+  return selectedViews[0];
+}
+
+assert.equal(
+  await resolveFishBootstrapView({
+    game_mode: 'tower',
+    game_mode_lock: { schemaVersion: 1, mode: 'tower' },
+    run: { phase: 'awaiting_choice', currentNode: null },
+  }),
+  'common',
+  'refreshing a completed same-floor tower fight must restore the route map instead of the stale BATTLE_START view',
+);
+assert.equal(
+  await resolveFishBootstrapView({
+    game_mode: 'tower',
+    game_mode_lock: { schemaVersion: 1, mode: 'tower' },
+    run: { phase: 'in_node', currentNode: { kind: 'event' } },
+  }),
+  'common',
+  'non-battle tower nodes must always restore the common route surface',
+);
+assert.equal(
+  await resolveFishBootstrapView({
+    game_mode: 'tower',
+    game_mode_lock: { schemaVersion: 1, mode: 'tower' },
+    run: { phase: 'in_node', currentNode: { kind: 'elite' } },
+  }),
+  'fish',
+  'an interrupted tower battle must still restore the battle surface',
+);
+assert.equal(
+  await resolveFishBootstrapView({ game_mode: 'story', run: null }),
+  'fish',
+  'story-mode battles must keep using the marker-selected battle surface',
+);
+
 assert.equal((sharedRuntime.getViewAsset('common').bodyHtml.match(/\$2/g) || []).length, 0);
 assert.throws(() => sharedRuntime.getViewAsset('unknown'), /未知的魔法少女世界视图/);
 
 for (const [view, payload] of Object.entries(interfacePayloads)) {
-  assert.ok(payload.replaceString.length < 10000, `${view} regex shell must stay lightweight`);
+  assert.ok(payload.replaceString.length < 6000, `${view} regex shell must stay lightweight in long chats`);
   assert.equal(payload.minDepth, 0, `${view} regex must only run on the latest message floor`);
   assert.equal(
     payload.maxDepth,

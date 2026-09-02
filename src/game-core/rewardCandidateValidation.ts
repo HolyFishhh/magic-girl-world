@@ -74,7 +74,22 @@ function compactPrograms(value: Record<string, unknown>): unknown[] {
 }
 
 function comparableDefinition(value: Record<string, unknown>): string {
-  const ignored = new Set(['quantity', 'count', 'price', 'status', 'description', 'upgrade_level', '$meta']);
+  const ignored = new Set([
+    'quantity',
+    'count',
+    'price',
+    'status',
+    'description',
+    'upgrade_level',
+    '$meta',
+    // Persistent tower decks store one owned instance per record. These fields
+    // describe ownership, not card rules, and must not split an otherwise
+    // identical reward definition.
+    'runInstanceId',
+    'templateId',
+    'origin',
+    'parentRunInstanceId',
+  ]);
   const normalize = (entry: unknown): unknown => {
     if (Array.isArray(entry)) return entry.map(normalize);
     if (!isRecord(entry)) return entry;
@@ -305,7 +320,10 @@ export function validateRewardCandidateAgainstLibrary(
   const existing = (library.existing || []).filter(
     (entry): entry is Record<string, unknown> => isRecord(entry) && entry.id === value.id,
   );
-  if (existing.length > 1) return failure(`已有内容包含重复 ID: ${String(value.id)}`);
+  if (existing.length > 1) {
+    const definitions = new Set(existing.map(comparableDefinition));
+    if (definitions.size > 1) return failure(`已有内容包含重复 ID: ${String(value.id)}`);
+  }
   if (existing.length === 0) return { ok: true };
   if (category === 'artifacts') return failure(`遗物已持有: ${String(value.id)}`);
   if (comparableDefinition(existing[0]) !== comparableDefinition(value)) {

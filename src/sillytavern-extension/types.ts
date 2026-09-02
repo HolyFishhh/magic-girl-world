@@ -5,9 +5,11 @@ import type {
   EnemyPowerScore,
 } from '../game-core';
 import type { KnowledgeGraphView } from './knowledgeGraph';
+import type { KnowledgeGraphStorage } from './knowledgeGraph';
 
 export const DESIGN_ASSISTANT_EXTENSION_ID = 'magic-girl-design-assistant';
 export const DESIGN_ASSISTANT_METADATA_KEY = 'magicGirlDesignAssistant';
+export const TOWER_ARCHIVE_METADATA_KEY = 'magicGirlTowerArchive';
 export const DESIGN_ASSISTANT_STATE_SPEC = 'mwg.st-design-assistant/v1' as const;
 export const DESIGN_ASSISTANT_PROMPT_MARKER = '[MWG_DESIGN_CONTEXT/v1]';
 export const DESIGN_ASSISTANT_CARD_SCOPE = 'mwg.design-assistant-card/v1' as const;
@@ -35,6 +37,7 @@ export interface ProgramCalibrationMemory {
   requestedRatio: number;
   effectiveRatio: number;
   appliedScale: number;
+  mode: 'applied' | 'verified' | 'advisory';
   winnableAtCurrentResources: boolean;
   changedPaths: string[];
   warnings: string[];
@@ -48,6 +51,9 @@ export interface DesignAssistantChatState {
   lastDeckFingerprint?: string;
   lastEnemyFingerprint?: string;
   lastInjectionAt?: number;
+  lastInjectionSource?: 'official' | 'tavern-helper' | 'mvu-lifecycle';
+  lastInjectionMessageId?: number | 'latest';
+  lastInjectionCount?: number;
   lastCalibration?: ProgramCalibrationMemory;
 }
 
@@ -77,19 +83,24 @@ export interface DesignAssistantDashboard {
   settings: DesignAssistantSettings;
   status: DesignAssistantStatus;
   threaded: boolean;
-  graph: { nodes: number; edges: number; version: string };
+  graph: { nodes: number; edges: number; version: string; storage: KnowledgeGraphStorage };
   state: DesignAssistantChatState;
   snapshot: MvuDesignSnapshot | null;
 }
 
 export interface MvuHost {
   events?: Record<string, string>;
-  getMvuData(options: { type: 'message'; message_id: 'latest' }): unknown;
+  getMvuData(options: { type: 'message'; message_id: number | 'latest' }): unknown;
+  replaceMvuData?(
+    data: unknown,
+    options: { type: 'message'; message_id: number | 'latest' },
+  ): Promise<void> | void;
   isDuringExtraAnalysis?(): boolean;
 }
 
 export interface SillyTavernEventSource {
   on(event: string, listener: (...args: any[]) => unknown): void;
+  emit?(event: string, ...args: any[]): Promise<unknown> | unknown;
   removeListener?(event: string, listener: (...args: any[]) => unknown): void;
 }
 
@@ -98,10 +109,17 @@ export interface SillyTavernContext {
   characterId?: string | number | null;
   groupId?: string | number | null;
   characters?: Array<Record<string, any>>;
+  chat?: Array<Record<string, any>>;
   extensionSettings: Record<string, any>;
   saveSettingsDebounced(): void;
   chatMetadata: Record<string, any>;
   saveMetadataDebounced(): void;
+  saveChat?(): Promise<void> | void;
+  updateMessageBlock?(
+    messageId: number,
+    message: Record<string, any>,
+    options?: { rerenderMessage?: boolean },
+  ): void;
   eventSource: SillyTavernEventSource;
   eventTypes: Record<string, string>;
 }

@@ -13,7 +13,7 @@ const node = { id: 'a1_f3_event_4_0', kind: 'event', act: 1, floor: 3, danger: 0
 assert.equal(formatRunNodeDirection(node, 42), formatRunNodeDirection(node, 42));
 assert.match(
   formatRunNodeDirection(node, 42),
-  /^围绕“.+”生成短事件；选择应体现.+。机制侧重“.+”。节奏：中段形成联动，明确取舍。章线：建立威胁与关键关系。$/,
+  /^围绕“.+”生成事件；选择应体现.+。机制侧重“.+”。节奏：中段形成联动，明确取舍。章线：建立威胁与关键关系。$/,
 );
 assert.match(formatRunNodeDirection({ ...node, id: 'a1_f4_shop_5_0', kind: 'shop' }, 42), /价格由程序决定/);
 assert.match(formatRunNodeDirection(node, 42), /机制侧重“(?:生命换收益|金币换成长|卡牌改造|遗物代价|路线情报)”/);

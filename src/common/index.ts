@@ -2,16 +2,22 @@
 import '../runtime/bootstrap';
 import {
   getCurrentChatMessageText,
+  getCurrentMessageVariableOptions,
   getCurrentMessageVariables,
-  getRelativeChatMessageText,
+  ensureMvuRuntimeReady,
   isCurrentMessageLatest,
   isCurrentMessageWithinDepth,
   rerenderHistoricalMessageForDepth,
   watchCurrentMessageDepth,
 } from '../runtime/messageVariables';
 import { readRunState } from '../runtime/runStateAdapter';
-import { retryCurrentMessageWithExtraModel } from '../runtime/mvuExtraModelRepair';
+import {
+  ExtraModelCandidateRejectedError,
+  retryCurrentMessageWithExtraModel,
+} from '../runtime/mvuExtraModelRepair';
 import { registerNaturalLanguageCardRepairHandler } from '../runtime/naturalLanguageCardRepair';
+import { registerRuntimeViewLifecycle, switchRuntimeView } from '../runtime/runtimeViewSwitcher';
+import { ensureRuntimeFrameHeightSync } from '../runtime/runtimeFrameHeight';
 import { createContentPackFromMvuBattle } from '../runtime/contentPackAdapter';
 import {
   isMvuDeckPowerProfileCurrent,
@@ -49,10 +55,19 @@ import {
   summarizeBuildBudget,
   type RunNodeChoice,
   type RunNodeKind,
+  type RunState,
   type PlayerContentReadiness,
   type EffectDisplayTag,
+  migrateGameModeInStat,
+  readGameMode,
+  readGameModeLock,
+  type GameMode,
 } from '../game-core';
+import { mountTowerApp, type TowerAppCallbacks, type TowerAppController } from '../tower/towerApp';
+import '../tower/index.scss';
 import { readStatusLocation, readStatusProfession } from './statusAdapter';
+import { isLockedTowerMapRun } from './towerMapMode';
+import { renderTowerNodePanel, type TowerRestCardAction } from './towerNodePanel';
 import { TavernCommonActionHost } from './commonActionHost';
 import {
   needsProgressionSettlement,
@@ -70,11 +85,16 @@ import {
   readRewardLimits,
   type RewardSelections,
 } from './rewardTransactions';
-import { TavernRunActionHost } from './runActionHost';
+import { createRewardPoolFingerprint, TavernRunActionHost } from './runActionHost';
+import {
+  InitialContentCandidateRejectedError,
+  runInitialContentRepairLoop,
+} from './initialContentRepairLoop';
 import './index.scss';
 
 const commonActionHost = TavernCommonActionHost.getInstance();
 const runActionHost = TavernRunActionHost.getInstance();
+ensureRuntimeFrameHeightSync()?.request();
 
 // ---------------- 奖励内联渲染：状态与工具 ----------------
 let __STAT__: any = null;
@@ -83,7 +103,14 @@ let __DELTA__: any = null;
 let __PENDING_REWARD_SUMMARY: string | null = null;
 let __PENDING_RUN_SUMMARY: string | null = null;
 let __RUN_ERROR: string | null = null;
+let __TOWER_MAP_APP: TowerAppController | null = null;
+let __INITIAL_TOWER_REPAIR_TIMER: ReturnType<typeof setTimeout> | null = null;
+let __INITIAL_TOWER_EXTENSION_WAIT_ATTEMPTS = 0;
+const __INITIAL_TOWER_REPAIR_FALLBACK_ATTEMPTS = new Map<string, number>();
+const __INITIAL_TOWER_REPAIR_FALLBACK_ISSUES = new Map<string, Array<{ path: string; code: string }>>();
 let __stopLatestMessageGuard: (() => void) | null = null;
+let __disposeTowerGenerationListener: (() => void) | null = null;
+let __towerGenerationRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let __BATTLE_BOOK_DATA: { playerStatusEffects: any[]; statuses: any[] } = {
   playerStatusEffects: [],
   statuses: [],
@@ -94,6 +121,11 @@ function getStatRootRef(variables: any): any {
   return variables?.stat_data && typeof variables.stat_data === 'object' ? variables.stat_data : {};
 }
 let __isMutating = false; // 防抖标记
+interface RewardSelectionMemory {
+  contextKey: string;
+  selections: RewardSelections;
+}
+let __REWARD_SELECTION_MEMORY: RewardSelectionMemory | null = null;
 let __USER_MUTATION_PILLS: string[] = [];
 // 持久通知（本页面会话内保持）
 const __PERSIST_PILLS: string[] = [];
@@ -112,6 +144,15 @@ const CN_LABELS: Record<string, string> = {
   profession: '职业',
   inventory: '持有物',
   permanent_status: '永久状态',
+};
+
+const CARD_RARITY_LABELS: Readonly<Record<string, string>> = {
+  Common: '普通',
+  Uncommon: '罕见',
+  Rare: '稀有',
+  Epic: '史诗',
+  Legendary: '传说',
+  Corrupt: '腐化',
 };
 
 function normalizeOptionsList<T = any>(value: any): T[] {
@@ -135,6 +176,7 @@ const RUN_NODE_LABELS: Record<RunNodeKind, { icon: string; name: string; prompt:
   event: { icon: '?', name: '事件', prompt: '生成一个有明确取舍的短事件。' },
   rest: { icon: '♨', name: '营火', prompt: '生成简短的营火休整场景，不代替玩家选择恢复或升级。' },
   shop: { icon: '¤', name: '商店', prompt: '生成本次商店的简短场景和商品候选；价格由程序决定。' },
+  treasure: { icon: '▣', name: '宝箱', prompt: '生成与当前世界和章节相符的宝箱收获，内容保持简短。' },
   boss: { icon: '♛', name: 'Boss', prompt: '生成本章节 Boss 战，机制应检验当前构筑。' },
 };
 
@@ -170,10 +212,10 @@ function currentBuildContext(): {
   return { pack, budget };
 }
 
-function currentInitialContentReadiness(): PlayerContentReadiness | null {
-  const pack = currentContentPack();
-  const battle = __STAT__?.battle;
+function initialContentReadinessFromStat(stat: Record<string, any> | null | undefined): PlayerContentReadiness | null {
+  const battle = stat?.battle;
   const core = battle?.core;
+  const pack = battle && typeof battle === 'object' ? createContentPackFromMvuBattle(battle) : null;
   return pack
     ? assessInitialPlayerContent(pack, {
         emoji: core?.emoji,
@@ -185,6 +227,10 @@ function currentInitialContentReadiness(): PlayerContentReadiness | null {
         exp: battle?.exp,
       })
     : null;
+}
+
+function currentInitialContentReadiness(): PlayerContentReadiness | null {
+  return initialContentReadinessFromStat(__STAT__);
 }
 
 function buildBudgetPrompt(context: ReturnType<typeof currentBuildContext>): string | null {
@@ -322,8 +368,7 @@ function computeChangePillsByDelta(delta: any, stat: any): string[] {
     } else {
       pills.push('职业：' + prof);
     }
-  }
-  else if (prof && typeof prof === 'object') {
+  } else if (prof && typeof prof === 'object') {
     const nameDelta = prof.name;
     const abilityDelta = prof.ability;
     if (typeof nameDelta === 'string' && nameDelta.includes('->')) pills.push('职业名：' + nameDelta);
@@ -440,7 +485,8 @@ function computeChangePillsByDelta(delta: any, stat: any): string[] {
 }
 
 async function applyRewardSelectionsInline(selections: RewardSelections) {
-  const settlement = await runActionHost.settleRewardSelections(selections);
+  const expectedReward = createRewardPoolFingerprint(__STAT__ || {});
+  const settlement = await runActionHost.settleRewardSelections(selections, { expectedReward });
   await synchronizeContentDesignContext();
   const settledSummary = settlement.summary;
   settledSummary.cards.forEach(name => __USER_MUTATION_PILLS.push(`新增卡牌：${name}`));
@@ -628,9 +674,10 @@ function renderChoiceModule() {
           const invalid = !inspection?.ok;
           // 处理费用显示
           const cost = card.cost;
-          const costDisplay = cost === undefined || cost === null
-            ? ''
-            : `消耗: ${describeCardCost(cost, contentDescriptionResourceDefinitions())}`;
+          const costDisplay =
+            cost === undefined || cost === null
+              ? ''
+              : `消耗: ${describeCardCost(cost, contentDescriptionResourceDefinitions())}`;
           const priceDisplay = isShop ? `价格: ${recommendShopPrice('cards', card, run.act)} 金币` : '';
           const cardDescription =
             normalizeChinesePlayerDescription(card.description) ||
@@ -749,6 +796,8 @@ function renderChoiceModule() {
   // 设置选择事件
   if (hasChoices) {
     setupChoiceEvents(cards, artifacts, items, usableLimits);
+  } else {
+    __REWARD_SELECTION_MEMORY = null;
   }
 }
 
@@ -786,14 +835,32 @@ async function requestRewardRerollFromUi(
 
 // 设置选择事件
 function setupChoiceEvents(cards: any[], artifacts: any[], items: any[], limits: any) {
-  const selections = { cards: [] as number[], artifacts: [] as number[], items: [] as number[] };
   const activeRun = readRunState(__STAT__);
   const isShop = activeRun?.phase === 'in_node' && activeRun.currentNode?.kind === 'shop';
-  const rerollCategories = ([
-    cards.length > 0 ? 'cards' : null,
-    artifacts.length > 0 ? 'artifacts' : null,
-    items.length > 0 ? 'items' : null,
-  ] as const).filter((value): value is 'cards' | 'artifacts' | 'items' => value !== null);
+  const reward = readRewardRoot(__STAT__) || {};
+  const contextKey = JSON.stringify({
+    nodeId: activeRun?.currentNode?.id || null,
+    nodeKind: activeRun?.currentNode?.kind || null,
+    poolRevision: Number(reward.pool_revision || 0),
+    cards,
+    artifacts,
+    items,
+    limits,
+  });
+  if (!__REWARD_SELECTION_MEMORY || __REWARD_SELECTION_MEMORY.contextKey !== contextKey) {
+    __REWARD_SELECTION_MEMORY = {
+      contextKey,
+      selections: { cards: [], artifacts: [], items: [] },
+    };
+  }
+  const selections = __REWARD_SELECTION_MEMORY.selections;
+  const rerollCategories = (
+    [
+      cards.length > 0 ? 'cards' : null,
+      artifacts.length > 0 ? 'artifacts' : null,
+      items.length > 0 ? 'items' : null,
+    ] as const
+  ).filter((value): value is 'cards' | 'artifacts' | 'items' => value !== null);
   const rerollCounts = { cards: cards.length, artifacts: artifacts.length, items: items.length };
   const pendingReroll = __STAT__?.run_reward_reroll;
 
@@ -822,8 +889,29 @@ function setupChoiceEvents(cards: any[], artifacts: any[], items: any[], limits:
     const selEl = document.getElementById(idFor(type, 'selected')) as HTMLElement | null;
     if (!listEl) return;
 
+    const inputs = Array.from(listEl.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[];
+    const restored = [...new Set(selections[type])]
+      .filter(index => Number.isInteger(index) && index >= 0 && index < inputs.length && !inputs[index]?.disabled)
+      .slice(0, Math.max(0, max));
+    selections[type].splice(0, selections[type].length, ...restored);
+    inputs.forEach((input, index) => {
+      input.checked = restored.includes(index);
+    });
+    if (selEl) selEl.textContent = String(restored.length);
+
     // 所有奖励统一使用checkbox；当 max===1 时，点击新项自动替换旧项
-    listEl.querySelectorAll('input[type="checkbox"]').forEach(inp => {
+    inputs.forEach(inp => {
+      // In a normal document a label toggles its hidden checkbox by default.
+      // Some Tavern iframe/overlay combinations swallow that default action
+      // when the player taps the card body, leaving the card visually inert.
+      // Forward a non-input label click to the real control so keyboard,
+      // mouse and touch all take the same `change` transaction path.
+      const option = inp.closest('label.option');
+      option?.addEventListener('click', event => {
+        if (event.target === inp || inp.disabled) return;
+        event.preventDefault();
+        inp.click();
+      });
       inp.addEventListener('change', ev => {
         const t = ev.target as HTMLInputElement;
         const idx = parseInt(t.value);
@@ -934,6 +1022,7 @@ function setupChoiceEvents(cards: any[], artifacts: any[], items: any[], limits:
           if (choiceOverlay) choiceOverlay.style.display = 'none';
 
           await applyRewardSelectionsInline(selections);
+          __REWARD_SELECTION_MEMORY = null;
 
           // 立即重新渲染通知模块以显示用户操作（不要立刻刷新，避免闪烁）
           renderNotifyModule();
@@ -999,7 +1088,6 @@ function renderRewardInline() {
       if (notifySection) notifySection.style.display = 'none';
     });
   }
-
 }
 
 function applyHistoricalReadOnlyMode(): boolean {
@@ -1074,7 +1162,9 @@ function contentDescriptionResourceDefinitions(): Record<string, { name: string;
 }
 
 function contentDescriptionResourceNames(): Record<string, string> {
-  return Object.fromEntries(Object.entries(contentDescriptionResourceDefinitions()).map(([id, value]) => [id, value.name]));
+  return Object.fromEntries(
+    Object.entries(contentDescriptionResourceDefinitions()).map(([id, value]) => [id, value.name]),
+  );
 }
 
 function contentRuleDescription(content: Record<string, any>, fallback = ''): string {
@@ -1132,14 +1222,16 @@ function translateCardType(type: string): string {
 function initializeUI() {
   document.getElementById('delete-mode-toggle')?.addEventListener('click', toggleDeleteMode);
   document.querySelector('.battle-book-btn')?.addEventListener('click', toggleBattleBook);
-  document.addEventListener('click', event => {
-    const target = event.target;
-    if (!(target instanceof Element)) return;
-    if (!target.closest('#run-repair-btn')) return;
-    event.preventDefault();
-    const readiness = currentInitialContentReadiness();
-    if (readiness && !readiness.ok) void requestInitialContentRepair(readiness);
-  });
+  document.addEventListener('click', handleCommonDocumentClick);
+}
+
+function handleCommonDocumentClick(event: MouseEvent): void {
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+  if (!target.closest('#run-repair-btn')) return;
+  event.preventDefault();
+  const readiness = currentInitialContentReadiness();
+  if (readiness && !readiness.ok) void requestInitialContentRepair(readiness);
 }
 
 function pendingRunText(): string {
@@ -1177,10 +1269,17 @@ function setRunButtonsDisabled(disabled: boolean): void {
   document.querySelectorAll<HTMLButtonElement>('[data-run-action]').forEach(button => {
     button.disabled = disabled;
   });
+  const towerRoot = document.getElementById('tower-map-root');
+  towerRoot?.classList.toggle('is-busy', disabled);
+  if (towerRoot) towerRoot.setAttribute('aria-busy', String(disabled));
 }
 
 function showRunError(error: unknown, fallback: string): void {
-  __RUN_ERROR = error instanceof Error ? error.message : fallback;
+  const crossRealmMessage =
+    error && typeof error === 'object' && typeof (error as Record<string, unknown>).message === 'string'
+      ? String((error as Record<string, unknown>).message)
+      : '';
+  __RUN_ERROR = error instanceof Error ? error.message : crossRealmMessage || fallback;
   for (const id of ['run-error', 'run-opt-in-error']) {
     const errorEl = document.getElementById(id);
     if (!errorEl) continue;
@@ -1203,6 +1302,116 @@ async function sendEnteredRunNode(node: RunNodeChoice): Promise<void> {
     setRunButtonsDisabled(false);
   } finally {
     setSendingState(false);
+    setRunButtonsDisabled(false);
+  }
+}
+
+async function activateTowerNode(node: RunNodeChoice): Promise<void> {
+  if (__IS_SENDING_ACTION) return;
+  setSendingState(true);
+  setRunButtonsDisabled(true);
+  try {
+    await runActionHost.activateTowerRunNode(node.id);
+    __PENDING_REWARD_SUMMARY = null;
+    __PENDING_RUN_SUMMARY = null;
+    __RUN_ERROR = null;
+    await loadGameData();
+  } catch (error) {
+    showRunError(error, '爬塔路线进入失败');
+    setRunButtonsDisabled(false);
+  } finally {
+    setSendingState(false);
+    setRunButtonsDisabled(false);
+  }
+}
+
+async function settleTowerOpeningChoice(choiceId: string): Promise<void> {
+  if (__IS_SENDING_ACTION) return;
+  setSendingState(true);
+  setRunButtonsDisabled(true);
+  try {
+    const opening = readRunState(__STAT__)?.opening;
+    const content =
+      opening?.phase === 'ready' && opening.content && typeof opening.content === 'object'
+        ? (opening.content as Record<string, any>)
+        : null;
+    const choice = Array.isArray(content?.choices)
+      ? content.choices.find((entry: any) => entry?.id === choiceId)
+      : null;
+    const result = await runActionHost.settleTowerOpeningChoice(choiceId);
+    __USER_MUTATION_PILLS.push(`开局馈赠：${String(choice?.label || choiceId)}`);
+    __PENDING_RUN_SUMMARY = `{{user}}选择了开局馈赠：${String(choice?.label || choiceId)}`;
+    if (result.cards.length) __USER_MUTATION_PILLS.push(`新增卡牌：${result.cards.join('、')}`);
+    if (result.artifacts.length) __USER_MUTATION_PILLS.push(`新增遗物：${result.artifacts.join('、')}`);
+    if (result.items.length) __USER_MUTATION_PILLS.push(`新增道具：${result.items.join('、')}`);
+    __RUN_ERROR = null;
+    await loadGameData();
+  } catch (error) {
+    showRunError(error, '开局馈赠结算失败');
+  } finally {
+    setSendingState(false);
+    setRunButtonsDisabled(false);
+  }
+}
+
+async function retryTowerOpening(): Promise<void> {
+  if (__IS_SENDING_ACTION) return;
+  setSendingState(true);
+  setRunButtonsDisabled(true);
+  try {
+    await runActionHost.retryTowerOpeningGeneration();
+    __RUN_ERROR = null;
+    await loadGameData();
+  } catch (error) {
+    showRunError(error, '开局馈赠重新生成失败');
+  } finally {
+    setSendingState(false);
+    setRunButtonsDisabled(false);
+  }
+}
+
+async function settleTowerEventChoice(choiceId: string): Promise<void> {
+  if (__IS_SENDING_ACTION) return;
+  setSendingState(true);
+  setRunButtonsDisabled(true);
+  try {
+    const event = __STAT__?.run_event;
+    const choice = Array.isArray(event?.choices) ? event.choices.find((entry: any) => entry?.id === choiceId) : null;
+    const result = await runActionHost.settleTowerEventChoice(choiceId);
+    const label = String(choice?.label || choiceId);
+    __USER_MUTATION_PILLS.push(`事件选择：${label}`);
+    __PENDING_RUN_SUMMARY = `{{user}}在事件中选择了：${label}`;
+    if (result.pendingReward) __PENDING_REWARD_SUMMARY = `{{user}}完成事件选择：${label}`;
+    __RUN_ERROR = null;
+    await loadGameData();
+  } catch (error) {
+    showRunError(error, '事件选择结算失败');
+  } finally {
+    setSendingState(false);
+    setRunButtonsDisabled(false);
+  }
+}
+
+function handleTowerRestCardAction(action: TowerRestCardAction, node: RunNodeChoice, card: Record<string, any>): void {
+  if (action === 'upgrade') void requestRestUpgrade(node, card);
+  else if (action === 'remove') void removeRestCard(card);
+  else if (action === 'duplicate') void duplicateRestCard(card);
+  else void requestRestTransform(node, card);
+}
+
+async function retryTowerMapNode(nodeId: string): Promise<void> {
+  if (__IS_SENDING_ACTION) return;
+  setSendingState(true);
+  setRunButtonsDisabled(true);
+  try {
+    await runActionHost.retryTowerNodeGeneration(nodeId);
+    __RUN_ERROR = null;
+    await loadGameData();
+  } catch (error) {
+    showRunError(error, '爬塔地点重新生成失败');
+  } finally {
+    setSendingState(false);
+    setRunButtonsDisabled(false);
   }
 }
 
@@ -1218,24 +1427,301 @@ async function retryActiveRunNode(node: RunNodeChoice): Promise<void> {
     setRunButtonsDisabled(false);
   } finally {
     setSendingState(false);
+    setRunButtonsDisabled(false);
   }
 }
 
-async function requestInitialContentRepair(readiness: PlayerContentReadiness): Promise<void> {
+function reportMvuValidationFailure(error: unknown): void {
+  try {
+    (globalThis as any).MagicGirlWorld?.reportMvuValidationFailure?.(error);
+  } catch {
+    // The visible run error remains authoritative when the shared monitor is unavailable.
+  }
+}
+
+async function requestInitialContentRepair(
+  readiness: PlayerContentReadiness,
+  options: { automatic?: boolean } = {},
+): Promise<void> {
   if (__IS_SENDING_ACTION || readiness.ok) return;
-  const prompt = formatPlayerContentRepairPrompt(readiness);
-  if (!prompt) return;
+  let repairKey: string | null = null;
+  try {
+    if (selectedGameMode(__STAT__) === 'tower') repairKey = automaticInitialRepairKey();
+  } catch {
+    repairKey = null;
+  }
+  let repaired = false;
+  let finalError: unknown = null;
   setSendingState(true);
   setRunButtonsDisabled(true);
   try {
-    await retryCurrentMessageWithExtraModel(prompt);
-    __RUN_ERROR = null;
+    if (options.automatic && repairKey) {
+      const transactions = readAutomaticRepairAttempts(repairKey);
+      if (transactions < MAX_AUTOMATIC_INITIAL_TOWER_REPAIRS) {
+        // Count the owning transaction once. Candidate retries inside this live
+        // transaction use a separate local budget so another iframe lifecycle
+        // cannot consume the second model correction halfway through.
+        writeAutomaticRepairAttempts(repairKey, transactions + 1);
+      } else {
+        setRunButtonsDisabled(false);
+        return;
+      }
+    }
+
+    const outcome = await runInitialContentRepairLoop(
+      options.automatic ? MAX_AUTOMATIC_INITIAL_TOWER_REPAIR_CANDIDATES : 1,
+      async () => {
+        const previousCandidateIssues = repairKey ? readAutomaticRepairCandidateIssues(repairKey) : [];
+        const combinedIssues = [...previousCandidateIssues, ...readiness.issues].filter(
+          (issue, index, issues) =>
+            issues.findIndex(entry => entry.path === issue.path && entry.code === issue.code) === index,
+        );
+        const prompt = formatPlayerContentRepairPrompt({ ...readiness, issues: combinedIssues });
+        if (!prompt) throw new Error('没有可用的初始战斗内容修复要求');
+        try {
+          await retryCurrentMessageWithExtraModel(prompt, {
+            refreshOnFailure: 'none',
+            // The first automatic MVU parse and this bounded repair can overlap.
+            // If the authoritative initial deck becomes valid while we wait, join
+            // that result instead of emitting a duplicate false-failure state.
+            acceptCurrentVariablesWhenValid: true,
+            validateVariables: variables => {
+              const candidateReadiness = initialContentReadinessFromStat(variables?.stat_data);
+              if (!candidateReadiness?.ok) {
+                if (repairKey && candidateReadiness) {
+                  writeAutomaticRepairCandidateIssues(repairKey, candidateReadiness.issues);
+                }
+                const remaining = candidateReadiness
+                  ? formatPlayerContentReadiness(candidateReadiness, 4)
+                  : '缺少 stat_data.battle';
+                throw new InitialContentCandidateRejectedError(`初始战斗内容仍未修复：${remaining}`);
+              }
+              if (repairKey) clearAutomaticRepairCandidateIssues(repairKey);
+            },
+          });
+        } catch (error) {
+          if (!(error instanceof ExtraModelCandidateRejectedError)) throw error;
+          if (repairKey) {
+            writeAutomaticRepairCandidateIssues(repairKey, [
+              ...readiness.issues,
+              { path: 'UpdateVariable', code: 'MISSING_UPDATE_BLOCK' },
+            ]);
+          }
+          throw new InitialContentCandidateRejectedError(error.message);
+        }
+      },
+    );
+    repaired = outcome.repaired;
+    finalError = outcome.error;
+    if (repaired) __RUN_ERROR = null;
+    if (!repaired && finalError) {
+      reportMvuValidationFailure(finalError);
+      showRunError(finalError, '请求修复初始战斗内容失败');
+      setRunButtonsDisabled(false);
+    } else if (!repaired) {
+      setRunButtonsDisabled(false);
+    }
   } catch (error) {
+    finalError = error;
+    reportMvuValidationFailure(error);
     showRunError(error, '请求修复初始战斗内容失败');
     setRunButtonsDisabled(false);
   } finally {
     setSendingState(false);
+    setRunButtonsDisabled(false);
   }
+  // The repair rewrites the current floor in place.  Tavern Helper does not
+  // guarantee that an existing iframe is reconstructed by refresh:affected,
+  // so explicitly re-read the authoritative MVU snapshot after the sending
+  // guard is released.  This starts the run immediately when the repair is
+  // sufficient. Invalid candidates are retried in the same live transaction;
+  // reloading here reconciles the final committed or rolled-back snapshot.
+  if (repaired || selectedGameMode(__STAT__) === 'tower') await loadGameData();
+}
+
+const MAX_AUTOMATIC_INITIAL_TOWER_REPAIRS = 2;
+const MAX_AUTOMATIC_INITIAL_TOWER_REPAIR_CANDIDATES = 2;
+
+function stableRepairKeyHash(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function automaticInitialRepairKey(): string {
+  const messageId = getCurrentMessageVariableOptions().message_id;
+  const stableStory = getCurrentChatMessageText()
+    .replace(/<UpdateVariable>[\s\S]*?<\/UpdateVariable>/gi, '')
+    .replace(/\[MWG_REPAIR_REQUEST_BEGIN\][\s\S]*?\[MWG_REPAIR_REQUEST_END\]/gi, '')
+    .trim();
+  return `mwg:tower-initial-repair:v2:${String(messageId)}:${stableRepairKeyHash(stableStory)}`;
+}
+
+function readAutomaticRepairAttempts(key: string): number {
+  try {
+    const count = Number(window.sessionStorage?.getItem(key));
+    if (Number.isInteger(count) && count >= 0) return count;
+  } catch {
+    // Some embedded WebViews deny sessionStorage; the in-memory cap remains.
+  }
+  return __INITIAL_TOWER_REPAIR_FALLBACK_ATTEMPTS.get(key) || 0;
+}
+
+function writeAutomaticRepairAttempts(key: string, count: number): void {
+  __INITIAL_TOWER_REPAIR_FALLBACK_ATTEMPTS.set(key, count);
+  try {
+    window.sessionStorage?.setItem(key, String(count));
+  } catch {
+    // The fallback map still prevents an in-frame retry loop.
+  }
+}
+
+function automaticRepairCandidateIssueKey(key: string): string {
+  return `${key}:candidate-issues`;
+}
+
+function readAutomaticRepairCandidateIssues(key: string): Array<{ path: string; code: string; message: string }> {
+  const fallback = __INITIAL_TOWER_REPAIR_FALLBACK_ISSUES.get(key) || [];
+  try {
+    const parsed = JSON.parse(window.sessionStorage?.getItem(automaticRepairCandidateIssueKey(key)) || '[]');
+    if (!Array.isArray(parsed)) return fallback.map(issue => ({ ...issue, message: '' }));
+    return parsed
+      .filter(issue => issue && typeof issue.path === 'string' && typeof issue.code === 'string')
+      .slice(0, 8)
+      .map(issue => ({ path: issue.path, code: issue.code, message: '' }));
+  } catch {
+    return fallback.map(issue => ({ ...issue, message: '' }));
+  }
+}
+
+function writeAutomaticRepairCandidateIssues(
+  key: string,
+  issues: ReadonlyArray<{ path: string; code: string }>,
+): void {
+  const bounded = issues.slice(0, 8).map(issue => ({ path: issue.path, code: issue.code }));
+  __INITIAL_TOWER_REPAIR_FALLBACK_ISSUES.set(key, bounded);
+  try {
+    window.sessionStorage?.setItem(automaticRepairCandidateIssueKey(key), JSON.stringify(bounded));
+  } catch {
+    // The in-frame fallback still improves a manual retry when storage is denied.
+  }
+}
+
+function clearAutomaticRepairCandidateIssues(key: string): void {
+  __INITIAL_TOWER_REPAIR_FALLBACK_ISSUES.delete(key);
+  try {
+    window.sessionStorage?.removeItem(automaticRepairCandidateIssueKey(key));
+  } catch {
+    // Nothing else owns this diagnostic cache.
+  }
+}
+
+function isMvuGenerationBusy(): boolean {
+  try {
+    const runtime = (globalThis as any).MagicGirlWorld;
+    const snapshot = runtime?.getMvuMonitorSnapshot?.();
+    return snapshot?.phase === 'generating' || snapshot?.phase === 'applying';
+  } catch {
+    return false;
+  }
+}
+
+function scheduleAutomaticInitialTowerRepair(readiness: PlayerContentReadiness): void {
+  if (
+    __IS_SENDING_ACTION ||
+    !isCurrentMessageLatest() ||
+    selectedGameMode(__STAT__) !== 'tower' ||
+    readRunState(__STAT__)
+  ) {
+    __INITIAL_TOWER_EXTENSION_WAIT_ATTEMPTS = 0;
+    return;
+  }
+  if (!towerExtensionReadiness().ready) {
+    // The latest message iframe can mount a few hundred milliseconds before
+    // SillyTavern finishes activating the third-party extension. Keep a short,
+    // bounded readiness watch so initial repair is not permanently skipped.
+    if (__INITIAL_TOWER_EXTENSION_WAIT_ATTEMPTS >= 40) return;
+    __INITIAL_TOWER_EXTENSION_WAIT_ATTEMPTS += 1;
+    if (__INITIAL_TOWER_REPAIR_TIMER !== null) clearTimeout(__INITIAL_TOWER_REPAIR_TIMER);
+    __INITIAL_TOWER_REPAIR_TIMER = setTimeout(() => {
+      __INITIAL_TOWER_REPAIR_TIMER = null;
+      if (towerExtensionReadiness().ready) {
+        __INITIAL_TOWER_EXTENSION_WAIT_ATTEMPTS = 0;
+        void (async () => {
+          await loadGameData();
+          const current = currentInitialContentReadiness();
+          if (current && !current.ok) scheduleAutomaticInitialTowerRepair(current);
+        })().catch(error => console.warn('[Tower] Failed to resume initial repair after extension startup', error));
+        return;
+      }
+      scheduleAutomaticInitialTowerRepair(readiness);
+    }, 750);
+    return;
+  }
+  __INITIAL_TOWER_EXTENSION_WAIT_ATTEMPTS = 0;
+  // The common iframe is mounted as soon as the first story response exists,
+  // while MVU's automatic extra-model request can still be generating. Do not
+  // spend one of the bounded repair attempts against that in-flight request.
+  if (isMvuGenerationBusy()) {
+    if (__INITIAL_TOWER_REPAIR_TIMER !== null) clearTimeout(__INITIAL_TOWER_REPAIR_TIMER);
+    __INITIAL_TOWER_REPAIR_TIMER = setTimeout(() => {
+      __INITIAL_TOWER_REPAIR_TIMER = null;
+      // The MVU renderer may briefly publish the candidate snapshot before the
+      // repair transaction rejects it and restores the authoritative message
+      // variables.  Always reload after generation settles; otherwise this
+      // iframe can mistake a rolled-back candidate for a valid initial deck and
+      // permanently skip the bounded automatic repair.
+      void (async () => {
+        try {
+          await loadGameData();
+          const current = currentInitialContentReadiness();
+          if (current && !current.ok) scheduleAutomaticInitialTowerRepair(current);
+        } catch (error) {
+          console.warn('[Tower] Failed to refresh initial content after MVU generation', error);
+        }
+      })();
+    }, 750);
+    return;
+  }
+  let key: string;
+  try {
+    key = automaticInitialRepairKey();
+  } catch {
+    return;
+  }
+  if (readAutomaticRepairAttempts(key) >= MAX_AUTOMATIC_INITIAL_TOWER_REPAIRS) return;
+  if (__INITIAL_TOWER_REPAIR_TIMER !== null) clearTimeout(__INITIAL_TOWER_REPAIR_TIMER);
+  __INITIAL_TOWER_REPAIR_TIMER = setTimeout(() => {
+    __INITIAL_TOWER_REPAIR_TIMER = null;
+    void (async () => {
+      try {
+        // A newly rebuilt iframe can receive the optimistic candidate snapshot
+        // even when the surrounding MVU transaction is about to roll it back.
+        // Re-read the authoritative message before either starting the run or
+        // spending a repair attempt.  loadGameData also starts the run when the
+        // persisted initial content is genuinely valid.
+        await loadGameData();
+        if (
+          __IS_SENDING_ACTION ||
+          !isCurrentMessageLatest() ||
+          selectedGameMode(__STAT__) !== 'tower' ||
+          readRunState(__STAT__)
+        ) {
+          return;
+        }
+        const current = currentInitialContentReadiness();
+        if (!current || current.ok) return;
+        const attempts = readAutomaticRepairAttempts(key);
+        if (attempts >= MAX_AUTOMATIC_INITIAL_TOWER_REPAIRS) return;
+        await requestInitialContentRepair(current, { automatic: true });
+      } catch (error) {
+        console.warn('[Tower] Failed to reconcile initial player content', error);
+      }
+    })();
+  }, 700);
 }
 
 async function requestRestUpgrade(node: RunNodeChoice, card: Record<string, any>): Promise<void> {
@@ -1245,11 +1731,17 @@ async function requestRestUpgrade(node: RunNodeChoice, card: Record<string, any>
   try {
     await runActionHost.requestRestUpgrade(node, card);
     __RUN_ERROR = null;
+    // The extra model only writes the upgrade candidate.  Re-read the current
+    // message immediately so syncPendingRunState can apply that candidate,
+    // complete the campfire node, and return the player to the map without an
+    // iframe rebuild or manual refresh.
+    await loadGameData();
   } catch (error) {
     showRunError(error, '升级请求失败');
     setRunButtonsDisabled(false);
   } finally {
     setSendingState(false);
+    setRunButtonsDisabled(false);
   }
 }
 
@@ -1260,11 +1752,13 @@ async function requestRestTransform(node: RunNodeChoice, card: Record<string, an
   try {
     await runActionHost.requestRestTransform(node, card);
     __RUN_ERROR = null;
+    await loadGameData();
   } catch (error) {
     showRunError(error, '变形请求失败');
     setRunButtonsDisabled(false);
   } finally {
     setSendingState(false);
+    setRunButtonsDisabled(false);
   }
 }
 
@@ -1326,6 +1820,102 @@ async function restartCurrentRun(): Promise<void> {
   }
 }
 
+function teardownTowerMap(): void {
+  __TOWER_MAP_APP?.destroy();
+  __TOWER_MAP_APP = null;
+  const root = document.getElementById('tower-map-root');
+  if (root) root.style.display = 'none';
+  const panel = document.getElementById('tower-node-panel-root');
+  if (panel) {
+    panel.replaceChildren();
+    panel.style.display = 'none';
+  }
+  const section = document.getElementById('run-section');
+  section?.classList.remove('has-tower-map', 'has-tower-rewards');
+  const heading = section?.querySelector<HTMLElement>(':scope > .run-heading');
+  if (heading) heading.style.display = '';
+}
+
+function renderTowerMap(stat: any, run: RunState, selectionEnabled: boolean): boolean {
+  if (!isLockedTowerMapRun(stat, run)) {
+    teardownTowerMap();
+    return false;
+  }
+  const root = document.getElementById('tower-map-root');
+  const section = document.getElementById('run-section');
+  if (!root || !section) return false;
+  root.style.display = '';
+  section.classList.add('has-tower-map');
+  const heading = section.querySelector<HTMLElement>(':scope > .run-heading');
+  if (heading) heading.style.display = 'none';
+
+  const callbacks: TowerAppCallbacks = {
+    ...(selectionEnabled
+      ? {
+          onNodeSelect: (node: { id: string }) => {
+            const current = readRunState(__STAT__);
+            const choice = current?.choices.find(candidate => candidate.id === node.id);
+            if (!choice) {
+              showRunError(new Error('该路线已经变化，请重新选择。'), '爬塔路线已经过期');
+              return;
+            }
+            void activateTowerNode(choice);
+          },
+        }
+      : {}),
+    ...(isCurrentMessageLatest()
+      ? {
+          onRetryNode: (node: { id: string }) => void retryTowerMapNode(node.id),
+          onRetry: () => void loadGameData(),
+        }
+      : {}),
+  };
+  const options = {
+    difficultyPercent: readRuntimeContentDesignSettings().difficultyPercent,
+    error: __RUN_ERROR || '',
+  };
+  if (!__TOWER_MAP_APP) {
+    __TOWER_MAP_APP = mountTowerApp({ root, snapshot: run, callbacks, ...options });
+  } else {
+    __TOWER_MAP_APP.setCallbacks(callbacks);
+    __TOWER_MAP_APP.update(run, options);
+  }
+  return true;
+}
+
+function renderTowerNodeContent(stat: any, run: RunState, active: boolean): boolean {
+  const root = document.getElementById('tower-node-panel-root');
+  if (!root || !active || !isLockedTowerMapRun(stat, run)) {
+    if (root) {
+      root.replaceChildren();
+      root.style.display = 'none';
+    }
+    return false;
+  }
+  const node = run.currentNode;
+  return renderTowerNodePanel({
+    root,
+    stat,
+    run,
+    isLatest: isCurrentMessageLatest(),
+    busy: __IS_SENDING_ACTION,
+    callbacks: {
+      onOpeningChoice: choiceId => void settleTowerOpeningChoice(choiceId),
+      onRetryOpening: () => void retryTowerOpening(),
+      onEventChoice: choiceId => void settleTowerEventChoice(choiceId),
+      onRestHeal: () => void healAtRest(),
+      ...(node?.kind === 'rest'
+        ? {
+            onRestCardAction: (action: TowerRestCardAction, card: Record<string, any>) =>
+              handleTowerRestCardAction(action, node, card),
+          }
+        : {}),
+      onLeaveShop: () => void leaveCurrentShop(),
+      onRestart: () => void restartCurrentRun(),
+    },
+  });
+}
+
 function renderRunData(stat: any): void {
   const section = document.getElementById('run-section');
   const currentEl = document.getElementById('run-current');
@@ -1342,9 +1932,10 @@ function renderRunData(stat: any): void {
   }
 
   if (!run) {
+    teardownTowerMap();
     section.style.display = 'none';
     const isLatest = isCurrentMessageLatest();
-    const expeditionMode = selectedGameMode(stat) === 'expedition';
+    const expeditionMode = selectedGameMode(stat) === 'tower';
     const readiness = isLatest ? currentInitialContentReadiness() : null;
     const needsRepair = !!readiness && !readiness.ok;
     if (optIn) optIn.style.display = isLatest && (expeditionMode || needsRepair) ? '' : 'none';
@@ -1354,6 +1945,10 @@ function renderRunData(stat: any): void {
       optInError.textContent = needsRepair && readiness ? formatPlayerContentReadiness(readiness) : '';
       optInError.style.display = needsRepair ? '' : 'none';
     }
+    // Reconcile even an apparently complete candidate.  MVU can rebuild this
+    // iframe before a failed candidate transaction rolls back, and the new
+    // document must verify the persisted snapshot before the map is created.
+    if (expeditionMode && readiness) scheduleAutomaticInitialTowerRepair(readiness);
     return;
   }
 
@@ -1369,9 +1964,40 @@ function renderRunData(stat: any): void {
 
   errorEl.textContent = __RUN_ERROR || '';
   errorEl.style.display = __RUN_ERROR ? '' : 'none';
-  actions.innerHTML = '';
+  actions.replaceChildren();
   const hasRewards = hasSelectableRewards(stat);
-  const needsStoryChoice = run.phase === 'in_node' && run.currentNode?.kind === 'event';
+  const lockedTowerMap = isLockedTowerMapRun(stat, run);
+  section.classList.toggle('has-tower-rewards', lockedTowerMap && hasRewards);
+  const extension = lockedTowerMap ? towerExtensionReadiness() : { ready: true, message: '' };
+  if (!extension.ready) {
+    teardownTowerMap();
+    currentEl.textContent = '爬塔组件尚未就绪';
+    errorEl.textContent = extension.message;
+    errorEl.style.display = '';
+    if (actionSection) actionSection.style.display = 'none';
+    return;
+  }
+  const needsStoryChoice = !lockedTowerMap && run.phase === 'in_node' && run.currentNode?.kind === 'event';
+  // Initial deck/enemy readiness is a one-time gate for the beginning of Act 1.
+  // Later acts also begin at floor 0, but their routes are already backed by
+  // pre-generated node content. Re-running the initial gate there can inspect
+  // stale, defeated battle data and incorrectly disable every ready entrance.
+  const needsInitialContentGate =
+    run.act === 1 && run.floor === 0 && run.phase === 'awaiting_choice' && !hasRewards;
+  const readiness = needsInitialContentGate ? currentInitialContentReadiness() : null;
+  const pendingReroll = stat?.run_reward_reroll;
+  const openingResolved = !lockedTowerMap || run.opening?.phase === 'consumed' || run.opening?.phase === 'skipped';
+  const towerMapActive = renderTowerMap(
+    stat,
+    run,
+    isLatest &&
+      run.phase === 'awaiting_choice' &&
+      !hasRewards &&
+      !pendingReroll &&
+      openingResolved &&
+      (!readiness || readiness.ok),
+  );
+  renderTowerNodeContent(stat, run, towerMapActive);
   if (actionSection) actionSection.style.display = isLatest && (hasRewards || needsStoryChoice) ? '' : 'none';
 
   const addButton = (text: string, className: string, handler: () => void) => {
@@ -1397,8 +2023,6 @@ function renderRunData(stat: any): void {
   // Validate the complete first-response content before exposing any route.
   // Later deck-building choices stay creative; reward and upgrade transactions
   // already validate every new persistent definition before committing it.
-  const needsInitialContentGate = run.floor === 0 && run.phase === 'awaiting_choice' && !hasRewards;
-  const readiness = needsInitialContentGate ? currentInitialContentReadiness() : null;
   if (readiness && !readiness.ok && !needsStoryChoice) {
     currentEl.textContent = readiness.deck.deckQuantity === 0 ? '等待有效起始牌组' : '起始战斗内容需要修复';
     errorEl.textContent = formatPlayerContentReadiness(readiness);
@@ -1407,14 +2031,13 @@ function renderRunData(stat: any): void {
     return;
   }
 
-  const pendingReroll = stat?.run_reward_reroll;
   if (pendingReroll && Array.isArray(pendingReroll.categories)) {
     currentEl.textContent = __RUN_ERROR ? '奖励重投需要重试' : '正在等待奖励重投结果';
-    addButton('重试重投', 'run-choice', () => void requestRewardRerollFromUi(
-      pendingReroll.categories,
-      pendingReroll.expected_counts || {},
-      true,
-    ));
+    addButton(
+      '重试重投',
+      'run-choice',
+      () => void requestRewardRerollFromUi(pendingReroll.categories, pendingReroll.expected_counts || {}, true),
+    );
     return;
   }
 
@@ -1422,8 +2045,21 @@ function renderRunData(stat: any): void {
     currentEl.textContent = run.currentNode?.kind === 'shop' ? '商店结算' : '先完成本次奖励结算';
     return;
   }
+  if (towerMapActive) {
+    if (run.phase === 'awaiting_choice') {
+      currentEl.textContent = openingResolved
+        ? `第 ${run.act} 幕 · 选择第 ${run.floor + 1} 层路线`
+        : '完成开局馈赠后选择路线';
+    } else if (run.phase === 'in_node' && run.currentNode) {
+      currentEl.textContent = runNodeSummary(run.currentNode);
+    } else {
+      currentEl.textContent = run.phase === 'won' ? '远征完成' : '远征失败';
+    }
+    return;
+  }
   if (run.phase === 'awaiting_choice') {
     currentEl.textContent = `Act ${run.act} · 选择第 ${run.floor + 1} 层路线`;
+    if (towerMapActive) return;
     run.choices.forEach(choice => {
       const label = RUN_NODE_LABELS[choice.kind];
       addButton(
@@ -1491,24 +2127,47 @@ async function settleLevelByExp(): Promise<ProgressionSettlement | null> {
   return settlement;
 }
 
-function selectedGameMode(stat: any): 'story' | 'expedition' {
-  const context = [getRelativeChatMessageText(-1), getRelativeChatMessageText(-2), getCurrentChatMessageText()].join('\n');
-  if (context.includes('[远征模式]')) return 'expedition';
-  return stat?.game_mode === 'expedition' ? 'expedition' : 'story';
+function selectedGameMode(stat: any): GameMode {
+  return readGameMode(stat);
+}
+
+function towerExtensionReadiness(): { ready: boolean; message: string } {
+  const runtime = (globalThis as any).MagicGirlWorld;
+  const capabilities =
+    typeof runtime?.getDesignAssistantCapabilities === 'function' ? runtime.getDesignAssistantCapabilities() : null;
+  if (!capabilities || capabilities.spec !== 'mwg.design-assistant/v1') {
+    return { ready: false, message: '爬塔模式需要安装并启用“魔法少女世界设计辅助器”扩展。' };
+  }
+  const version = String(capabilities.version || '0.0.0')
+    .split('.')
+    .map((part: string) => Number(part) || 0);
+  const supported = (version[0] || 0) > 0 || (version[1] || 0) >= 2;
+  if (!supported || capabilities.towerGeneration !== true || capabilities.towerCoordinator !== true) {
+    return {
+      ready: false,
+      message: `设计辅助器版本过低（当前 ${capabilities.version || '未知'}，至少需要 0.2.0）。`,
+    };
+  }
+  return { ready: true, message: '' };
 }
 
 async function synchronizeSelectedGameMode(): Promise<void> {
   if (!isCurrentMessageLatest()) return;
   const mode = selectedGameMode(__STAT__);
-  if (__STAT__?.game_mode !== mode) {
+  const lock = readGameModeLock(__STAT__);
+  const needsSync =
+    !lock || lock.mode !== mode || __STAT__?.game_mode !== mode || (mode === 'story' && __STAT__?.run != null);
+  if (needsSync) {
     await commonActionHost.updateVariablesWith((variables: any) => {
       const stat = getStatRootRef(variables) || {};
-      stat.game_mode = mode;
+      migrateGameModeInStat(stat);
       return variables;
     });
     __STAT__.game_mode = mode;
+    __STAT__.game_mode_lock = { schemaVersion: 1, mode };
+    if (mode === 'story') __STAT__.run = null;
   }
-  if (mode !== 'expedition' || readRunState(__STAT__)) return;
+  if (mode !== 'tower' || readRunState(__STAT__)) return;
   const readiness = currentInitialContentReadiness();
   if (!readiness?.ok) return;
   await runActionHost.startRun();
@@ -1519,7 +2178,7 @@ let __CONTENT_PROFILE_SEQUENCE = 0;
 let __CONTENT_PROFILE_TIMER: ReturnType<typeof setTimeout> | null = null;
 
 function scheduleBackgroundDeckPowerProfile(): void {
-  if (!isCurrentMessageLatest()) return;
+  if (!__commonViewInitialized || !isCurrentMessageLatest()) return;
   if (isExternalDesignAssistantActive()) return;
   if (__CONTENT_PROFILE_TIMER !== null) clearTimeout(__CONTENT_PROFILE_TIMER);
   const sequence = ++__CONTENT_PROFILE_SEQUENCE;
@@ -1539,15 +2198,17 @@ function scheduleBackgroundDeckPowerProfile(): void {
     // CPU-heavy, while the MVU write transaction must stay short and responsive.
     const profile = profileMvuDeckPower(snapshot, { simulationSeeds: 8 });
     if (!profile || sequence !== __CONTENT_PROFILE_SEQUENCE || !isCurrentMessageLatest()) return;
-    void commonActionHost.updateVariablesWith((variables: any) => {
-      if (!isMvuDeckPowerProfileCurrent(variables, profile, { simulationSeeds: 8 })) return variables;
-      refreshMvuContentDesignContext(variables, {
-        ...readRuntimeContentDesignSettings(),
-        simulationSeeds: 8,
-        deckPowerProfile: profile,
-      });
-      return variables;
-    }).catch(error => console.warn('后台卡组评分写回失败：', error));
+    void commonActionHost
+      .updateVariablesWith((variables: any) => {
+        if (!isMvuDeckPowerProfileCurrent(variables, profile, { simulationSeeds: 8 })) return variables;
+        refreshMvuContentDesignContext(variables, {
+          ...readRuntimeContentDesignSettings(),
+          simulationSeeds: 8,
+          deckPowerProfile: profile,
+        });
+        return variables;
+      })
+      .catch(error => console.warn('后台卡组评分写回失败：', error));
   }, 180);
 }
 
@@ -1572,7 +2233,19 @@ async function synchronizeContentDesignContext(): Promise<void> {
 
 // 加载游戏数据
 async function loadGameData() {
+  const viewSequence = __commonViewSequence;
+  const viewIsActive = () => __commonViewInitialized && viewSequence === __commonViewSequence;
+  if (!viewIsActive()) return;
   try {
+    // A restored chat can mount its iframe before MVU has rebuilt the
+    // persisted message-variable cache. Reading at that moment leaves the
+    // static "未知 / LV1" placeholders on screen forever because the view is
+    // otherwise not mounted again. Wait for this exact message snapshot before
+    // the first read so reopening a saved chat restores without another AI
+    // generation or a manual "重新读取变量" action.
+    await ensureMvuRuntimeReady();
+    if (!viewIsActive()) return;
+
     // 获取当前变量数据
     let variables = null;
     let rpgData = {};
@@ -1582,7 +2255,6 @@ async function loadGameData() {
       __STAT__ = getStatRootRef(variables) || {};
       __DELTA__ = variables?.delta_data || variables?.delta || {};
       rpgData = __STAT__;
-
     } catch (msgError) {
       console.warn('获取变量失败：', msgError);
       return;
@@ -1590,6 +2262,7 @@ async function loadGameData() {
 
     try {
       await synchronizeSelectedGameMode();
+      if (!viewIsActive()) return;
       variables = getCurrentMessageVariables();
       __STAT__ = getStatRootRef(variables) || {};
       __DELTA__ = variables?.delta_data || variables?.delta || {};
@@ -1601,6 +2274,7 @@ async function loadGameData() {
     // 剧情模式不触发远征事务；远征模式仅在开始页选择后由程序初始化。
     if (readRunState(__STAT__)) {
       await ensureAndConsumeRunState();
+      if (!viewIsActive()) return;
       try {
         variables = getCurrentMessageVariables();
         __STAT__ = getStatRootRef(variables) || {};
@@ -1614,11 +2288,13 @@ async function loadGameData() {
     // 先结算基于经验的升级（AI只会增加 exp）
     try {
       await settleLevelByExp();
+      if (!viewIsActive()) return;
     } catch (e) {
       console.warn('结算升级异常:', e);
     }
 
     await synchronizeContentDesignContext();
+    if (!viewIsActive()) return;
 
     // 结算后重新获取最新变量快照
     try {
@@ -1630,6 +2306,8 @@ async function loadGameData() {
       console.warn('结算后重新获取变量失败：', e);
     }
 
+    if (!viewIsActive()) return;
+
     // 渲染各模块数据
     renderStatusData(rpgData);
     renderBattleData(rpgData);
@@ -1640,9 +2318,26 @@ async function loadGameData() {
     if (!applyHistoricalReadOnlyMode()) renderActionArea();
     renderRunData(rpgData);
     startLatestMessageGuard();
+    maybeOpenTowerBattle(rpgData);
   } catch (error) {
     console.error('加载游戏数据失败:', error);
   }
+}
+
+function maybeOpenTowerBattle(stat: any): void {
+  if (!isCurrentMessageLatest()) return;
+  const run = readRunState(stat);
+  if (!run || !isLockedTowerMapRun(stat, run) || run.phase !== 'in_node' || !run.currentNode) return;
+  if (!isBattleRunNode(run.currentNode.kind)) return;
+  const activeNode = stat?.run_node;
+  if (!activeNode || activeNode.node_id !== run.currentNode.id) return;
+  const enemies = Array.isArray(stat?.battle?.enemies)
+    ? stat.battle.enemies
+    : stat?.battle?.enemy
+      ? [stat.battle.enemy]
+      : [];
+  if (!enemies.some((enemy: any) => enemy && typeof enemy.name === 'string' && enemy.name.trim())) return;
+  switchRuntimeView('fish');
 }
 
 // 渲染状态数据
@@ -1798,9 +2493,7 @@ function renderDeckArchetypeProfile(battle: any): void {
   const context = battle?.design_context;
   const archetypes = battle?.design_context?.archetypes;
   const affinities = Array.isArray(archetypes?.affinities)
-    ? archetypes.affinities
-        .filter((entry: any) => entry && Number(entry.share) > 0)
-        .slice(0, 5)
+    ? archetypes.affinities.filter((entry: any) => entry && Number(entry.share) > 0).slice(0, 5)
     : [];
   const scatterShare = Math.max(0, Math.min(100, Number(archetypes?.scatterShare) || 0));
   if (affinities.length === 0 && scatterShare <= 0) {
@@ -1826,23 +2519,28 @@ function renderDeckArchetypeProfile(battle: any): void {
     cards: Array.isArray(entry.supportingCards) ? entry.supportingCards.map(String).slice(0, 5) : [],
     color: palette[index % palette.length],
   }));
-  if (scatterShare > 0) segments.push({
-    label: '通用散卡',
-    description: '不强绑定当前主流派，但能提供独立价值或为后续转向留出空间。',
-    share: scatterShare,
-    cards: [],
-    color: '#a59d98',
-  });
+  if (scatterShare > 0)
+    segments.push({
+      label: '通用散卡',
+      description: '不强绑定当前主流派，但能提供独立价值或为后续转向留出空间。',
+      share: scatterShare,
+      cards: [],
+      color: '#a59d98',
+    });
   const total = segments.reduce((sum, entry) => sum + entry.share, 0) || 1;
-  bar.innerHTML = segments.map(entry => {
-    const normalized = entry.share / total * 100;
-    const title = `${entry.label} ${entry.share.toFixed(1).replace(/\.0$/, '')}%${entry.description ? `：${entry.description}` : ''}`;
-    return `<span class="archetype-share-segment" style="--share:${normalized};--segment-color:${entry.color}" title="${escapeHtml(title)}"><span>${escapeHtml(entry.label)}</span></span>`;
-  }).join('');
-  legend.innerHTML = segments.map(entry => {
-    const cards = entry.cards.length ? ` · ${entry.cards.join('、')}` : '';
-    return `<div class="archetype-legend-item" title="${escapeHtml(`${entry.description}${cards}`)}"><i style="--segment-color:${entry.color}"></i><span>${escapeHtml(entry.label)}</span><strong>${escapeHtml(entry.share.toFixed(1).replace(/\.0$/, ''))}%</strong></div>`;
-  }).join('');
+  bar.innerHTML = segments
+    .map(entry => {
+      const normalized = (entry.share / total) * 100;
+      const title = `${entry.label} ${entry.share.toFixed(1).replace(/\.0$/, '')}%${entry.description ? `：${entry.description}` : ''}`;
+      return `<span class="archetype-share-segment" style="--share:${normalized};--segment-color:${entry.color}" title="${escapeHtml(title)}"><span>${escapeHtml(entry.label)}</span></span>`;
+    })
+    .join('');
+  legend.innerHTML = segments
+    .map(entry => {
+      const cards = entry.cards.length ? ` · ${entry.cards.join('、')}` : '';
+      return `<div class="archetype-legend-item" title="${escapeHtml(`${entry.description}${cards}`)}"><i style="--segment-color:${entry.color}"></i><span>${escapeHtml(entry.label)}</span><strong>${escapeHtml(entry.share.toFixed(1).replace(/\.0$/, ''))}%</strong></div>`;
+    })
+    .join('');
   const score = Number(context?.balance?.deckProfile?.totalScore ?? context?.balance?.deck?.totalScore);
   const confidence = Number(context?.balance?.deckProfile?.confidence);
   caption.textContent = Number.isFinite(score)
@@ -1929,24 +2627,33 @@ function renderBattleData(rpgData: any) {
         .map((card: any) => {
           const description = contentRuleDescription(card, '');
           const effectTags = compactContentEffectTagsHtml(card);
-          const cost = card.cost === 'energy' ? '全部能量' : card.cost ?? 0;
+          const cost = card.cost === 'energy' ? '全部能量' : (card.cost ?? 0);
+          const rarity = String(card.rarity || 'Common');
+          const rarityLabel = CARD_RARITY_LABELS[rarity] || rarity;
           const profile = cardArchetypeProfiles.get(String(card.id || ''));
           const score = Number(profile?.scoreContribution);
           const affinityChips = Array.isArray(profile?.affinities)
-            ? profile.affinities.slice(0, 3).map((entry: any) => {
-                const affinityScore = Number(entry?.score);
-                return `<span title="${escapeHtml(String(entry?.label || entry?.id || '流派'))}亲和度 ${Number.isFinite(affinityScore) ? affinityScore : 0}">${escapeHtml(String(entry?.label || entry?.id || '流派'))} ${Number.isFinite(affinityScore) ? affinityScore : 0}</span>`;
-              }).join('')
+            ? profile.affinities
+                .slice(0, 3)
+                .map((entry: any) => {
+                  const affinityScore = Number(entry?.score);
+                  return `<span title="${escapeHtml(String(entry?.label || entry?.id || '流派'))}亲和度 ${Number.isFinite(affinityScore) ? affinityScore : 0}">${escapeHtml(String(entry?.label || entry?.id || '流派'))} ${Number.isFinite(affinityScore) ? affinityScore : 0}</span>`;
+                })
+                .join('')
             : '';
-          const archetypeMeta = Number.isFinite(score) || affinityChips
-            ? `<div class="card-archetype-meta">${Number.isFinite(score) ? `<strong title="移除一张后与当前构筑总分的差值">构筑贡献 ${score > 0 ? '+' : ''}${escapeHtml(score)}</strong>` : ''}${affinityChips}</div>`
-            : '';
+          const archetypeMeta =
+            Number.isFinite(score) || affinityChips
+              ? `<div class="card-archetype-meta">${Number.isFinite(score) ? `<strong title="移除一张后与当前构筑总分的差值">构筑贡献 ${score > 0 ? '+' : ''}${escapeHtml(score)}</strong>` : ''}${affinityChips}</div>`
+              : '';
           return `
-          <div class="card" data-card-id="${escapeHtml(card.id || '')}">
+          <div class="card rarity-${escapeHtml(rarity)}" data-card-id="${escapeHtml(card.id || '')}">
             <button type="button" class="card-delete-btn" data-card-id="${escapeHtml(card.id || '')}" title="删除一张" style="display: none;">
               🗑️
             </button>
-            <div class="card-name">${escapeHtml(card.emoji || '🃏')} ${escapeHtml(card.name || '未知')}</div>
+            <div class="card-name-row">
+              <div class="card-name">${escapeHtml(card.emoji || '🃏')} ${escapeHtml(card.name || '未知')}</div>
+              <span class="card-rarity-chip"><i aria-hidden="true"></i>${escapeHtml(rarityLabel)}</span>
+            </div>
             <div class="card-meta"><span>消耗 ${escapeHtml(cost)}</span><span>${escapeHtml(translateCardType(card.type || 'Skill'))}</span><span>数量 ${escapeHtml(card.quantity || 1)}</span></div>
             ${archetypeMeta}
             ${effectTags}
@@ -2091,7 +2798,6 @@ function renderNPCData(rpgData: any) {
       relationsContainer.innerHTML = '<div class="info-card"><h3>暂无NPC关系</h3></div>';
     }
   }
-
 }
 
 function renderActionArea() {
@@ -2426,41 +3132,62 @@ function toggleStatusDetail(detailId: string): void {
 }
 
 let __commonViewInitialized = false;
+let __commonViewSequence = 0;
 let __disposeCardRepairHandler: (() => void) | null = null;
+
+function destroyCommonView(): void {
+  if (!__commonViewInitialized) return;
+  __commonViewInitialized = false;
+  __commonViewSequence += 1;
+  __CONTENT_PROFILE_SEQUENCE += 1;
+  if (__CONTENT_PROFILE_TIMER !== null) clearTimeout(__CONTENT_PROFILE_TIMER);
+  __CONTENT_PROFILE_TIMER = null;
+  teardownTowerMap();
+  __stopLatestMessageGuard?.();
+  __stopLatestMessageGuard = null;
+  __disposeCardRepairHandler?.();
+  __disposeCardRepairHandler = null;
+  __disposeTowerGenerationListener?.();
+  __disposeTowerGenerationListener = null;
+  if (__towerGenerationRefreshTimer !== null) clearTimeout(__towerGenerationRefreshTimer);
+  __towerGenerationRefreshTimer = null;
+  document.removeEventListener('click', handleCommonDocumentClick);
+}
+
+function listenForTowerGenerationUpdates(): void {
+  const runtime = (globalThis as any).MagicGirlWorld;
+  if (typeof runtime?.registerTowerGenerationListener !== 'function') return;
+  __disposeTowerGenerationListener = runtime.registerTowerGenerationListener(() => {
+    if (!__commonViewInitialized || !isCurrentMessageLatest()) return;
+    if (__towerGenerationRefreshTimer !== null) clearTimeout(__towerGenerationRefreshTimer);
+    __towerGenerationRefreshTimer = setTimeout(() => {
+      __towerGenerationRefreshTimer = null;
+      if (__commonViewInitialized) void loadGameData();
+    }, 40);
+  }, false);
+}
 
 function initializeCommonView(): void {
   if (__commonViewInitialized) return;
   __commonViewInitialized = true;
+  __commonViewSequence += 1;
+  registerRuntimeViewLifecycle('common', destroyCommonView);
   if (isCurrentMessageLatest()) {
     try {
       __disposeCardRepairHandler = registerNaturalLanguageCardRepairHandler();
     } catch (error) {
       console.warn('自然语言卡牌修复入口注册失败:', error);
     }
+    listenForTowerGenerationUpdates();
   }
   setSendingState(false);
   initializeUI();
   void loadGameData();
 }
 
-// The runtime injects this script after the complete view body. Native DOM
-// readiness keeps initialization deterministic in Tavern Helper and also
-// supports direct builds without relying on a particular jQuery instance.
+// Both the exported Tavern asset and the direct HTML build place this script
+// after the complete view body, so mounting immediately avoids leaving a
+// DOMContentLoaded callback owned by a view that may already have been swapped.
 if (typeof window !== 'undefined') {
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initializeCommonView, { once: true });
-  } else {
-    initializeCommonView();
-  }
-
-  window.addEventListener(
-    'pagehide',
-    () => {
-      __stopLatestMessageGuard?.();
-      __stopLatestMessageGuard = null;
-      __disposeCardRepairHandler?.();
-      __disposeCardRepairHandler = null;
-    },
-    { once: true },
-  );
+  initializeCommonView();
 }

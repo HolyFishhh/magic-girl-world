@@ -9,6 +9,7 @@ import {
   hasContentMetric,
   isCompactEffectList,
   normalizeCompactNamedEffectInput,
+  normalizeEnemyActionSelectionInput,
   resolveTriggerInput,
   validateContentPackContract,
   validateCombatResourceDefinitions,
@@ -496,7 +497,8 @@ function collectDescriptionWarnings(battle: Record<string, any>, warnings: Battl
 }
 
 function validateEnemyActionConfig(enemy: Record<string, any>, issues: BattleContentIssue[], path = 'battle.enemy'): void {
-  const mode = String(enemy.action_mode || 'random');
+  const normalized = normalizeEnemyActionSelectionInput(enemy);
+  const mode = normalized.actionMode;
   if (!ENEMY_ACTION_MODES.has(mode)) {
     issues.push({
       path: `${path}.action_mode`,
@@ -510,7 +512,7 @@ function validateEnemyActionConfig(enemy: Record<string, any>, issues: BattleCon
       .map(action => String(action.name || ''))
       .filter(Boolean),
   );
-  const root = enemy.action_config || {};
+  const root = normalized.actionConfig;
   if (!isRecord(root)) {
     issues.push({ path: `${path}.action_config`, code: 'INVALID_ACTION_CONFIG', message: '行动配置必须是对象' });
     return;

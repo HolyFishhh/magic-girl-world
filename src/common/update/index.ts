@@ -2,6 +2,7 @@ import { compactContentToDisplayTags } from '../../game-core';
 import { escapeHtml } from '../../fish/shared/html';
 import { getCurrentChatMessageText, getCurrentMessageVariables } from '../../runtime/messageVariables';
 import { normalizeMvuStatusDefinitions } from '../../runtime/mvuArrays';
+import { ensureRuntimeFrameHeightSync } from '../../runtime/runtimeFrameHeight';
 import {
   groupMvuUpdateCommands,
   mvuUpdateFieldLabel,
@@ -9,6 +10,8 @@ import {
   type MvuUpdateCommand,
 } from '../../runtime/mvuUpdateDisplay';
 import './index.scss';
+
+ensureRuntimeFrameHeightSync()?.request();
 
 const TYPE_LABELS: Readonly<Record<string, string>> = {
   Attack: '攻击',

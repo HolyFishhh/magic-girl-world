@@ -141,7 +141,12 @@
                 <button class="enemy-intent-summary stage-intent-summary" id="enemy-intent-summary" type="button" aria-label="敌方下一轮效果">
                   <span class="intent-badge" title="准备行动">❓</span>
                 </button>
-                <div class="stage-emoji" id="stage-enemy-emoji">👹</div>
+                <div class="stage-enemy-party" id="stage-enemy-party" aria-label="敌方战斗队列">
+                  <button class="stage-enemy-member is-active" type="button" data-enemy-id="enemy" aria-pressed="true">
+                    <span class="stage-enemy-member-intent" aria-hidden="true">❓</span>
+                    <span class="stage-emoji" id="stage-enemy-emoji">👹</span>
+                  </button>
+                </div>
                 <div class="stage-summons" id="enemy-summons" aria-label="敌方召唤单位"></div>
               </div>
 

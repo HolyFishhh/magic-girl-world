@@ -6,6 +6,10 @@ export interface CardUpgradePatch {
   /** Optional route binding for node-scoped upgrades. */
   node_id: string;
   card_id: string;
+  /** Harmless identity echo tolerated from models that copy the compact source card. */
+  id?: string;
+  /** Harmless current-level echo; the host still owns the actual increment. */
+  upgrade_level?: number;
   description?: string;
   name?: string;
   cost?: CardCost;
@@ -33,6 +37,8 @@ export type CardUpgradeResult =
 const PATCH_KEYS = new Set([
   'node_id',
   'card_id',
+  'id',
+  'upgrade_level',
   'description',
   'name',
   'cost',
@@ -90,6 +96,14 @@ export function applyCardUpgrade(
   if (typeof patchValue.card_id !== 'string' || patchValue.card_id !== cardValue.id) {
     return { ok: false, message: 'upgrade card_id must match the selected card' };
   }
+  if (patchValue.id !== undefined && patchValue.id !== cardValue.id) {
+    return { ok: false, message: 'upgrade id must match the selected card' };
+  }
+  const currentLevel = Number(cardValue.upgrade_level ?? 0);
+  if (!Number.isInteger(currentLevel) || currentLevel < 0) return { ok: false, message: 'card upgrade_level is invalid' };
+  if (patchValue.upgrade_level !== undefined && patchValue.upgrade_level !== currentLevel) {
+    return { ok: false, message: 'upgrade_level is owned by the host' };
+  }
   if (
     patchValue.description !== undefined &&
     (typeof patchValue.description !== 'string' || !patchValue.description.trim())
@@ -104,9 +118,7 @@ export function applyCardUpgrade(
   );
   if (changedKeys.length === 0) return { ok: false, message: 'upgrade patch does not change card rules' };
 
-  const currentLevel = Number(cardValue.upgrade_level ?? 0);
   const maxLevel = options.maxLevel ?? 1;
-  if (!Number.isInteger(currentLevel) || currentLevel < 0) return { ok: false, message: 'card upgrade_level is invalid' };
   if (!Number.isInteger(maxLevel) || maxLevel < 1 || maxLevel > 9) return { ok: false, message: 'maxLevel is invalid' };
   if (currentLevel >= maxLevel) return { ok: false, message: 'card has reached its upgrade limit' };
 

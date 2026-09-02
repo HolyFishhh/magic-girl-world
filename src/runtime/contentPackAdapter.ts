@@ -1,5 +1,6 @@
 import { createContentPack, normalizeCompactNamedEffectInput, type ContentPack } from '../game-core';
 import { flattenMvuArray, normalizeMvuStatusDefinitions } from './mvuArrays';
+import { normalizeMvuBattleContent } from './mvuBattleContentNormalizer';
 
 function isRecord(value: unknown): value is Record<string, any> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -24,17 +25,18 @@ function normalizeMvuEnemy(value: unknown): unknown {
 /** Map the canonical MUV battle root into the portable content boundary once. */
 export function createContentPackFromMvuBattle(battleData: unknown): ContentPack {
   if (!isRecord(battleData)) throw new Error('battle data must be an object');
-  const core = isRecord(battleData.core) ? battleData.core : {};
+  const normalizedBattle = normalizeMvuBattleContent(battleData);
+  const core = isRecord(normalizedBattle.core) ? normalizedBattle.core : {};
   return createContentPack({
-    cards: normalizeMvuList(battleData.cards),
-    statuses: normalizeMvuStatusDefinitions(battleData.statuses),
-    relics: normalizeMvuList(battleData.artifacts),
-    items: normalizeMvuList(battleData.items),
-    abilities: normalizeMvuList(battleData.player_abilities),
-    activeStatuses: normalizeMvuList(battleData.player_status_effects),
+    cards: normalizeMvuList(normalizedBattle.cards),
+    statuses: normalizeMvuStatusDefinitions(normalizedBattle.statuses),
+    relics: normalizeMvuList(normalizedBattle.artifacts),
+    items: normalizeMvuList(normalizedBattle.items),
+    abilities: normalizeMvuList(normalizedBattle.player_abilities),
+    activeStatuses: normalizeMvuList(normalizedBattle.player_status_effects),
     playerResources: normalizeMvuList(core.resources),
-    enemy: normalizeMvuEnemy(battleData.enemy),
-    enemies: normalizeMvuList(battleData.enemies).map(normalizeMvuEnemy),
-    playerDesireEffect: normalizeCompactNamedEffectInput(battleData.player_lust_effect, '欲望满溢'),
+    enemy: normalizeMvuEnemy(normalizedBattle.enemy),
+    enemies: normalizeMvuList(normalizedBattle.enemies).map(normalizeMvuEnemy),
+    playerDesireEffect: normalizeCompactNamedEffectInput(normalizedBattle.player_lust_effect, '欲望满溢'),
   });
 }

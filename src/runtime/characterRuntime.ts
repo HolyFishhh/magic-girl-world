@@ -15,6 +15,7 @@ type RuntimeBuildInfo = Readonly<{
 type HostReadinessOptions = Readonly<{
   mvuTimeoutMs?: number;
   battleDataTimeoutMs?: number;
+  requireBattleData?: boolean;
 }>;
 
 declare const __MWG_VIEW_ASSETS__: Record<RuntimeViewName, RuntimeViewAsset>;
@@ -37,6 +38,144 @@ function isSettlementRecord(value: unknown): value is SettlementRecord {
 function cloneSettlementValue<T>(value: T): T {
   if (value === undefined) return value;
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function normalizeEmbeddedBattleVariables(variables: unknown): boolean {
+  if (
+    !isSettlementRecord(variables) ||
+    !isSettlementRecord(variables.stat_data) ||
+    !isSettlementRecord(variables.stat_data.battle)
+  ) return false;
+  const battle = cloneSettlementValue(variables.stat_data.battle);
+  const rawStatuses = Array.isArray(battle.statuses)
+    ? battle.statuses
+    : isSettlementRecord(battle.statuses)
+      ? Object.entries(battle.statuses).map(([key, entry]) =>
+          isSettlementRecord(entry) && typeof entry.id !== 'string' ? { id: key, ...entry } : entry)
+      : [];
+  const statuses = rawStatuses.filter(isSettlementRecord);
+  const used = new Set(
+    statuses
+      .map(status => status.id)
+      .filter((id): id is string => typeof id === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(id)),
+  );
+  const aliases = new Map<string, string>();
+  const hash = (value: string): string => {
+    let result = 2166136261;
+    for (let index = 0; index < value.length; index += 1) {
+      result ^= value.charCodeAt(index);
+      result = Math.imul(result, 16777619);
+    }
+    return (result >>> 0).toString(36);
+  };
+  battle.statuses = statuses.map((status, index) => {
+    const originalId = typeof status.id === 'string' ? status.id.trim() : '';
+    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(originalId)) return status;
+    const name = typeof status.name === 'string' ? status.name.trim() : '';
+    const base = `status_${hash(`${originalId || name || 'status'}:${index}`)}`;
+    let replacement = base;
+    let suffix = 2;
+    while (used.has(replacement)) replacement = `${base}_${suffix++}`;
+    used.add(replacement);
+    if (originalId) aliases.set(originalId, replacement);
+    if (name && !aliases.has(name)) aliases.set(name, replacement);
+    return { ...status, id: replacement };
+  });
+  const formulaKeys = new Set([
+    'damage', 'heal', 'block', 'energy', 'lust', 'stacks', 'draw', 'scry', 'seek',
+    'set_hp', 'set_lust', 'set_energy', 'set_block', 'count', 'limit', 'extra',
+    'add', 'subtract', 'multiply', 'divide', 'minimum', 'maximum',
+  ]);
+  type FormulaActor = 'self' | 'opponent';
+  const opponentDefaultOperations = new Set([
+    'damage', 'lust', 'execute', 'kill', 'apply_status', 'remove_status',
+  ]);
+  const selfDefaultOperations = new Set([
+    'heal', 'block', 'energy', 'draw', 'scry', 'seek',
+  ]);
+  const inferFormulaActor = (
+    value: Readonly<Record<string, unknown>>,
+    inherited?: FormulaActor,
+  ): FormulaActor | undefined => {
+    if (value.to === 'self' || value.to === 'opponent') return value.to;
+    const keys = Object.keys(value);
+    const opponent = keys.some(key => opponentDefaultOperations.has(key));
+    const self = keys.some(key => selfDefaultOperations.has(key));
+    if (opponent !== self) return opponent ? 'opponent' : 'self';
+    return inherited;
+  };
+  const rewriteFormula = (value: string, actor?: FormulaActor): string => {
+    let result = value.replace(/\bself\.opponent\./g, 'opponent.');
+    if (actor) result = result.replace(/\b(?:self\|opponent|opponent\|self)\./g, `${actor}.`);
+    aliases.forEach((replacement, alias) => {
+      for (const actor of ['self', 'opponent']) {
+        result = result.split(`${actor}.status.${alias}.stacks`).join(`${actor}.status.${replacement}.stacks`);
+      }
+    });
+    return result;
+  };
+  const rewrite = (value: unknown, parentKey = '', inheritedActor?: FormulaActor): unknown => {
+    if (typeof value === 'string') return rewriteFormula(value, inheritedActor);
+    if (Array.isArray(value)) return value.map(entry => rewrite(entry, '', inheritedActor));
+    if (!isSettlementRecord(value)) return value;
+    const actor = inferFormulaActor(value, inheritedActor);
+    if (
+      formulaKeys.has(parentKey) &&
+      Object.keys(value).length === 1 &&
+      Object.prototype.hasOwnProperty.call(value, 'formula') &&
+      (typeof value.formula === 'string' || typeof value.formula === 'number')
+    ) return typeof value.formula === 'string' ? rewriteFormula(value.formula, actor) : value.formula;
+    const result: Record<string, any> = {};
+    Object.entries(value).forEach(([key, entry]) => {
+      if (key === 'id' && typeof entry === 'string' && aliases.has(entry)) result[key] = aliases.get(entry);
+      else if ((key === 'apply_status' || key === 'remove_status') && typeof entry === 'string') {
+        result[key] = aliases.get(entry) || entry;
+      } else result[key] = rewrite(entry, key, actor);
+    });
+    for (const operation of ['apply_status', 'remove_status'] as const) {
+      const nested = result[operation];
+      if (!isSettlementRecord(nested) || typeof nested.id !== 'string') continue;
+      const transferable = operation === 'apply_status' ? ['stacks', 'to', 'targets'] : ['to', 'targets'];
+      const allowed = new Set([
+        'id', 'name', 'emoji', 'description', 'type', 'stacks_change', 'maxStacks', 'stun', 'triggers', '$meta',
+        ...transferable,
+      ]);
+      if (Object.keys(nested).some(key => !allowed.has(key))) continue;
+      if (transferable.some(key => result[key] !== undefined && nested[key] !== undefined && result[key] !== nested[key])) continue;
+      result[operation] = aliases.get(nested.id) || nested.id;
+      transferable.forEach(key => {
+        if (result[key] === undefined && nested[key] !== undefined) result[key] = nested[key];
+      });
+    }
+    const nestedModify = result.modify;
+    if (isSettlementRecord(nestedModify)) {
+      const attribute = typeof nestedModify.attribute === 'string'
+        ? nestedModify.attribute
+        : typeof nestedModify.stat === 'string'
+          ? nestedModify.stat
+          : '';
+      const operators = ['add', 'subtract', 'multiply', 'divide', 'set'].filter(
+        key => nestedModify[key] !== undefined,
+      );
+      const allowed = new Set(['attribute', 'stat', 'add', 'subtract', 'multiply', 'divide', 'set', 'to', 'targets']);
+      if (
+        attribute &&
+        operators.length === 1 &&
+        Object.keys(nestedModify).every(key => allowed.has(key)) &&
+        ['to', 'targets', ...operators].every(
+          key => result[key] === undefined || nestedModify[key] === undefined || result[key] === nestedModify[key],
+        )
+      ) {
+        result.modify = attribute;
+        ['to', 'targets', ...operators].forEach(key => {
+          if (result[key] === undefined && nestedModify[key] !== undefined) result[key] = nestedModify[key];
+        });
+      }
+    }
+    return result;
+  };
+  variables.stat_data.battle = rewrite(battle);
+  return true;
 }
 
 function stableSettlementValue(value: unknown): unknown {
@@ -249,6 +388,26 @@ function summarizeMvuUpdate(result: unknown): string[] {
     battleHandoffReady: false,
   };
   let cardRepairHandler: ((requirement: string) => Promise<void>) | null = null;
+  type TowerGenerationBridgeEvent = {
+    type: 'status' | 'completed' | 'failed';
+    payload: unknown;
+  };
+  const towerGenerationListeners = new Set<(event: TowerGenerationBridgeEvent) => void>();
+  const towerGenerationSnapshot: {
+    status: unknown;
+    completed: unknown;
+    failed: unknown;
+  } = { status: null, completed: null, failed: null };
+  const publishTowerGenerationEvent = (event: TowerGenerationBridgeEvent): void => {
+    towerGenerationSnapshot[event.type] = event.payload;
+    for (const listener of towerGenerationListeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        console.error('[MagicGirlWorld] 爬塔生成监听器执行失败', error);
+      }
+    }
+  };
 
   type MvuMonitorSettings = {
     showMvuWindow: boolean;
@@ -257,9 +416,45 @@ function summarizeMvuUpdate(result: unknown): string[] {
     designAssistantEnabled: boolean;
     simulationSeeds: number;
     showNotifications: boolean;
+    debug: boolean;
+  };
+
+  const installPublishedTowerExtension = async (): Promise<boolean> => {
+    const provider = registryHost.MagicGirlDesignAssistant || host.MagicGirlDesignAssistant || null;
+    if (typeof provider?.getCapabilities === 'function') return true;
+    const parentWindow = (host.parent || host.window?.parent || host) as any;
+    if (typeof parentWindow?.Function !== 'function') {
+      throw new Error('当前酒馆页面无法打开官方扩展安装器');
+    }
+    // Create the dynamic import in SillyTavern's top-window realm. This calls
+    // the official installer, including its own third-party confirmation and
+    // request headers, instead of duplicating a private HTTP endpoint.
+    const loadOfficialInstaller = parentWindow.Function('return import("/scripts/extensions.js")');
+    const extensionModule = await loadOfficialInstaller();
+    if (typeof extensionModule?.installExtension !== 'function') {
+      throw new Error('当前酒馆版本没有提供官方扩展安装接口');
+    }
+    return extensionModule.installExtension(
+      'https://github.com/HolyFishhh/magic-girl-world.git',
+      false,
+      'extension',
+    );
   };
 
   const installMvuMonitor = () => {
+    const requiredTowerExtensionVersion = '0.2.0';
+    const towerExtensionReleaseUrl = 'https://github.com/HolyFishhh/magic-girl-world/releases/latest';
+    const compareSemanticVersions = (left: string, right: string): number => {
+      const normalize = (value: string) => value.split(/[.-]/).map(part => Number.parseInt(part, 10) || 0);
+      const leftParts = normalize(left);
+      const rightParts = normalize(right);
+      const length = Math.max(leftParts.length, rightParts.length);
+      for (let index = 0; index < length; index += 1) {
+        const difference = (leftParts[index] || 0) - (rightParts[index] || 0);
+        if (difference !== 0) return difference;
+      }
+      return 0;
+    };
     const storageKey = 'mwg:settings-center:v2';
     const defaultSettings: MvuMonitorSettings = {
       showMvuWindow: true,
@@ -268,6 +463,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
       designAssistantEnabled: true,
       simulationSeeds: 8,
       showNotifications: true,
+      debug: false,
     };
     let settings = { ...defaultSettings };
     let orbPosition: { x: number; y: number } | null = null;
@@ -281,6 +477,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
         ? Number(settings.simulationSeeds)
         : 8;
       settings.showNotifications = settings.showNotifications !== false;
+      settings.debug = settings.debug === true;
       if (Number.isFinite(stored?.orbPosition?.x) && Number.isFinite(stored?.orbPosition?.y)) {
         orbPosition = { x: Number(stored.orbPosition.x), y: Number(stored.orbPosition.y) };
       }
@@ -299,6 +496,8 @@ function summarizeMvuUpdate(result: unknown): string[] {
       detail: '等待下一次变量更新',
       startedAt: 0,
       finishedAt: 0,
+      candidateHasUpdateBlock: false,
+      variableWriteObserved: false,
       open: false,
       settingsVisible: false,
       cardRepairFormVisible: false,
@@ -380,6 +579,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
           ? Number(remote.simulationSeeds)
           : settings.simulationSeeds,
         showNotifications: remote.showNotifications !== false,
+        debug: remote.debug === true,
       };
       const changed = Object.keys(next).some(key => (next as any)[key] !== (settings as any)[key]);
       settings = next;
@@ -499,19 +699,63 @@ function summarizeMvuUpdate(result: unknown): string[] {
       const snapshot = available ? dashboard.snapshot : null;
       const profile = snapshot?.deckProfile;
       const lineage = snapshot?.lineage || dashboard?.state?.lineage;
+      const capabilities = designAssistant?.getCapabilities?.() || null;
+      const extensionVersion = typeof capabilities?.version === 'string' ? capabilities.version : '';
+      const towerCapabilityReady = capabilities?.towerGeneration === true && capabilities?.towerCoordinator === true;
+      const towerVersionReady = extensionVersion.length > 0
+        && compareSemanticVersions(extensionVersion, requiredTowerExtensionVersion) >= 0;
+      const towerAvailable = towerCapabilityReady && towerVersionReady;
+      const towerStatus = towerAvailable ? designAssistant?.getTowerCoordinatorStatus?.() : null;
       if (root) {
         root.dataset.designAvailable = available ? 'true' : 'false';
         root.dataset.deckAvailable = profile ? 'true' : 'false';
         root.dataset.lineageAvailable = Array.isArray(lineage?.families) && lineage.families.length > 0 ? 'true' : 'false';
+        root.dataset.towerAvailable = towerAvailable ? 'true' : 'false';
       }
       const remoteSettings = dashboard?.settings;
       if (remoteSettings) applyRemoteSettings(remoteSettings);
       setAllText('[data-mwg-design-status]', dashboard?.status?.message || '等待设计辅助器连接');
       setAllText(
+        '[data-mwg-tower-status]',
+        towerAvailable
+          ? towerStatus?.message || '爬塔后台已连接，等待本局启动'
+          : '爬塔组件未安装或版本过低；剧情模式仍可正常使用。',
+      );
+      setAllText(
+        '[data-mwg-tower-extension]',
+        towerAvailable
+          ? `设计辅助器 ${extensionVersion} · 爬塔组件已连接`
+          : `需要设计辅助器 ${requiredTowerExtensionVersion} 或更高版本`,
+      );
+      setAllText(
+        '[data-mwg-tower-requirement]',
+        !extensionVersion
+          ? `未检测到设计辅助器。下载 magic-girl-design-assistant-${requiredTowerExtensionVersion}.zip，安装后刷新酒馆。`
+          : !towerVersionReady
+            ? `当前版本 ${extensionVersion} 过低，需要 ${requiredTowerExtensionVersion} 或更高版本。更新后刷新酒馆。`
+            : `当前扩展 ${extensionVersion} 缺少爬塔后台能力，请重新安装完整发布包后刷新酒馆。`,
+      );
+      setAllText(
         '[data-mwg-design-runtime]',
         available
           ? `${dashboard.threaded ? '后台模拟' : '兼容计算'} · 图谱 ${dashboard.graph?.nodes || 0} 节点 / ${dashboard.graph?.edges || 0} 关系`
           : '当前没有可用的角色卡专属设计组件',
+      );
+      const injectionAt = Number(dashboard?.state?.lastInjectionAt);
+      const injectionSource = dashboard?.state?.lastInjectionSource === 'mvu-lifecycle'
+        ? 'MVU 自动二阶段'
+        : dashboard?.state?.lastInjectionSource === 'tavern-helper'
+          ? '酒馆助手实时事件'
+          : dashboard?.state?.lastInjectionSource === 'official'
+            ? '酒馆官方事件'
+            : '未知事件源';
+      const injectionMessageId = dashboard?.state?.lastInjectionMessageId;
+      const injectionCount = Math.max(0, Number(dashboard?.state?.lastInjectionCount) || 0);
+      setAllText(
+        '[data-mwg-design-injection]',
+        Number.isFinite(injectionAt) && injectionAt > 0
+          ? `最近注入：${injectionSource} · 楼层 ${injectionMessageId ?? '未知'} · ${new Date(injectionAt).toLocaleTimeString('zh-CN', { hour12: false })} · 本存档累计 ${injectionCount} 次`
+          : '尚未捕获本存档的第二轮变量请求',
       );
       setAllText('[data-mwg-deck-score]', profile ? String(profile.totalScore) : '—');
       setAllText(
@@ -538,6 +782,43 @@ function summarizeMvuUpdate(result: unknown): string[] {
           : [];
       });
       replaceLines('[data-mwg-horizon-list]', horizonLines, '尚未生成回合曲线');
+      const envelope = snapshot?.enemyEnvelope;
+      const enemyPower = snapshot?.enemyPower;
+      setAllText(
+        '[data-mwg-balance-summary]',
+        envelope
+          ? `目标 ${envelope.targetScore} 分 · 有效难度 ${envelope.effectiveRatio}% · 预计 ${envelope.targetTurns?.[0] ?? '—'}~${envelope.targetTurns?.[1] ?? '—'} 回合${enemyPower ? ` · 当前敌人 ${enemyPower.currentEncounterScore} 分` : ''}`
+          : '等待敌人数值预算',
+      );
+      replaceLines(
+        '[data-mwg-unsupported-list]',
+        Array.isArray(profile?.unsupportedFeatures)
+          ? profile.unsupportedFeatures.slice(0, 12).map((feature: string) => ({
+              title: String(feature),
+              detail: '该机制尚未被影子模拟完整执行；只提供保守预算，不自动改写敌人数值。',
+            }))
+          : [],
+        '当前构筑没有未覆盖的模拟机制。',
+      );
+      const calibration = dashboard?.state?.lastCalibration;
+      replaceLines(
+        '[data-mwg-calibration-list]',
+        calibration
+          ? [{
+              title: calibration.mode === 'applied'
+                ? `已校准 ×${calibration.appliedScale}`
+                : calibration.mode === 'advisory'
+                  ? '仅提供预算，未自动改写'
+                  : '数值已验证，无需改写',
+              detail: [
+                `目标难度 ${calibration.requestedRatio}% / 有效 ${calibration.effectiveRatio}%`,
+                calibration.winnableAtCurrentResources ? '当前资源可通关' : '当前资源存在通关风险',
+                ...(Array.isArray(calibration.warnings) ? calibration.warnings.slice(0, 3) : []),
+              ].join(' · '),
+            }]
+          : [],
+        '尚未生成需要复评的新敌人。',
+      );
       const archetypes = Array.isArray(profile?.archetypes) ? profile.archetypes.slice(0, 10) : [];
       replaceLines(
         '[data-mwg-archetype-list]',
@@ -566,7 +847,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
           title: String(family.name || family.label || family.id || family.familyId || '未命名敌人族群'),
           detail: [
             Array.isArray(family.themeAxes) ? family.themeAxes.slice(0, 4).join('、') : '',
-            Array.isArray(family.signatureActions) ? `招牌行动：${family.signatureActions.slice(0, 3).map((entry: any) => entry.name || entry.id || entry).join('、')}` : '',
+            Array.isArray(family.canonicalActions) ? `招牌行动：${family.canonicalActions.slice(-3).map((entry: any) => entry.name || entry.id || entry).join('、')}` : '',
           ].filter(Boolean).join(' · '),
         })),
         '尚未建立敌人谱系；只有剧情明确属于同族、上下位或首领关系时才会记录。',
@@ -621,7 +902,10 @@ function summarizeMvuUpdate(result: unknown): string[] {
       root.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-mwg-design-setting]').forEach(input => {
         const key = input.dataset.mwgDesignSetting as keyof MvuMonitorSettings;
         const value = settings[key];
-        if (input instanceof HTMLInputElement && input.type === 'checkbox') input.checked = Boolean(value);
+        // Controls live in the parent SillyTavern document while this runtime
+        // executes inside Tavern Helper's iframe. Cross-realm `instanceof`
+        // fails even for real input elements, so use tag/type capabilities.
+        if (input.tagName === 'INPUT' && input.type === 'checkbox') input.checked = Boolean(value);
         else input.value = String(value);
       });
       renderMvuProcess();
@@ -684,9 +968,11 @@ function summarizeMvuUpdate(result: unknown): string[] {
 #mwg-mvu-monitor .mwg-card-repair-button[data-kind="primary"]{border-color:#a95377!important;background:linear-gradient(135deg,#b66083,#914262)!important;color:#fff!important;box-shadow:0 4px 12px #7f38552e!important}.mwg-card-repair-button:disabled{opacity:.55;cursor:wait}
 #mwg-mvu-monitor .mwg-card-repair-error{display:none;color:#b33d4e;font:400 11px/1.45 var(--mwg-body)!important}
 #mwg-mvu-monitor [data-mwg-component]{display:none}
-#mwg-mvu-monitor[data-design-available="true"] [data-mwg-component="design"]{display:block}
+#mwg-mvu-monitor[data-design-available="true"] [data-mwg-component="design"],#mwg-mvu-monitor[data-design-available="true"] [data-mwg-component="diagnostics"]{display:block}
 #mwg-mvu-monitor[data-deck-available="true"] [data-mwg-component="deck"],#mwg-mvu-monitor[data-deck-available="true"] [data-mwg-component="archetype"]{display:block}
 #mwg-mvu-monitor[data-lineage-available="true"] [data-mwg-component="lineage"]{display:block}
+#mwg-mvu-monitor[data-tower-available="true"] [data-mwg-component="tower"]{display:block}
+#mwg-mvu-monitor[data-tower-available="false"] [data-mwg-component="tower-install"]{display:block}
 #mwg-mvu-monitor[data-mvu-history="true"] [data-mwg-component="mvu-history"]{display:block}
 #mwg-mvu-monitor .mwg-settings-group{margin:0 0 9px!important;border:1px solid #eadbd3!important;border-radius:14px!important;background:#fffefdde!important;overflow:hidden}
 #mwg-mvu-monitor .mwg-settings-group>summary{display:flex!important;min-height:46px;padding:10px 13px;align-items:center;gap:9px;color:#74455a;font:500 14px/1.35 var(--mwg-body);cursor:pointer;list-style:none}
@@ -698,6 +984,8 @@ function summarizeMvuUpdate(result: unknown): string[] {
 #mwg-mvu-monitor .mwg-design-status-card strong,#mwg-mvu-monitor .mwg-design-status-card small{display:block!important;margin:0!important}
 #mwg-mvu-monitor .mwg-design-status-card strong{color:#7e3e5a;font:500 13px/1.45 var(--mwg-body)}
 #mwg-mvu-monitor .mwg-design-status-card small{margin-top:3px!important;color:#998087;font:400 11px/1.45 var(--mwg-body)}
+#mwg-mvu-monitor .mwg-extension-download{display:flex!important;margin-top:9px;min-height:34px;padding:7px 10px;align-items:center;justify-content:center;border:1px solid #d5a8b9;border-radius:9px;background:#fff;color:#87445f;font:500 12px/1.4 var(--mwg-body);text-decoration:none!important}
+#mwg-mvu-monitor .mwg-extension-download:hover{border-color:#a74d72;background:#fff4f8;color:#70364f}
 #mwg-mvu-monitor .mwg-deck-overview{display:grid!important;margin:10px 0;grid-template-columns:112px minmax(0,1fr);gap:10px;align-items:stretch}
 #mwg-mvu-monitor .mwg-deck-score-card{display:grid!important;place-items:center;padding:12px;border:1px solid #e5d1da;border-radius:13px;background:radial-gradient(circle at 50% 20%,#fff,#fff0f6)}
 #mwg-mvu-monitor .mwg-deck-score-card strong{color:#913f63;font:400 30px/1 var(--mwg-display)}
@@ -764,12 +1052,13 @@ function summarizeMvuUpdate(result: unknown): string[] {
     <details class="mwg-settings-group" data-mwg-component="design" open>
       <summary>难度与设计辅助器</summary>
       <div class="mwg-group-body">
-        <div class="mwg-design-status-card"><strong data-mwg-design-status>等待设计辅助器连接</strong><small data-mwg-design-runtime></small></div>
+        <div class="mwg-design-status-card"><strong data-mwg-design-status>等待设计辅助器连接</strong><small data-mwg-design-runtime></small><small data-mwg-design-injection>尚未捕获本存档的第二轮变量请求</small></div>
         <label class="mwg-setting-row"><span class="mwg-setting-copy"><strong>启用第二轮设计辅助</strong><small>只在本角色卡的 MVU 第二轮注入评分、流派与敌人预算</small></span><input type="checkbox" data-mwg-design-setting="designAssistantEnabled"><span class="mwg-switch" aria-hidden="true"></span></label>
         <label class="mwg-difficulty-row"><span class="mwg-setting-copy"><strong>剧情战斗强度</strong><small>相对当前卡组评分；100%为极限发挥，110%允许有限资源损耗</small></span><select class="mwg-difficulty-select" data-mwg-difficulty aria-label="剧情战斗强度"><option value="10">10% 剧情体验</option><option value="50">50% 轻松</option><option value="80">80% 标准</option><option value="100">100% 极限平衡</option><option value="110">110% 高压</option></select></label>
         <label class="mwg-setting-row"><span class="mwg-setting-copy"><strong>程序自动校准</strong><small>生成后只调整敌人数值，不改身份、招式、行动顺序或攻击次数</small></span><input type="checkbox" data-mwg-design-setting="autoCalibration"><span class="mwg-switch" aria-hidden="true"></span></label>
         <label class="mwg-difficulty-row"><span class="mwg-setting-copy"><strong>模拟精度</strong><small>精度越高，随机牌序覆盖越多，后台计算耗时也会增加</small></span><select class="mwg-difficulty-select" data-mwg-design-setting="simulationSeeds" aria-label="模拟精度"><option value="8">快速 · 8组</option><option value="12">均衡 · 12组</option><option value="16">精细 · 16组</option><option value="24">深入 · 24组</option></select></label>
         <label class="mwg-setting-row"><span class="mwg-setting-copy"><strong>显示校准提示</strong><small>只在敌人数值被实际调整时显示提示</small></span><input type="checkbox" data-mwg-design-setting="showNotifications"><span class="mwg-switch" aria-hidden="true"></span></label>
+        <label class="mwg-setting-row"><span class="mwg-setting-copy"><strong>调试日志</strong><small>在控制台输出本轮注入的紧凑设计上下文和失败原因</small></span><input type="checkbox" data-mwg-design-setting="debug"><span class="mwg-switch" aria-hidden="true"></span></label>
         <button class="mwg-refresh-design" type="button" data-action="refresh-design">立即重新评估卡组</button>
       </div>
     </details>
@@ -780,12 +1069,32 @@ function summarizeMvuUpdate(result: unknown): string[] {
         <strong class="mwg-subsection-title">回合能力曲线</strong><div class="mwg-data-list" data-mwg-horizon-list></div>
       </div>
     </details>
+    <details class="mwg-settings-group" data-mwg-component="diagnostics">
+      <summary>平衡预算与模拟边界</summary>
+      <div class="mwg-group-body"><div class="mwg-design-status-card"><strong>本轮敌人数值预算</strong><small data-mwg-balance-summary>等待敌人数值预算</small></div><strong class="mwg-subsection-title">最近一次敌人复评</strong><div class="mwg-data-list" data-mwg-calibration-list></div><strong class="mwg-subsection-title">尚未完整模拟的机制</strong><div class="mwg-data-list" data-mwg-unsupported-list></div></div>
+    </details>
     <details class="mwg-settings-group" data-mwg-component="archetype">
       <summary>流派总览与演变方向</summary>
       <div class="mwg-group-body"><small class="mwg-inline-note" data-mwg-scatter-share></small><strong class="mwg-subsection-title">当前流派倾向</strong><div class="mwg-data-list" data-mwg-archetype-list></div><strong class="mwg-subsection-title">邻接与桥接方向</strong><div class="mwg-data-list" data-mwg-evolution-list></div></div>
     </details>
     <details class="mwg-settings-group" data-mwg-component="lineage">
       <summary>敌人谱系记忆</summary><div class="mwg-group-body"><div class="mwg-data-list" data-mwg-lineage-list></div></div>
+    </details>
+    <details class="mwg-settings-group" data-mwg-component="tower">
+      <summary>爬塔后台</summary>
+      <div class="mwg-group-body">
+        <div class="mwg-design-status-card"><strong>单页预生成状态</strong><small data-mwg-tower-extension>正在检测扩展版本</small><small data-mwg-tower-status>等待爬塔组件连接</small></div>
+        <button class="mwg-refresh-design" type="button" data-action="retry-tower-generation">重试最近失败的节点</button>
+        <button class="mwg-refresh-design" type="button" data-action="archive-tower-run">重试终局归档</button>
+      </div>
+    </details>
+    <details class="mwg-settings-group" data-mwg-component="tower-install" open>
+      <summary>爬塔组件需要安装</summary>
+      <div class="mwg-group-body">
+        <div class="mwg-design-status-card"><strong data-mwg-tower-extension>需要设计辅助器 0.2.0 或更高版本</strong><small data-mwg-tower-requirement>安装完整扩展包后刷新酒馆；剧情模式不受影响。</small></div>
+        <button class="mwg-extension-download" type="button" data-action="install-tower-extension">快捷安装爬塔组件</button>
+        <a class="mwg-extension-download" href="${towerExtensionReleaseUrl}" target="_blank" rel="noopener noreferrer">安装失败时打开手动下载页面</a>
+      </div>
     </details>
     <details class="mwg-settings-group" data-mwg-component="mvu-history">
       <summary>最近一次 MVU 生成全过程</summary>
@@ -824,6 +1133,38 @@ function summarizeMvuUpdate(result: unknown): string[] {
         if (cardRepairPending) return;
         monitorState.cardRepairFormVisible = false;
         render();
+      });
+      root.querySelector('[data-action="retry-tower-generation"]')?.addEventListener('click', () => {
+        const failed = towerGenerationSnapshot.failed as any;
+        const nodeId = typeof failed?.nodeId === 'string' ? failed.nodeId : '';
+        const provider = registryHost.MagicGirlDesignAssistant || host.MagicGirlDesignAssistant || designAssistant;
+        const request = nodeId ? {
+          generationType: nodeId === '__tower_opening__' ? 'opening' : 'node',
+          nodeId,
+        } : {};
+        const retry = typeof provider?.retryTowerGeneration === 'function'
+          ? Promise.resolve(provider.retryTowerGeneration(request))
+          : Promise.reject(new Error('爬塔后台重试扩展尚未就绪'));
+        void retry.then(() => render()).catch(error => console.warn('[MagicGirlWorld] 爬塔节点重试失败', error));
+      });
+      root.querySelector('[data-action="archive-tower-run"]')?.addEventListener('click', () => {
+        void Promise.resolve(designAssistant?.archiveTowerRun?.())
+          .then(() => render())
+          .catch(error => console.warn('[MagicGirlWorld] 爬塔终局归档失败', error));
+      });
+      root.querySelector('[data-action="install-tower-extension"]')?.addEventListener('click', event => {
+        const button = event.currentTarget as HTMLButtonElement;
+        button.disabled = true;
+        button.textContent = '正在打开酒馆安装器…';
+        void installPublishedTowerExtension()
+          .then(installed => {
+            button.textContent = installed ? '安装完成，请刷新酒馆' : '安装已取消，可再次尝试';
+          })
+          .catch(error => {
+            button.disabled = false;
+            button.textContent = '快捷安装失败，请使用下方手动安装';
+            console.warn('[MagicGirlWorld] 快捷安装爬塔组件失败', error);
+          });
       });
       root.querySelector('[data-action="submit-card-repair"]')?.addEventListener('click', async () => {
         if (cardRepairPending) return;
@@ -872,7 +1213,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
       root.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-mwg-design-setting]').forEach(input => {
         input.addEventListener('change', () => {
           const localKey = input.dataset.mwgDesignSetting as keyof MvuMonitorSettings;
-          const value = input instanceof HTMLInputElement && input.type === 'checkbox'
+          const value = input.tagName === 'INPUT' && input.type === 'checkbox'
             ? input.checked
             : Number(input.value);
           settings = { ...settings, [localKey]: value };
@@ -969,11 +1310,42 @@ function summarizeMvuUpdate(result: unknown): string[] {
         monitorState.detail = '剧情已完成，正在进行第二轮变量整理';
         monitorState.startedAt = Date.now();
         monitorState.finishedAt = 0;
+        monitorState.candidateHasUpdateBlock = false;
+        monitorState.variableWriteObserved = false;
         monitorState.open = settings.showMvuWindow;
         monitorState.settingsVisible = false;
         pushTimeline('第二轮请求开始', '读取剧情与最新 MVU 变量');
         ensureDom();
         startElapsedTimer();
+        render();
+      },
+      beginStructuredOperation(input: { generationId: string; detail: string }) {
+        api.begin({ generationId: input.generationId });
+        monitorState.detail = input.detail || '正在生成结构化游戏内容';
+        monitorState.open = settings.showMvuWindow;
+        pushTimeline('后台结构化请求开始', monitorState.detail);
+        render();
+      },
+      applyStructuredOperation(input: { generationId: string; detail: string; rawOutput?: string }) {
+        if (input.generationId && monitorState.generationId !== input.generationId) return;
+        clearApplyTimer();
+        monitorState.phase = 'applying';
+        monitorState.detail = input.detail || '正在校验并写入当前楼层';
+        if (typeof input.rawOutput === 'string') monitorState.rawOutput = input.rawOutput;
+        pushTimeline('结构化结果已返回', monitorState.detail);
+        render();
+      },
+      completeStructuredOperation(input: { generationId: string; summary: string; rawOutput?: string }) {
+        if (input.generationId && monitorState.generationId !== input.generationId) return;
+        clearApplyTimer();
+        monitorState.phase = 'success';
+        monitorState.output = input.summary || '当前楼层内容已更新';
+        if (typeof input.rawOutput === 'string') monitorState.rawOutput = input.rawOutput;
+        monitorState.pendingOutput = '';
+        monitorState.detail = '后台内容已校验并写入当前楼层';
+        monitorState.variableWriteObserved = true;
+        pushTimeline('后台内容应用完成', monitorState.output);
+        finishElapsedTimer();
         render();
       },
       stream(text: unknown, generationId?: string) {
@@ -990,14 +1362,26 @@ function summarizeMvuUpdate(result: unknown): string[] {
       complete(result: unknown, generationId?: string) {
         if (generationId && monitorState.generationId && generationId !== monitorState.generationId) return;
         if (monitorState.phase === 'idle') return;
-        monitorState.rawOutput = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
-        monitorState.output = summarizeMvuUpdate(extractUpdateOutput(result)).join('\n');
+        const updateOutput = extractUpdateOutput(result);
+        const candidateHasUpdateBlock = /<UpdateVariable>[\s\S]*?<\/UpdateVariable>/i.test(updateOutput);
+        // COMMAND_PARSED receives the whole assistant floor in current MVU
+        // builds.  The monitor is for the second-stage response, so never
+        // repeat the first-stage story in the "raw model output" panel.
+        monitorState.rawOutput = updateOutput;
+        monitorState.candidateHasUpdateBlock = candidateHasUpdateBlock;
+        monitorState.output = summarizeMvuUpdate(updateOutput).join('\n');
         monitorState.pendingOutput = '';
         if (!monitorState.reasoning) monitorState.reasoning = extractReturnedReasoning(result);
         pushTimeline('模型返回完成', `${monitorState.rawOutput.length} 字符`);
         // COMMAND_PARSED may arrive after VARIABLE_UPDATE_ENDED in some MVU builds.
-        // Preserve the completed state while still capturing the final source text.
-        if (monitorState.phase === 'success') {
+        // A variable event alone is not success: program writes and rollback
+        // events also use the same hook. Require a complete model update block.
+        if (monitorState.variableWriteObserved) {
+          if (candidateHasUpdateBlock) api.success();
+          else api.fail(new Error('第二轮模型没有返回可解析的 <UpdateVariable> 变量更新块'));
+          return;
+        }
+        if (monitorState.phase === 'success' || monitorState.phase === 'error') {
           render();
           return;
         }
@@ -1051,6 +1435,19 @@ function summarizeMvuUpdate(result: unknown): string[] {
       },
       success() {
         if (monitorState.phase === 'idle') return;
+        monitorState.variableWriteObserved = true;
+        if (!monitorState.candidateHasUpdateBlock) {
+          monitorState.phase = 'applying';
+          monitorState.detail = '变量事件已到达，正在等待模型返回的完整更新块';
+          pushTimeline('等待变量更新块', '不把程序写入或空解析误判为完成');
+          clearApplyTimer();
+          applyTimer = host.setTimeout?.(() => {
+            if (monitorState.phase !== 'applying' || monitorState.candidateHasUpdateBlock) return;
+            api.fail(new Error('第二轮模型没有返回可解析的 <UpdateVariable> 变量更新块'));
+          }, 1200) as number | undefined;
+          render();
+          return;
+        }
         clearApplyTimer();
         monitorState.phase = 'success';
         monitorState.detail = '第二轮变量已写入，可继续游玩';
@@ -1092,6 +1489,15 @@ function summarizeMvuUpdate(result: unknown): string[] {
         ensureDom();
         render();
       },
+      receiveTowerGenerationStatus(value: unknown) {
+        publishTowerGenerationEvent({ type: 'status', payload: value });
+      },
+      receiveTowerGenerationCompleted(value: unknown) {
+        publishTowerGenerationEvent({ type: 'completed', payload: value });
+      },
+      receiveTowerGenerationFailed(value: unknown) {
+        publishTowerGenerationEvent({ type: 'failed', payload: value });
+      },
       openSettings() {
         monitorState.settingsVisible = true;
         ensureDom();
@@ -1102,21 +1508,28 @@ function summarizeMvuUpdate(result: unknown): string[] {
         if (lifecycleTimer !== undefined) host.clearInterval?.(lifecycleTimer);
         if (streamRenderTimer !== undefined) host.clearTimeout?.(streamRenderTimer);
         clearApplyTimer();
+        if (registryHost.MagicGirlWorldMvuMonitor === api) delete registryHost.MagicGirlWorldMvuMonitor;
+        if (host.MagicGirlWorldMvuMonitor === api) delete host.MagicGirlWorldMvuMonitor;
         root?.remove();
         root = null;
       },
     };
 
+    // The card runtime executes inside Tavern Helper's iframe while the
+    // installed extension executes in SillyTavern's top window. Publish the
+    // bridge on the parent registry host so both halves share one dashboard.
+    registryHost.MagicGirlWorldMvuMonitor = api;
     host.MagicGirlWorldMvuMonitor = api;
-    api.setDesignAssistant(host.MagicGirlDesignAssistant || null);
+    api.setDesignAssistant(registryHost.MagicGirlDesignAssistant || host.MagicGirlDesignAssistant || null);
     syncThinkingSetting();
     ensureDom();
     listen('js_stream_token_received_fully', (text: string, generationId: string) => api.stream(text, generationId));
     listen('stream_reasoning_done', (reasoning: string) => api.reasoning(reasoning));
     const syncExtraAnalysis = (): void => {
       try {
-        if ((host.MagicGirlDesignAssistant || null) !== designAssistant) {
-          api.setDesignAssistant(host.MagicGirlDesignAssistant || null);
+        const provider = registryHost.MagicGirlDesignAssistant || host.MagicGirlDesignAssistant || null;
+        if (provider !== designAssistant) {
+          api.setDesignAssistant(provider);
         }
         const globalVariables = host.getVariables?.({ type: 'global' });
         api.syncExtraAnalysis(globalVariables?.extra_analysis === true);
@@ -1141,6 +1554,128 @@ function summarizeMvuUpdate(result: unknown): string[] {
     } catch {
       return undefined;
     }
+  };
+
+  const normalizeMvuMessageRoot = (value: unknown): Record<string, any> | null => {
+    let current = value;
+    for (let depth = 0; depth < 2; depth += 1) {
+      if (isSettlementRecord(current) && isSettlementRecord(current.stat_data)) return current;
+      if (Array.isArray(current) && current.length === 1) {
+        current = current[0];
+        continue;
+      }
+      if (
+        isSettlementRecord(current)
+        && Object.keys(current).length === 1
+        && Object.prototype.hasOwnProperty.call(current, '0')
+      ) {
+        current = current['0'];
+        continue;
+      }
+      break;
+    }
+    return isSettlementRecord(current) && isSettlementRecord(current.stat_data) ? current : null;
+  };
+
+  const readMvuMessageVariables = (messageId: number | 'latest'): Record<string, any> => {
+    const mvu = getMvuApi();
+    if (!mvu || typeof mvu.getMvuData !== 'function') throw new Error('MVU getMvuData 接口不可用');
+    const variables = normalizeMvuMessageRoot(
+      mvu.getMvuData({ type: 'message', message_id: messageId }),
+    );
+    if (!variables) throw new Error('MVU 消息变量根结构无效');
+    return cloneSettlementValue(variables);
+  };
+
+  const messageVariableUpdateQueues = new Map<string, Promise<void>>();
+  const runRevision = (variables: Record<string, any>): number | null => {
+    const value = Number(variables.stat_data?.run?.stateRevision);
+    return Number.isFinite(value) ? value : null;
+  };
+
+  /**
+   * Tavern Helper's convenience variable cache can lag behind direct MVU
+   * replacements performed by the persistent extension. Always merge runtime
+   * actions into MVU's authoritative message snapshot so a battle-session save
+   * cannot resurrect an older tower floor.
+   */
+  const updateMvuMessageVariablesWith = async (
+    messageId: number | 'latest',
+    updater: (variables: Record<string, any>) => Record<string, any> | Promise<Record<string, any>>,
+  ): Promise<Record<string, any>> => {
+    if (typeof updater !== 'function') throw new Error('消息变量更新器无效');
+    const key = String(messageId);
+    const previous = messageVariableUpdateQueues.get(key) || Promise.resolve();
+    let operation!: Promise<Record<string, any>>;
+    operation = previous
+      .catch(() => undefined)
+      .then(async () => {
+        const mvu = getMvuApi();
+        if (!mvu || typeof mvu.replaceMvuData !== 'function') throw new Error('MVU replaceMvuData 接口不可用');
+
+        let base = readMvuMessageVariables(messageId);
+        let next = await updater(cloneSettlementValue(base));
+        if (!isSettlementRecord(next) || !isSettlementRecord(next.stat_data)) {
+          throw new Error('消息变量更新器返回了无效根结构');
+        }
+
+        // A model-backed node may finish while an asynchronous UI transaction
+        // is preparing its result. Rebase the updater once onto the newer run
+        // revision instead of allowing the older snapshot to win.
+        const latest = readMvuMessageVariables(messageId);
+        const baseRevision = runRevision(base);
+        const latestRevision = runRevision(latest);
+        if (baseRevision !== null && latestRevision !== null && latestRevision > baseRevision) {
+          base = latest;
+          next = await updater(cloneSettlementValue(base));
+          if (!isSettlementRecord(next) || !isSettlementRecord(next.stat_data)) {
+            throw new Error('消息变量更新器在重放后返回了无效根结构');
+          }
+        }
+
+        const nextRevision = runRevision(next);
+        const authoritativeRevision = runRevision(base);
+        if (
+          nextRevision !== null
+          && authoritativeRevision !== null
+          && nextRevision < authoritativeRevision
+        ) {
+          throw new Error(`拒绝写入旧爬塔状态：${nextRevision} < ${authoritativeRevision}`);
+        }
+
+        await mvu.replaceMvuData(cloneSettlementValue(next), {
+          type: 'message',
+          message_id: messageId,
+        });
+        return cloneSettlementValue(next);
+      });
+    const tail = operation.then(() => undefined, () => undefined);
+    messageVariableUpdateQueues.set(key, tail);
+    void tail.finally(() => {
+      if (messageVariableUpdateQueues.get(key) === tail) messageVariableUpdateQueues.delete(key);
+    });
+    return operation;
+  };
+
+  const replaceMvuMessageVariables = async (
+    messageId: number | 'latest',
+    variables: Record<string, any>,
+  ): Promise<Record<string, any>> => {
+    if (!isSettlementRecord(variables) || !isSettlementRecord(variables.stat_data)) {
+      throw new Error('拒绝写入根结构无效的 MVU 消息变量');
+    }
+    return updateMvuMessageVariablesWith(messageId, current => {
+      const currentRevision = runRevision(current);
+      const incomingRevision = runRevision(variables);
+      if (
+        currentRevision !== null
+        && incomingRevision !== null
+        && incomingRevision < currentRevision
+      ) {
+        throw new Error(`拒绝替换为旧爬塔状态：${incomingRevision} < ${currentRevision}`);
+      }
+      return cloneSettlementValue(variables);
+    });
   };
 
   const hasMvuApi = (): boolean => {
@@ -1283,6 +1818,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
     }
     while (!hasMvuApi() && Date.now() < mvuDeadline) await wait(100);
     if (!hasMvuApi()) throw new Error('等待 MUV 初始化超时，请确认卡内脚本已启用并完成内嵌世界书导入');
+    if (options.requireBattleData === false) return;
 
     const dataDeadline = Date.now() + battleDataTimeoutMs;
     let lastWorldbookError = '';
@@ -1364,6 +1900,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
             fullInitializationContexts.add(variables);
           }
           recoverMisplacedCards(variables);
+          normalizeEmbeddedBattleVariables(variables);
           const previousEnemies = playableEnemies(variablesBeforeUpdate?.stat_data?.battle);
           const currentEnemies = playableEnemies(variables?.stat_data?.battle);
           if (
@@ -1454,9 +1991,34 @@ function summarizeMvuUpdate(result: unknown): string[] {
     },
     waitForMessageReady,
     getMessageText,
+    getMessageVariables(messageId: number | 'latest' = 'latest'): Record<string, any> {
+      return readMvuMessageVariables(messageId);
+    },
+    updateMessageVariablesWith(
+      messageId: number | 'latest',
+      updater: (variables: Record<string, any>) => Record<string, any> | Promise<Record<string, any>>,
+    ): Promise<Record<string, any>> {
+      return updateMvuMessageVariablesWith(messageId, updater);
+    },
+    replaceMessageVariables(
+      messageId: number | 'latest',
+      variables: Record<string, any>,
+    ): Promise<Record<string, any>> {
+      return replaceMvuMessageVariables(messageId, variables);
+    },
     requestCardRepair(requirement: string): Promise<void> {
       if (!cardRepairHandler) return Promise.reject(new Error('当前页面尚未完成第二轮修复接口加载'));
       return cardRepairHandler(requirement);
+    },
+    requestMvuExtraRepair(request: unknown): Promise<unknown> | unknown | null {
+      const provider = registryHost.MagicGirlDesignAssistant || host.MagicGirlDesignAssistant || null;
+      if (typeof provider?.requestMvuExtraRepair !== 'function') return null;
+      return provider.requestMvuExtraRepair(request);
+    },
+    requestRestMutation(request: unknown): Promise<unknown> | unknown | null {
+      const provider = registryHost.MagicGirlDesignAssistant || host.MagicGirlDesignAssistant || null;
+      if (typeof provider?.requestRestMutation !== 'function') return null;
+      return provider.requestRestMutation(request);
     },
     registerCardRepairHandler(handler: (requirement: string) => Promise<void>): () => void {
       if (typeof handler !== 'function') throw new Error('卡牌修复处理器无效');
@@ -1464,6 +2026,78 @@ function summarizeMvuUpdate(result: unknown): string[] {
       return () => {
         if (cardRepairHandler === handler) cardRepairHandler = null;
       };
+    },
+    requestTowerGeneration(request: unknown): Promise<unknown> {
+      const provider = registryHost.MagicGirlDesignAssistant || host.MagicGirlDesignAssistant || null;
+      if (typeof provider?.requestTowerGeneration !== 'function') {
+        return Promise.reject(new Error('爬塔后台生成扩展尚未就绪'));
+      }
+      return Promise.resolve(provider.requestTowerGeneration(request));
+    },
+    persistTowerGeneration(request: unknown): Promise<unknown> {
+      const provider = registryHost.MagicGirlDesignAssistant || host.MagicGirlDesignAssistant || null;
+      if (typeof provider?.persistTowerGeneration !== 'function') {
+        return Promise.reject(new Error('爬塔后台持久化扩展尚未就绪'));
+      }
+      return Promise.resolve(provider.persistTowerGeneration(request));
+    },
+    retryTowerGeneration(request: unknown): Promise<unknown> {
+      const provider = registryHost.MagicGirlDesignAssistant || host.MagicGirlDesignAssistant || null;
+      if (typeof provider?.retryTowerGeneration !== 'function') {
+        return Promise.reject(new Error('爬塔后台重试扩展尚未就绪'));
+      }
+      return Promise.resolve(provider.retryTowerGeneration(request));
+    },
+    scheduleTowerGeneration(reason = 'character-runtime'): Promise<unknown> {
+      const provider = registryHost.MagicGirlDesignAssistant || host.MagicGirlDesignAssistant || null;
+      if (typeof provider?.scheduleTowerGeneration !== 'function') return Promise.resolve(false);
+      return Promise.resolve(provider.scheduleTowerGeneration(reason));
+    },
+    archiveTowerRun(): Promise<unknown> {
+      const provider = registryHost.MagicGirlDesignAssistant || host.MagicGirlDesignAssistant || null;
+      if (typeof provider?.archiveTowerRun !== 'function') {
+        return Promise.reject(new Error('爬塔终局归档扩展尚未就绪'));
+      }
+      return Promise.resolve(provider.archiveTowerRun());
+    },
+    getTowerCoordinatorStatus(): unknown {
+      const provider = registryHost.MagicGirlDesignAssistant || host.MagicGirlDesignAssistant || null;
+      return typeof provider?.getTowerCoordinatorStatus === 'function' ? provider.getTowerCoordinatorStatus() : null;
+    },
+    getDesignAssistantCapabilities(): unknown {
+      const provider = registryHost.MagicGirlDesignAssistant || host.MagicGirlDesignAssistant || null;
+      return typeof provider?.getCapabilities === 'function' ? provider.getCapabilities() : null;
+    },
+    installTowerExtension(): Promise<boolean> {
+      return installPublishedTowerExtension();
+    },
+    getMvuMonitorSnapshot() {
+      return mvuMonitor.getSnapshot();
+    },
+    reportMvuValidationFailure(error: unknown) {
+      mvuMonitor.fail(error);
+    },
+    registerTowerGenerationListener(
+      listener: (event: TowerGenerationBridgeEvent) => void,
+      replay = true,
+    ): () => void {
+      if (typeof listener !== 'function') throw new Error('爬塔生成监听器无效');
+      towerGenerationListeners.add(listener);
+      if (replay) {
+        if (towerGenerationSnapshot.status !== null) {
+          listener({ type: 'status', payload: towerGenerationSnapshot.status });
+        }
+        if (towerGenerationSnapshot.completed !== null) {
+          listener({ type: 'completed', payload: towerGenerationSnapshot.completed });
+        }
+        if (towerGenerationSnapshot.failed !== null) {
+          listener({ type: 'failed', payload: towerGenerationSnapshot.failed });
+        }
+      }
+      return () => towerGenerationListeners.delete(listener);
+    },
+    getTowerGenerationSnapshot() {
+      return { ...towerGenerationSnapshot };
     },
   });
 
@@ -1473,7 +2107,9 @@ function summarizeMvuUpdate(result: unknown): string[] {
     state.status = 'closed';
     removeEventBindings();
     mvuMonitor.destroy();
+    messageVariableUpdateQueues.clear();
     cardRepairHandler = null;
+    towerGenerationListeners.clear();
     if (registryHost[stateKey]?.instanceId === instanceId) delete registryHost[stateKey];
   };
 

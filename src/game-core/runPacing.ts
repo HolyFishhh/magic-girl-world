@@ -179,6 +179,7 @@ export function formatRunPacingHint(pacing: RunNodePacing, kind: RunNodeKind): s
     return `节奏：${PHASE_LABELS[pacing.phase]}，${EVENT_COST_LABELS[pacing.eventCost]}。${story}${variation}`;
   if (kind === 'shop')
     return `节奏：${PHASE_LABELS[pacing.phase]}，${SHOP_TIER_LABELS[pacing.shopTier]}。${story}${variation}`;
-  if (kind === 'rest') return `节奏：${PHASE_LABELS[pacing.phase]}，场景保持简短。${story}${variation}`;
+  if (kind === 'treasure') return `节点阶段：${PHASE_LABELS[pacing.phase]}。${story}${variation}`;
+  if (kind === 'rest') return `节点阶段：${PHASE_LABELS[pacing.phase]}。${story}${variation}`;
   return `节奏：${PHASE_LABELS[pacing.phase]}，压力${pacing.intensity}/4。${story}${variation}`;
 }

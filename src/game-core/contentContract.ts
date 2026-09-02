@@ -146,14 +146,15 @@ function validateIdList(
   value: unknown,
   path: string,
   issues: ContentContractIssue[],
-  options: { requireId?: boolean } = {},
+  options: { requireId?: boolean; allowOwnedCopies?: boolean } = {},
 ): Array<Record<string, any>> {
   const list = Array.isArray(value) ? value : [];
   if (!Array.isArray(value)) {
     addIssue(issues, path, 'INVALID_LIST', 'content collections must be arrays');
     return [];
   }
-  const seen = new Set<string>();
+  const seen = new Map<string, { entry: Record<string, any>; index: number }>();
+  const seenRunInstanceIds = new Set<string>();
   const records: Array<Record<string, any>> = [];
   list.forEach((entry, index) => {
     const entryPath = `${path}[${index}]`;
@@ -167,8 +168,35 @@ function validateIdList(
       addIssue(issues, `${entryPath}.id`, 'INVALID_ID', 'id must start with a letter or underscore');
       return;
     }
-    if (seen.has(entry.id)) addIssue(issues, `${entryPath}.id`, 'DUPLICATE_ID', `duplicate id: ${entry.id}`);
-    seen.add(entry.id);
+    const previous = seen.get(entry.id);
+    if (previous) {
+      const previousRunId =
+        typeof previous.entry.runInstanceId === 'string' ? previous.entry.runInstanceId.trim() : '';
+      const runInstanceId = typeof entry.runInstanceId === 'string' ? entry.runInstanceId.trim() : '';
+      const isDistinctOwnedCopy =
+        options.allowOwnedCopies === true &&
+        Boolean(previousRunId) &&
+        Boolean(runInstanceId) &&
+        previousRunId !== runInstanceId &&
+        !seenRunInstanceIds.has(runInstanceId);
+      if (!isDistinctOwnedCopy) {
+        addIssue(issues, `${entryPath}.id`, 'DUPLICATE_ID', `duplicate id: ${entry.id}`);
+      }
+    } else {
+      seen.set(entry.id, { entry, index });
+    }
+    if (typeof entry.runInstanceId === 'string' && entry.runInstanceId.trim()) {
+      const runInstanceId = entry.runInstanceId.trim();
+      if (seenRunInstanceIds.has(runInstanceId)) {
+        addIssue(
+          issues,
+          `${entryPath}.runInstanceId`,
+          'DUPLICATE_RUN_INSTANCE_ID',
+          `duplicate run card identity: ${runInstanceId}`,
+        );
+      }
+      seenRunInstanceIds.add(runInstanceId);
+    }
   });
   return records;
 }
@@ -338,7 +366,7 @@ export function validateContentPackContract(
   const required = options.requireExecutable === true;
   const statusIds = validateStatusList(pack.statuses, 'statuses', issues);
 
-  const cards = validateIdList(pack.cards, 'cards', issues, { requireId: true });
+  const cards = validateIdList(pack.cards, 'cards', issues, { requireId: true, allowOwnedCopies: true });
   cards.forEach((card, index) => validateCard(card, `cards[${index}]`, issues, required, statusIds));
 
   const relics = validateIdList(pack.relics, 'relics', issues, { requireId: true });
@@ -443,7 +471,7 @@ export function validateContentPackContract(
         issues,
         {
           triggerPolicy: 'allow',
-          modifierPolicy: ability.trigger === 'passive' ? 'only' : 'forbid',
+          modifierPolicy: resolveTriggerInput(ability).trigger === 'passive' ? 'only' : 'forbid',
           knownStatusIds: statusIds,
         },
         required,

@@ -84,6 +84,14 @@ const state = {
   random: { schemaVersion: 1, seed: 1234, cursor: 9 },
 };
 
+const towerAwaiting = session.createRunState({ seed: 1 });
+const towerChoice = towerAwaiting.choices[0];
+const towerActiveRun = session.enterRunNode(towerAwaiting, towerChoice.id);
+const towerState = clone(state);
+towerState.battleRequest = {
+  route: { nodeId: towerChoice.id },
+};
+
 const store = new session.BattleSessionStore(storage, 1);
 assert.equal(store.prepare(storage.read(), battleA), null);
 store.enable();
@@ -107,6 +115,35 @@ assert.equal(store.wasRestored(), true);
 assert.deepEqual(restore.random, { schemaVersion: 1, seed: 1234, cursor: 9 });
 restore.currentTurn = 99;
 assert.equal(saved.state.currentTurn, 1, 'restored state must not retain a message-variable reference');
+store.finishRestore();
+
+const partialMultiEnemyState = clone(state);
+const defeatedEnemy = clone(state.enemy);
+defeatedEnemy.currentHp = 0;
+defeatedEnemy.block = 0;
+const survivingEnemy = {
+  ...clone(state.enemy),
+  id: 'training_dummy_reinforcement',
+  name: 'Training Dummy Reinforcement',
+  currentHp: 41,
+  block: 2,
+};
+partialMultiEnemyState.currentTurn = 2;
+partialMultiEnemyState.enemy = clone(survivingEnemy);
+partialMultiEnemyState.enemies = [clone(survivingEnemy)];
+partialMultiEnemyState.defeatedEnemies = [defeatedEnemy];
+partialMultiEnemyState.activeEnemyId = survivingEnemy.id;
+await store.flush(partialMultiEnemyState);
+const partialMultiEnemySnapshot = session.readBattleSessionSnapshot(variables);
+assert.ok(partialMultiEnemySnapshot, 'a snapshot with one defeated enemy must remain valid');
+assert.deepEqual(partialMultiEnemySnapshot.state.enemies.map(enemy => enemy.id), [survivingEnemy.id]);
+assert.deepEqual(partialMultiEnemySnapshot.state.defeatedEnemies.map(enemy => enemy.id), [defeatedEnemy.id]);
+const partialMultiEnemyRestore = store.prepare(storage.read(), battleA);
+assert.equal(partialMultiEnemyRestore.currentTurn, 2);
+assert.equal(partialMultiEnemyRestore.activeEnemyId, survivingEnemy.id);
+assert.equal(partialMultiEnemyRestore.enemy.id, survivingEnemy.id);
+assert.deepEqual(partialMultiEnemyRestore.enemies.map(enemy => enemy.id), [survivingEnemy.id]);
+assert.deepEqual(partialMultiEnemyRestore.defeatedEnemies.map(enemy => enemy.id), [defeatedEnemy.id]);
 store.finishRestore();
 
 const playedInnateState = clone(state);
@@ -222,6 +259,50 @@ assert.equal(
   session.readBattleSessionSnapshot(isolatedVariables),
   null,
   'a queued save from an older battle generation must not write after the MUV input changes',
+);
+
+let towerVariables = {
+  stat_data: {
+    game_mode: 'tower',
+    game_mode_lock: { schemaVersion: 1, mode: 'tower' },
+    run: towerActiveRun,
+  },
+};
+const towerStorage = {
+  read: () => clone(towerVariables),
+  update: async updater => {
+    towerVariables = await updater(clone(towerVariables));
+    return clone(towerVariables);
+  },
+};
+const towerStore = new session.BattleSessionStore(towerStorage, 1);
+towerStore.prepare(towerStorage.read(), battleA);
+towerStore.enable();
+await towerStore.flush(towerState);
+assert.equal(session.readBattleSessionSnapshot(towerVariables).state.currentTurn, 1);
+
+const savedTowerSnapshot = clone(session.readBattleSessionSnapshot(towerVariables));
+towerVariables.stat_data.run = {
+  ...towerVariables.stat_data.run,
+  phase: 'awaiting_choice',
+  act: 3,
+  floor: 15,
+  currentNode: null,
+  choices: [{ id: 'act-3-boss', kind: 'boss', act: 3, floor: 16, danger: 3, column: 3 }],
+  stateRevision: 98,
+};
+const staleTowerState = clone(towerState);
+staleTowerState.player.currentHp = 1;
+await towerStore.flush(staleTowerState);
+assert.deepEqual(
+  session.readBattleSessionSnapshot(towerVariables),
+  savedTowerSnapshot,
+  'a completed tower node must reject late session writes from its old battle view',
+);
+assert.equal(
+  towerStore.prepare(towerStorage.read(), battleA),
+  null,
+  'a completed tower node must not restore its old battle session',
 );
 
 let failNextUpdate = false;

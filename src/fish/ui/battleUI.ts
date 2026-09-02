@@ -195,6 +195,7 @@ export class BattleUI {
     const multi = living.length > 1;
     $('.battle-main-grid').toggleClass('multi-enemy-battle', multi);
     $('.enemy-section').toggleClass('is-multi-enemy', multi);
+    this.updateEnemyStageParty(living, activeEnemyId);
     const roster = $('#enemy-roster');
     if (!multi) {
       roster.empty().hide();
@@ -204,14 +205,59 @@ export class BattleUI {
       .html(living.map(enemy => {
         const hp = this.displayBattleValue(enemy.currentHp);
         const maxHp = this.displayBattleValue(enemy.maxHp, 1);
-        const intent = enemy.nextAction?.name || enemy.intent?.description || '准备行动';
-        return `<button class="enemy-roster-unit${enemy.id === activeEnemyId ? ' is-active' : ''}" data-enemy-id="${escapeHtmlAttribute(String(enemy.id))}" type="button" aria-pressed="${enemy.id === activeEnemyId ? 'true' : 'false'}" title="${escapeHtmlAttribute(String(intent))}">
+        const lust = this.displayBattleValue(enemy.currentLust);
+        const maxLust = this.displayBattleValue(enemy.maxLust, 1);
+        const hpPercent = maxHp > 0 ? Math.max(0, Math.min(100, (hp / maxHp) * 100)) : 0;
+        const lustPercent = maxLust > 0 ? Math.max(0, Math.min(100, (lust / maxLust) * 100)) : 0;
+        const intentModel = EnemyIntentPresenter.getInstance().createDisplayModel(enemy);
+        const intentBadges = intentModel.badges.map(badge => `<span class="enemy-roster-intent-badge" title="${escapeHtmlAttribute(badge.label)}"><i>${escapeHtml(badge.icon)}</i>${badge.value ? `<b>${escapeHtml(badge.value)}</b>` : ''}</span>`).join('');
+        const support = [
+          ...(Array.isArray(enemy.statusEffects) ? enemy.statusEffects : []).map((status: any) => ({ emoji: status.emoji || '◈', title: `${status.name || status.id}${Number(status.stacks) > 1 ? ` ${this.displayBattleValue(status.stacks)}层` : ''}` })),
+          ...(Array.isArray(enemy.abilities) ? enemy.abilities : []).map((ability: any) => ({ emoji: ability.emoji || '⚡', title: `能力：${ability.name || ability.id}` })),
+          ...(enemy.lustEffect ? [{ emoji: enemy.lustEffect.emoji || '💗', title: `欲望效果：${enemy.lustEffect.name || '未命名'}` }] : []),
+        ];
+        const supportHtml = support.map(entry => `<span class="enemy-roster-support" title="${escapeHtmlAttribute(entry.title)}">${escapeHtml(entry.emoji)}</span>`).join('');
+        return `<button class="enemy-roster-unit${enemy.id === activeEnemyId ? ' is-active' : ''}" data-enemy-id="${escapeHtmlAttribute(String(enemy.id))}" type="button" aria-pressed="${enemy.id === activeEnemyId ? 'true' : 'false'}" title="${escapeHtmlAttribute(intentModel.description)}">
           <span class="enemy-roster-emoji">${escapeHtml(String(enemy.emoji || '👹'))}</span>
-          <span class="enemy-roster-copy"><b>${escapeHtml(String(enemy.name || enemy.id))}</b><small>生命 ${hp}/${maxHp} · ${escapeHtml(String(intent))}</small></span>
+          <span class="enemy-roster-copy">
+            <span class="enemy-roster-heading"><b>${escapeHtml(String(enemy.name || enemy.id))}</b>${Number(enemy.block) > 0 ? `<em>🛡${this.displayBattleValue(enemy.block)}</em>` : ''}</span>
+            <span class="enemy-roster-bars">
+              <span class="enemy-roster-bar hp"><i style="width:${hpPercent}%"></i><b>${hp}/${maxHp}</b></span>
+              <span class="enemy-roster-bar lust"><i style="width:${lustPercent}%"></i><b>${lust}/${maxLust}</b></span>
+            </span>
+            <span class="enemy-roster-action"><strong>${escapeHtml(intentModel.description)}</strong><span>${intentBadges}</span></span>
+            ${supportHtml ? `<span class="enemy-roster-supports">${supportHtml}</span>` : ''}
+          </span>
         </button>`;
       }).join(''))
       .show();
     roster.off('click.mwg-enemy-target').on('click.mwg-enemy-target', '.enemy-roster-unit', event => {
+      const enemyId = String($(event.currentTarget).attr('data-enemy-id') || '');
+      if (!enemyId || !GameStateManager.getInstance().setActiveEnemy(enemyId)) return;
+      void this.refreshBattleUI(GameStateManager.getInstance().getGameState());
+    });
+  }
+
+  private static updateEnemyStageParty(enemies: any[], activeEnemyId: string | null): void {
+    const party = $('#stage-enemy-party');
+    const stage = $('#stage-enemy');
+    if (!party.length) return;
+    const multi = enemies.length > 1;
+    stage.toggleClass('has-enemy-party', multi);
+    party.attr('data-enemy-count', String(enemies.length));
+    // Keep the authored queue order stable. Selecting a target may update the
+    // detailed HUD, but the other actors must not jump around on the stage.
+    const ordered = [...enemies];
+    party.html(ordered.map((enemy, index) => {
+      const active = enemy.id === activeEnemyId || (!activeEnemyId && index === ordered.length - 1);
+      const intent = EnemyIntentPresenter.getInstance().createDisplayModel(enemy);
+      const badges = intent.badges.map(badge => `${escapeHtml(badge.icon)}${badge.value ? `<b>${escapeHtml(badge.value)}</b>` : ''}`).join('');
+      return `<button class="stage-enemy-member${active ? ' is-active' : ''}" type="button" data-enemy-id="${escapeHtmlAttribute(String(enemy.id))}" aria-pressed="${active ? 'true' : 'false'}" aria-label="选择目标：${escapeHtmlAttribute(String(enemy.name || enemy.id))}，下一步${escapeHtmlAttribute(intent.description)}" style="--party-order:${index};--party-depth:${ordered.length - index}">
+        <span class="stage-enemy-member-intent" title="${escapeHtmlAttribute(intent.description)}">${badges || '❓'}</span>
+        <span class="stage-emoji"${active ? ' id="stage-enemy-emoji"' : ''}>${escapeHtml(String(enemy.emoji || '👹'))}</span>
+      </button>`;
+    }).join(''));
+    party.off('click.mwg-stage-enemy').on('click.mwg-stage-enemy', '.stage-enemy-member', event => {
       const enemyId = String($(event.currentTarget).attr('data-enemy-id') || '');
       if (!enemyId || !GameStateManager.getInstance().setActiveEnemy(enemyId)) return;
       void this.refreshBattleUI(GameStateManager.getInstance().getGameState());

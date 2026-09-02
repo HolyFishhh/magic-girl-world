@@ -301,7 +301,7 @@ assert.deepEqual(
 );
 const restoredExpedition = structuredClone(expeditionStat);
 const restoredRun = runAdapter.migrateRunProgramStateInStat(restoredExpedition);
-assert.equal(restoredRun.schemaVersion, 2);
+assert.equal(restoredRun.schemaVersion, 3);
 assert.equal(restoredExpedition.run_transaction_revision, 3);
 assert.equal(restoredExpedition.run_transaction_events.length, 3, 'save restore does not replay transaction events');
 assert.equal(restoredExpedition.run_trigger_invocations.length, 0, 'save restore does not synthesize trigger calls');

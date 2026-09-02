@@ -8,24 +8,49 @@ import {
   readRunState,
   restartRunInStat,
 } from '../runtime/runStateAdapter';
+import {
+  enterTowerRunNodeInStat,
+  requeueInvalidReadyTowerNodeGenerationInStat,
+  retryTowerNodeGenerationInStat,
+  type TowerGenerationRequest,
+} from '../runtime/towerStateAdapter';
+import { activateTowerNodeInStat, type TowerNodeActivationResult } from '../runtime/towerContentActivation';
+import { queueTowerOpeningInStat, type TowerOpeningRequest } from '../runtime/towerOpeningAdapter';
 import { isCurrentMessageLatest } from '../runtime/messageVariables';
-import { hasSelectableRewards, normalizeMvuList, removeOneCardFromBattleDeck, type CardRemovalResult, type RewardSelections, type RewardSelectionSummary } from './rewardTransactions';
+import {
+  hasSelectableRewards,
+  normalizeMvuList,
+  removeOneCardFromBattleDeck,
+  type CardRemovalResult,
+  type RewardSelections,
+  type RewardSelectionSummary,
+} from './rewardTransactions';
 import {
   executeUnifiedRunTransactionInStat,
+  settleTowerEventChoiceInStat,
+  settleTowerOpeningChoiceInStat,
   type RestHealResult,
   type RestUpgradeResult,
   type RunTransactionEvent,
+  type TowerEventChoiceSettlementResult,
+  type TowerOpeningSettlementResult,
 } from './runTransactions';
-import {
-  TavernCommonActionHost,
-  type CommonContinuationPlan,
-  type CommonVariablesUpdater,
-} from './commonActionHost';
+import { TavernCommonActionHost, type CommonContinuationPlan, type CommonVariablesUpdater } from './commonActionHost';
 
 export interface CommonRunActionPorts {
   isLatest(): boolean;
   updateVariablesWith(updater: CommonVariablesUpdater): Promise<Record<string, any>>;
+  /** Safe only for fingerprint-guarded historical reward settlement. */
+  updateLatestVariablesWith?(updater: CommonVariablesUpdater): Promise<Record<string, any>>;
   continueWithPrompt<TPrepared = void>(plan: CommonContinuationPlan<TPrepared>): Promise<void>;
+  scheduleTowerGeneration?(reason: string): Promise<unknown> | unknown;
+  requestRestMutation?(request: {
+    spec: 'mwg.rest-mutation-request/v1';
+    kind: 'upgrade' | 'transform';
+    nodeId: string;
+    runInstanceId?: string;
+    cardId?: string;
+  }): Promise<unknown> | unknown | null;
 }
 
 export interface CommonRunSyncResult {
@@ -40,6 +65,23 @@ export interface CommonRewardSettlement {
   summary: RewardSelectionSummary;
   spentGold: number | null;
   event: RunTransactionEvent;
+}
+
+/**
+ * Identifies exactly the reward pool shown by a rendered panel.  A battle
+ * message can become historical while the story continuation is appended; in
+ * that case we may settle into the latest message only if this identity still
+ * matches.  IDs/names preserve order so a regenerated pool cannot be claimed
+ * through an old overlay.
+ */
+export interface RewardPoolFingerprint {
+  nodeId: string | null;
+  poolRevision: string;
+  candidates: Record<RewardRerollCategory, string[]>;
+}
+
+export interface RewardSettlementOptions {
+  expectedReward?: RewardPoolFingerprint;
 }
 
 interface OptionalValueSnapshot {
@@ -114,7 +156,12 @@ function replaceRecord(target: Record<string, any>, source: Record<string, any>)
 function readRewardRerollPending(stat: Record<string, any>): RewardRerollPending | null {
   const value = stat.run_reward_reroll;
   if (value == null) return null;
-  if (!isRecord(value) || !Array.isArray(value.categories) || !isRecord(value.expected_counts) || !isRecord(value.original_reward)) {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.categories) ||
+    !isRecord(value.expected_counts) ||
+    !isRecord(value.original_reward)
+  ) {
     throw new Error('奖励重投状态无效');
   }
   return value as RewardRerollPending;
@@ -134,6 +181,44 @@ function rerollCategories(values: readonly string[]): RewardRerollCategory[] {
 function persistentCards(stat: Record<string, any>): Record<string, any>[] {
   if (!isRecord(stat.battle)) throw new Error('battle 数据不存在');
   return migratePersistentRunDeck(normalizeMvuList<Record<string, any>>(stat.battle.cards));
+}
+
+function rewardCandidateIdentity(value: unknown, index: number): string {
+  if (!isRecord(value)) return `invalid:${index}`;
+  const id = typeof value.id === 'string' && value.id.trim() ? value.id.trim() : '';
+  const name = typeof value.name === 'string' && value.name.trim() ? value.name.trim() : '';
+  return id ? `id:${id}` : name ? `name:${name}` : `invalid:${index}`;
+}
+
+/** Capture the displayed reward pool before an asynchronous UI action starts. */
+export function createRewardPoolFingerprint(stat: Record<string, any>): RewardPoolFingerprint {
+  if (!isRecord(stat.reward)) throw new Error('奖励数据不存在，无法确认领取目标');
+  const run = readRunState(stat);
+  return {
+    nodeId: typeof run?.currentNode?.id === 'string' ? run.currentNode.id : null,
+    poolRevision: String(stat.reward.pool_revision ?? ''),
+    candidates: {
+      cards: normalizeMvuList(stat.reward.card).map(rewardCandidateIdentity),
+      artifacts: normalizeMvuList(stat.reward.artifact).map(rewardCandidateIdentity),
+      items: normalizeMvuList(stat.reward.item).map(rewardCandidateIdentity),
+    },
+  };
+}
+
+export function rewardPoolFingerprintMatches(
+  stat: Record<string, any>,
+  expected: RewardPoolFingerprint,
+): boolean {
+  const actual = createRewardPoolFingerprint(stat);
+  return (
+    actual.nodeId === expected.nodeId &&
+    actual.poolRevision === expected.poolRevision &&
+    (['cards', 'artifacts', 'items'] as const).every(
+      category =>
+        actual.candidates[category].length === expected.candidates[category].length &&
+        actual.candidates[category].every((value, index) => value === expected.candidates[category][index]),
+    )
+  );
 }
 
 function resolvePendingUpgradeTarget(stat: Record<string, any>, node: RunNodeChoice): string {
@@ -178,10 +263,37 @@ export class TavernRunActionHost {
       return {
         isLatest: () => isCurrentMessageLatest(),
         updateVariablesWith: updater => actionHost.updateVariablesWith(updater),
+        updateLatestVariablesWith: updater => actionHost.updateLatestVariablesWith(updater),
         continueWithPrompt: plan => actionHost.continueWithPrompt(plan),
+        scheduleTowerGeneration: reason => {
+          const runtime = (globalThis as any).MagicGirlWorld;
+          return typeof runtime?.scheduleTowerGeneration === 'function'
+            ? runtime.scheduleTowerGeneration(reason)
+            : false;
+        },
+        requestRestMutation: request => {
+          const runtime = (globalThis as any).MagicGirlWorld;
+          return typeof runtime?.requestRestMutation === 'function'
+            ? runtime.requestRestMutation(request)
+            : null;
+        },
       };
     })(),
   ) {}
+
+  /**
+   * Program-owned MVU writes do not consistently emit Tavern Helper's
+   * mvu_update_ended event. Explicitly wake the extension after a tower state
+   * transition, but never make a completed player transaction fail merely
+   * because the optional background generator is temporarily unavailable.
+   */
+  private async scheduleTowerGeneration(reason: string): Promise<void> {
+    try {
+      await this.ports.scheduleTowerGeneration?.(reason);
+    } catch (error) {
+      console.warn(`[MagicGirlWorld] 爬塔后台唤醒失败（${reason}）：`, error);
+    }
+  }
 
   public static getInstance(): TavernRunActionHost {
     if (!TavernRunActionHost.instance) TavernRunActionHost.instance = new TavernRunActionHost();
@@ -203,8 +315,10 @@ export class TavernRunActionHost {
       const pendingReroll = readRewardRerollPending(stat);
       if (pendingReroll) {
         const generatedReward = isRecord(stat.reward) ? stat.reward : {};
-        const ready = pendingReroll.categories.every(category =>
-          normalizeMvuList(generatedReward[REWARD_REROLL_KEYS[category]]).length === pendingReroll.expected_counts[category],
+        const ready = pendingReroll.categories.every(
+          category =>
+            normalizeMvuList(generatedReward[REWARD_REROLL_KEYS[category]]).length ===
+            pendingReroll.expected_counts[category],
         );
         if (ready) {
           const draft = structuredClone(stat);
@@ -278,42 +392,80 @@ export class TavernRunActionHost {
       return variables;
     });
     if (!run) throw new Error('远征初始化失败：MUV 更新未返回状态');
+    await this.scheduleTowerGeneration('run-created');
     return run;
   }
 
-  public async settleRewardSelections(selections: RewardSelections): Promise<CommonRewardSettlement> {
+  public async settleRewardSelections(
+    selections: RewardSelections,
+    options: RewardSettlementOptions = {},
+  ): Promise<CommonRewardSettlement> {
     let settlement: CommonRewardSettlement | null = null;
-    await this.ports.updateVariablesWith((variables: Record<string, any>) => {
+    const historical = !this.ports.isLatest();
+    if (historical && !options.expectedReward) {
+      throw new Error('历史奖励缺少校验信息，请在最新消息中重新打开奖励');
+    }
+    const update = historical ? this.ports.updateLatestVariablesWith : this.ports.updateVariablesWith;
+    if (!update) throw new Error('当前酒馆版本无法安全结算历史奖励，请在最新消息中领取');
+    await update((variables: Record<string, any>) => {
       const stat = statRoot(variables);
+      if (historical && !rewardPoolFingerprintMatches(stat, options.expectedReward!)) {
+        throw new Error('奖励已经更新，请在最新消息中重新打开奖励后领取');
+      }
       const run = readRunState(stat);
       if (run?.phase === 'in_node' && run.currentNode?.kind === 'shop') {
         const transaction = executeUnifiedRunTransactionInStat(stat, {
-          kind: 'shop_purchase', selections, source: { kind: 'player', id: 'reward-ui' },
+          kind: 'shop_purchase',
+          selections,
+          source: { kind: 'player', id: 'reward-ui' },
         });
         const value = transaction.value as RewardSelectionSummary & { spentGold: number };
         settlement = { kind: 'shop', summary: value, spentGold: value.spentGold, event: transaction.event };
+      } else if (run?.phase === 'in_node' && run.currentNode?.kind === 'treasure') {
+        const transaction = executeUnifiedRunTransactionInStat(stat, {
+          kind: 'treasure_reward_claim',
+          selections,
+          source: { kind: 'player', id: 'reward-ui' },
+        });
+        settlement = {
+          kind: 'reward',
+          summary: transaction.value as RewardSelectionSummary,
+          spentGold: null,
+          event: transaction.event,
+        };
       } else if (run?.phase === 'in_node' && run.currentNode?.kind === 'event' && stat.run_result != null) {
         const transaction = executeUnifiedRunTransactionInStat(stat, {
-          kind: 'event_reward_claim', selections, source: { kind: 'player', id: 'reward-ui' },
+          kind: 'event_reward_claim',
+          selections,
+          source: { kind: 'player', id: 'reward-ui' },
         });
-        settlement = { kind: 'event', summary: transaction.value as RewardSelectionSummary, spentGold: null, event: transaction.event };
+        settlement = {
+          kind: 'event',
+          summary: transaction.value as RewardSelectionSummary,
+          spentGold: null,
+          event: transaction.event,
+        };
       } else {
         const transaction = executeUnifiedRunTransactionInStat(stat, {
-          kind: 'reward_claim', selections, source: { kind: 'player', id: 'reward-ui' },
+          kind: 'reward_claim',
+          selections,
+          source: { kind: 'player', id: 'reward-ui' },
         });
-        settlement = { kind: 'reward', summary: transaction.value as RewardSelectionSummary, spentGold: null, event: transaction.event };
+        settlement = {
+          kind: 'reward',
+          summary: transaction.value as RewardSelectionSummary,
+          spentGold: null,
+          event: transaction.event,
+        };
       }
       return variables;
     });
     if (!settlement) throw new Error('奖励领取失败：MUV 更新未返回结算结果');
+    await this.scheduleTowerGeneration('reward-settled');
     return settlement;
   }
 
-  public requestRewardReroll(
-    categoriesValue: readonly string[],
-    prompt: string,
-    goldCost = 0,
-  ): Promise<void> {
+  public requestRewardReroll(categoriesValue: readonly string[], prompt: string, goldCost = 0): Promise<void> {
     const categories = rerollCategories(categoriesValue);
     if (!Number.isInteger(goldCost) || goldCost < 0) throw new Error('奖励重投金币费用无效');
     return this.ports.continueWithPrompt<RewardRerollPreparationSnapshot>({
@@ -324,10 +476,9 @@ export class TavernRunActionHost {
           const stat = statRoot(variables);
           if (readRewardRerollPending(stat)) throw new Error('已有奖励重投正在生成');
           if (!isRecord(stat.reward)) throw new Error('reward 数据不存在');
-          const expectedCounts = Object.fromEntries(categories.map(category => [
-            category,
-            normalizeMvuList(stat.reward[REWARD_REROLL_KEYS[category]]).length,
-          ]));
+          const expectedCounts = Object.fromEntries(
+            categories.map(category => [category, normalizeMvuList(stat.reward[REWARD_REROLL_KEYS[category]]).length]),
+          );
           if (Object.values(expectedCounts).some(count => count < 1)) throw new Error('奖励重投类别没有现有候选');
           snapshot = { pending: optionalValue(stat, 'run_reward_reroll'), reward: structuredClone(stat.reward) };
           const run = readRunState(stat);
@@ -406,6 +557,97 @@ export class TavernRunActionHost {
     });
   }
 
+  /** Enter one DAG node and reconcile discarded branches in the same MUV replacement. */
+  public enterTowerRunNode(node: RunNodeChoice, prompt: string): Promise<void> {
+    return this.ports.continueWithPrompt<RunState>({
+      prompt,
+      prepare: async () => {
+        let previous: RunState | null = null;
+        await this.ports.updateVariablesWith((variables: Record<string, any>) => {
+          previous = enterTowerRunNodeInStat(statRoot(variables), node.id).previous;
+          return variables;
+        });
+        if (!previous) throw new Error('爬塔路线进入未返回可回滚状态');
+        return previous;
+      },
+      rollbackBeforeSend: async previous => {
+        await this.ports.updateVariablesWith((variables: Record<string, any>) => {
+          const stat = statRoot(variables);
+          const current = readRunState(stat);
+          if (current?.phase === 'in_node' && current.currentNode?.id === node.id) stat.run = previous;
+          return variables;
+        });
+      },
+    });
+  }
+
+  /** Requeue only the failed map node selected by the player. */
+  public async retryTowerNodeGeneration(nodeId: string): Promise<TowerGenerationRequest> {
+    let request: TowerGenerationRequest | null = null;
+    await this.ports.updateVariablesWith((variables: Record<string, any>) => {
+      request = retryTowerNodeGenerationInStat(statRoot(variables), nodeId).request;
+      return variables;
+    });
+    if (!request) throw new Error('爬塔节点重试未返回生成请求');
+    await this.scheduleTowerGeneration('node-retry-queued');
+    return request;
+  }
+
+  /** Consume one pre-generated v3 map node without asking AI to generate it again. */
+  public async activateTowerRunNode(nodeId: string): Promise<TowerNodeActivationResult> {
+    if (!this.ports.isLatest()) throw new Error('历史楼层不能进入爬塔节点');
+    const normalizedNodeId = String(nodeId || '').trim();
+    if (!normalizedNodeId) throw new Error('爬塔节点 ID 不能为空');
+
+    let previousStat: Record<string, any> | null = null;
+    let activation: TowerNodeActivationResult | null = null;
+    try {
+      await this.ports.updateVariablesWith((variables: Record<string, any>) => {
+        const stat = statRoot(variables);
+        previousStat = structuredClone(stat);
+        activation = activateTowerNodeInStat(stat, normalizedNodeId);
+        return variables;
+      });
+    } catch (error) {
+      // Validation failures occur before activateTowerNodeInStat publishes its
+      // draft, so they need no compensating write. Only recover when the node
+      // was activated but the outer MVU persistence step then failed.
+      if (previousStat && activation) {
+        try {
+          await this.ports.updateVariablesWith((variables: Record<string, any>) => {
+            const stat = statRoot(variables);
+            const run = readRunState(stat);
+            const activeNode = isRecord(stat.run_node) ? stat.run_node : null;
+            if (
+              run?.phase === 'in_node' &&
+              run.currentNode?.id === normalizedNodeId &&
+              activeNode?.node_id === normalizedNodeId
+            ) {
+              replaceRecord(stat, structuredClone(previousStat!));
+            }
+            return variables;
+          });
+        } catch (rollbackError) {
+          throw new AggregateError([error, rollbackError], '爬塔节点进入失败，且完整状态回滚失败');
+        }
+      }
+      const detail = error instanceof Error ? error.message : String(error);
+      const invalidPreparedContent = /^(?:tower\s+(?:battle\s+content|reward|event)|tower\s+node\s+(?:reward|payload)|battle\s+data\s+is\s+unavailable)/i.test(detail);
+      if (!activation && invalidPreparedContent) {
+        await this.ports.updateVariablesWith((variables: Record<string, any>) => {
+          requeueInvalidReadyTowerNodeGenerationInStat(statRoot(variables), normalizedNodeId, detail);
+          return variables;
+        });
+        await this.scheduleTowerGeneration('invalid-ready-node-requeued');
+        throw new Error('这个节点的旧版或不完整内容已自动重新生成；后台准备完成后即可再次进入。');
+      }
+      throw error;
+    }
+    if (!activation) throw new Error('爬塔节点激活失败：MUV 更新未返回结果');
+    await this.scheduleTowerGeneration('node-activated');
+    return activation;
+  }
+
   public retryRunNode(node: RunNodeChoice, prompt: string): Promise<void> {
     return this.ports.continueWithPrompt<RetrySnapshot>({
       prompt,
@@ -449,6 +691,18 @@ export class TavernRunActionHost {
   }
 
   public requestRestUpgrade(node: RunNodeChoice, card: Record<string, any>): Promise<void> {
+    if (this.ports.requestRestMutation) {
+      if (node.kind !== 'rest') return Promise.reject(new Error('营火升级需要有效的营火节点'));
+      return Promise.resolve(this.ports.requestRestMutation({
+        spec: 'mwg.rest-mutation-request/v1',
+        kind: 'upgrade',
+        nodeId: node.id,
+        ...(typeof card.runInstanceId === 'string' ? { runInstanceId: card.runInstanceId } : {}),
+        ...(typeof card.id === 'string' ? { cardId: card.id } : {}),
+      })).then(result => {
+        if (result === null || result === undefined) throw new Error('爬塔后台组件尚未提供营火升级功能');
+      });
+    }
     const prompt = formatRestUpgradePrompt({ node, card });
     return this.ports.continueWithPrompt<RestUpgradePreparationSnapshot>({
       prompt,
@@ -458,9 +712,10 @@ export class TavernRunActionHost {
           const stat = statRoot(variables);
           if (!isRecord(stat.battle)) throw new Error('battle 数据不存在');
           const cards = persistentCards(stat);
-          const selected = typeof card.runInstanceId === 'string'
-            ? cards.find(entry => entry.runInstanceId === card.runInstanceId)
-            : cards.find(entry => entry.id === card.id);
+          const selected =
+            typeof card.runInstanceId === 'string'
+              ? cards.find(entry => entry.runInstanceId === card.runInstanceId)
+              : cards.find(entry => entry.id === card.id);
           if (!selected) throw new Error('营火升级目标卡牌不存在');
           previous = {
             runUpgrade: optionalValue(stat, 'run_upgrade'),
@@ -489,6 +744,17 @@ export class TavernRunActionHost {
 
   public requestRestTransform(node: RunNodeChoice, card: Record<string, any>): Promise<void> {
     if (node.kind !== 'rest') throw new Error('营火变形需要有效的营火节点');
+    if (this.ports.requestRestMutation) {
+      return Promise.resolve(this.ports.requestRestMutation({
+        spec: 'mwg.rest-mutation-request/v1',
+        kind: 'transform',
+        nodeId: node.id,
+        ...(typeof card.runInstanceId === 'string' ? { runInstanceId: card.runInstanceId } : {}),
+        ...(typeof card.id === 'string' ? { cardId: card.id } : {}),
+      })).then(result => {
+        if (result === null || result === undefined) throw new Error('爬塔后台组件尚未提供营火变形功能');
+      });
+    }
     const prompt = [
       `[营火变形] node_id=${node.id}`,
       `只为选中的卡牌生成一张完整、合法的替换卡：${JSON.stringify(card)}`,
@@ -502,9 +768,10 @@ export class TavernRunActionHost {
           const stat = statRoot(variables);
           if (!isRecord(stat.battle)) throw new Error('battle 数据不存在');
           const cards = persistentCards(stat);
-          const selected = typeof card.runInstanceId === 'string'
-            ? cards.find(entry => entry.runInstanceId === card.runInstanceId)
-            : cards.find(entry => entry.id === card.id);
+          const selected =
+            typeof card.runInstanceId === 'string'
+              ? cards.find(entry => entry.runInstanceId === card.runInstanceId)
+              : cards.find(entry => entry.id === card.id);
           if (!selected) throw new Error('营火变形目标卡牌不存在');
           previous = {
             runTransform: optionalValue(stat, 'run_transform'),
@@ -535,11 +802,13 @@ export class TavernRunActionHost {
     let result: RestHealResult | null = null;
     await this.ports.updateVariablesWith((variables: Record<string, any>) => {
       result = executeUnifiedRunTransactionInStat(statRoot(variables), {
-        kind: 'rest_heal', source: { kind: 'player', id: 'run-ui' },
+        kind: 'rest_heal',
+        source: { kind: 'player', id: 'run-ui' },
       }).value as RestHealResult;
       return variables;
     });
     if (!result) throw new Error('营火恢复失败：MUV 更新未返回结算结果');
+    await this.scheduleTowerGeneration('rest-settled');
     return result;
   }
 
@@ -547,11 +816,13 @@ export class TavernRunActionHost {
     let run: RunState | null = null;
     await this.ports.updateVariablesWith((variables: Record<string, any>) => {
       run = executeUnifiedRunTransactionInStat(statRoot(variables), {
-        kind: 'shop_leave', source: { kind: 'player', id: 'run-ui' },
+        kind: 'shop_leave',
+        source: { kind: 'player', id: 'run-ui' },
       }).value as RunState;
       return variables;
     });
     if (!run) throw new Error('离开商店失败：MUV 更新未返回结算结果');
+    await this.scheduleTowerGeneration('shop-left');
     return run;
   }
 
@@ -562,6 +833,7 @@ export class TavernRunActionHost {
       return variables;
     });
     if (!run) throw new Error('新远征初始化失败：MUV 更新未返回状态');
+    await this.scheduleTowerGeneration('run-restarted');
     return run;
   }
 
@@ -569,7 +841,9 @@ export class TavernRunActionHost {
     let result: { runInstanceId: string; cardName: string } | null = null;
     await this.ports.updateVariablesWith((variables: Record<string, any>) => {
       result = executeUnifiedRunTransactionInStat(statRoot(variables), {
-        kind: 'rest_remove_card', runInstanceId, source: { kind: 'player', id: 'run-ui' },
+        kind: 'rest_remove_card',
+        runInstanceId,
+        source: { kind: 'player', id: 'run-ui' },
       }).value as { runInstanceId: string; cardName: string };
       return variables;
     });
@@ -577,11 +851,15 @@ export class TavernRunActionHost {
     return result;
   }
 
-  public async duplicateCardAtRest(runInstanceId: string): Promise<{ sourceRunInstanceId: string; createdRunInstanceId: string; cardName: string }> {
+  public async duplicateCardAtRest(
+    runInstanceId: string,
+  ): Promise<{ sourceRunInstanceId: string; createdRunInstanceId: string; cardName: string }> {
     let result: { sourceRunInstanceId: string; createdRunInstanceId: string; cardName: string } | null = null;
     await this.ports.updateVariablesWith((variables: Record<string, any>) => {
       result = executeUnifiedRunTransactionInStat(statRoot(variables), {
-        kind: 'rest_duplicate_card', runInstanceId, source: { kind: 'player', id: 'run-ui' },
+        kind: 'rest_duplicate_card',
+        runInstanceId,
+        source: { kind: 'player', id: 'run-ui' },
       }).value as { sourceRunInstanceId: string; createdRunInstanceId: string; cardName: string };
       return variables;
     });
@@ -596,7 +874,10 @@ export class TavernRunActionHost {
     let result: { runInstanceId: string; cardName: string } | null = null;
     await this.ports.updateVariablesWith((variables: Record<string, any>) => {
       result = executeUnifiedRunTransactionInStat(statRoot(variables), {
-        kind: 'rest_transform_card', runInstanceId, replacement, source: { kind: 'player', id: 'run-ui' },
+        kind: 'rest_transform_card',
+        runInstanceId,
+        replacement,
+        source: { kind: 'player', id: 'run-ui' },
       }).value as { runInstanceId: string; cardName: string };
       return variables;
     });
@@ -612,6 +893,42 @@ export class TavernRunActionHost {
       return variables;
     });
     if (!result) throw new Error('删卡失败：MUV 更新未返回结果');
+    return result;
+  }
+
+  public async settleTowerOpeningChoice(choiceId: string): Promise<TowerOpeningSettlementResult> {
+    if (!this.ports.isLatest()) throw new Error('历史楼层不能选择开局馈赠');
+    let result: TowerOpeningSettlementResult | null = null;
+    await this.ports.updateVariablesWith((variables: Record<string, any>) => {
+      result = settleTowerOpeningChoiceInStat(statRoot(variables), choiceId);
+      return variables;
+    });
+    if (!result) throw new Error('开局馈赠结算失败：MUV 更新未返回结果');
+    await this.scheduleTowerGeneration('opening-settled');
+    return result;
+  }
+
+  public async retryTowerOpeningGeneration(): Promise<TowerOpeningRequest> {
+    if (!this.ports.isLatest()) throw new Error('历史楼层不能重新生成开局馈赠');
+    let request: TowerOpeningRequest | null = null;
+    await this.ports.updateVariablesWith((variables: Record<string, any>) => {
+      request = queueTowerOpeningInStat(statRoot(variables)).request;
+      return variables;
+    });
+    if (!request) throw new Error('开局馈赠重试未返回生成请求');
+    await this.scheduleTowerGeneration('opening-retry-queued');
+    return request;
+  }
+
+  public async settleTowerEventChoice(choiceId: string): Promise<TowerEventChoiceSettlementResult> {
+    if (!this.ports.isLatest()) throw new Error('历史楼层不能选择爬塔事件');
+    let result: TowerEventChoiceSettlementResult | null = null;
+    await this.ports.updateVariablesWith((variables: Record<string, any>) => {
+      result = settleTowerEventChoiceInStat(statRoot(variables), choiceId);
+      return variables;
+    });
+    if (!result) throw new Error('爬塔事件结算失败：MUV 更新未返回结果');
+    await this.scheduleTowerGeneration('event-settled');
     return result;
   }
 }

@@ -1,56 +1,54 @@
 {
-  "额外模型变量更新格式": {
-    "comment": "[mvu_update] 额外模型变量更新格式",
+  "世界信息": {
+    "comment": "[mvu_plot] [剧情通用] 世界信息",
     "create": true,
-    "constant": true,
-    "selective": false,
-    "keys": [],
-    "use_regex": false,
-    "extensions": {
-      "group": "",
-      "group_override": false,
-      "prevent_recursion": true,
-      "exclude_recursion": true,
-      "depth": 0
-    }
-  },
-  "卡牌常驻规范": {
-    "comment": "[mvu_update] 卡牌常驻规范",
-    "create": true,
-    "constant": true,
-    "selective": false,
-    "keys": [],
-    "use_regex": false,
-    "extensions": {
-      "group": "",
-      "group_override": false,
-      "prevent_recursion": true,
-      "exclude_recursion": true,
-      "depth": 0
-    }
-  },
-  "首条消息变量更新": {
-    "comment": "[mvu_update] 首条消息变量更新",
     "constant": false,
-    "keys": ["<CHARACTER_INIT_PENDING>", "〈CHARACTER_INIT_PENDING〉", "＜CHARACTER_INIT_PENDING＞"],
-    "use_regex": false,
-    "extensions": {
-      "scan_depth": 1
-    }
+    "keys": ["[开始游戏]"],
+    "use_regex": false
   },
-  "变量更新规则": {
-    "comment": "[mvu_update] 变量更新规则",
+  "地点与NPC线路": {
+    "comment": "[mvu_plot] [剧情通用] 地点与NPC线路",
+    "create": true,
+    "constant": false,
+    "keys": ["[开始游戏]"],
+    "use_regex": false
+  },
+  "入侵与遭遇类型": {
+    "comment": "[mvu_plot] [剧情通用] 入侵与遭遇类型",
+    "create": true,
+    "constant": false,
+    "keys": ["[开始游戏]"],
+    "use_regex": false
+  },
+  "变量说明": {
+    "comment": "[mvu_plot] [剧情通用] 当前状态与构筑",
+    "aliases": ["剧情可见状态与构筑"],
     "constant": true,
     "selective": false,
     "keys": [],
+    "use_regex": false
+  },
+  "等级表现形式": {
+    "comment": "[mvu_plot] [剧情通用] 等级表现形式",
+    "constant": false,
+    "keys": [],
+    "use_regex": false
+  },
+  "爬塔开局剧情": {
+    "comment": "[mvu_plot] [模式入口] 爬塔开局短叙事",
+    "create": true,
+    "constant": false,
+    "keys": ["[爬塔模式]"],
     "use_regex": false,
     "extensions": {
-      "group": "",
-      "group_override": false
+      "scan_depth": 1,
+      "prevent_recursion": true,
+      "exclude_recursion": true
     }
   },
   "输出格式要求": {
-    "comment": "[mvu_plot] 剧情模型职责与输出",
+    "comment": "[mvu_plot] [剧情通用] 正文职责",
+    "aliases": ["剧情模型职责与输出"],
     "constant": true,
     "selective": false,
     "keys": [],
@@ -64,7 +62,8 @@
     }
   },
   "剧情交接锚点": {
-    "comment": "[mvu_plot] 剧情交接终检",
+    "comment": "[mvu_plot] [末端终检] 剧情交接锚点",
+    "aliases": ["剧情交接终检"],
     "create": true,
     "constant": true,
     "selective": false,
@@ -78,31 +77,89 @@
       "exclude_recursion": true
     }
   },
-  "变量说明": {
-    "comment": "[mvu_plot] 剧情可见状态与构筑",
+  "[initvar]不要启用": {
+    "comment": "[mvu_plot] [数据模板] [initvar]不要启用",
+    "enabled": false
+  },
+  "额外模型变量更新格式": {
+    "comment": "[mvu_update] [数据契约] MVU输出格式",
+    "create": true,
     "constant": true,
     "selective": false,
     "keys": [],
-    "use_regex": false
+    "use_regex": false,
+    "extensions": {
+      "group": "",
+      "group_override": false,
+      "prevent_recursion": true,
+      "exclude_recursion": true,
+      "depth": 0
+    }
+  },
+  "变量更新规则": {
+    "comment": "[mvu_update] [数据契约] 普通增量与事务路由",
+    "constant": true,
+    "selective": false,
+    "keys": [],
+    "use_regex": false,
+    "extensions": {
+      "group": "",
+      "group_override": false
+    }
+  },
+  "变量数据结构": {
+    "comment": "[mvu_update] [数据契约] 路径结构与边界",
+    "create": true,
+    "constant": false,
+    "selective": true,
+    "keys": ["<CHARACTER_INIT_PENDING>", "〈CHARACTER_INIT_PENDING〉", "＜CHARACTER_INIT_PENDING＞", "<CONTENT_PENDING>", "〈CONTENT_PENDING〉", "＜CONTENT_PENDING＞", "<BATTLE_PENDING>", "〈BATTLE_PENDING〉", "＜BATTLE_PENDING＞", "[MVU_BATTLE_SETTLEMENT]", "[战斗内容修复]", "[玩家自然语言卡牌修复]", "[战斗场景修复]"],
+    "use_regex": false,
+    "extensions": {
+      "group": "",
+      "group_override": false,
+      "prevent_recursion": true,
+      "exclude_recursion": true,
+      "depth": 0
+    }
+  },
+  "卡牌常驻规范": {
+    "comment": "[mvu_update] [数据契约] 永久战斗内容生命周期",
+    "create": true,
+    "constant": true,
+    "selective": false,
+    "keys": [],
+    "use_regex": false,
+    "extensions": {
+      "group": "",
+      "group_override": false,
+      "prevent_recursion": true,
+      "exclude_recursion": true,
+      "depth": 0
+    }
   },
   "战斗内容生成要求": {
-    "comment": "[mvu_update] 战斗内容生成要求",
+    "comment": "[mvu_update] [战斗生成] 通用效果DSL",
     "constant": false,
-    "keys": ["<CHARACTER_INIT_PENDING>", "〈CHARACTER_INIT_PENDING〉", "＜CHARACTER_INIT_PENDING＞", "<CONTENT_PENDING>", "〈CONTENT_PENDING〉", "＜CONTENT_PENDING＞", "[开始战斗]", "<BATTLE_PENDING>", "〈BATTLE_PENDING〉", "＜BATTLE_PENDING＞", "[MVU_BATTLE_SETTLEMENT]", "[营火升级]", "[商店生成]", "[事件选择]", "[战斗内容修复]", "[玩家自然语言卡牌修复]"],
+    "keys": ["<CHARACTER_INIT_PENDING>", "〈CHARACTER_INIT_PENDING〉", "＜CHARACTER_INIT_PENDING＞", "<CONTENT_PENDING>", "〈CONTENT_PENDING〉", "＜CONTENT_PENDING＞", "[开始战斗]", "<BATTLE_PENDING>", "〈BATTLE_PENDING〉", "＜BATTLE_PENDING＞", "[MVU_BATTLE_SETTLEMENT]", "[战斗内容修复]", "[玩家自然语言卡牌修复]"],
     "use_regex": false
   },
-  "[initvar]不要启用": {
-    "comment": "[mvu_plot] [initvar]不要启用",
-    "enabled": false
+  "首条消息变量更新": {
+    "comment": "[mvu_update] [模式入口] 一次性初始化",
+    "constant": false,
+    "keys": ["<CHARACTER_INIT_PENDING>", "〈CHARACTER_INIT_PENDING〉", "＜CHARACTER_INIT_PENDING＞"],
+    "use_regex": false,
+    "extensions": {
+      "scan_depth": 1
+    }
   },
   "战斗场景生成": {
-    "comment": "[mvu_update] 战斗场景生成",
+    "comment": "[mvu_update] [战斗生成] 遇敌注册",
     "constant": false,
     "keys": ["[开始战斗]", "<BATTLE_PENDING>", "〈BATTLE_PENDING〉", "＜BATTLE_PENDING＞", "[战斗场景修复]"],
     "use_regex": false
   },
   "战斗结算生成": {
-    "comment": "[mvu_update] 战斗结算生成",
+    "comment": "[mvu_update] [结算修复] 战斗结算",
     "create": true,
     "constant": false,
     "keys": ["[MVU_BATTLE_SETTLEMENT]"],
@@ -115,60 +172,25 @@
       "depth": 0
     }
   },
-  "等级表现形式": {
-    "comment": "[mvu_plot] 等级表现形式",
-    "constant": false,
-    "keys": [],
-    "use_regex": false
-  },
-  "远征节点协议": {
-    "comment": "[mvu_update] 远征节点协议",
-    "create": true,
-    "constant": false,
-    "keys": ["[路线节点]", "[事件选择]", "[营火升级]", "[商店生成]"],
-    "use_regex": false
-  },
   "初始战斗内容修复": {
-    "comment": "[mvu_update] 初始战斗内容修复",
+    "comment": "[mvu_update] [结算修复] 玩家内容修复",
     "create": true,
     "constant": false,
     "keys": ["[战斗内容修复]", "[玩家自然语言卡牌修复]"],
     "use_regex": false
   },
   "战斗场景修复": {
-    "comment": "[mvu_update] 战斗场景修复",
+    "comment": "[mvu_update] [结算修复] 当前战斗修复",
     "create": true,
     "constant": false,
     "keys": ["[战斗场景修复]"],
     "use_regex": false
   },
-  "世界信息": {
-    "comment": "[mvu_plot] 世界信息",
+  "远征节点协议": {
+    "comment": "[mvu_update] [tower] 爬塔后台节点协议",
     "create": true,
     "constant": false,
-    "keys": ["[开始游戏]"],
-    "use_regex": false
-  },
-  "地点与NPC线路": {
-    "comment": "[mvu_plot] 地点与NPC线路",
-    "create": true,
-    "constant": false,
-    "keys": ["[开始游戏]"],
-    "use_regex": false
-  },
-  "入侵与遭遇类型": {
-    "comment": "[mvu_plot] 入侵与遭遇类型",
-    "create": true,
-    "constant": false,
-    "keys": ["[开始游戏]"],
-    "use_regex": false
-  },
-  "变量数据结构": {
-    "comment": "[mvu_update] 变量数据结构",
-    "create": true,
-    "constant": false,
-    "selective": true,
-    "keys": ["<CHARACTER_INIT_PENDING>", "〈CHARACTER_INIT_PENDING〉", "＜CHARACTER_INIT_PENDING＞", "<CONTENT_PENDING>", "〈CONTENT_PENDING〉", "＜CONTENT_PENDING＞", "<BATTLE_PENDING>", "〈BATTLE_PENDING〉", "＜BATTLE_PENDING＞", "[MVU_BATTLE_SETTLEMENT]", "[路线节点]", "[事件选择]", "[营火升级]", "[商店生成]", "[战斗内容修复]", "[玩家自然语言卡牌修复]", "[战斗场景修复]"],
+    "keys": ["[爬塔后台节点生成]", "[爬塔开局馈赠事件]"],
     "use_regex": false,
     "extensions": {
       "group": "",

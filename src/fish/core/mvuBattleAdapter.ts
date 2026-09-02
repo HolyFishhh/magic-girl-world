@@ -5,6 +5,7 @@ import {
   normalizeOrbContainer,
   normalizeCombatResourceStates,
   normalizeChinesePlayerDescription,
+  normalizeEnemyActionSelectionInput,
   migratePersistentRunDeck,
   serializePersistentCardProgression,
   writeBackPersistentCardProgression,
@@ -331,8 +332,7 @@ export function convertMvuEnemy(
   const actions = normalizeMvuArray(source.actions)
     .map(value => normalizeEnemyAction(value, enemyCompilationOptions))
     .filter(value => value !== null);
-  const actionMode = source.action_mode || 'random';
-  const actionConfig = source.action_config || {};
+  const { actionMode, actionConfig } = normalizeEnemyActionSelectionInput(source);
   const selection = selectEnemyAction({ ...source, actions, actionMode, actionConfig }, random);
   const preview = selection.action as import('../../game-core').EnemyAction | null;
   const lustEffect = normalizeNamedEffectDefinition(source.lust_effect, {

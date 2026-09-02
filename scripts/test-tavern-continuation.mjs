@@ -194,6 +194,31 @@ assert.equal(committedBox.value.stat_data.settled, 37);
 assert.equal(committedBox.value.mwg?.battle_session, undefined);
 assert.doesNotMatch(committedLifecycle.join(','), /replace|reload-state/);
 
+// Tower confirmation is an in-place transaction: it never creates or
+// triggers a chat floor, and duplicate UI callbacks cannot settle twice.
+const towerBox = { value: clone(initialVariables) };
+const towerLifecycle = [];
+let towerContinuationCalls = 0;
+const towerBattleHost = new TavernBattleEndHost(
+  new TavernContinuationHost(
+    continuationPorts({
+      createChatMessages: async () => {
+        towerContinuationCalls += 1;
+      },
+      triggerGeneration: async () => {
+        towerContinuationCalls += 1;
+      },
+    }),
+  ),
+  battlePorts(towerBox, towerLifecycle, {
+    openCommonView: () => towerLifecycle.push('open-common'),
+  }),
+);
+await towerBattleHost.confirmTowerBattleEnd('victory');
+await towerBattleHost.confirmTowerBattleEnd('victory');
+assert.equal(towerContinuationCalls, 0);
+assert.deepEqual(towerLifecycle, ['clear', 'settle:victory', 'open-common']);
+
 function presentationState(route) {
   return {
     currentTurn: 2,

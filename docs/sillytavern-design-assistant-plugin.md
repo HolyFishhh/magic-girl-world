@@ -30,6 +30,10 @@
 
 同时监听 `CHAT_COMPLETION_SETTINGS_READY` 作为不同 Tavern Helper 请求分支的兼容回退；同一请求通过标记去重，不会注入两次。
 
+宿主职责刻意分开：SillyTavern 官方 `getContext()` 管扩展生命周期、聊天元数据、设置和事件发送；Tavern Helper 管指定楼层消息、消息变量与生成。Tavern Helper 顶层没有稳定公开的 `eventEmit`，因此自然语言修复和消息重放通过官方 `context.eventSource.emit` 桥接，不读取私有 `_bind`，也不等待并不存在的 Tavern Helper 全局初始化通知。
+
+`loading_order` 只保证模块先后，不保证这些全局能力在同一 tick 就绪。扩展在 context 缺失时保留可重试状态；自然语言修复会在当前 `chatId` 内有界等待 Tavern Helper 的消息、变量和按钮接口。等待期间一旦切换聊天或停用扩展，旧事务立即失效，不会写入新聊天。
+
 ## 为什么不把它做成 MVU 工具智能体
 
 SillyTavern 原生 Function Calling 不支持 quiet/background 请求。MVU 的额外模型请求也有自己的唯一提交工具，不能安全加入另一组查询工具并期待多轮工具循环。强行使用工具智能体会增加请求长度、延迟和失败面。
@@ -49,7 +53,7 @@ SillyTavern 原生 Function Calling 不支持 quiet/background 请求。MVU 的�
 ### 流派知识图谱
 
 - `src/game-core/archetypeGraph.ts` 保存结构化流派节点、邻接边、桥接条件和机械反协同。
-- 扩展将图转换为版本化节点/关系快照，存入 IndexedDB 数据库 `magic-girl-world-design-graph-v1`。
+- 扩展将图转换为版本化节点/关系快照，存入 IndexedDB 数据库 `magic-girl-world-design-graph-v2`。启动时会读取并校验 `contentVersion`、结构指纹、节点唯一性和边引用；旧版或损坏快照会被当前内置图替换，浏览器禁用 IndexedDB 时则无损回退到内存图。
 - 查询按当前卡组的多流派亲和度选取种子，再做有限深度邻接遍历；不会用卡名、职业、毒、烧伤等题材词硬匹配。
 - 通用散卡保持 `scatterShare`，不会被强迫归入某个流派。
 
@@ -91,6 +95,10 @@ SillyTavern 原生 Function Calling 不支持 quiet/background 请求。MVU 的�
 - `getKnowledgeGraphStats()`。
 
 ## 构建与本地安装
+
+玩家安装：在角色卡开始页或设置悬浮窗点击“快捷安装”，确认 SillyTavern 的第三方扩展提示即可。该按钮调用酒馆官方安装器，仓库地址为 `https://github.com/HolyFishhh/magic-girl-world.git`，分支为 `extension`。安装完成后刷新酒馆。
+
+维护者本地安装：
 
 ```powershell
 npm run build:sillytavern-extension

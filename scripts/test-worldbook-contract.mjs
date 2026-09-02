@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 const root = resolve('worldbook_new');
 const manifest = JSON.parse(await readFile(resolve(root, 'manifest.json'), 'utf8'));
 const entryConfig = JSON.parse(await readFile(resolve(root, 'entry-config.json'), 'utf8'));
+const responsibilityIndex = await readFile(resolve(root, 'README.md'), 'utf8');
 const requiredEntries = [
   '额外模型变量更新格式',
   '卡牌常驻规范',
@@ -13,6 +14,7 @@ const requiredEntries = [
   '变量更新规则',
   '[initvar]不要启用',
   '输出格式要求',
+  '爬塔开局剧情',
   '剧情交接锚点',
   '变量说明',
   '战斗场景生成',
@@ -29,6 +31,37 @@ const requiredEntries = [
 ];
 assert.deepEqual(Object.keys(manifest).sort(), requiredEntries.sort());
 assert.equal(new Set(Object.values(manifest)).size, Object.values(manifest).length, 'manifest sources must be unique');
+assert.deepEqual(Object.keys(manifest), [
+  '世界信息',
+  '地点与NPC线路',
+  '入侵与遭遇类型',
+  '变量说明',
+  '等级表现形式',
+  '爬塔开局剧情',
+  '输出格式要求',
+  '剧情交接锚点',
+  '[initvar]不要启用',
+  '额外模型变量更新格式',
+  '变量更新规则',
+  '变量数据结构',
+  '卡牌常驻规范',
+  '战斗内容生成要求',
+  '首条消息变量更新',
+  '战斗场景生成',
+  '战斗结算生成',
+  '初始战斗内容修复',
+  '战斗场景修复',
+  '远征节点协议',
+  '[config_override]',
+]);
+assert.deepEqual(Object.keys(entryConfig), Object.keys(manifest), 'entry config order must mirror manifest import order');
+assert.match(responsibilityIndex, /模式入口/);
+assert.match(responsibilityIndex, /剧情通用/);
+assert.match(responsibilityIndex, /MVU 数据契约/);
+assert.match(responsibilityIndex, /战斗内容生成/);
+assert.match(responsibilityIndex, /结算与修复/);
+assert.match(responsibilityIndex, /爬塔专用/);
+assert.match(responsibilityIndex, /末端终检/);
 
 const sources = new Map();
 for (const [entryName, sourceName] of Object.entries(manifest)) {
@@ -43,6 +76,7 @@ const expectedMvuRoles = {
   '首条消息变量更新': 'update',
   '变量更新规则': 'update',
   '输出格式要求': 'plot',
+  '爬塔开局剧情': 'plot',
   '变量说明': 'plot',
   '变量数据结构': 'update',
   '战斗内容生成要求': 'update',
@@ -62,6 +96,21 @@ for (const [entryName, role] of Object.entries(expectedMvuRoles)) {
   const hasUpdate = /\[mvu_update\]/i.test(comment);
   const actualRole = hasPlot && hasUpdate ? 'mixed' : hasUpdate ? 'update' : hasPlot ? 'plot' : 'unclassified';
   assert.equal(actualRole, role, `${entryName} must remain a ${role} MVU world-book entry`);
+}
+for (const name of ['世界信息', '地点与NPC线路', '入侵与遭遇类型', '变量说明', '等级表现形式', '输出格式要求']) {
+  assert.match(entryConfig[name].comment, /\[剧情通用\]/, `${name} must remain in the story-only group`);
+}
+assert.match(entryConfig['剧情交接锚点'].comment, /\[末端终检\]/);
+assert.match(entryConfig['爬塔开局剧情'].comment, /\[模式入口\]/);
+assert.deepEqual(entryConfig['爬塔开局剧情'].keys, ['[爬塔模式]']);
+for (const name of ['额外模型变量更新格式', '变量更新规则', '变量数据结构', '卡牌常驻规范']) {
+  assert.match(entryConfig[name].comment, /\[数据契约\]/, `${name} must remain in the MVU contract group`);
+}
+for (const name of ['战斗内容生成要求', '战斗场景生成']) {
+  assert.match(entryConfig[name].comment, /\[战斗生成\]/, `${name} must remain in the battle generation group`);
+}
+for (const name of ['战斗结算生成', '初始战斗内容修复', '战斗场景修复']) {
+  assert.match(entryConfig[name].comment, /\[结算修复\]/, `${name} must remain in the settlement/repair group`);
 }
 assert.equal(entryConfig['[config_override]']?.enabled, false, 'config override must stay a disabled card-settings entry');
 assert.equal(entryConfig['[initvar]不要启用']?.enabled, false, 'initvar template must stay disabled');
@@ -88,9 +137,39 @@ assert.equal(initial.run, null);
 assert.equal(initial.run_result, null);
 assert.equal(initial.run_upgrade, null);
 assert.equal(initial.game_mode, 'story');
+assert.equal(initial.game_mode_lock, null);
 assert.equal(initial.battle.design_context, null);
 
 const allPromptSources = Array.from(sources.values()).join('\n');
+assert.doesNotMatch(allPromptSources, /六个浅层字段|六个字段/);
+assert.doesNotMatch(allPromptSources, /疾风骤雨|咒缠魅魔|暴怒独眼巨人|处刑斧|深渊巨魔|灰爪撕咬|资源汲取|魔藤花/);
+for (const [name, config] of Object.entries(entryConfig)) {
+  if (name === '远征节点协议') continue;
+  const keys = config.keys || [];
+  for (const staleMarker of ['[路线节点]', '[事件选择]', '[营火升级]', '[商店生成]']) {
+    assert.equal(keys.includes(staleMarker), false, `${name} must not retain stale tower marker ${staleMarker}`);
+  }
+}
+const storyPrompt = [
+  '世界信息',
+  '地点与NPC线路',
+  '入侵与遭遇类型',
+  '变量说明',
+  '等级表现形式',
+  '输出格式要求',
+  '剧情交接锚点',
+].map(name => sources.get(name)).join('\n');
+assert.doesNotMatch(storyPrompt, /爬塔|远征|短叙事|TOWER_NODE_RESULT|地图拓扑/);
+const towerOpeningGuide = sources.get('爬塔开局剧情');
+assert.match(towerOpeningGuide, /完全沿用玩家当前启用的预设与用户要求/);
+assert.match(towerOpeningGuide, /不覆盖正文长度、段落数量、文风、节奏或剧情选择/);
+assert.match(towerOpeningGuide, /第二轮 MVU 负责生成合法变量/);
+assert.doesNotMatch(towerOpeningGuide, /300 个中文字符以内|不直接开始战斗/);
+assert.match(towerOpeningGuide, /不影响剧情模式/);
+assert.match(sources.get('首条消息变量更新'), /唯一详细生成入口/);
+assert.match(sources.get('战斗场景生成'), /唯一详细入口/);
+assert.match(sources.get('战斗结算生成'), /唯一权威/);
+assert.match(sources.get('战斗内容生成要求'), /效果字段、触发器、目标视角和公式边界的唯一权威/);
 assert.equal(entryConfig['卡牌常驻规范']?.constant, true, 'compact card rules must stay active for every MVU turn');
 assert.equal(entryConfig['变量说明']?.constant, true, 'the plot model must receive current MVU state every turn');
 assert.equal(entryConfig['变量数据结构']?.constant, false, 'full schema must not spend tokens on ordinary MVU turns');
@@ -134,8 +213,9 @@ for (const transientPath of [
     `${transientPath} must stay out of the ordinary plot context and be injected only by its transaction`,
   );
 }
-assert.match(plotStateGuide, /一次性战斗\/奖励对象由对应事务消息按需提供/);
-assert.match(plotStateGuide, /模式和远征状态则由程序锚点切换对应世界书/);
+assert.match(plotStateGuide, /一次性战斗或奖励对象由对应事务消息按需提供/);
+assert.match(plotStateGuide, /游戏流程专用状态同样不进入普通剧情上下文/);
+assert.doesNotMatch(plotStateGuide, /爬塔|远征|短叙事|地图拓扑/);
 assert.match(plotStateGuide, /剧情模型每轮读取这些 MVU 值/);
 assert.match(plotStateGuide, /永远不输出变量命令/);
 assert.match(sources.get('剧情交接锚点'), /最后一句若仍在描写敌人的攻击/);
@@ -219,7 +299,7 @@ assert.match(firstMessageGuide, /`emoji` 不得留空/);
 assert.match(firstMessageGuide, /卡牌只能写入此路径/);
 assert.match(firstMessageGuide, /禁止写入 `battle\.player_abilities`/);
 assert.match(firstMessageGuide, /剧情模式的 `run` 保持 null/);
-assert.match(firstMessageGuide, /远征模式在起始战斗内容通过门禁后由程序创建/);
+assert.match(firstMessageGuide, /爬塔模式由程序在初始化内容通过门禁后创建运行状态/);
 assert.match(firstMessageGuide, /不输出选项或战斗启动标记/);
 assert.match(sources.get('输出格式要求'), /不写任何以 `\[A\.`、`\[B\.`、`\[1\.` 等开头/);
 assert.match(sources.get('输出格式要求'), /开局不让玩家先选初始技能或初始卡牌/);
@@ -389,13 +469,12 @@ assert.match(sceneGuide, /`actions`、`abilities`、`lust_effect` 的 `descripti
 assert.match(sceneGuide, /描述必须明确写出触发时机、条件和结果/);
 assert.match(sceneGuide, /不要续写剧情，不要输出 `<BATTLE_PENDING>`、`<BATTLE_START>` 或选项/);
 assert.match(sceneGuide, /写错会在启动前按路径报错/);
-assert.match(sceneGuide, /\[构筑摘要\]/);
-assert.match(sceneGuide, /不要复制、解释或写回/);
-assert.match(sceneGuide, /\[敌人预算\]/);
-assert.match(sceneGuide, /不要自行重算预算/);
+assert.match(sceneGuide, /`battle\.design_context` 提供程序评分、回合曲线、目标预算/);
+assert.match(sceneGuide, /不是需要复制、解释或写回的字段/);
+assert.match(sceneGuide, /不依赖固定生命区间/);
 assert.match(sceneGuide, /同时含 `<CHARACTER_INIT_PENDING>`/);
 assert.match(sceneGuide, /`battle\.cards` 为空/);
-assert.match(sceneGuide, /`battle\.artifacts\/items` 至少各注册 1 个/);
+assert.match(sceneGuide, /不得为补齐门禁套用固定遗物、道具、状态或数值模板/);
 assert.match(sceneGuide, /单敌写 `battle\.enemy` 并清空 `battle\.enemies`/);
 assert.match(sceneGuide, /多敌写 `battle\.enemies` 并清空 `battle\.enemy`/);
 assert.match(sceneGuide, /每个对象必须有唯一稳定英文 `id`/);
@@ -427,22 +506,14 @@ const variableDataGuide = sources.get('变量数据结构');
 assert.match(variableDataGuide, /"player_abilities":/);
 assert.match(variableDataGuide, /"player_status_effects":/);
 assert.match(variableDataGuide, /`stat_data`/);
-assert.match(variableDataGuide, /`run` 由远征程序独占/);
+assert.match(variableDataGuide, /`run`、`run_node`、`run_node_reward`/);
+assert.match(variableDataGuide, /由流程程序独占/);
 assert.match(variableDataGuide, /多敌的整数 `action_priority\/speed` 分别按高到低排序/);
 assert.match(variableDataGuide, /当前 MVU 变量没有可写的 `battle\.summons` 路径/);
 assert.match(variableDataGuide, /`battle\.core\.emoji` 是玩家在战斗舞台中的形象/);
-assert.match(variableDataGuide, /战后奖励/);
-assert.match(variableDataGuide, /各类别的 `candidates\/pick`/);
-assert.match(variableDataGuide, /`limits` 整对象写入 `reward\.limits`/);
-assert.match(variableDataGuide, /禁止分路径写限制/);
-assert.match(variableDataGuide, /不存在的类别保持空数组/);
-assert.match(variableDataGuide, /固定写 `"quantity":1`/);
-assert.match(variableDataGuide, /战斗胜利经验已由程序提前结算/);
-assert.match(variableDataGuide, /候选数量不符时禁止结束输出/);
-assert.match(variableDataGuide, /失败请求不给胜利奖励/);
-assert.match(variableDataGuide, /可登记一项或多项主题相关的持久代价/);
-assert.match(variableDataGuide, /也可组合诅咒牌、`status\.permanent_status` 永久状态和负面遗物/);
-assert.match(variableDataGuide, /胜利若在正文中明确形成了持久代价/);
+assert.doesNotMatch(variableDataGuide, /## 战后奖励|各类别的 `candidates\/pick`|候选数量不符时禁止结束输出/);
+assert.match(variableDataGuide, /战后候选、惩罚和请求清理只按“战斗结算生成”处理/);
+assert.doesNotMatch(variableDataGuide, /胜利若在正文中明确形成了持久代价/);
 assert.doesNotMatch(variableDataGuide, /"effect"\s*:/);
 
 const initializationGuide = sources.get('首条消息变量更新');
@@ -499,44 +570,37 @@ assert.ok(entryConfig['战斗场景生成'].keys.includes('〈BATTLE_PENDING〉'
 assert.ok(entryConfig['战斗场景生成'].keys.includes('＜BATTLE_PENDING＞'));
 assert.match(outputGuide, /直接输出自然、连贯的 Markdown 剧情正文/);
 assert.match(outputGuide, /`opening` 字段规定首轮正文的当前时机/);
-assert.match(outputGuide, /危险或敌人尚未出现.*不得描写敌人现身、攻击、玩家迎战/);
+assert.match(outputGuide, /危险或敌人尚未出现.*不得描写敌人现身、攻击或玩家迎战/);
 assert.match(outputGuide, /不使用 `<Story>`、HTML、代码块或页面容器/);
 assert.match(outputGuide, /不使用 `<Story>`/);
 assert.match(outputGuide, /不输出 `<Options>`、`<Option>`、`<BattleOption>`/);
 assert.match(outputGuide, /不输出 `<UpdateVariable>`/);
-assert.match(outputGuide, /<BATTLE_PENDING>/);
 assert.match(outputGuide, /不输出 `<BATTLE_START>`/);
-assert.match(outputGuide, /`battle\.cards` 为空/);
-assert.match(outputGuide, /依次输出 `<CHARACTER_INIT_PENDING>` 和 `<BATTLE_PENDING>`/);
-assert.match(outputGuide, /半角 ASCII 尖括号/);
-assert.match(outputGuide, /不要只描写“战斗开始”却漏掉交接标记/);
+assert.match(outputGuide, /“剧情交接锚点”为唯一标准/);
+assert.doesNotMatch(outputGuide, /依次输出 `<CHARACTER_INIT_PENDING>` 和 `<BATTLE_PENDING>`|半角 ASCII 尖括号|不要只描写“战斗开始”却漏掉交接标记/);
 assert.match(outputGuide, /只输出战后剧情正文/);
 const runGuide = sources.get('远征节点协议');
-assert.match(runGuide, /程序会按 Act、层数、节点类型和已完成的同类节点/);
-assert.match(runGuide, /机制相同但叙事身份不同/);
-assert.match(runGuide, /\[世界连续性\]/);
-assert.match(runGuide, /最多两名正在追踪 NPC/);
-assert.match(runGuide, /原有 `status\/factions\/npcs`/);
-assert.match(runGuide, /轻量代价.*明确取舍.*高价值高代价/);
-assert.match(runGuide, /基础补给、定向补强或高阶成长/);
-assert.match(runGuide, /程序独占维护 `run`/);
-assert.match(runGuide, /`node_id\/card_id` 必须使用消息和当前卡组中的真实值/);
-assert.doesNotMatch(runGuide, /moon_slash/);
-assert.match(runGuide, /向 `reward\.card\/artifact\/item` 写对应数量的商品候选/);
-assert.match(runGuide, /\[商店预算\]/);
-assert.match(runGuide, /商店商品禁止写 `price`/);
-assert.match(runGuide, /程序会按 Act、类别、稀有度和数量确定价格/);
-assert.match(runGuide, /候选同级附 `"status":\{完整状态定义\}`/);
-assert.doesNotMatch(runGuide, /reward\.status/);
-assert.doesNotMatch(runGuide, /card_price|artifact_price|item_price/);
-assert.doesNotMatch(runGuide, /price\(card=/);
-assert.match(runGuide, /`failed` 会结束整次远征/);
-assert.match(runGuide, /`gold\/hp` 是 -999\.\.999 的整数变化量/);
-assert.match(runGuide, /非 `failed` 不能扣到 0/);
-assert.match(runGuide, /禁止另行修改 `battle\.core\.hp`/);
-assert.match(runGuide, /同时写入 `run_result` 和 `reward\.card\/artifact\/item`/);
-assert.match(runGuide, /确认领取”或“跳过/);
-assert.match(runGuide, /不要把事件代价拆成另一条命令/);
+assert.deepEqual(entryConfig['远征节点协议']?.keys, ['[爬塔后台节点生成]', '[爬塔开局馈赠事件]']);
+assert.equal(entryConfig['远征节点协议']?.constant, false);
+assert.match(runGuide, /已锁定爬塔模式后台内容生成的唯一协议/);
+assert.match(runGuide, /剧情模式.*不得套用本协议/);
+assert.match(runGuide, /程序独占维护游戏模式、地图拓扑、路线/);
+assert.match(runGuide, /AI 只填写请求指定的一个节点或一个开局馈赠事件/);
+assert.match(runGuide, /只输出请求指定的单个标签 JSON/);
+assert.match(runGuide, /`node_id`、`request_id`、`based_on_revision`、`kind`/);
+assert.match(runGuide, /<TOWER_NODE_RESULT>/);
+assert.match(runGuide, /<TOWER_OPENING_RESULT>/);
+assert.match(runGuide, /`payload\.battle`/);
+assert.match(runGuide, /多敌人必须各自完整、可独立行动/);
+assert.match(runGuide, /同一次请求中预生成/);
+assert.match(runGuide, /胜利前隐藏/);
+assert.match(runGuide, /`payload\.event\.choices`/);
+assert.match(runGuide, /`outcome`、`hp`、`max_hp`、`gold`、`card_removals`、`reward`/);
+assert.match(runGuide, /禁止写价格/);
+assert.match(runGuide, /恢复、升级、删卡、复制和变形.*由程序/);
+assert.match(runGuide, /同一敌人族群或上下位关系/);
+assert.match(runGuide, /不限定题材、元素、角色身份、叙事风格和构筑创意/);
+assert.doesNotMatch(runGuide, /\[路线节点\]|run_result|run_upgrade|moon_slash/);
 
 const repairGuide = sources.get('初始战斗内容修复');
 assert.equal(entryConfig['初始战斗内容修复']?.constant, false);
@@ -564,6 +628,13 @@ assert.match(repairGuide, /未被问题路径指出的合法卡牌、状态、�
 assert.match(repairGuide, /逐项复核 `问题=` 中的每一个路径/);
 assert.match(repairGuide, /`from\/pick` 必须与其同级/);
 assert.match(repairGuide, /公式禁止任何函数/);
+assert.match(repairGuide, /禁止再包一层 `effects`/);
+assert.match(repairGuide, /`damage_modifier\/damage_taken_modifier\/lust_damage_modifier\/lust_damage_taken_modifier\/heal_modifier\/block_modifier` 不是卡牌、状态触发器或其他 `effects` 的公开操作键/);
+assert.match(repairGuide, /实际 `modify` 规则写进该状态的 `triggers\.hold`/);
+assert.match(repairGuide, /`set_hp\/set_lust\/set_energy\/set_block` 的值直接是数值或合法公式/);
+assert.match(repairGuide, /`scry\/seek` 只写数量/);
+assert.match(repairGuide, /只能引用 `battle\.core\.resources` 中已完整注册的 ID/);
+assert.match(repairGuide, /每个道具必须有非空 `effects`/);
 assert.doesNotMatch(repairGuide, /spec\/op\/steps|"effect"\s*:/);
 
 const battleRepairGuide = sources.get('战斗场景修复');
@@ -629,7 +700,8 @@ assert.match(settlementGuide, /惩罚可以是一项或多项/);
 assert.match(settlementGuide, /组合诅咒牌、负面遗物和 `status\.permanent_status`/);
 assert.doesNotMatch(settlementGuide, /恰好增量登记一项|三选一|不要同时生成多项/);
 assert.doesNotMatch(allPromptSources, /一次只选择.*诅咒牌|通常按敌人主题增量登记一项/);
-assert.match(settlementGuide, /禁止修改 `battle\.core`、`battle\.exp`、`battle\.enemy`/);
+assert.match(settlementGuide, /禁止修改 `battle\.core`、`battle\.exp`、`battle\.enemy\/battle\.enemies`/);
+assert.match(settlementGuide, /禁止修改模式、地图、路线和节点事务状态/);
 assert.match(settlementGuide, /最后一条命令必须是两参数 `_\.set\('reward\.request', null\)`/);
 assert.match(updateGuide, /第二阶段的 MVU 额外模型/);
 assert.match(updateGuide, /不要续写剧情、复述正文、生成选项/);
@@ -649,44 +721,35 @@ assert.match(extraFormatGuide, /`npcs` 是对象映射/);
 assert.match(extraFormatGuide, /禁止对任何 `\.effects` 或 `\.trigger` 路径使用 `_.assign`/);
 assert.match(extraFormatGuide, /_\.remove\('path', keyOrIndexOrValue\)/);
 assert.match(extraFormatGuide, /_\.add\('numeric\.path', delta\)/);
-assert.match(updateGuide, /战败不生成奖励/);
-assert.match(updateGuide, /程序已完成生命、经验、敌人清理等战斗结算/);
-assert.match(updateGuide, /禁止再修改 `battle\.core\/battle\.exp\/battle\.enemy\/battle\.enemies`/);
-assert.match(updateGuide, /`reward\.card\/artifact\/item\/limits` 全部使用两参数/);
-assert.match(updateGuide, /诅咒牌、负面遗物或永久状态/);
+assert.match(updateGuide, /本条只负责普通增量规则和事务路由/);
+assert.match(updateGuide, /专用事务的字段清单、生成要求与末端校验以对应专用条目为唯一权威/);
+assert.match(updateGuide, /`reward\.request\.marker` 为 `\[MVU_BATTLE_SETTLEMENT\]`：执行“战斗结算生成”/);
+assert.doesNotMatch(updateGuide, /战败不生成奖励|`reward\.card\/artifact\/item\/limits` 全部使用两参数|诅咒牌、负面遗物或永久状态/);
 assert.match(extraFormatGuide, /没有事实变化时/);
 assert.match(extraFormatGuide, /真实原值/);
 assert.doesNotMatch(updateGuide, /_\.set\('status\.time', T, T\);/);
 assert.match(updateGuide, /不得直接改等级/);
-assert.match(updateGuide, /`run` 只读/);
+assert.match(updateGuide, /`run` 及其路线、节点和事务状态只读/);
 assert.match(updateGuide, /保留现有 NPC、势力关系与未解决行动/);
-assert.match(updateGuide, /`<CONTENT_PENDING>`/);
-assert.match(updateGuide, /`battle\.cards` 非空且门禁完整时，无论正文是否误含该标记/);
-assert.match(updateGuide, /若卡牌已经存在但上述其他必需项缺失，只补缺失项，不重复卡牌/);
+assert.match(updateGuide, /初始化后的永久战斗内容只在明确成长、奖励、商店、营火或修复事务中增量处理/);
+assert.match(updateGuide, /卡组非空且初始化门禁完整时忽略重复标记/);
+assert.match(updateGuide, /若卡牌已经存在但其他初始化必需项缺失，只按该条目补齐缺失项/);
 assert.match(updateGuide, /标记不是必要条件/);
 assert.match(updateGuide, /`battle\.cards` 没有任何真实卡牌对象时，无论最新正文是否含 `<CHARACTER_INIT_PENDING>`/);
-assert.match(updateGuide, /总 `quantity` 至少 10/);
 assert.match(updateGuide, /`deckQuality` 会按不可主动使用、常规资源难以打出、低费用效率、偏离主构筑且低效/);
-assert.match(updateGuide, /禁止重复登记 `battle\.cards\/artifacts\/items\/statuses\/player_lust_effect`/);
-assert.match(updateGuide, /用 `_\.assign\/_\.remove` 增量处理/);
 assert.match(updateGuide, /即使漏了 `<BATTLE_PENDING>`/);
-assert.match(updateGuide, /合法敌人出现后运行时自动打开战斗页/);
+assert.match(updateGuide, /合法敌人注册后由运行时打开战斗页/);
 assert.match(sources.get('卡牌常驻规范'), /漏掉 `<BATTLE_PENDING>` 时/);
-assert.match(sources.get('卡牌常驻规范'), /机制仍服从剧情身份、形态和场景/);
-assert.match(sources.get('卡牌常驻规范'), /不因带有欲望主题就生成纯欲望流/);
-assert.match(sources.get('卡牌常驻规范'), /自定义减益、能力或本场牌库干扰/);
-assert.match(sources.get('卡牌常驻规范'), /所有新状态必须在引用前完整注册/);
-assert.match(sources.get('卡牌常驻规范'), /没有明确顺序或权重需求时使用 `action_mode:"random"`/);
-assert.match(sources.get('卡牌常驻规范'), /保留可反复推进至战斗结束的生命伤害或完整注册的持续伤害/);
-assert.match(sources.get('卡牌常驻规范'), /不能堆砌无关机制或修改持久玩家内容/);
+assert.match(sources.get('卡牌常驻规范'), /本条不重复敌人对象与行动模式规则/);
+assert.doesNotMatch(sources.get('卡牌常驻规范'), /`action_mode:"random"`|纯欲望流|自定义减益、能力或本场牌库干扰/);
 
 const locationGuide = sources.get('地点与NPC线路');
 assert.match(locationGuide, /0-2 名会持续登场的 NPC/);
 assert.match(locationGuide, /路人和普通敌人不登记/);
 const invasionGuide = sources.get('入侵与遭遇类型');
 assert.match(invasionGuide, /长期威胁 0-7/);
-assert.match(invasionGuide, /战术危险 0-3/);
-assert.match(invasionGuide, /禁止直接复制换算/);
+assert.match(invasionGuide, /单次遭遇的强弱应由当时剧情、参战者和环境决定/);
+assert.doesNotMatch(invasionGuide, /路线 `danger`|节点的战术危险/);
 for (const name of ['世界信息', '地点与NPC线路', '入侵与遭遇类型']) {
   assert.equal(entryConfig[name]?.constant, false);
   assert.deepEqual(entryConfig[name]?.keys, ['[开始游戏]']);

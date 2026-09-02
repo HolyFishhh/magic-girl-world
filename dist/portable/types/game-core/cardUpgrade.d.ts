@@ -3,6 +3,10 @@ export interface CardUpgradePatch {
     /** Optional route binding for node-scoped upgrades. */
     node_id: string;
     card_id: string;
+    /** Harmless identity echo tolerated from models that copy the compact source card. */
+    id?: string;
+    /** Harmless current-level echo; the host still owns the actual increment. */
+    upgrade_level?: number;
     description?: string;
     name?: string;
     cost?: CardCost;

@@ -11,11 +11,15 @@ const worker = await fs.readFile(path.join(output, 'design-worker.js'), 'utf8');
 const css = await fs.readFile(path.join(output, manifest.css), 'utf8');
 
 assert.equal(manifest.minimum_client_version, '1.18.0');
+assert.equal(manifest.version, '0.2.0', 'manifest must match the tower coordinator capability version');
 assert.deepEqual(manifest.dependencies, ['third-party/JS-Slash-Runner']);
 assert.equal(manifest.hooks.activate, 'activate');
 assert.ok(script.length > 10000, 'gameplay scoring core must be bundled into the standalone extension');
 assert.ok(worker.length > 10000, 'seeded simulation must be bundled into the background worker');
-assert.ok(css.includes('mwg-design-assistant-settings'));
+assert.match(script, /DOMContentLoaded/, 'the entry module must self-activate in SillyTavern 1.18');
+assert.match(script, /\.\.\/\.\.\/\.\.\/extensions\.js/, 'the entry must load SillyTavern 1.18 official extension API');
+assert.ok(css.length <= 128, 'the card-scoped extension must not ship a global settings drawer stylesheet');
+assert.doesNotMatch(css, /mwg-design-assistant-settings/);
 assert.doesNotMatch(script, /https?:\/\//, 'runtime bundle must not fetch executable code from a CDN');
 assert.doesNotMatch(worker, /https?:\/\//, 'worker bundle must not fetch executable code from a CDN');
 
@@ -73,7 +77,8 @@ globalThis.Mvu = {
   getMvuData: () => variables,
   isDuringExtraAnalysis: () => duringExtra,
 };
-module.activate();
+await module.activate();
+assert.equal(globalThis.MagicGirlDesignAssistantBootstrap?.phase, 'ready');
 await module.getController().warmup();
 const request = { prompt: [{ role: 'user', content: 'update' }] };
 duringExtra = true;
@@ -81,7 +86,9 @@ await events.emit('generate_after_data', request);
 assert.ok(request.prompt.some(message => String(message.content).includes('[MWG_DESIGN_CONTEXT/v1]')));
 module.disable();
 assert.equal(globalThis.MagicGirlDesignAssistant, undefined);
+assert.equal(globalThis.MagicGirlDesignAssistantBootstrap?.phase, 'disabled');
 delete globalThis.SillyTavern;
 delete globalThis.Mvu;
+delete globalThis.MagicGirlDesignAssistantBootstrap;
 
 console.log('Standalone SillyTavern extension package is complete, offline, and exposes its activation hook.');

@@ -109,6 +109,57 @@ button {
   text-shadow: none;
 }
 
+.tower-extension-check {
+  display: flex;
+  max-width: 920px;
+  margin: 0 auto 18px;
+  padding: 12px 14px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid rgba(183, 116, 143, 0.42);
+  border-radius: 13px;
+  background: rgba(255, 247, 250, 0.94);
+  box-shadow: 0 8px 22px rgba(104, 65, 83, 0.1);
+}
+
+.tower-extension-check[hidden] {
+  display: none;
+}
+
+.tower-extension-check div {
+  display: grid;
+  gap: 2px;
+}
+
+.tower-extension-check strong {
+  color: #87445f;
+  font-family: var(--mwg-font-display);
+  font-weight: 400;
+}
+
+.tower-extension-check span {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.tower-extension-check button {
+  flex: 0 0 auto;
+  min-height: 38px;
+  padding: 0 16px;
+  border: 1px solid #a95377;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #b66083, #914262);
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(127, 56, 85, 0.18);
+}
+
+.tower-extension-check button:disabled {
+  opacity: 0.68;
+  cursor: wait;
+}
+
 .creator-form {
   position: relative;
   z-index: 1;
@@ -483,6 +534,15 @@ textarea:focus {
 
   .creator-form {
     padding: 17px 14px 24px;
+  }
+
+  .tower-extension-check {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .tower-extension-check button {
+    width: 100%;
   }
 
   .form-heading,

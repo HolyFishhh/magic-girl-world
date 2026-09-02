@@ -17,8 +17,70 @@ export interface EnemyActionSelectionResult {
   mode: string;
 }
 
+export const CANONICAL_ENEMY_ACTION_MODES = new Set([
+  'random',
+  'probability',
+  'sequence',
+  'sequence_then_probability',
+]);
+
+const ENEMY_ACTION_MODE_ALIASES: Readonly<Record<string, string>> = {
+  weighted: 'probability',
+  random_weighted: 'probability',
+  sequence_loop: 'sequence',
+  sequential: 'sequence',
+  round_robin: 'sequence',
+};
+
 function isRecord(value: unknown): value is Record<string, any> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Canonicalize common model-authored aliases and fill mechanically obvious
+ * action configuration from the action list. This keeps generated enemies
+ * executable without changing their authored actions or weights.
+ */
+export function normalizeEnemyActionSelectionInput(enemy: any): {
+  actionMode: string;
+  actionConfig: Record<string, any>;
+} {
+  const actions: EnemyActionLike[] = Array.isArray(enemy?.actions)
+    ? enemy.actions.filter((action: unknown): action is EnemyActionLike =>
+        isRecord(action) && typeof action.name === 'string' && action.name.trim().length > 0,
+      )
+    : [];
+  const rawMode = String(enemy?.actionMode ?? enemy?.action_mode ?? 'random').trim() || 'random';
+  const actionMode = ENEMY_ACTION_MODE_ALIASES[rawMode] || rawMode;
+  const sourceConfig = isRecord(enemy?.actionConfig)
+    ? enemy.actionConfig
+    : isRecord(enemy?.action_config)
+      ? enemy.action_config
+      : {};
+  if (!CANONICAL_ENEMY_ACTION_MODES.has(actionMode) || actionMode === 'random') {
+    return { actionMode, actionConfig: actionMode === 'random' ? {} : sourceConfig };
+  }
+
+  const names = actions.map(action => action.name);
+  const derivedProbability = Object.fromEntries(
+    actions.map(action => [
+      action.name,
+      typeof action.weight === 'number' && Number.isFinite(action.weight) && action.weight > 0 ? action.weight : 1,
+    ]),
+  );
+  const configuredProbability = isRecord(sourceConfig.probability)
+    ? sourceConfig.probability
+    : Object.keys(sourceConfig).some(key => typeof sourceConfig[key] === 'number')
+      ? sourceConfig
+      : null;
+  const probability = configuredProbability || derivedProbability;
+  const sequence = Array.isArray(sourceConfig.sequence) && sourceConfig.sequence.length > 0
+    ? sourceConfig.sequence
+    : names;
+
+  if (actionMode === 'probability') return { actionMode, actionConfig: { probability } };
+  if (actionMode === 'sequence') return { actionMode, actionConfig: { sequence } };
+  return { actionMode, actionConfig: { sequence, probability } };
 }
 
 function pickRandom<T>(values: T[], random: () => number): T | null {
@@ -55,8 +117,9 @@ export function selectEnemyAction(enemy: any, random: () => number): EnemyAction
         (action: unknown): action is EnemyActionLike => isRecord(action) && typeof action.name === 'string',
       )
     : [];
-  const mode = String(enemy?.actionMode || 'random');
-  const config = enemy?.actionConfig || {};
+  const normalized = normalizeEnemyActionSelectionInput(enemy);
+  const mode = normalized.actionMode;
+  const config = normalized.actionConfig;
   const modeConfig = isRecord(config) && isRecord(config[mode]) ? config[mode] : config;
   const state: EnemyActionSelectionState = {
     sequenceIndex: Number.isInteger(enemy?._sequenceIndex) ? Math.max(0, enemy._sequenceIndex) : 0,

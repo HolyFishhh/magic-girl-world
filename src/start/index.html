@@ -13,6 +13,14 @@
         <p class="direct-start-note">你也可以通过直接描述一段内容来开始游戏，体验卡牌战斗内容。</p>
       </header>
 
+      <aside class="tower-extension-check" data-tower-extension-check hidden aria-live="polite">
+        <div>
+          <strong data-tower-extension-title>爬塔组件尚未安装</strong>
+          <span data-tower-extension-detail>剧情模式可以直接游玩；选择爬塔模式前请先安装角色卡专属组件。</span>
+        </div>
+        <button type="button" data-action="install-tower-extension">快捷安装</button>
+      </aside>
+
       <section class="creator-form" aria-label="剧情模式角色创建">
         <div class="form-heading">
           <div>
@@ -29,9 +37,9 @@
               <strong>剧情模式</strong>
               <span>自由输入，故事会根据你的选择自然发展。</span>
             </button>
-            <button class="mode-card" type="button" data-mode="expedition" role="radio" aria-checked="false" disabled>
+            <button class="mode-card" type="button" data-mode="tower" role="radio" aria-checked="false">
               <strong>爬塔模式</strong>
-              <span>暂未开放，之后会加入路线、营火和 Boss 玩法。</span>
+              <span>一次选择后不可更改，沿随机路线连续挑战战斗、事件、营火、宝箱与 Boss。</span>
             </button>
           </div>
         </section>
@@ -89,37 +97,92 @@
             >
               <strong>魔法少女</strong><span>契约、变身、同伴与守护日常的奇幻冒险。</span>
             </button>
-            <button class="preset-card" type="button" data-preset-field="world" data-value="故事发生在熟悉的现代都市，日常生活、社会关系与隐藏事件并行，超自然要素是否存在由剧情自然展开。">
+            <button
+              class="preset-card"
+              type="button"
+              data-preset-field="world"
+              data-value="故事发生在熟悉的现代都市，日常生活、社会关系与隐藏事件并行，超自然要素是否存在由剧情自然展开。"
+            >
               <strong>现代都市</strong><span>从工作、校园和街区日常中展开自由故事。</span>
             </button>
-            <button class="preset-card" type="button" data-preset-field="world" data-value="修行者在宗门、城镇与秘境之间求道成长，功法、境界、法宝和势力关系随经历逐步建立。">
+            <button
+              class="preset-card"
+              type="button"
+              data-preset-field="world"
+              data-value="修行者在宗门、城镇与秘境之间求道成长，功法、境界、法宝和势力关系随经历逐步建立。"
+            >
               <strong>修仙世界</strong><span>宗门修行、秘境探索、法宝机缘与境界成长。</span>
             </button>
-            <button class="preset-card" type="button" data-preset-field="world" data-value="蒸汽机械、齿轮技术与神秘力量共同推动文明，玩家可在工业都市、空艇航线和未知遗迹间冒险。">
+            <button
+              class="preset-card"
+              type="button"
+              data-preset-field="world"
+              data-value="蒸汽机械、齿轮技术与神秘力量共同推动文明，玩家可在工业都市、空艇航线和未知遗迹间冒险。"
+            >
               <strong>蒸汽朋克</strong><span>机械都市、空艇、发明与工业时代的秘密。</span>
             </button>
-            <button class="preset-card" type="button" data-preset-field="world" data-value="剑与魔法构成广阔大陆，冒险者、王国、种族与遗迹共同形成可以自由探索的旅程。">
+            <button
+              class="preset-card"
+              type="button"
+              data-preset-field="world"
+              data-value="剑与魔法构成广阔大陆，冒险者、王国、种族与遗迹共同形成可以自由探索的旅程。"
+            >
               <strong>西幻冒险</strong><span>剑与魔法、冒险者、公会、王国与远古遗迹。</span>
             </button>
-            <button class="preset-card" type="button" data-preset-field="world" data-value="校园生活中存在异能、社团与秘密组织，日常关系和能力事件会共同影响角色成长。">
+            <button
+              class="preset-card"
+              type="button"
+              data-preset-field="world"
+              data-value="校园生活中存在异能、社团与秘密组织，日常关系和能力事件会共同影响角色成长。"
+            >
               <strong>学园异能</strong><span>校园日常、社团关系、能力成长与秘密事件。</span>
             </button>
-            <button class="preset-card" type="button" data-preset-field="world" data-value="熟悉的城市里流传着真假难辨的异常传闻，调查、规则与人物执念会逐步揭开怪谈背后的真相。">
+            <button
+              class="preset-card"
+              type="button"
+              data-preset-field="world"
+              data-value="熟悉的城市里流传着真假难辨的异常传闻，调查、规则与人物执念会逐步揭开怪谈背后的真相。"
+            >
               <strong>都市怪谈</strong><span>异常传闻、悬疑调查、规则谜题与都市生活。</span>
             </button>
-            <button class="preset-card" type="button" data-preset-field="world" data-value="人类踏入星际时代，在飞船、殖民地、人工智能与外星文明之间探索未知并决定未来。">
+            <button
+              class="preset-card"
+              type="button"
+              data-preset-field="world"
+              data-value="人类踏入星际时代，在飞船、殖民地、人工智能与外星文明之间探索未知并决定未来。"
+            >
               <strong>科幻星际</strong><span>星舰航行、未知文明、科技抉择与宇宙探索。</span>
             </button>
-            <button class="preset-card" type="button" data-preset-field="world" data-value="灾变后的世界资源有限、秩序重组，玩家需要在生存、聚落关系与未知威胁之间寻找新的道路。">
+            <button
+              class="preset-card"
+              type="button"
+              data-preset-field="world"
+              data-value="灾变后的世界资源有限、秩序重组，玩家需要在生存、聚落关系与未知威胁之间寻找新的道路。"
+            >
               <strong>末日废土</strong><span>灾后生存、资源探索、聚落抉择与重建希望。</span>
             </button>
-            <button class="preset-card" type="button" data-preset-field="world" data-value="东方传说与人间烟火交织，妖灵、术法、江湖和古老因缘在山河城镇间延续。">
+            <button
+              class="preset-card"
+              type="button"
+              data-preset-field="world"
+              data-value="东方传说与人间烟火交织，妖灵、术法、江湖和古老因缘在山河城镇间延续。"
+            >
               <strong>东方奇幻</strong><span>妖灵术法、江湖山河、古老传说与人间烟火。</span>
             </button>
-            <button class="preset-card" type="button" data-preset-field="world" data-value="拥有特殊能力的人活跃在公众视野与幕后阴影中，英雄、反派、组织和社会舆论共同塑造世界。">
+            <button
+              class="preset-card"
+              type="button"
+              data-preset-field="world"
+              data-value="拥有特殊能力的人活跃在公众视野与幕后阴影中，英雄、反派、组织和社会舆论共同塑造世界。"
+            >
               <strong>超级英雄</strong><span>能力者、英雄身份、城市危机与公众选择。</span>
             </button>
-            <button class="preset-card" type="button" data-preset-field="world" data-value="玩家会进入规则各异的独立场景完成任务，在一次次生存与选择中积累能力并接近世界真相。">
+            <button
+              class="preset-card"
+              type="button"
+              data-preset-field="world"
+              data-value="玩家会进入规则各异的独立场景完成任务，在一次次生存与选择中积累能力并接近世界真相。"
+            >
               <strong>无限副本</strong><span>多样场景、明确任务、生存挑战与长期成长。</span>
             </button>
           </div>
@@ -149,37 +212,92 @@
             >
               <strong>均衡构筑</strong><span>攻防与资源兼顾，适合自由成长和初次体验。</span>
             </button>
-            <button class="preset-card" type="button" data-preset-field="card" data-value="以连续出牌、攻击次数或出牌顺序积累优势，并由关键卡牌收束本回合的连锁收益。">
+            <button
+              class="preset-card"
+              type="button"
+              data-preset-field="card"
+              data-value="以连续出牌、攻击次数或出牌顺序积累优势，并由关键卡牌收束本回合的连锁收益。"
+            >
               <strong>连击构筑</strong><span>连续出牌累积优势，重视牌序与回合爆发。</span>
             </button>
-            <button class="preset-card" type="button" data-preset-field="card" data-value="通过可叠加且持续生效的状态逐步建立优势，状态的名称、性质与结算方式完全由当前剧情决定。">
+            <button
+              class="preset-card"
+              type="button"
+              data-preset-field="card"
+              data-value="通过可叠加且持续生效的状态逐步建立优势，状态的名称、性质与结算方式完全由当前剧情决定。"
+            >
               <strong>状态持续</strong><span>叠层、持续作用与清算形成逐步增强的节奏。</span>
             </button>
-            <button class="preset-card" type="button" data-preset-field="card" data-value="主动弃置手牌来触发效果、整理牌序或换取资源，使不需要的牌也能成为构筑的一部分。">
+            <button
+              class="preset-card"
+              type="button"
+              data-preset-field="card"
+              data-value="主动弃置手牌来触发效果、整理牌序或换取资源，使不需要的牌也能成为构筑的一部分。"
+            >
               <strong>弃牌循环</strong><span>主动处理手牌，并从弃牌行为中获得收益。</span>
             </button>
-            <button class="preset-card" type="button" data-preset-field="card" data-value="让部分卡牌使用后离开本场循环，以此换取即时强度、牌库精简或特殊触发。">
+            <button
+              class="preset-card"
+              type="button"
+              data-preset-field="card"
+              data-value="让部分卡牌使用后离开本场循环，以此换取即时强度、牌库精简或特殊触发。"
+            >
               <strong>消耗精简</strong><span>用一次性卡牌换取强力效果和更稳定的牌库。</span>
             </button>
-            <button class="preset-card" type="button" data-preset-field="card" data-value="把防御、承受攻击或保留格挡转化为反击机会，在稳住战线的同时逐步压制敌人。">
+            <button
+              class="preset-card"
+              type="button"
+              data-preset-field="card"
+              data-value="把防御、承受攻击或保留格挡转化为反击机会，在稳住战线的同时逐步压制敌人。"
+            >
               <strong>格挡反击</strong><span>防守也能形成威胁，适合稳健而主动的打法。</span>
             </button>
-            <button class="preset-card" type="button" data-preset-field="card" data-value="围绕能量的获得、保存、转换与集中使用构筑，在合适时机打出高投入的爆发回合。">
+            <button
+              class="preset-card"
+              type="button"
+              data-preset-field="card"
+              data-value="围绕能量的获得、保存、转换与集中使用构筑，在合适时机打出高投入的爆发回合。"
+            >
               <strong>能量爆发</strong><span>积累并调度能量，用高投入换取关键回合。</span>
             </button>
-            <button class="preset-card" type="button" data-preset-field="card" data-value="通过生成临时卡牌、召唤物或协同单位扩展每回合的选择，具体形态由角色与世界观决定。">
+            <button
+              class="preset-card"
+              type="button"
+              data-preset-field="card"
+              data-value="通过生成临时卡牌、召唤物或协同单位扩展每回合的选择，具体形态由角色与世界观决定。"
+            >
               <strong>召唤生成</strong><span>动态创造战斗资源，让牌组随局势不断变化。</span>
             </button>
-            <button class="preset-card" type="button" data-preset-field="card" data-value="通过抽牌、检索、回收、预见或调整牌序提高稳定性，更准确地组合想要的行动。">
+            <button
+              class="preset-card"
+              type="button"
+              data-preset-field="card"
+              data-value="通过抽牌、检索、回收、预见或调整牌序提高稳定性，更准确地组合想要的行动。"
+            >
               <strong>牌库操控</strong><span>规划抽牌和牌序，以稳定循环完成组合。</span>
             </button>
-            <button class="preset-card" type="button" data-preset-field="card" data-value="把生命或其他自身资源作为可管理的代价，并通过回复、转换或收益放大形成循环。">
+            <button
+              class="preset-card"
+              type="button"
+              data-preset-field="card"
+              data-value="把生命或其他自身资源作为可管理的代价，并通过回复、转换或收益放大形成循环。"
+            >
               <strong>生命交换</strong><span>主动承担代价，再把风险转化为更大收益。</span>
             </button>
-            <button class="preset-card" type="button" data-preset-field="card" data-value="使用持续能力逐步建立战斗引擎，让后续回合随着已部署效果不断增强。">
+            <button
+              class="preset-card"
+              type="button"
+              data-preset-field="card"
+              data-value="使用持续能力逐步建立战斗引擎，让后续回合随着已部署效果不断增强。"
+            >
               <strong>能力成长</strong><span>先建立长期效果，再让整套构筑逐步运转。</span>
             </button>
-            <button class="preset-card" type="button" data-preset-field="card" data-value="选择带有明确代价或不稳定性的高收益行动，在局势失控前完成爆发或建立补偿手段。">
+            <button
+              class="preset-card"
+              type="button"
+              data-preset-field="card"
+              data-value="选择带有明确代价或不稳定性的高收益行动，在局势失控前完成爆发或建立补偿手段。"
+            >
               <strong>风险收益</strong><span>接受副作用与不确定性，换取更高的上限。</span>
             </button>
           </div>
@@ -193,7 +311,35 @@
               placeholder="想玩的主题、流派、战斗节奏、希望保留或避免的机制……不用写公式。"
             ></textarea>
           </label>
-          <p class="helper-text">这里描述“想玩什么”，不需要写 JSON、数值或公式；预设只是方向，不绑定元素、状态名或固定伤害类型，具体卡牌由剧情按角色经历生成。</p>
+          <p class="helper-text">
+            这里描述“想玩什么”，不需要写
+            JSON、数值或公式；预设只是方向，不绑定元素、状态名或固定伤害类型，具体卡牌由剧情按角色经历生成。
+          </p>
+        </section>
+
+        <section
+          class="setup-section tower-only-section"
+          data-mode-only="tower"
+          aria-labelledby="tower-fields-title"
+          aria-hidden="true"
+          hidden
+        >
+          <div class="section-heading">
+            <h3 id="tower-fields-title"><span class="section-icon">🗺️</span> 本次爬塔</h3>
+            <span class="section-note">只影响这一局的内容倾向，不会改变程序生成的地图规则</span>
+          </div>
+          <label class="input-group large-input">
+            <span>额外要求 <em>可选</em></span>
+            <textarea
+              data-config-field="towerRequirements"
+              rows="4"
+              maxlength="900"
+              placeholder="想遇到的剧情气氛、敌人风格、事件方向，或希望避免的内容……"
+            ></textarea>
+          </label>
+          <p class="helper-text tower-difficulty-note">
+            敌人强度由右上角悬浮设置中的难度控制；开始后本存档的游戏模式将被锁定，不能在剧情模式与爬塔模式之间切换。
+          </p>
         </section>
 
         <section class="preview-section" aria-label="创建预览">

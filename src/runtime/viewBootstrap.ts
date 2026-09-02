@@ -11,11 +11,18 @@ type SharedRuntime = Readonly<{
   spec: 'mwg.tavern-runtime/v1';
   version: string;
   getViewAsset(view: RuntimeViewName): RuntimeViewAsset;
+  getMessageVariables?: (messageId?: number | 'latest') => Record<string, any>;
 }>;
 
 declare const __MWG_VIEW_NAME__: RuntimeViewName;
 declare const __MWG_CARD_VERSION__: string;
 declare function waitGlobalInitialized<T>(global: string): Promise<T>;
+
+function isolatedRuntimeScript(source: string): string {
+  // Keep the first mounted bundle out of the iframe's global lexical scope so
+  // a later in-place common/fish switch cannot collide with minified names.
+  return `(() => {\n${source}\n})();`;
+}
 
 (() => {
   const view = __MWG_VIEW_NAME__;
@@ -61,9 +68,6 @@ declare function waitGlobalInitialized<T>(global: string): Promise<T>;
     return;
   }
 
-  if (document.documentElement.dataset.mwgMountedView === view) return;
-  document.documentElement.dataset.mwgMountedView = view;
-
   const fail = (error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     document.body.replaceChildren();
@@ -93,22 +97,51 @@ declare function waitGlobalInitialized<T>(global: string): Promise<T>;
       }
       (globalThis as any).MagicGirlWorld = api;
 
-      const asset = api.getViewAsset(view);
-      if (!asset?.bodyHtml || !asset?.styles || !asset?.script) throw new Error(`视图资源不完整: ${view}`);
+      let resolvedView = view;
+      if (view === 'fish' && typeof api.getMessageVariables === 'function') {
+        try {
+          const variables = api.getMessageVariables(currentMessageId() ?? 'latest');
+          const stat = variables && variables.stat_data;
+          const run = stat && stat.run;
+          const node = run && run.currentNode;
+          const towerLocked =
+            !!stat &&
+            (stat.game_mode === 'tower' ||
+              (stat.game_mode_lock && stat.game_mode_lock.mode === 'tower'));
+          const activeTowerBattle =
+            !!run &&
+            run.phase === 'in_node' &&
+            !!node &&
+            ['battle', 'elite', 'boss'].indexOf(node.kind) !== -1;
+          // The latest message keeps its original BATTLE_START marker after a
+          // same-floor tower fight. On refresh the authoritative run, not that
+          // stale marker, decides whether to restore combat or the route map.
+          if (towerLocked && run && !activeTowerBattle) resolvedView = 'common';
+        } catch {
+          // MVU readiness below still owns user-facing failures. Falling back
+          // to the marker-selected view preserves story-mode compatibility.
+        }
+      }
+      if (document.documentElement.dataset.mwgMountedView === resolvedView) return;
+      document.documentElement.dataset.mwgMountedView = resolvedView;
+
+      const asset = api.getViewAsset(resolvedView);
+      if (!asset?.bodyHtml || !asset?.styles || !asset?.script)
+        throw new Error(`视图资源不完整: ${resolvedView}`);
 
       document.title = asset.title;
       const style = document.createElement('style');
-      style.dataset.mwgRuntimeStyle = view;
+      style.dataset.mwgRuntimeStyle = resolvedView;
       style.textContent = asset.styles;
       document.head.appendChild(style);
 
       document.body.innerHTML = asset.bodyHtml;
 
       document.documentElement.dataset.mwgRuntime = expectedVersion;
-      document.documentElement.dataset.mwgView = view;
+      document.documentElement.dataset.mwgView = resolvedView;
       const script = document.createElement('script');
-      script.dataset.mwgRuntimeScript = view;
-      script.textContent = asset.script;
+      script.dataset.mwgRuntimeScript = resolvedView;
+      script.textContent = isolatedRuntimeScript(asset.script);
       document.body.appendChild(script);
     })
     .catch(fail);

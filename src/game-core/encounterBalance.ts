@@ -50,6 +50,11 @@ export interface EncounterCalibrationResult {
   warnings: string[];
 }
 
+export interface EncounterCalibrationLoopOptions {
+  /** Extra passes after the first binary-search calibration. */
+  maxCorrectionPasses?: number;
+}
+
 const HORIZONS = [1, 2, 3, 5, 8] as const;
 
 function round(value: number, digits = 2): number {
@@ -190,6 +195,13 @@ const MODERN_AMOUNT_OPERATIONS = new Set([
   'damage_summons', 'heal_summons', 'gain_summon_resource',
 ]);
 
+function integerScaledAmount(value: number, factor: number, minimum = 0): number {
+  const scaled = Math.round(value * factor);
+  if (value > 0) return Math.max(Math.max(1, minimum), scaled);
+  if (value < 0) return Math.min(-1, scaled);
+  return 0;
+}
+
 function scaleEffectValue(value: unknown, factor: number, path: string, changed: string[]): unknown {
   if (Array.isArray(value)) return value.map((entry, index) => scaleEffectValue(entry, factor, `${path}[${index}]`, changed));
   if (!isRecord(value)) return value;
@@ -198,7 +210,7 @@ function scaleEffectValue(value: unknown, factor: number, path: string, changed:
     const scalable = DIRECT_SCALABLE_KEYS.has(key)
       || (key === 'amount' && typeof value.op === 'string' && MODERN_AMOUNT_OPERATIONS.has(value.op));
     if (scalable && typeof entry === 'number' && Number.isFinite(entry) && entry !== 0) {
-      const next = round(Math.max(key === 'stacks' ? 1 : 0, entry * factor), 1);
+      const next = integerScaledAmount(entry, factor, key === 'stacks' ? 1 : 0);
       result[key] = next;
       if (next !== entry) changed.push(`${path}.${key}`);
       continue;
@@ -215,8 +227,11 @@ function scaleEnemy(enemy: ContentDefinition, factor: number, path: string, chan
   const maxHp = Math.max(1, Number(result.max_hp) || Number(result.hp) || 1);
   const hp = clamp(Number(result.hp ?? maxHp), 0, maxHp);
   const hpRatio = hp / maxHp;
-  const nextMaxHp = round(Math.max(1, maxHp * factor), 1);
-  const nextHp = round(nextMaxHp * hpRatio, 1);
+  const nextMaxHp = Math.max(1, Math.round(maxHp * factor));
+  // Current HP carries story-authored pre-battle damage.  Keeping runtime precision
+  // avoids turning an exact ratio such as 45/60 into 68/90 during scaling,
+  // while staying inside the public battle-number precision contract.
+  const nextHp = hp <= 0 ? 0 : Math.max(0.01, round(nextMaxHp * hpRatio, 2));
   if (nextMaxHp !== maxHp) changed.push(`${path}.max_hp`);
   if (nextHp !== hp) changed.push(`${path}.hp`);
   result.max_hp = nextMaxHp;
@@ -282,6 +297,12 @@ export function calibrateEncounterNumbers(input: {
   currentLust?: number;
   maxLust?: number;
   seeds?: number;
+  /**
+   * Keep low-confidence calibration near the authored numbers. Story-mode
+   * advisory balancing leaves this enabled; tower mode disables it because
+   * the requested difficulty ratio is authoritative for the run.
+   */
+  lowConfidenceScaleClamp?: boolean;
 }): EncounterCalibrationResult {
   const requestedRatio = ratio(input.requestedRatio);
   const maxLust = Math.max(1, Number(input.maxLust) || 100);
@@ -309,7 +330,8 @@ export function calibrateEncounterNumbers(input: {
   let effectiveRatio = envelope.effectiveRatio;
   let appliedScale = frontierScale * effectiveRatio / 100;
   const warnings: string[] = [];
-  if (input.profile.confidence < 0.55) {
+  const clampLowConfidenceScale = input.lowConfidenceScaleClamp !== false;
+  if (input.profile.confidence < 0.55 && clampLowConfidenceScale) {
     appliedScale = clamp(appliedScale, 0.72, 1.28);
     warnings.push('模拟覆盖率较低，自动校准已限制在原始数值的 72%~128%，其余只提供软提示。');
   }
@@ -327,7 +349,9 @@ export function calibrateEncounterNumbers(input: {
   while (!winnable(currentSimulation) && effectiveRatio > 10) {
     effectiveRatio = Math.max(10, effectiveRatio - 5);
     appliedScale = frontierScale * effectiveRatio / 100;
-    if (input.profile.confidence < 0.55) appliedScale = clamp(appliedScale, 0.72, 1.28);
+    if (input.profile.confidence < 0.55 && clampLowConfidenceScale) {
+      appliedScale = clamp(appliedScale, 0.72, 1.28);
+    }
     calibrated = scaleEncounterNumbers(input.pack, appliedScale);
     fullSimulation = simulate(
       calibrated.pack,
@@ -359,4 +383,44 @@ export function calibrateEncounterNumbers(input: {
     confidence: input.profile.confidence,
     warnings,
   };
+}
+
+/**
+ * Re-run the shared numeric calibrator a bounded number of times when a
+ * low-confidence clamp leaves the current-resource simulation unwinnable.
+ * Every pass only scales authored numeric fields; names, descriptions,
+ * selectors, hit counts and action cadence remain untouched.
+ */
+export function calibrateEncounterUntilWinnable(
+  input: Parameters<typeof calibrateEncounterNumbers>[0],
+  options: EncounterCalibrationLoopOptions = {},
+): EncounterCalibrationResult {
+  const maxCorrectionPasses = Math.max(0, Math.min(4, Math.floor(options.maxCorrectionPasses ?? 4)));
+  let result = calibrateEncounterNumbers(input);
+  let appliedScale = result.appliedScale;
+  const changedPaths = new Set(result.changedPaths);
+  const warnings = new Set(result.warnings);
+  let totalIterations = result.iterations;
+
+  for (let pass = 0; !result.winnableAtCurrentResources && pass < maxCorrectionPasses; pass += 1) {
+    const next = calibrateEncounterNumbers({
+      ...input,
+      pack: result.calibratedPack,
+      requestedRatio: Math.min(input.requestedRatio, result.effectiveRatio),
+    });
+    totalIterations += next.iterations;
+    if (next.changedPaths.length === 0 || Math.abs(next.appliedScale - 1) < 0.01) break;
+    appliedScale *= next.appliedScale;
+    next.changedPaths.forEach(path => changedPaths.add(path));
+    next.warnings.forEach(warning => warnings.add(warning));
+    result = {
+      ...next,
+      requestedRatio: Number(input.requestedRatio),
+      appliedScale: round(appliedScale, 3),
+      changedPaths: [...changedPaths],
+      iterations: totalIterations,
+      warnings: [...warnings],
+    };
+  }
+  return result;
 }

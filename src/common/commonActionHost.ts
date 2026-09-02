@@ -1,4 +1,4 @@
-import { updateCurrentMessageVariablesWith } from '../runtime/messageVariables';
+import { updateCurrentMessageVariablesWith, updateLatestMessageVariablesWith } from '../runtime/messageVariables';
 import {
   TavernContinuationError,
   TavernContinuationHost,
@@ -51,6 +51,15 @@ export class TavernCommonActionHost {
 
   public updateVariablesWith(updater: CommonVariablesUpdater): Promise<Record<string, any>> {
     return Promise.resolve(this.ports.updateVariablesWith(updater));
+  }
+
+  /**
+   * A deliberately narrow escape hatch for an already-rendered reward panel.
+   * The caller owns the reward-pool fingerprint check; every other common UI
+   * action continues to write only to its current message.
+   */
+  public updateLatestVariablesWith(updater: CommonVariablesUpdater): Promise<Record<string, any>> {
+    return Promise.resolve(updateLatestMessageVariablesWith(updater));
   }
 
   public async continueWithPrompt<TPrepared = void>(plan: CommonContinuationPlan<TPrepared>): Promise<void> {

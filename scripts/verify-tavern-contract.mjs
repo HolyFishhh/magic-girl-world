@@ -92,6 +92,14 @@ await messageModule.ensureMvuRuntimeReady();
 assert.equal(pendingWorldbookErrors, 0, 'battle startup must retry a transient missing-worldbook error');
 assert.equal(pendingBattleReads, 0, 'battle startup must retry while the current message battle floor is still pending');
 const stableGetVariables = globalThis.getVariables;
+let hostOnlyVariableReads = 0;
+globalThis.getVariables = () => {
+  hostOnlyVariableReads += 1;
+  return { stat_data: {} };
+};
+await messageModule.ensureMvuRuntimeReady({ mvuTimeoutMs: 200, requireBattleData: false });
+assert.equal(hostOnlyVariableReads, 0, 'first-message setup must not wait for battle data before it can request initialization');
+globalThis.getVariables = stableGetVariables;
 globalThis.getVariables = () => {
   throw new Error('Type mismatch: expected object schema but got any at path battle.enemy');
 };
@@ -172,7 +180,7 @@ assert.ok(new RegExp(startExported.findRegex).test('[开始游戏]'));
 assert.ok(startExported.replaceString.startsWith('```\n<body>'));
 assert.ok(startExported.replaceString.endsWith('</body>\n```'));
 assert.ok(
-  startExported.replaceString.length < 10000,
+  startExported.replaceString.length < 6000,
   'start interface must remain lightweight enough for Tavern Helper',
 );
 assert.ok(!startExported.replaceString.includes('jQuery v3'), 'start interface must not bundle jQuery');
@@ -183,6 +191,13 @@ assert.deepEqual(updateExported.placement, [2]);
 assert.equal(updateExported.minDepth, 0);
 assert.equal(updateExported.maxDepth, 2);
 assert.ok(new RegExp(updateExported.findRegex).test('<UpdateVariable>_.set(\'status.time\', \'新时间\');</UpdateVariable>'));
+assert.equal(
+  new RegExp(updateExported.findRegex).test(
+    '<UpdateVariable>_.set(\'status.time\', \'新时间\');</UpdateVariable>\n<StatusPlaceHolderImpl/>',
+  ),
+  false,
+  'the standalone update view must not create an adjacent fenced iframe before the common view',
+);
 assert.ok(updateExported.replaceString.startsWith('```\n<body>'));
 assert.ok(updateExported.replaceString.endsWith('</body>\n```'));
 assert.ok(/(?:const|var) view = "update"/.test(updateExported.replaceString));
@@ -195,8 +210,13 @@ const ordinaryResponse = 'normal story\n<StatusPlaceHolderImpl/>';
 const battleResponse = 'battle lead-in\n<UpdateVariable></UpdateVariable>\n<BATTLE_START>';
 const mvuPlaceholder = '<StatusPlaceHolderImpl/>';
 const displayOrdinaryResponse = 'normal story\n<StatusPlaceHolderImpl/>';
+const displayOrdinaryUpdateResponse =
+  "normal story\n<UpdateVariable>_.set('status.time', '新时间');</UpdateVariable>\n<StatusPlaceHolderImpl/>";
 const displayBattleResponse = 'battle lead-in\n<BATTLE_START>\n<StatusPlaceHolderImpl/>';
 assert.ok(new RegExp(commonExported.findRegex).test(ordinaryResponse));
+const displayOrdinaryUpdateMatch = new RegExp(commonExported.findRegex).exec(displayOrdinaryUpdateResponse);
+assert.ok(displayOrdinaryUpdateMatch?.[0].includes('<UpdateVariable>'));
+assert.ok(displayOrdinaryUpdateMatch?.[0].includes('<StatusPlaceHolderImpl/>'));
 assert.ok(
   new RegExp(commonExported.findRegex).test(`normal story\n${mvuPlaceholder}`),
   'common regex must tolerate the display placeholder appended by MUV',
@@ -209,13 +229,20 @@ assert.ok(
   new RegExp(startExported.findRegex).test('[开始游戏]\n<StatusPlaceHolderImpl/>'),
   'start regex must consume the MUV placeholder so common status does not render a second iframe',
 );
+assert.equal(
+  new RegExp(startExported.findRegex).test(
+    '开场剧情\n<CHARACTER_INIT_PENDING>\n<UpdateVariable>_.set(\'status.time\', \'新时间\');</UpdateVariable>\n<StatusPlaceHolderImpl/>',
+  ),
+  false,
+  'the initialization handoff on a generated assistant floor must never mount the start view',
+);
 assert.ok(!new RegExp(commonExported.findRegex).test('plain story without an MUV protocol marker'));
 assert.ok(!new RegExp(commonExported.findRegex).test(battleResponse), 'common status bar must not precede battle UI');
 assert.ok(
   commonExported.replaceString.startsWith('```\n<body>'),
   'common interface must replace only protocol markers with a lightweight shell',
 );
-assert.ok(commonExported.replaceString.length < 10000, 'common regex must contain only a lightweight runtime shell');
+assert.ok(commonExported.replaceString.length < 6000, 'common regex must contain only a lightweight runtime shell');
 assert.ok(commonExported.replaceString.includes("waitGlobalInitialized('MagicGirlWorld')"));
 assert.equal(commonExported.replaceString.match(/\$(?:\d+|<[^>]+>)/g), null);
 for (const payload of [startExported, updateExported, commonExported, exported]) {
@@ -228,6 +255,34 @@ const renderedCommonMessage = displayOrdinaryResponse.replace(
 );
 assert.ok(renderedCommonMessage.startsWith('normal story\n```\n<body>'));
 assert.ok(!renderedCommonMessage.includes('<StatusPlaceHolderImpl/>'));
+const renderedCommonUpdateMessage = displayOrdinaryUpdateResponse.replace(
+  new RegExp(commonExported.findRegex),
+  commonExported.replaceString,
+);
+assert.equal(
+  (renderedCommonUpdateMessage.match(/```/g) || []).length,
+  2,
+  'a story update must render exactly one fenced interface document',
+);
+assert.ok(!renderedCommonUpdateMessage.includes('<UpdateVariable>'));
+assert.ok(!renderedCommonUpdateMessage.includes('<StatusPlaceHolderImpl/>'));
+const firstGeneratedTowerResponse =
+  '简短开场剧情\n<CHARACTER_INIT_PENDING>\n<UpdateVariable>_.set(\'battle.cards\', []);</UpdateVariable>\n<StatusPlaceHolderImpl/>';
+let renderedFirstGeneratedTowerResponse = firstGeneratedTowerResponse;
+for (const payload of [startExported, updateExported, commonExported, exported]) {
+  renderedFirstGeneratedTowerResponse = renderedFirstGeneratedTowerResponse.replace(
+    new RegExp(payload.findRegex),
+    payload.replaceString,
+  );
+}
+assert.equal(
+  (renderedFirstGeneratedTowerResponse.match(/```/g) || []).length,
+  2,
+  'the first generated tower response must contain exactly one fenced interface document',
+);
+assert.match(renderedFirstGeneratedTowerResponse, /(?:const|var) view = "common"/);
+assert.doesNotMatch(renderedFirstGeneratedTowerResponse, /(?:const|var) view = "start"/);
+assert.doesNotMatch(renderedFirstGeneratedTowerResponse, /CHARACTER_INIT_PENDING|StatusPlaceHolderImpl|UpdateVariable/);
 assert.ok(!commonExported.replaceString.includes('class="story-text"'), 'common iframe must not wrap story text');
 assert.ok(
   !commonExported.replaceString.includes('tab-navigation'),
@@ -242,8 +297,8 @@ assert.equal(exported.promptOnly, false);
 assert.ok(new RegExp(exported.findRegex).test(battleResponse));
 assert.equal(
   new RegExp(exported.findRegex).exec(battleResponse)?.[0].includes('<UpdateVariable>'),
-  false,
-  'battle regex must leave UpdateVariable for the independent update view',
+  true,
+  'battle regex must consume UpdateVariable together with the battle marker to avoid adjacent fenced iframes',
 );
 assert.ok(
   new RegExp(exported.findRegex).test(`${battleResponse}\n${mvuPlaceholder}`),
@@ -260,7 +315,7 @@ assert.equal(displayBattleMatch?.length, 1, 'battle regex must not transport mes
 assert.ok(!new RegExp(exported.findRegex).test(ordinaryResponse));
 assert.ok(exported.replaceString.startsWith('```\n<body>'));
 assert.ok(exported.replaceString.endsWith('</body>\n```'));
-assert.ok(exported.replaceString.length < 10000, 'battle regex must contain only a lightweight runtime shell');
+assert.ok(exported.replaceString.length < 6000, 'battle regex must contain only a lightweight runtime shell');
 assert.ok(exported.replaceString.includes("waitGlobalInitialized('MagicGirlWorld')"));
 assert.ok(
   characterRuntimeSource.includes('__magic_girl_world') && characterRuntimeSource.includes('battle_session'),
@@ -405,7 +460,7 @@ assert.equal(patchedCard.data.name, releaseConfig.characterName);
 assert.equal(patchedCard.data.character_version, releaseConfig.cardVersion);
 assert.equal(
   patchedCard.data.creator_notes,
-  '剧情模式可直接开始游玩；角色卡已内置世界书、MVU 变量框架与交互界面。爬塔模式暂未开放。',
+  '剧情模式可直接开始游玩；角色卡已内置世界书、MVU 变量框架与交互界面。爬塔模式需要另行安装 0.2.0 或更高版本的“魔法少女世界设计辅助器”扩展。',
   'patched card creator notes must describe the embedded current architecture',
 );
 assert.equal(
@@ -436,6 +491,13 @@ assert.equal(patchedMvuScripts.length, 1, 'patched card must contain exactly one
 assert.ok(
   patchedMvuScripts[0].content.includes(`@${releaseConfig.mvuVersion}/`),
   'patched card must pin the configured MUV release',
+);
+assert.equal(patchedMvuScripts[0].button?.enabled, true, 'patched card must enable the MUV button group');
+assert.equal(
+  patchedMvuScripts[0].button?.buttons?.filter(button => button?.name === '重试额外模型解析' && button.visible === true)
+    .length,
+  1,
+  'patched card must expose the real extra-model retry action instead of only the local reparse action',
 );
 assert.ok(
   patchedMvuScripts[0].content.includes(`__MAGIC_GIRL_WORLD_MVU_LOADER__`) &&
@@ -542,6 +604,23 @@ for (const [entryName, sourceName] of Object.entries(worldbookManifest)) {
       );
     }
   }
+  if (!Object.hasOwn(worldbookEntryConfig[entryName]?.extensions || {}, 'group')) {
+    assert.equal(
+      matchingEntries[0].extensions?.group,
+      '',
+      `${entryName} must not inherit an unrelated world-book selection group`,
+    );
+    assert.equal(
+      matchingEntries[0].extensions?.group_override,
+      false,
+      `${entryName} must not inherit group override from the source-card template`,
+    );
+  }
+  assert.equal(
+    matchingEntries[0].insertion_order,
+    Object.keys(worldbookManifest).indexOf(entryName),
+    `${entryName} must follow manifest order`,
+  );
 }
 
 execFileSync(process.execPath, [fileURLToPath(import.meta.url), '--missing-host'], { stdio: 'inherit' });

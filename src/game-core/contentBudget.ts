@@ -1,4 +1,5 @@
 import type { BattleRouteContext } from './battleContract';
+import type { RunNodeKind } from './runState';
 import { normalizeRunAct, recommendRunNodePacing, type RunPacingContext } from './runPacing';
 
 export interface BattleRewardBudget {
@@ -15,6 +16,96 @@ export interface ShopBudget {
 }
 
 export type ShopCandidateCategory = 'cards' | 'artifacts' | 'items';
+
+export interface TowerBattleRewardContext {
+  nodeId: string;
+  kind: Extract<RunNodeKind, 'battle' | 'elite' | 'boss'>;
+  act: number;
+  floor: number;
+  floorsPerAct?: number;
+}
+
+const TOWER_REWARD_KEYS = {
+  cards: ['card', 'cards'],
+  artifacts: ['artifact', 'artifacts'],
+  items: ['item', 'items'],
+} as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** Build the fixed battle reward budget without asking callers to invent pacing fields. */
+export function recommendTowerBattleRewardBudget(context: TowerBattleRewardContext): BattleRewardBudget {
+  const danger = context.kind === 'boss' ? 3 : context.kind === 'elite' ? 2 : 1;
+  return recommendBattleRewardBudget({
+    nodeId: context.nodeId,
+    kind: context.kind,
+    act: context.act,
+    actCount: 3,
+    floor: context.floor,
+    floorsPerAct: context.floorsPerAct ?? 16,
+    danger,
+  });
+}
+
+/**
+ * Make battle reward quantity and pick limits program-owned.
+ *
+ * Extra candidates/categories are trimmed so already prepared nodes from an
+ * older build remain playable. Missing required candidates are rejected and
+ * sent through the bounded structure-repair request instead of silently
+ * inventing authored content.
+ */
+export function enforceBattleRewardBudget(
+  rewardValue: unknown,
+  budget: BattleRewardBudget,
+): Record<string, unknown> {
+  if (!isRecord(rewardValue)) throw new Error('tower battle reward must be an object');
+  const allowedFields = new Set(['card', 'cards', 'artifact', 'artifacts', 'item', 'items', 'limits']);
+  const unknown = Object.keys(rewardValue).find(key => !allowedFields.has(key));
+  if (unknown) throw new Error(`tower battle reward contains unsupported field: ${unknown}`);
+
+  const expectations = {
+    cards: { candidates: budget.cards.candidates, pick: budget.cards.pick },
+    artifacts: {
+      candidates: budget.artifacts?.candidates ?? 0,
+      pick: budget.artifacts?.pick ?? 0,
+    },
+    items: {
+      candidates: budget.items?.candidates ?? 0,
+      pick: budget.items?.pick ?? 0,
+    },
+  } as const;
+  const normalized: Record<'card' | 'artifact' | 'item', unknown[]> = {
+    card: [],
+    artifact: [],
+    item: [],
+  };
+
+  for (const category of Object.keys(TOWER_REWARD_KEYS) as Array<keyof typeof TOWER_REWARD_KEYS>) {
+    const [singular, plural] = TOWER_REWARD_KEYS[category];
+    if (rewardValue[singular] !== undefined && rewardValue[plural] !== undefined) {
+      throw new Error(`tower battle reward cannot contain both ${singular} and ${plural}`);
+    }
+    const source = rewardValue[singular] ?? rewardValue[plural] ?? [];
+    if (!Array.isArray(source)) throw new Error(`tower battle reward ${singular} must be an array`);
+    const expected = expectations[category].candidates;
+    if (source.length < expected) {
+      throw new Error(`tower battle reward ${singular} requires ${expected} candidates but received ${source.length}`);
+    }
+    normalized[singular] = structuredClone(source.slice(0, expected));
+  }
+
+  return {
+    ...normalized,
+    limits: {
+      cards: expectations.cards.pick,
+      artifacts: expectations.artifacts.pick,
+      items: expectations.items.pick,
+    },
+  };
+}
 
 /** Fixed candidate budgets reduce AI arithmetic and keep rewards comparable between runs. */
 export function recommendBattleRewardBudget(route: BattleRouteContext | null): BattleRewardBudget {

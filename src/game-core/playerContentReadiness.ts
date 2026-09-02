@@ -28,6 +28,35 @@ export interface InitialPlayerStateInput {
 
 const INITIAL_DECK_MIN_QUANTITY = 10;
 
+const REPAIR_HINTS: Readonly<Record<string, string>> = {
+  INVALID_CURSE_COST: '诅咒牌必须省略 cost，不能用零费用代替',
+  EMPTY_EFFECTS: '需要可执行效果的对象必须提供非空浅层 effects',
+  MISSING_EFFECT_SOURCE: '补齐非空浅层 effects；欲望效果的操作不能写在对象顶层',
+  INVALID_EFFECT: '每个 effects 项都必须是完整操作；hits 只能与 damage 位于同一项',
+  INVALID_CARD_COUNT: 'copy/double 的值直接写数量或 all，来源和筛选字段与操作同级',
+  INVALID_CARD_ID: 'add_card/ensure_card 的值直接写 creates 中已登记的模板 ID 字符串',
+  UNKNOWN_CARD_TEMPLATE: '补齐同一内容对象的 creates 模板，或移除未登记的临时牌引用',
+  INVALID_STATUS: '状态瞬时触发直接写浅层效果；持续数值修饰只能写在 hold 的 modify 规则中',
+  UNKNOWN_STATUS: '先完整登记被引用的状态 ID，或移除该状态引用',
+  INVALID_TRIGGER: 'trigger 必须有受支持的 on 和非空浅层 effects',
+  MISSING_TRIGGER: '遗物或独立能力需要合法 trigger，不能只写说明文字',
+  MISSING_RELIC: '补齐至少一件具有合法可执行来源的初始遗物',
+  MISSING_ITEM: '补齐至少一个具有非空浅层 effects 的初始道具',
+  MISSING_DESIRE_EFFECT: '补齐具名且具有非空浅层 effects 的玩家欲望满溢效果',
+};
+
+function repairHintForIssue(issue: PlayerContentReadinessIssue): string | undefined {
+  if (
+    /\.(?:damage|damage_taken|lust_damage|lust_damage_taken|heal|block)_modifier(?:\.|$)/.test(issue.path)
+  ) {
+    return 'damage_modifier 等不是卡牌 effects 操作：本次伤害直接写 damage；持续修饰改为状态 triggers.hold 中的 {modify:"damage",add:有限数值}，卡牌只 apply_status';
+  }
+  if (/\.triggers\.(?:apply|stack|tick|remove)(?:\[|\.|$)/.test(issue.path)) {
+    return '状态 apply/stack/tick/remove 只执行瞬时浅层效果且不再包 effects；持续数值修饰只能写在 hold（triggers.hold）';
+  }
+  return REPAIR_HINTS[issue.code];
+}
+
 const ISSUE_LABELS: Readonly<Record<string, string>> = {
   INVALID_ID: 'ID 格式错误',
   DUPLICATE_ID: 'ID 重复',
@@ -142,7 +171,16 @@ export function formatPlayerContentReadiness(readiness: PlayerContentReadiness, 
 }
 
 /** Build a bounded repair request without echoing untrusted AI field values. */
-export function formatPlayerContentRepairPrompt(readiness: PlayerContentReadiness, limit = 4): string {
+export function formatPlayerContentRepairPrompt(readiness: PlayerContentReadiness, limit = 8): string {
   if (readiness.ok) return '';
-  return formatBoundedContentRepairPrompt('[战斗内容修复]', readiness.issues, limit);
+  const hints = readiness.issues
+    .map(repairHintForIssue)
+    .filter((hint, index, values): hint is string => !!hint && values.indexOf(hint) === index)
+    .slice(0, 5);
+  return [
+    formatBoundedContentRepairPrompt('[战斗内容修复]', readiness.issues, limit),
+    ...(hints.length > 0 ? [`约束=${hints.join('；')}`] : []),
+    '任务=一次补齐并修正上列全部初始内容；保留合法内容，不得清空卡组、遗物、道具或欲望效果，也不得只回写空数组或占位值。卡组为空时须按首条消息变量更新规范创建完整初始牌组并补齐核心资源。',
+    '仅输出世界书规定的一个完整变量更新块；禁止Markdown、代码围栏、YAML块标记或任何块外文字。',
+  ].join('\n');
 }

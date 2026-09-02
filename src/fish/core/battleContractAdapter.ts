@@ -1,5 +1,6 @@
 import {
   createBattleRequest,
+  readGameMode,
   validateRunState,
   type BattleRequest,
   type RunNodeChoice,
@@ -8,6 +9,11 @@ import { createContentPackFromMvuBattle } from '../../runtime/contentPackAdapter
 
 function isRecord(value: unknown): value is Record<string, any> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function towerResource(value: unknown, fallback = 0): number {
+  const amount = Number(value);
+  return Number.isFinite(amount) ? Math.max(0, Math.round(amount)) : fallback;
 }
 
 /** Convert canonical MUV data once at the host boundary. */
@@ -20,6 +26,11 @@ export function createBattleRequestFromMvu(variables: unknown, battleData: unkno
   const runResult = validateRunState(stat?.run);
   const run = runResult.ok ? runResult.value : null;
   const currentNode: RunNodeChoice | null = run?.phase === 'in_node' ? run.currentNode : null;
+  const towerBattle = readGameMode(stat) === 'tower' && currentNode !== null;
+  const maxHp = towerBattle ? Math.max(1, towerResource(core.max_hp, 100)) : core.max_hp;
+  const maxLust = towerBattle ? Math.max(1, towerResource(core.max_lust, 100)) : core.max_lust;
+  const hp = towerBattle ? Math.min(maxHp, towerResource(core.hp)) : core.hp;
+  const lust = towerBattle ? Math.min(maxLust, towerResource(core.lust)) : core.lust;
   const route = currentNode
     ? {
         act: currentNode.act,
@@ -37,10 +48,10 @@ export function createBattleRequestFromMvu(variables: unknown, battleData: unkno
     content,
     player: {
       emoji: core.emoji,
-      hp: core.hp,
-      maxHp: core.max_hp,
-      lust: core.lust,
-      maxLust: core.max_lust,
+      hp,
+      maxHp,
+      lust,
+      maxLust,
       level: battleData.level,
     },
     route,

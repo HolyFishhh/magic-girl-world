@@ -42,6 +42,29 @@ assert.equal(
   'reward.card=3项；reward.artifact=[]；reward.item=1项；reward.limits={"cards":1,"items":1}（整对象一次写入，不得添加其他键）；每张 reward.card 固定 quantity=1；经验已由程序结算，禁止修改 battle.exp',
 );
 
+const normalTowerBudget = core.recommendTowerBattleRewardBudget({
+  nodeId: 'act-1-floor-2-col-1',
+  kind: 'battle',
+  act: 1,
+  floor: 2,
+});
+const normalizedTowerReward = core.enforceBattleRewardBudget({
+  card: [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'extra' }],
+  artifact: [{ id: 'forbidden-relic' }],
+  item: [{ id: 'potion' }, { id: 'extra-potion' }],
+  limits: { cards: 4, artifacts: 1, items: 2 },
+}, normalTowerBudget);
+assert.deepEqual(normalizedTowerReward, {
+  card: [{ id: 'a' }, { id: 'b' }, { id: 'c' }],
+  artifact: [],
+  item: [{ id: 'potion' }],
+  limits: { cards: 1, artifacts: 0, items: 1 },
+});
+assert.throws(
+  () => core.enforceBattleRewardBudget({ card: [{ id: 'a' }], artifact: [], item: [{ id: 'potion' }] }, normalTowerBudget),
+  /requires 3 candidates/,
+);
+
 const standardShop = { act: 2, floor: 4, kind: 'shop', danger: 0, floorsPerAct: 10, actCount: 3 };
 assert.deepEqual(core.recommendShopBudget(standardShop), {
   cards: 3,

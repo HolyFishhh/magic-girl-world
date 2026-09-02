@@ -17,7 +17,7 @@ assert.match(dedicated, /_\.assign\('array\.path', value\)/);
 assert.doesNotMatch(dedicated, /_\.assign\('battle\.statuses'/, 'format example must not teach a reusable status definition');
 
 const config = entryConfig[dedicatedName];
-assert.equal(config.comment, '[mvu_update] 额外模型变量更新格式');
+assert.equal(config.comment, '[mvu_update] [数据契约] MVU输出格式');
 assert.equal(config.constant, true, 'extra-model format must be an always-active update entry');
 assert.equal(config.selective, false);
 assert.equal(entryConfig['变量更新规则'].constant, true, 'variable rules must be always active for the update model');

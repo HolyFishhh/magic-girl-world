@@ -1,15 +1,15 @@
 import {
-  calibrateEncounterNumbers,
+  calibrateEncounterUntilWinnable,
+  createEncounterLineagePromptView,
   createContentMechanicsFingerprint,
   createDeckPowerProfileFingerprint,
   createEnemyBudgetEnvelope,
-  formatEncounterLineageForModel,
+  extractContentMechanicFeatures,
   profileDeckPower,
   scoreEnemyPower,
   updateEncounterLineageMemory,
   type ContentPack,
   type DeckPowerProfile,
-  type EncounterCalibrationResult,
   type EncounterLineageMemory,
 } from '../game-core';
 import { createContentPackFromMvuBattle } from '../runtime/contentPackAdapter';
@@ -62,11 +62,25 @@ function emptyLineage(): EncounterLineageMemory {
   return { spec: 'mwg.encounter-lineage/v1', families: [], recentEnemies: [] };
 }
 
+function normalizeProgramCalibrationMemory(value: unknown): ProgramCalibrationMemory | undefined {
+  if (!isRecord(value)) return undefined;
+  const memory = clone(value) as ProgramCalibrationMemory;
+  if (value.mode === 'applied' || value.mode === 'verified' || value.mode === 'advisory') {
+    memory.mode = value.mode;
+  } else {
+    memory.mode = Array.isArray(value.changedPaths) && value.changedPaths.length > 0
+      ? 'applied'
+      : 'verified';
+  }
+  return memory;
+}
+
 export function normalizeDesignAssistantChatState(value: unknown): DesignAssistantChatState {
   const source = isRecord(value) && value.spec === DESIGN_ASSISTANT_STATE_SPEC ? value : {};
   const lineage = isRecord(source.lineage) && source.lineage.spec === 'mwg.encounter-lineage/v1'
     ? clone(source.lineage) as EncounterLineageMemory
     : emptyLineage();
+  const lastCalibration = normalizeProgramCalibrationMemory(source.lastCalibration);
   return {
     spec: DESIGN_ASSISTANT_STATE_SPEC,
     lineage,
@@ -76,7 +90,18 @@ export function normalizeDesignAssistantChatState(value: unknown): DesignAssista
     ...(typeof source.lastDeckFingerprint === 'string' ? { lastDeckFingerprint: source.lastDeckFingerprint } : {}),
     ...(typeof source.lastEnemyFingerprint === 'string' ? { lastEnemyFingerprint: source.lastEnemyFingerprint } : {}),
     ...(Number.isFinite(source.lastInjectionAt) ? { lastInjectionAt: Number(source.lastInjectionAt) } : {}),
-    ...(isRecord(source.lastCalibration) ? { lastCalibration: clone(source.lastCalibration) as ProgramCalibrationMemory } : {}),
+    ...(source.lastInjectionSource === 'official'
+      || source.lastInjectionSource === 'tavern-helper'
+      || source.lastInjectionSource === 'mvu-lifecycle'
+      ? { lastInjectionSource: source.lastInjectionSource }
+      : {}),
+    ...(source.lastInjectionMessageId === 'latest' || Number.isInteger(Number(source.lastInjectionMessageId))
+      ? { lastInjectionMessageId: source.lastInjectionMessageId === 'latest' ? 'latest' : Number(source.lastInjectionMessageId) }
+      : {}),
+    ...(Number.isInteger(Number(source.lastInjectionCount)) && Number(source.lastInjectionCount) >= 0
+      ? { lastInjectionCount: Number(source.lastInjectionCount) }
+      : {}),
+    ...(lastCalibration ? { lastCalibration } : {}),
   };
 }
 
@@ -116,36 +141,6 @@ function formatRange(value: { min: number; max: number }): string {
   return `${value.min}~${value.max}`;
 }
 
-function calibrateUntilWinnable(input: Parameters<typeof calibrateEncounterNumbers>[0]): EncounterCalibrationResult {
-  let result = calibrateEncounterNumbers(input);
-  let appliedScale = result.appliedScale;
-  const changedPaths = new Set(result.changedPaths);
-  const warnings = new Set(result.warnings);
-  // Low-confidence decks intentionally cap one correction pass. A wildly
-  // overstated model enemy may therefore need several bounded passes. Each pass
-  // keeps authored identity and cadence intact while re-running the real shadow
-  // simulation against current resources.
-  for (let pass = 0; !result.winnableAtCurrentResources && pass < 4; pass += 1) {
-    const next = calibrateEncounterNumbers({
-      ...input,
-      pack: result.calibratedPack,
-      requestedRatio: Math.min(input.requestedRatio, result.effectiveRatio),
-    });
-    if (next.changedPaths.length === 0 || Math.abs(next.appliedScale - 1) < 0.01) break;
-    appliedScale *= next.appliedScale;
-    next.changedPaths.forEach(path => changedPaths.add(path));
-    next.warnings.forEach(warning => warnings.add(warning));
-    result = {
-      ...next,
-      requestedRatio: Number(input.requestedRatio),
-      appliedScale: Math.round(appliedScale * 1000) / 1000,
-      changedPaths: [...changedPaths],
-      warnings: [...warnings],
-    };
-  }
-  return result;
-}
-
 function archetypeLines(profile: DeckPowerProfile): string[] {
   return profile.archetypes.slice(0, 4).map(entry => {
     const missing = entry.missingPayoffs.slice(0, 2).join('、');
@@ -167,6 +162,53 @@ function evolutionLines(graph: KnowledgeGraphView): string[] {
   });
 }
 
+function lineageContextLines(lineage: EncounterLineageMemory): string[] {
+  const view = createEncounterLineagePromptView(lineage);
+  const familyLines = view.families.map(family => {
+    const actions = family.canonicalActions.slice(-2).map(action => {
+      const definition = JSON.stringify(action.definition);
+      return `${action.name}=${definition}`;
+    });
+    return [
+      `family_id=${family.key}（${family.label}）`,
+      `主题=${family.themeAxes.join('、') || '未定'}`,
+      actions.length ? `可继承行动结构=${actions.join('；')}` : '',
+    ].filter(Boolean).join('；');
+  });
+  const recentLines = view.recentEnemies.slice(-3).map(enemy =>
+    `${enemy.name}${enemy.familyKey ? `（family_id=${enemy.familyKey}）` : ''}：${enemy.themeAxes.join('、') || '未定'}；行动=${enemy.actions.map(action => action.name).join('、') || '无'}`,
+  );
+  return [...familyLines, ...recentLines];
+}
+
+export function createInitializationDesignPrompt(variables: unknown): string | null {
+  const battle = battleFromVariables(variables);
+  if (!battle || Array.isArray(battle.cards) && battle.cards.length > 0) return null;
+  return [
+    DESIGN_ASSISTANT_PROMPT_MARKER,
+    '程序确认当前最新MVU变量尚未建立玩家卡组；这是初始化辅助，不是固定题材、职业或剧情预设。',
+    '仅依据当前剧情已经成立的身份、能力与环境，初始化可直接游玩的玩家战斗内容：战斗形象、核心上限、卡组、至少一种可执行的辅助来源，以及欲望满溢效果。',
+    '所有自定义状态、资源、触发器和引用对象必须先注册再使用；效果应使用当前角色卡支持的通用DSL，不得把自然语言描述当作可执行效果。',
+    '卡组结构与数量保持自由，不因缺少防御、治疗或固定牌数而报错；但必须存在至少一种能结束战斗的可执行路径。',
+    '初始化完成后，后续轮次只能增量新增、修改或删除剧情实际变化的内容，禁止再次整表重建玩家卡组。',
+  ].join('\n');
+}
+
+export function calibrationAdvisoryReasons(profile: DeckPowerProfile, pack?: ContentPack): string[] {
+  const reasons: string[] = [];
+  if (profile.confidence < 0.65) reasons.push(`卡组模拟置信度仅${Math.round(profile.confidence * 100)}%`);
+  const authoredOperations = pack
+    ? new Set(extractContentMechanicFeatures(pack).operations)
+    : null;
+  const unsupportedAuthoredFeatures = authoredOperations
+    ? profile.unsupportedFeatures.filter(feature => authoredOperations.has(feature))
+    : profile.unsupportedFeatures;
+  if (unsupportedAuthoredFeatures.length > 0) {
+    reasons.push(`完整战斗模拟尚未覆盖：${unsupportedAuthoredFeatures.slice(0, 6).join('、')}`);
+  }
+  return reasons;
+}
+
 function formatPrompt(input: {
   profile: DeckPowerProfile;
   envelope: ReturnType<typeof createEnemyBudgetEnvelope>;
@@ -177,19 +219,22 @@ function formatPrompt(input: {
   const { profile, envelope, lineage, enemyPower, knowledgeGraph } = input;
   const archetypes = archetypeLines(profile);
   const evolutions = evolutionLines(knowledgeGraph);
-  const lineageLines = formatEncounterLineageForModel(lineage).slice(-5);
+  const lineageLines = lineageContextLines(lineage);
   return [
     DESIGN_ASSISTANT_PROMPT_MARKER,
     '以下内容由程序从本轮最新MVU变量计算，只是变量设计与平衡辅助；剧情事实和玩家现有构筑优先，禁止重新初始化或整表覆盖玩家内容。',
     `卡组强度=${profile.totalScore}，置信度=${Math.round(profile.confidence * 100)}%；${horizonSummary(profile)}。`,
     `牌库质量=${Math.round(profile.deckQuality.multiplier * 100)}%；不可主动使用${profile.deckQuality.deadCopies}张，常规资源难以打出${profile.deckQuality.hardToPlayCopies}张，低费用效率${profile.deckQuality.inefficientCopies}张，偏离主构筑且低效${profile.deckQuality.offPlanCopies}张。低质量卡和不相容卡会污染抽牌，已经从总分中扣除，不能把牌数增加误判为强度增加。`,
     `能力维度：爆发${profile.dimensions.burst}、持续${profile.dimensions.sustainedOutput}、生存${profile.dimensions.survival}、经济${profile.dimensions.economy}、稳定${profile.dimensions.consistency}、成长${profile.dimensions.scaling}、控制${profile.dimensions.control}、组合${profile.dimensions.combo}。`,
+    profile.unsupportedFeatures.length
+      ? `评分边界：${profile.unsupportedFeatures.slice(0, 8).join('、')}尚未被完整影子模拟；这些机制应由模型按实际DSL保守估值，程序不会在低置信时强行改写敌人数值。`
+      : '评分边界：本构筑已由当前影子模拟完整覆盖。',
     `难度=${envelope.requestedRatio}%；按当前生命与欲望资源后的有效难度=${envelope.effectiveRatio}%，目标敌人=${envelope.targetScore}分，预期${envelope.targetTurns[0]}~${envelope.targetTurns[1]}回合。`,
     '最大生命参与卡组长期评分；当前生命和当前欲望只用于判断这场战斗的可打性与安全封顶，不改变卡组总分。',
     `敌人数值预算：有效生命${formatRange(envelope.durability.hp)}；单次生命压力上限${envelope.burstCap}；反制窗口至少${envelope.requiredCounterplayWindows}个。生命、欲望、控制、格挡和成长共享预算，不得各自同时取上限。`,
     archetypes.length ? `当前流派：${archetypes.join('；')}` : '当前没有稳定流派；允许通用散卡并自然形成构筑方向。',
     evolutions.length ? `知识图谱邻接路径：${evolutions.join('；')}。奖励可以强化、桥接或提供通用散卡，不得强迫转型。` : '',
-    lineageLines.length ? `敌人谱系记忆：${lineageLines.join('；')}。仅当剧情确有亲缘、同族或上下位关系时复用family_id与招牌行动。` : '',
+    lineageLines.length ? `敌人谱系记忆：${lineageLines.join('；')}。仅当剧情确有亲缘、同族或上下位关系时复用对应family_id，并至少保留一个可继承行动结构；无关敌人不得强行归族。` : '',
     enemyPower ? `变量中现有敌人程序评分=${enemyPower.currentEncounterScore}；若本轮剧情没有更换敌人，应增量更新而非重建。` : '',
     '若剧情本轮确实触发新战斗：围绕剧情身份设计一个主机制、一个可协同的副机制和可观察反制；当前hp应承接先手攻击、伤势与状态，不必等于max_hp。',
     '目标视角：每个effects中的self恒指该效果的拥有者，opponent恒指其对手；敌方行动的self是敌方，玩家卡牌的self是玩家。需要作用到另一方时显式写to，避免只靠自然语言判断。',
@@ -212,6 +257,10 @@ export class DesignAssistantEngine {
 
   knowledgeGraphStats(lineage?: EncounterLineageMemory) {
     return this.knowledgeGraph.stats(lineage);
+  }
+
+  createInitializationPrompt(variables: unknown): string | null {
+    return createInitializationDesignPrompt(variables);
   }
 
   private profile(pack: ContentPack, maxHp: number, maxLust: number, seeds: number): DeckPowerProfile {
@@ -286,12 +335,13 @@ export class DesignAssistantEngine {
     state.lineage = snapshot.lineage;
     state.lastDeckFingerprint = snapshot.deckFingerprint;
     state.lastEnemyFingerprint = snapshot.enemyFingerprint;
-    if (!settings.autoCalibration || state.calibratedEnemyFingerprints.includes(snapshot.enemyFingerprint)) {
+    const calibrationKey = `${snapshot.enemyFingerprint}|deck=${snapshot.deckFingerprint}|difficulty=${settings.difficultyPercent}|seeds=${settings.simulationSeeds}`;
+    if (!settings.autoCalibration || state.calibratedEnemyFingerprints.includes(calibrationKey)) {
       return { changed: false, state, snapshot };
     }
     const pack = createContentPackFromMvuBattle(battle);
     const core = isRecord(battle.core) ? battle.core : {};
-    const calibration = calibrateUntilWinnable({
+    const calibration = calibrateEncounterUntilWinnable({
       pack,
       profile: snapshot.deckProfile,
       requestedRatio: settings.difficultyPercent,
@@ -300,18 +350,27 @@ export class DesignAssistantEngine {
       maxLust: Math.max(1, finite(core.max_lust, 100)),
       seeds: settings.simulationSeeds,
     });
-    state.calibratedEnemyFingerprints.push(snapshot.enemyFingerprint);
+    const advisoryReasons = calibrationAdvisoryReasons(snapshot.deckProfile, pack);
+    state.calibratedEnemyFingerprints.push(calibrationKey);
     state.calibratedEnemyFingerprints = state.calibratedEnemyFingerprints.slice(-16);
     state.lastCalibration = {
       enemyFingerprint: snapshot.enemyFingerprint,
       requestedRatio: calibration.requestedRatio,
       effectiveRatio: calibration.effectiveRatio,
       appliedScale: calibration.appliedScale,
+      mode: advisoryReasons.length > 0
+        ? 'advisory'
+        : calibration.changedPaths.length > 0 && Math.abs(calibration.appliedScale - 1) >= 0.02
+          ? 'applied'
+          : 'verified',
       winnableAtCurrentResources: calibration.winnableAtCurrentResources,
       changedPaths: calibration.changedPaths.slice(0, 80),
-      warnings: calibration.warnings,
+      warnings: [...advisoryReasons, ...calibration.warnings],
       calibratedAt: Date.now(),
     };
+    if (advisoryReasons.length > 0) {
+      return { changed: false, state, snapshot };
+    }
     if (calibration.changedPaths.length === 0 || Math.abs(calibration.appliedScale - 1) < 0.02) {
       return { changed: false, state, snapshot };
     }

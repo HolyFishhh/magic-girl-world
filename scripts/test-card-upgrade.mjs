@@ -28,6 +28,17 @@ assert.equal(
   upgrades.applyCardUpgrade(base, { node_id: 'a1_f3_rest_0', card_id: 'moon_slash', effects: [{ damage: 9 }] }).ok,
   true,
 );
+assert.equal(
+  upgrades.applyCardUpgrade(base, {
+    node_id: 'a1_f3_rest_0',
+    card_id: 'moon_slash',
+    id: 'moon_slash',
+    upgrade_level: 0,
+    effects: [{ damage: 9 }],
+  }).ok,
+  true,
+  'models may echo the selected card id and current upgrade level without invalidating the patch',
+);
 assert.deepEqual(
   upgrades.applyCardUpgrade(base, { node_id: '', card_id: 'moon_slash', effects: [{ damage: 9 }] }),
   { ok: false, message: 'upgrade node_id must be a non-empty string' },
@@ -66,6 +77,7 @@ assert.deepEqual(
   { ok: false, message: '$[0].damage.left: Unsupported variable: unknown' },
 );
 assert.equal(upgrades.applyCardUpgrade(base, { ...patch, id: 'hijack' }).ok, false);
+assert.equal(upgrades.applyCardUpgrade(base, { ...patch, upgrade_level: 1 }).ok, false);
 assert.equal(upgrades.applyCardUpgrade(base, { node_id: 'a1_f3_rest_0', card_id: 'moon_slash', effects: [{ damage: 6 }] }).ok, false);
 assert.equal(upgrades.applyCardUpgrade(base, { node_id: 'a1_f3_rest_0', card_id: 'other', description: '错误', effects: [{ damage: 9 }] }).ok, false);
 assert.equal(upgrades.applyCardUpgrade(upgraded.card, patch).ok, false, 'default upgrade limit is one');

@@ -8,6 +8,7 @@ const THEMES: Record<RunNodeKind, readonly string[]> = {
   event: ['受困者求援', '危险交易', '异常遗物', '身份误认', '追踪线索', '阵营冲突'],
   rest: ['暂时安全的营火', '废弃据点', '雨夜屋檐', '结界内的喘息'],
   shop: ['流动黑市', '魔法工坊', '临时补给点', '战利品拍卖', '隐秘收藏室'],
+  treasure: ['尘封宝箱', '遗失补给', '守护者遗产', '异常储藏室', '路线馈赠'],
   boss: ['章节宿敌决战', '城市级灾害核心', '幕后主使现身', '失控仪式终局'],
 };
 
@@ -16,6 +17,7 @@ const FOCUSES: Partial<Record<RunNodeKind, readonly string[]>> = {
   elite: ['高风险换取明确成长', '用机制要求改变出牌顺序', '给予可学习的多阶段压力'],
   event: ['即时收益与长期代价', '生命与资源的取舍', '信息与风险的取舍', '不同立场带来不同后果'],
   shop: ['补足构筑短板', '提供一个转变构筑方向的选择', '让低价实用品与高价成长并存'],
+  treasure: ['提供明确成长', '让收获贴合本章经历', '在稳定收益与少量取舍间保持简洁'],
   boss: ['分阶段升级压力', '检验本章核心构筑', '让危险行动有明确预告和应对'],
 };
 
@@ -24,6 +26,7 @@ const MECHANICS: Partial<Record<RunNodeKind, readonly string[]>> = {
   elite: ['行动预告', '资源消耗', '状态反制', '构筑弱点', '阶段变化'],
   event: ['生命换收益', '金币换成长', '卡牌改造', '遗物代价', '路线情报'],
   shop: ['攻击补强', '防御补强', '抽弃循环', '状态联动', '能量效率'],
+  treasure: ['遗物成长', '道具补给', '牌组修整', '资源恢复', '带代价的馈赠'],
   boss: ['阶段变化', '行动预告', '持续成长', '资源压缩', '构筑检验'],
 };
 
@@ -49,8 +52,10 @@ export function formatRunNodeDirection(
   if (node.kind === 'battle') return `围绕“${theme}”生成普通战斗；${focus}。${mechanicHint}${pacingHint}`;
   if (node.kind === 'elite') return `围绕“${theme}”生成机制鲜明的精英战斗；${focus}。${mechanicHint}${pacingHint}`;
   if (node.kind === 'boss') return `围绕“${theme}”生成本章 Boss 战；${focus}。${mechanicHint}${pacingHint}`;
-  if (node.kind === 'event') return `围绕“${theme}”生成短事件；选择应体现${focus}。${mechanicHint}${pacingHint}`;
+  if (node.kind === 'event') return `围绕“${theme}”生成事件；选择应体现${focus}。${mechanicHint}${pacingHint}`;
   if (node.kind === 'shop')
-    return `围绕“${theme}”生成简短商店场景和商品；${focus}，价格由程序决定。${mechanicHint}${pacingHint}`;
-  return `围绕“${theme}”生成简短营火场景，不生成剧情选项。${pacingHint}`;
+    return `围绕“${theme}”生成商店场景和商品；${focus}，价格由程序决定。${mechanicHint}${pacingHint}`;
+  if (node.kind === 'treasure')
+    return `围绕“${theme}”生成宝箱场景；${focus}。${mechanicHint}${pacingHint}`;
+  return `围绕“${theme}”生成营火场景，不生成剧情选项。${pacingHint}`;
 }

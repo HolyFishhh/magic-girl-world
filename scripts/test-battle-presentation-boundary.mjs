@@ -155,6 +155,7 @@ assert.match(battleUi, /bindEnemyIntentDetails/);
 assert.match(enemyIntentPresenter, /#enemy-intent-summary/);
 assert.match(enemyIntentPresenter, /class="intent-badge"/);
 assert.match(enemyIntentPresenter, /DynamicStatusManager\.getInstance\(\)\.getStatusDefinition/);
+assert.match(enemyIntentPresenter, /public createDisplayModel/);
 assert.doesNotMatch(enemyIntentPresenter, /class="intent-effects"|createEffectTagsHTML/);
 assert.match(cardSelectionHost, /planCardSelection/);
 assert.match(cardSelectionHost, /resolveCardSelection/);
@@ -178,6 +179,8 @@ assert.doesNotMatch(battleStyles, /\.phase-indicator,\s*\n\s*\.fullscreen-text\s
 assert.doesNotMatch(battleHtml, /id="modeToggle"|点击出牌|拖动出牌/);
 assert.match(battleHtml, /id="stage-player-emoji"/);
 assert.match(battleHtml, /id="stage-enemy-emoji"/);
+assert.match(battleHtml, /id="stage-enemy-party"/);
+assert.match(battleHtml, /class="stage-enemy-member is-active"/);
 assert.match(battleHtml, /class="enemy-avatar-stack"/);
 assert.match(battleHtml, /id="enemy-intent-summary"/);
 const stageEnemyStart = battleHtml.indexOf('class="stage-combatant stage-enemy"');
@@ -205,6 +208,14 @@ assert.match(
   'the next-action badge is anchored above the enemy actor instead of overlapping its emoji',
 );
 assert.match(battleStyles, /\.stage-action-token\s*\{/);
+assert.match(battleStyles, /\.stage-enemy-party\s*\{/);
+assert.match(battleStyles, /\.stage-enemy-member\s*\{/);
+assert.match(battleStyles, /\.enemy-roster-bars\s*\{/);
+assert.match(battleStyles, /\.enemy-roster-action\s*\{/);
+assert.match(battleUi, /updateEnemyStageParty\(living, activeEnemyId\)/);
+assert.match(battleUi, /EnemyIntentPresenter\.getInstance\(\)\.createDisplayModel\(enemy\)/);
+assert.match(battleUi, /class="enemy-roster-intent-badge"/);
+assert.match(battleUi, /class="stage-enemy-member\$\{active/);
 assert.match(
   battleStyles,
   /\.compact-support-row\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) minmax\(68px, 10\.8em\) auto auto/s,
@@ -271,6 +282,26 @@ assert.match(battleStyles, /\.card-game-container\s*\{[^}]*height:\s*640px;[^}]*
 assert.match(battleStyles, /\.battle-main-grid\s*\{[^}]*grid-template-rows:\s*96px minmax\(0, 1fr\) 96px/s);
 assert.match(
   battleStyles,
+  /\.center-battle-area\s*\{[^}]*grid-template-rows:\s*minmax\(72px, 1fr\) 190px/s,
+  'wide battle layouts reserve a fixed hand row so surplus height expands the stage instead of a blank card gutter',
+);
+assert.match(
+  battleStyles,
+  /@media \(max-width: 760px\)[\s\S]*?\.card-game-container\s*\{[^}]*height:\s*clamp\(660px, 165vw, 760px\)[^}]*min-height:\s*clamp\(660px, 165vw, 760px\)[^}]*\}[\s\S]*?#battle-scene\s*\{[^}]*grid-template-rows:\s*36px minmax\(0, 1fr\) 38px/s,
+  'phone layout owns one bounded battle viewport and keeps the top pile/fullscreen bar separate from combat rows',
+);
+assert.match(
+  battleStyles,
+  /@media \(max-width: 760px\)[\s\S]*?\.center-battle-area\s*\{[^}]*grid-template-rows:\s*minmax\(72px, 1fr\) 155px/s,
+  'phone layout keeps the hand readable without pushing actors outside the viewport',
+);
+assert.match(
+  battleStyles,
+  /@media \(max-width: 390px\)[\s\S]*?\.top-info-bar\s*\{[^}]*grid-template-columns:\s*auto auto minmax\(0, 1fr\)/s,
+  'narrow phones keep turn, fullscreen, and pile controls in distinct top-bar columns',
+);
+assert.match(
+  battleStyles,
   /\.enemy-card,\s*\.player-card\s*\{[^}]*grid-template-columns:\s*minmax\(228px, 1\.45fr\) minmax\(0, 1fr\)/s,
 );
 assert.doesNotMatch(battleStyles, /height:\s*1040px|height:\s*940px|height:\s*920px/);
@@ -312,6 +343,7 @@ assert.match(shellPresenter, /watchCurrentMessageUntilHistorical/);
 assert.match(shellPresenter, /public showItems/);
 assert.match(shellPresenter, /BattleLog\.logPlayerAction/);
 assert.match(shellPresenter, /mwg:play-card\.mwgBattleShell/);
+assert.match(shellPresenter, /#close-battle-log'[\s\S]*?fadeOut\(200\)/);
 assert.match(shellPresenter, /escapeHtml\(item\.name\)/);
 assert.doesNotMatch(shellPresenter, /triggerSlash/);
 

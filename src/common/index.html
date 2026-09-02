@@ -36,12 +36,18 @@
             <span><small>金币</small><b id="run-gold">99</b></span>
           </div>
         </div>
+        <div
+          id="tower-node-panel-root"
+          class="tower-node-panel-host"
+          style="display: none"
+          aria-label="当前爬塔地点"
+        ></div>
+        <div id="tower-map-root" class="tower-map-common-host" style="display: none" aria-label="爬塔路线地图"></div>
         <div class="run-actions" id="run-actions"></div>
         <div class="run-error" id="run-error" role="alert" style="display: none"></div>
       </section>
 
       <section class="section action-section" aria-label="本轮行动">
-
         <div id="choice-container" style="display: none">
           <div class="reward-card" id="choice-card">
             <div class="reward-header">
@@ -73,7 +79,9 @@
               </section>
             </div>
             <div class="reward-actions">
-              <button class="btn btn-secondary" id="reroll-reward-btn" type="button" style="display: none">重投候选</button>
+              <button class="btn btn-secondary" id="reroll-reward-btn" type="button" style="display: none">
+                重投候选
+              </button>
               <button class="btn btn-primary" id="confirm-btn" type="button" disabled>确认领取</button>
             </div>
           </div>
@@ -87,20 +95,38 @@
             <section class="status-group">
               <h3>基本信息</h3>
               <div class="info-grid">
-                <div class="info-item"><span class="label">职业能力</span><span class="value" id="status-job-ability">未知</span></div>
+                <div class="info-item">
+                  <span class="label">职业能力</span><span class="value" id="status-job-ability">未知</span>
+                </div>
               </div>
             </section>
             <section class="status-group">
               <h3>服装</h3>
               <div class="info-grid clothing-grid">
-                <div class="info-item"><span class="label">头部</span><span class="value" id="clothing-head">未知</span></div>
-                <div class="info-item"><span class="label">颈部</span><span class="value" id="clothing-neck">未知</span></div>
-                <div class="info-item"><span class="label">手部</span><span class="value" id="clothing-hands">未知</span></div>
-                <div class="info-item"><span class="label">上衣</span><span class="value" id="clothing-top">未知</span></div>
-                <div class="info-item"><span class="label">下装</span><span class="value" id="clothing-bottom">未知</span></div>
-                <div class="info-item"><span class="label">内衣</span><span class="value" id="clothing-underwear">未知</span></div>
-                <div class="info-item"><span class="label">腿部</span><span class="value" id="clothing-legs">未知</span></div>
-                <div class="info-item"><span class="label">足部</span><span class="value" id="clothing-feet">未知</span></div>
+                <div class="info-item">
+                  <span class="label">头部</span><span class="value" id="clothing-head">未知</span>
+                </div>
+                <div class="info-item">
+                  <span class="label">颈部</span><span class="value" id="clothing-neck">未知</span>
+                </div>
+                <div class="info-item">
+                  <span class="label">手部</span><span class="value" id="clothing-hands">未知</span>
+                </div>
+                <div class="info-item">
+                  <span class="label">上衣</span><span class="value" id="clothing-top">未知</span>
+                </div>
+                <div class="info-item">
+                  <span class="label">下装</span><span class="value" id="clothing-bottom">未知</span>
+                </div>
+                <div class="info-item">
+                  <span class="label">内衣</span><span class="value" id="clothing-underwear">未知</span>
+                </div>
+                <div class="info-item">
+                  <span class="label">腿部</span><span class="value" id="clothing-legs">未知</span>
+                </div>
+                <div class="info-item">
+                  <span class="label">足部</span><span class="value" id="clothing-feet">未知</span>
+                </div>
               </div>
             </section>
             <section class="status-group">
@@ -128,15 +154,21 @@
               <div class="group-heading">
                 <h3>战斗准备</h3>
                 <div class="run-opt-in-actions">
-                  <button class="btn btn-plain" id="run-repair-btn" type="button" style="display: none">请求 MVU 修复</button>
+                  <button class="btn btn-plain" id="run-repair-btn" type="button" style="display: none">
+                    请求 MVU 修复
+                  </button>
                 </div>
               </div>
               <div class="run-error" id="run-opt-in-error" role="alert" style="display: none"></div>
             </section>
             <section class="status-group compact-metrics">
               <div class="info-item"><span class="label">生命</span><span class="value" id="battle-hp">未知</span></div>
-              <div class="info-item"><span class="label">欲望</span><span class="value" id="battle-desire">未知</span></div>
-              <div class="info-item"><span class="label">删卡次数</span><span class="value" id="battle-card-remove">0</span></div>
+              <div class="info-item">
+                <span class="label">欲望</span><span class="value" id="battle-desire">未知</span>
+              </div>
+              <div class="info-item">
+                <span class="label">删卡次数</span><span class="value" id="battle-card-remove">0</span>
+              </div>
             </section>
             <section class="status-group deck-archetype-profile" id="deck-archetype-profile" hidden>
               <div class="group-heading">
@@ -150,15 +182,26 @@
             <section class="status-group">
               <div class="group-heading">
                 <h3>牌组</h3>
-                <button id="delete-mode-toggle" class="icon-button delete-toggle-btn" type="button" title="切换删卡模式">
+                <button
+                  id="delete-mode-toggle"
+                  class="icon-button delete-toggle-btn"
+                  type="button"
+                  title="切换删卡模式"
+                >
                   🗑️ <span id="delete-count">0</span>
                 </button>
               </div>
               <div class="battle-deck" id="battle-deck"></div>
             </section>
             <section class="status-group split-resource">
-              <div><h3>遗物</h3><div class="data-grid" id="battle-artifacts"></div></div>
-              <div><h3>道具</h3><div class="data-grid" id="battle-items"></div></div>
+              <div>
+                <h3>遗物</h3>
+                <div class="data-grid" id="battle-artifacts"></div>
+              </div>
+              <div>
+                <h3>道具</h3>
+                <div class="data-grid" id="battle-items"></div>
+              </div>
             </section>
             <section class="status-group">
               <div class="battle-book-container">

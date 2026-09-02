@@ -1,6 +1,7 @@
 import { REQUIRED_TAVERN_HELPER_FUNCTIONS, requireTavernHelperHost } from './tavernHost';
 
 type MessageVariableOptions = { type: 'message'; message_id?: number | 'latest' };
+type ChatVariableOptions = { type: 'chat' };
 type VariablesUpdater = (variables: Record<string, any>) => Record<string, any> | Promise<Record<string, any>>;
 
 export const TAVERN_HELPER_MIN_VERSION = '3.4.17';
@@ -10,12 +11,23 @@ export const MVU_BATTLE_DATA_TIMEOUT_MS = 30000;
 export interface MvuReadinessOptions {
   mvuTimeoutMs?: number;
   battleDataTimeoutMs?: number;
+  /** First-message setup only needs the MVU host; battle data is created by the opening generation. */
+  requireBattleData?: boolean;
 }
 
 type SharedHostRuntime = Readonly<{
   spec?: string;
   version?: string;
   waitForMessageReady?: (messageId?: number | 'latest', options?: MvuReadinessOptions) => Promise<void>;
+  getMessageVariables?: (messageId?: number | 'latest') => Record<string, any>;
+  updateMessageVariablesWith?: (
+    messageId: number | 'latest',
+    updater: VariablesUpdater,
+  ) => Record<string, any> | Promise<Record<string, any>>;
+  replaceMessageVariables?: (
+    messageId: number | 'latest',
+    variables: Record<string, any>,
+  ) => unknown | Promise<unknown>;
 }>;
 
 /**
@@ -30,6 +42,16 @@ export function getCurrentMessageVariableOptions(): MessageVariableOptions {
   const messageId = Number(runtime.getCurrentMessageId());
   if (!Number.isInteger(messageId) || messageId < 0) throw new Error('无法确定当前酒馆消息楼层');
   return { type: 'message', message_id: messageId };
+}
+
+/**
+ * Resolve Tavern Helper's live message scope without granting general write
+ * access to an older rendered floor.  Callers must still perform their own
+ * domain-level concurrency check before using this (reward settlement is the
+ * only current consumer).
+ */
+export function getLatestMessageVariableOptions(): MessageVariableOptions {
+  return { type: 'message', message_id: 'latest' };
 }
 
 export function isCurrentMessageLatest(): boolean {
@@ -124,6 +146,11 @@ export async function rerenderHistoricalMessageForDepth(): Promise<boolean> {
 /** Read MUV/Tavern Helper variables belonging to this rendered message. */
 export function getCurrentMessageVariables(): Record<string, any> {
   const runtime = requireTavernHelperHost();
+  const sharedHost = runtime.MagicGirlWorld as SharedHostRuntime | undefined;
+  const messageId = getCurrentMessageVariableOptions().message_id ?? 'latest';
+  if (sharedHost?.spec === 'mwg.tavern-runtime/v1' && typeof sharedHost.getMessageVariables === 'function') {
+    return sharedHost.getMessageVariables(messageId);
+  }
   return runtime.getVariables(getCurrentMessageVariableOptions());
 }
 
@@ -162,13 +189,61 @@ export function updateCurrentMessageVariablesWith(
 ): Record<string, any> | Promise<Record<string, any>> {
   assertCurrentMessageLatest();
   const runtime = requireTavernHelperHost();
+  const sharedHost = runtime.MagicGirlWorld as SharedHostRuntime | undefined;
+  const messageId = getCurrentMessageVariableOptions().message_id ?? 'latest';
+  if (
+    sharedHost?.spec === 'mwg.tavern-runtime/v1'
+    && typeof sharedHost.updateMessageVariablesWith === 'function'
+  ) {
+    return sharedHost.updateMessageVariablesWith(messageId, updater);
+  }
   return runtime.updateVariablesWith(updater, getCurrentMessageVariableOptions());
+}
+
+/**
+ * Update the newest chat message even when this iframe belongs to an older
+ * floor.  This deliberately bypasses `assertCurrentMessageLatest`; it is a
+ * narrow transport primitive, not a replacement for normal historical-floor
+ * protection.  Consumers must verify that the intended state is still the
+ * same before mutating it.
+ */
+export function updateLatestMessageVariablesWith(
+  updater: VariablesUpdater,
+): Record<string, any> | Promise<Record<string, any>> {
+  const runtime = requireTavernHelperHost();
+  const sharedHost = runtime.MagicGirlWorld as SharedHostRuntime | undefined;
+  const messageId: number | 'latest' = 'latest';
+  if (
+    sharedHost?.spec === 'mwg.tavern-runtime/v1'
+    && typeof sharedHost.updateMessageVariablesWith === 'function'
+  ) {
+    return sharedHost.updateMessageVariablesWith(messageId, updater);
+  }
+  return runtime.updateVariablesWith(updater, getLatestMessageVariableOptions());
+}
+
+/** Mirror start-of-game locks into chat scope so the next generated floor inherits them. */
+export function updateCurrentChatVariablesWith(
+  updater: VariablesUpdater,
+): Record<string, any> | Promise<Record<string, any>> {
+  assertCurrentMessageLatest();
+  const runtime = requireTavernHelperHost();
+  const options: ChatVariableOptions = { type: 'chat' };
+  return runtime.updateVariablesWith(updater, options);
 }
 
 /** Replace the complete variable snapshot owned by the current message. */
 export function replaceCurrentMessageVariables(variables: Record<string, any>): unknown | Promise<unknown> {
   assertCurrentMessageLatest();
   const runtime = requireTavernHelperHost();
+  const sharedHost = runtime.MagicGirlWorld as SharedHostRuntime | undefined;
+  const messageId = getCurrentMessageVariableOptions().message_id ?? 'latest';
+  if (
+    sharedHost?.spec === 'mwg.tavern-runtime/v1'
+    && typeof sharedHost.replaceMessageVariables === 'function'
+  ) {
+    return sharedHost.replaceMessageVariables(messageId, variables);
+  }
   return runtime.replaceVariables(variables, getCurrentMessageVariableOptions());
 }
 
@@ -254,8 +329,10 @@ export async function ensureMvuRuntimeReady(options: number | MvuReadinessOption
   }
 
   const mvuTimeoutMs = Math.max(1, readinessOptions.mvuTimeoutMs ?? MVU_INITIALIZATION_TIMEOUT_MS);
-  const battleDataTimeoutMs = Math.max(1, readinessOptions.battleDataTimeoutMs ?? MVU_BATTLE_DATA_TIMEOUT_MS);
   await waitForMvuApi(runtime, mvuTimeoutMs);
+  if (readinessOptions.requireBattleData === false) return;
+
+  const battleDataTimeoutMs = Math.max(1, readinessOptions.battleDataTimeoutMs ?? MVU_BATTLE_DATA_TIMEOUT_MS);
 
   const startedAt = Date.now();
   let lastWorldbookError: unknown;

@@ -57,7 +57,8 @@ assert.equal(run.validateRunState(state).ok, true);
 const legacyV1 = { ...structuredClone(first), schemaVersion: 1 };
 const migratedV1 = run.validateRunState(legacyV1);
 assert.equal(migratedV1.ok, true, 'valid schema v1 saves are migrated during restore');
-assert.equal(migratedV1.value.schemaVersion, 2);
+assert.equal(migratedV1.value.schemaVersion, 3);
+assert.equal(migratedV1.value.routeMode, 'legacy-window');
 assert.equal(legacyV1.schemaVersion, 1, 'migration does not mutate the saved snapshot');
 
 const corrupted = structuredClone(state);
@@ -74,5 +75,48 @@ assert.deepEqual(run.validateRunState(missingChoice), { ok: false, message: 'run
 
 const failed = run.completeRunNode(run.enterRunNode(first, first.choices[0].id), { outcome: 'failed' });
 assert.equal(failed.phase, 'lost');
+
+const mapped = run.createRunState({ seed: 20260830 });
+assert.equal(mapped.schemaVersion, 3);
+assert.equal(mapped.routeMode, 'map');
+assert.equal(mapped.actCount, 3);
+assert.equal(mapped.floorsPerAct, 16);
+assert.equal(mapped.opening.phase, 'pending');
+assert.equal(mapped.choices.length, 6);
+assert.deepEqual(
+  mapped.choices.map(choice => choice.id).sort(),
+  [...mapped.map.startNodeIds[1]].sort(),
+);
+assert.equal(run.validateRunState(mapped).ok, true);
+
+let mappedProgress = mapped;
+for (let act = 1; act <= 3; act += 1) {
+  for (let floor = 1; floor <= 16; floor += 1) {
+    const choice = mappedProgress.choices[0];
+    assert.equal(choice.act, act);
+    assert.equal(choice.floor, floor);
+    const beforeRevision = mappedProgress.stateRevision;
+    mappedProgress = run.enterRunNode(mappedProgress, choice.id);
+    assert.equal(mappedProgress.stateRevision, beforeRevision + 1);
+    mappedProgress = run.completeRunNode(mappedProgress, { outcome: 'cleared' });
+    assert.equal(mappedProgress.stateRevision, beforeRevision + 2);
+    assert.equal(mappedProgress.visitedNodeIds.includes(choice.id), true);
+    assert.equal(run.validateRunState(mappedProgress).ok, true);
+  }
+}
+assert.equal(mappedProgress.phase, 'won');
+assert.equal(mappedProgress.nodeCounts.treasure, 3);
+assert.equal(mappedProgress.nodeCounts.boss, 3);
+
+const tamperedMapChoice = structuredClone(mapped);
+tamperedMapChoice.choices[0].id = mapped.map.acts[0].bossNodeId;
+assert.match(run.validateRunState(tamperedMapChoice).message, /map choice/);
+
+const escapedMapStart = run.completeRunNode(run.enterRunNode(mapped, mapped.choices[0].id), { outcome: 'escaped' });
+assert.deepEqual(
+  escapedMapStart.choices.map(choice => choice.id).sort(),
+  mapped.choices.map(choice => choice.id).sort(),
+  'escaping before clearing a node restores the same reachable route choices',
+);
 
 console.log('Portable seeded run progression, route windows, outcomes, and strict restore validation passed.');

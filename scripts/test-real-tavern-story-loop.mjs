@@ -297,7 +297,6 @@ async function generate(api, oai, messages, options) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(180_000),
       });
       const raw = await response.text();
       if (!response.ok) throw new Error(`HTTP ${response.status}: ${raw.slice(0, 500)}`);

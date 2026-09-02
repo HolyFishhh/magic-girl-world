@@ -106,6 +106,12 @@
     "reroll_count": 0
   },
   "run": null,
+  "run_node": null,
+  "run_node_reward": null,
+  "run_event": null,
+  "run_shop": null,
+  "run_treasure": null,
+  "run_rest": null,
   "run_result": null,
   "run_upgrade": null,
   "run_upgrade_target": null,
@@ -130,5 +136,7 @@
     "by_event": { "$meta": { "extensible": true } },
     "by_source": { "$meta": { "extensible": true } }
   },
-  "game_mode": "story"
+  "game_mode": "story",
+  "game_mode_lock": null,
+  "tower_requirements": ""
 }

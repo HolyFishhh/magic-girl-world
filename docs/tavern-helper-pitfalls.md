@@ -557,3 +557,60 @@
 - 原因：旧规则说明器只把公式、`when/on` 和动态创建判定为“需要说明”，没有把普通字面量 `discard_effects` 本身视为复杂时机；内容适配器又优先采用 AI 的 `description`，导致叙事覆盖可执行规则。
 - 处理：任何弃牌后效果、条件、触发器或分支都由编译结果生成权威中文说明。AI 的非机械叙事可以拼接在前，但数值复述和冲突文本会被丢弃；卡牌专属弃牌收益与全局 `on_discard` 触发使用不同文案。
 - 回归：内容说明、战斗适配、普通页、奖励页与牌堆测试共同锁定固定弃牌后格挡、自然中文条件、结构化触发和叙事合并；`0.5.144` 全量发布与官方导入读回通过。
+
+## P63：伪同层应复用酒馆楼层存档，而不是另造浏览器存档
+
+- 目标：玩家在同一个持续存在的大页面里连续游玩，后台 AI 生成时不刷新角色 iframe，也不让玩家等待下一张页面重新挂载。
+- 已核对方案：使用 Tavern Helper `createChatMessages` 静默创建 user 楼层，禁止自动生成和消息区刷新；再调用 `generate`，解析并校验返回；最后静默创建 assistant 楼层并派发项目内部刷新事件。普通 `/send`、`/trigger` 会走酒馆完整发送链并触发楼层刷新，不适合承担这条后台链路。
+- 存储边界：权威进度仍写入酒馆楼层及 MVU，这样分支、读档和变量回溯继续由酒馆负责。不要把主进度只放进 IndexedDB，否则必须自行重造消息分段、存档、快照、分支和变量匹配。
+- 长对话：后台楼层仍会存在于聊天历史；应按阶段使用 `/hide` 或等价官方能力限制进入模型上下文的历史量，但不能删除用于读档的权威楼层。
+- 并发边界：扩展内存保存 Promise、取消器和活动队列；MVU 只保存节点任务的 `requestId/nodeId/revision/phase`。切聊天或改道后，旧响应必须因作用域不匹配而丢弃。
+- UI 边界：第三步到最终提交期间只更新爬塔页内部的流式文本或加载状态；assistant 楼层提交成功后用内部事件刷新当前页面数据，不依赖酒馆消息列表重新渲染。
+- 持续页面边界：在聊天末尾静默追加消息仍会让正在游玩的角色 iframe 变成历史楼层；`refresh:none` 只禁止 DOM 刷新，不会保留该楼层的“最新消息”写权限。这个问题不只发生在战斗，地图选择、事件、领奖和营火也仍要写变量，所以普通“节点结束”同样不是安全点。
+- 归档策略：节点生成后立即把已校验结果写入最新 MVU，保证刷新可恢复；请求/响应对留在扩展待归档队列，只有整局胜利、失败或明确退出后才批量创建隐藏楼层。内存 Promise 和取消器不进入存档，刷新后遗留的 `generating` 状态转为可重试失败。
+- 资料：Discord 教程帖 `1459561889557123335`，核对日期 `2026-08-30`。
+
+## P64：本地酒馆无法访问时先区分“服务不可达”和“浏览器连接错位”
+
+- 不要仅凭某个浏览器标签出现 `ERR_CONNECTION_REFUSED` 就断言 `8012` 服务停止。先检查本地监听端口和 SillyTavern 进程，再检查当前自动化会话实际控制的是哪个标签。
+- in-app browser 的 ambient 标签提示不等于该标签已经被当前测试会话接管；应读取当前受控标签列表并按 URL 选择已存在的酒馆标签，避免重复新开页面或误用旧错误页。
+- 当前验证基线：SillyTavern `1.18.0`、Tavern Helper `4.9.3`、`http://127.0.0.1:8012/`。实机测试同时验证页面状态、控制台错误、角色脚本/MVU 初始化和变量读回，不能只检查 HTTP 200。
+
+## P65：本地测试地址的查询参数会破坏 jQuery UI 标签页并复制整页 DOM
+
+- 症状：API 面板显示“有效的”，但可见输入框仍写着“未连接到 API”；页面同时出现两个 `#send_textarea/#send_form/#sheld`，角色卡按钮点击后看似没有后续。
+- 原因：SillyTavern 的 `<base href="/">` 与带查询参数的地址组合后，背景面板中的 `href="#bg_global_tab"` 会解析成不含查询参数的根地址。jQuery UI 因当前地址不同而把它误判为远程标签，重新请求 `/` 并把整页 HTML 注入 `#bg_tabs`。重复 ID 使 jQuery 的 ID 快路径只更新隐藏副本，真实可见输入区一直保留旧状态。
+- 处理：真实酒馆测试始终使用干净的 `http://127.0.0.1:8012/`，不要用 `?tower-clean=...` 等查询参数隔离测试。需要区分测试轮次时使用聊天名称、消息标记或独立数据目录；重载后先断言 `#sheld` 与 `#send_textarea` 均只有一个，再检查 API 状态。
+- 边界：这是测试 URL 与酒馆前端标签组件的交互问题，不是 DeepSeek 密钥、设计辅助器或 MVU 请求策略故障；不得通过修改 SillyTavern 源码掩盖。
+
+## P66：MVU 的“重新处理变量”不是额外模型重试
+
+- 症状：点击“重新处理变量”后没有网络请求，服务端日志也看不到第二轮模型；用户误以为 API 或扩展失效。
+- 原因：该按钮只清理并重新解析当前楼层已经存在的 `<UpdateVariable>`。真正重新调用额外模型的入口是 MVU 的“重试额外模型解析”；打包脚本曾只替换 MVU 内容，没有同步脚本按钮元数据，导致新版入口被保留为隐藏或完全缺失。
+- 处理：角色卡打包时强制启用 MVU 按钮组，并保证恰好一个可见的“重试额外模型解析”。项目内自然语言修复仍通过跨脚本按钮解析触发同一个事件，不创建新楼层。
+- 回归：角色卡契约测试读取最终 PNG 元数据，断言该按钮存在、可见且不重复；真实酒馆验收必须点击此入口并在服务端确认出现第二轮请求。
+
+## P67：持久扩展不能假定 TavernHelper 顶层暴露事件发送
+
+- 症状：消息读取、变量读取和额外模型按钮发现都正常，但自然语言卡牌修复在真正触发 MVU 按钮时报告 `eventEmit` 缺失；测试夹具若自行伪造同名函数会掩盖这个问题。
+- 原因：`globalThis.TavernHelper` 的公开顶层对象提供消息、变量、生成和提示注入函数，但事件发送仅存在于内部绑定对象，不属于稳定公共接口；当前实现也没有实际发出可依赖的 `global_TavernHelper_initialized` 事件。扩展模块加载完成时，Tavern Helper 还可能正在 jQuery ready 初始化阶段。
+- 处理：SillyTavern 官方 `getContext()` 负责生命周期、聊天作用域、持久化和 `eventSource.emit`；Tavern Helper 只负责消息、变量和生成。扩展使用代理桥接，在不修改 Tavern Helper 对象的前提下，把 `eventEmit` 路由到官方事件源；初始化通过短时能力轮询与官方 context 降级完成，不等待不存在的全局通知。
+- 消息重放：写回指定 `messageId` 后，重新确认 `chatId + messageId` 仍是当前作用域，再发 `MESSAGE_RECEIVED(messageId, 'extension')`。`setChatMessages` 不会自动重跑 MVU；修改 `extra.reasoning` 时必须保留原 `extra` 其他字段。
+- 提示注入：不要依赖异步 extension-prompt filter 做角色卡隔离；在 `GENERATE_AFTER_DATA` / `CHAT_COMPLETION_SETTINGS_READY` 监听器内显式检查角色卡作用域和 `Mvu.isDuringExtraAnalysis()`，直接修改本次请求 payload，并用标记去重。
+- 回归：`test-reasoning-final-recovery` 使用一个没有顶层 `eventEmit` 的 Tavern Helper 夹具，断言官方事件源收到 `message_received, messageId, extension`；同时断言桥接不改变原始 Tavern Helper 对象和方法接收者。
+
+## P68：扩展加载顺序不等于运行时能力已经就绪
+
+- 症状：扩展面板显示已启用，但刷新后第一次点击自然语言修复偶发报告 Tavern Helper 接口未就绪；若 SillyTavern 官方 context 在生命周期钩子触发时仍为空，扩展还可能再也不尝试激活。
+- 原因：`loading_order` 只决定模块加载顺序。Tavern Helper 在自己的 jQuery ready 回调中才发布顶层 API，SillyTavern context、角色卡 iframe 与 MVU 也可能在不同 tick 完成初始化。把一次空 context 或空 `globalThis.TavernHelper` 当成永久状态，会制造刷新相关的竞态。
+- 处理：控制器只有拿到官方 context 后才标记 active，并保存实际订阅的 eventSource 供停用时解除；持久修复入口在固定 `chatId` 与角色卡作用域内对 Tavern Helper 必需能力做最多 10 秒的有界轮询。轮询期间切聊天或停用会立即拒绝，后台模拟与校准在 await 返回后也重新检查 active 与聊天作用域。
+- 回归：插件契约测试覆盖“第一次 context 为空、第二次成功激活”；类型检查和持久修复测试继续锁定原楼层事务、回滚和跨聊天保护。
+
+## P69：自动 MVU 二阶段不经过普通生成事件
+
+- 症状：剧情第一轮生成正常，但扩展在 `generate_after_data` / `chat_completion_settings_ready` 中从未观察到自动 MVU 的第二轮请求；设计上下文因此没有进入变量模型。
+- 原因：MVU 自动二阶段直接调用 Tavern Helper `generateRaw()`。这条链路不走酒馆普通生成的两个请求整形事件，但会在请求前发布 `mag_variable_update_started`，并在结束时发布 `mag_variable_update_ended`。
+- 处理：扩展监听 `mag_variable_update_started`，同步读取当前最新楼层 MVU，再用 `injectPrompts(..., { once: true })` 注入一条 `in_chat/depth=0/system` 设计上下文。完成事件、切换聊天或扩展停用时必须清理该一次性提示。
+- 重复边界：MVU 对用户消息入楼也会发布一次 `mag_variable_update_started`。不能只按事件名注入；还要检查最新楼层必须是 `is_user === false` 且 `is_system !== true`，只允许刚完成的助手正文楼层。否则会一轮累计两次，甚至把评分提示提前送进剧情第一轮。
+- 验收：真实酒馆中一条普通剧情消息使累计注入由 `7` 变为 `8`，最新注入楼层对应新助手楼层 `22`；剧情保持原预设，MVU 在 `8.6` 秒后写回，计时完成后不再增长。
+- 测试陷阱：加载窗为了保留历史会在隐藏 DOM 中继续存在“正在生成变量”。验收脚本必须同时检查节点可见性（例如 `offsetParent !== null`）或根节点 `data-phase/data-busy`，不得只以文字是否存在判定二阶段仍在运行。

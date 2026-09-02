@@ -82,7 +82,7 @@ const PATH_LABELS: Readonly<Record<string, string>> = {
   'reward.limits': '奖励选择上限',
 };
 
-const INTERNAL_PATHS = new Set(['reward.request', 'game_mode', 'run']);
+const INTERNAL_PATHS = new Set(['reward.request', 'game_mode', 'game_mode_lock', 'run']);
 
 export function extractLastMvuUpdateBlock(message: string): string {
   const matches = [

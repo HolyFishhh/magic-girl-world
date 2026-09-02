@@ -40,10 +40,15 @@ export class BattleLog {
       $('body').append(logHtml);
 
       // 添加关闭按钮事件
-      $('#close-battle-log').on('click', () => {
+    }
+
+    // The normal card build already contains this panel. Rebind on every
+    // runtime mount so pre-rendered and dynamically-created panels match.
+    $('#close-battle-log')
+      .off('click.mwgBattleLog')
+      .on('click.mwgBattleLog', () => {
         $('#battle-log').fadeOut(200);
       });
-    }
 
     this.logContainer = $('#battle-log .log-content');
   }
@@ -262,14 +267,28 @@ export class BattleLog {
       }
     }
     const journalResourceSpends = new Map<number, string[]>();
+    const journalPlayerCards = new Map<number, string[]>();
     for (const event of gameState.eventJournal?.events || []) {
-      if (event.kind !== 'resource_spent' || event.resource === 'energy' || event.spent <= 0) continue;
       const turn = Math.max(1, Math.floor(event.turn || 1));
+      if (
+        event.kind === 'card_played' &&
+        event.phase === 'before' &&
+        event.replayIndex === 0
+      ) {
+        const cards = journalPlayerCards.get(turn) || [];
+        const name = String(event.cardName || event.templateId || '未知卡牌');
+        cards.push(event.automatic ? `${name}（自动）` : name);
+        journalPlayerCards.set(turn, cards);
+        continue;
+      }
+      if (event.kind !== 'resource_spent' || event.resource === 'energy' || event.spent <= 0) continue;
       const entries = journalResourceSpends.get(turn) || [];
       entries.push(`消耗${event.spent}点${customResources.get(event.resource) || event.resource}`);
       journalResourceSpends.set(turn, entries);
     }
-    if (this.entries.length === 0 && journalResourceSpends.size === 0) return '- 无可用战斗事件记录';
+    if (this.entries.length === 0 && journalResourceSpends.size === 0 && journalPlayerCards.size === 0) {
+      return '- 无可用战斗事件记录';
+    }
 
     const grouped = new Map<number, BattleHistoryEntry[]>();
     for (const entry of this.entries) {
@@ -279,6 +298,9 @@ export class BattleLog {
       grouped.set(turn, current);
     }
     for (const turn of journalResourceSpends.keys()) {
+      if (!grouped.has(turn)) grouped.set(turn, []);
+    }
+    for (const turn of journalPlayerCards.keys()) {
       if (!grouped.has(turn)) grouped.set(turn, []);
     }
 
@@ -297,9 +319,13 @@ export class BattleLog {
     return [...grouped.entries()]
       .sort(([left], [right]) => left - right)
       .map(([turn, entries]) => {
-        const playerActions = countActions(
-          entries.filter(entry => entry.actor === 'player').map(entry => entry.actionName || ''),
-        );
+        const journalCards = journalPlayerCards.get(turn) || [];
+        const journalCardNames = new Set(journalCards.map(name => name.replace(/（自动）$/, '')));
+        const loggedPlayerActions = entries
+          .filter(entry => entry.actor === 'player')
+          .map(entry => entry.actionName || '')
+          .filter(name => !journalCardNames.has(name));
+        const playerActions = countActions([...journalCards, ...loggedPlayerActions]);
         const enemyActions = countActions(
           entries
             .filter(entry => entry.actor === 'enemy')

@@ -284,7 +284,11 @@ button:disabled,
 }
 
 .battle-main-grid.multi-enemy-battle {
-  grid-template-rows: minmax(184px, 26vh) minmax(0, 1fr) 96px;
+  // `vh` follows the outer Tavern viewport in some embedded runtimes.  On a
+  // tall desktop that made the enemy row exceed this fixed-height game board,
+  // collapsing the stage/hand area to zero.  Keep every combatant visible but
+  // reserve a real interaction surface for the cards in all embeddings.
+  grid-template-rows: minmax(160px, 184px) minmax(126px, 1fr) 96px;
 }
 
 .enemy-section,
@@ -361,23 +365,129 @@ button:disabled,
 .enemy-roster-copy {
   display: grid;
   min-width: 0;
-  gap: 1px;
+  gap: 3px;
 }
 
-.enemy-roster-copy b,
-.enemy-roster-copy small {
+.enemy-roster-heading,
+.enemy-roster-action,
+.enemy-roster-supports {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.enemy-roster-heading {
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.enemy-roster-heading b {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-.enemy-roster-copy b {
+.enemy-roster-heading b {
   font: 600 12px/1.1 var(--mwg-font-display);
 }
 
-.enemy-roster-copy small {
-  opacity: 0.78;
-  font: 500 9px/1.15 var(--mwg-font-data);
+.enemy-roster-heading em {
+  flex: 0 0 auto;
+  color: #46789b;
+  font: 700 9px/1 var(--mwg-font-data);
+  font-style: normal;
+}
+
+.enemy-roster-bars {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
+  gap: 3px;
+}
+
+.enemy-roster-bar {
+  position: relative;
+  height: 9px;
+  overflow: hidden;
+  border: 1px solid rgba(84, 52, 70, 0.18);
+  border-radius: 999px;
+  background: rgba(86, 62, 78, 0.12);
+}
+
+.enemy-roster-bar > i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+}
+
+.enemy-roster-bar.hp > i {
+  background: linear-gradient(90deg, #b93d56, #ec7582);
+}
+
+.enemy-roster-bar.lust > i {
+  background: linear-gradient(90deg, #b65c96, #ee8fc2);
+}
+
+.enemy-roster-bar > b {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  color: #fff;
+  font: 700 7px/8px var(--mwg-font-data);
+  text-align: center;
+  text-shadow: 0 1px 2px rgba(20, 10, 18, 0.85);
+}
+
+.enemy-roster-action {
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.enemy-roster-action > strong {
+  min-width: 0;
+  overflow: hidden;
+  font: 600 9px/1.15 var(--mwg-font-body);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.enemy-roster-action > span,
+.enemy-roster-supports {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+}
+
+.enemy-roster-intent-badge,
+.enemy-roster-support {
+  display: inline-flex;
+  min-width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(120, 75, 101, 0.2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.68);
+  font: 700 8px/1 var(--mwg-font-data);
+}
+
+.enemy-roster-intent-badge i {
+  font-style: normal;
+}
+
+.enemy-roster-intent-badge b {
+  margin-left: 1px;
+  font: inherit;
+}
+
+.enemy-roster-supports {
+  overflow: hidden;
+}
+
+.enemy-roster-support {
+  width: 16px;
+  flex: 0 0 16px;
+  font-size: 10px;
 }
 
 .enemy-section {
@@ -1161,6 +1271,140 @@ button:disabled,
   transform-origin: right center;
 }
 
+.stage-enemy-party {
+  position: relative;
+  display: flex;
+  min-width: clamp(54px, 13vw, 126px);
+  height: clamp(54px, 8vh, 72px);
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 2px;
+  isolation: isolate;
+}
+
+/* A multi-enemy encounter uses an actual formation instead of overlapping
+ * cards.  Five actors plus their intent badges remain independently readable
+ * in the compact Tavern iframe, while the middle lane still has room for
+ * action animations. */
+.multi-enemy-battle .battle-stage {
+  grid-template-columns: minmax(48px, 0.55fr) minmax(68px, 1fr) minmax(190px, 1.55fr);
+}
+
+.stage-enemy.has-enemy-party {
+  padding-inline: 2px 5px;
+}
+
+.stage-enemy.has-enemy-party .stage-intent-summary {
+  display: none;
+}
+
+.stage-enemy.has-enemy-party .stage-enemy-party {
+  width: min(230px, 45vw);
+  min-width: min(190px, 45vw);
+  justify-content: stretch;
+}
+
+.stage-enemy-member {
+  position: relative;
+  display: grid;
+  width: clamp(40px, 6.4vh, 58px);
+  height: clamp(50px, 7.8vh, 68px);
+  flex: 0 0 clamp(40px, 6.4vh, 58px);
+  margin-left: 0;
+  padding: 9px 0 0;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.76;
+  transform: translateY(calc((var(--party-depth, 1) - 1) * -1px)) scale(0.92);
+  transition: opacity 140ms ease, transform 140ms ease, filter 140ms ease;
+  z-index: var(--party-depth, 1);
+}
+
+.stage-enemy.has-enemy-party .stage-enemy-member {
+  width: auto;
+  min-width: 34px;
+  max-width: 48px;
+  flex: 1 1 40px;
+  opacity: 0.88;
+  transform: scale(0.96);
+}
+
+.stage-enemy.has-enemy-party .stage-enemy-member:nth-child(even):not(.is-active) {
+  transform: translateY(-2px) scale(0.96);
+}
+
+.stage-enemy-member:hover,
+.stage-enemy-member:focus-visible,
+.stage-enemy-member.is-active {
+  opacity: 1;
+  outline: none;
+  transform: translateY(-2px) scale(1);
+  filter: brightness(1.08);
+}
+
+.stage-enemy-member.is-active {
+  z-index: 20;
+}
+
+.stage-enemy.has-enemy-party .stage-enemy-member.is-active {
+  transform: translateY(-3px) scale(1.04);
+}
+
+.stage-enemy-member-intent {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  z-index: 2;
+  display: inline-flex;
+  min-width: 22px;
+  max-width: 54px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  padding: 0 4px;
+  overflow: hidden;
+  border: 1px solid rgba(217, 191, 250, 0.5);
+  border-radius: 999px;
+  background: rgba(23, 17, 46, 0.88);
+  color: #fff;
+  font: 700 8px/1 var(--mwg-font-data);
+  white-space: nowrap;
+  box-shadow: 0 2px 7px rgba(18, 12, 39, 0.28);
+  transform: translateX(-50%);
+}
+
+.stage-enemy-member-intent b {
+  font: inherit;
+}
+
+.stage-enemy-member .stage-emoji {
+  width: clamp(40px, 6.4vh, 58px);
+  height: clamp(40px, 6.4vh, 58px);
+  font-size: clamp(24px, 4.6vh, 39px);
+}
+
+.stage-enemy.has-enemy-party .stage-enemy-member .stage-emoji {
+  width: clamp(34px, 5.2vh, 46px);
+  height: clamp(34px, 5.2vh, 46px);
+  font-size: clamp(23px, 4vh, 34px);
+}
+
+.stage-enemy:not(.has-enemy-party) .stage-enemy-party {
+  min-width: clamp(42px, 7vh, 62px);
+}
+
+.stage-enemy:not(.has-enemy-party) .stage-enemy-member {
+  width: clamp(42px, 7vh, 62px);
+  height: clamp(50px, 8vh, 70px);
+  margin-left: 0;
+  opacity: 1;
+  transform: none;
+}
+
 .stage-action-lane {
   position: relative;
   align-self: stretch;
@@ -1736,7 +1980,8 @@ button:disabled,
   z-index: 2850;
   max-height: min(70vh, 460px);
   padding: 13px 14px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   border: 1px solid var(--line-strong);
   border-radius: 11px;
   background: var(--paper-raised);
@@ -3363,6 +3608,37 @@ html body .modifier-panel-content {
     grid-template-rows: 38px minmax(0, 1fr);
   }
 
+  .enemy-section.is-multi-enemy {
+    grid-template-rows: 38px auto minmax(0, 1fr);
+  }
+
+  .enemy-roster {
+    grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+    gap: 2px;
+    padding: 2px 4px;
+  }
+
+  .enemy-roster-unit {
+    gap: 3px;
+    padding: 2px 4px;
+  }
+
+  .enemy-roster-emoji {
+    font-size: 16px;
+  }
+
+  .enemy-roster-heading b {
+    font-size: 10px;
+  }
+
+  .enemy-roster-action > strong {
+    font-size: 8px;
+  }
+
+  .enemy-roster-supports {
+    display: none;
+  }
+
   .player-section {
     grid-template-rows: 30px minmax(0, 1fr);
   }
@@ -3495,6 +3771,54 @@ html body .modifier-panel-content {
     font-size: clamp(27px, 9vw, 38px);
   }
 
+  .stage-enemy-party {
+    min-width: 76px;
+    height: 56px;
+  }
+
+  .stage-enemy-member {
+    width: 42px;
+    height: 54px;
+    flex-basis: 42px;
+    margin-left: 0;
+  }
+
+  .stage-enemy-member .stage-emoji {
+    width: 42px;
+    height: 42px;
+    font-size: 29px;
+  }
+
+  .multi-enemy-battle .battle-stage {
+    grid-template-columns: minmax(44px, 0.55fr) minmax(52px, 0.8fr) minmax(180px, 1.65fr);
+  }
+
+  .stage-enemy.has-enemy-party .stage-enemy-party {
+    width: min(214px, 52vw);
+    min-width: min(180px, 52vw);
+  }
+
+  .stage-enemy.has-enemy-party .stage-enemy-member {
+    width: auto;
+    min-width: 32px;
+    height: 52px;
+    flex: 1 1 36px;
+  }
+
+  .stage-enemy.has-enemy-party .stage-enemy-member .stage-emoji {
+    width: 34px;
+    height: 34px;
+    font-size: 25px;
+  }
+
+  .stage-enemy.has-enemy-party .stage-enemy-member-intent {
+    min-width: 20px;
+    max-width: 42px;
+    height: 16px;
+    padding-inline: 3px;
+    font-size: 7px;
+  }
+
   .hand-section {
     grid-template-rows: 27px minmax(0, 1fr);
   }
@@ -3555,6 +3879,22 @@ html body .modifier-panel-content {
     grid-template-rows: 104px minmax(0, 1fr) 92px;
   }
 
+  /* The generic fullscreen geometry above is intentionally compact for a
+   * single opponent.  A party needs one more real row for its roster; without
+   * this override the roster becomes an implicit grid row and is squeezed on
+   * top of the selected enemy's bars.  Reserve enough room for five actors in
+   * two wrapped rows while leaving the flexible middle lane to the stage and
+   * hand. */
+  html.mwg-fullscreen-active .battle-main-grid.multi-enemy-battle,
+  html:fullscreen .battle-main-grid.multi-enemy-battle {
+    grid-template-rows: minmax(176px, 190px) minmax(0, 1fr) 92px;
+  }
+
+  html.mwg-fullscreen-active .enemy-section.is-multi-enemy,
+  html:fullscreen .enemy-section.is-multi-enemy {
+    grid-template-rows: 38px auto minmax(0, 1fr);
+  }
+
   html.mwg-fullscreen-active .center-battle-area,
   html:fullscreen .center-battle-area {
     grid-template-rows: minmax(88px, 1fr) 178px;
@@ -3583,6 +3923,44 @@ html body .modifier-panel-content {
   .deck-stat {
     min-width: 0;
     padding-inline: 2px;
+  }
+
+  /* Tavern's mobile chat column can be considerably narrower than the device
+   * viewport. Keep a five-enemy formation inside the real iframe width instead
+   * of relying on viewport units, which otherwise clip the final combatant. */
+  .multi-enemy-battle .battle-stage {
+    grid-template-columns: minmax(36px, 44px) minmax(34px, 48px) minmax(0, 1fr);
+  }
+
+  .stage-enemy.has-enemy-party {
+    min-width: 0;
+    padding-inline: 0 2px;
+  }
+
+  .stage-enemy.has-enemy-party .stage-enemy-party {
+    width: 100%;
+    min-width: 0;
+    gap: 0;
+  }
+
+  .stage-enemy.has-enemy-party .stage-enemy-member {
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    flex: 1 1 0;
+  }
+
+  .stage-enemy.has-enemy-party .stage-enemy-member .stage-emoji {
+    width: min(30px, 100%);
+    height: 32px;
+    font-size: 22px;
+  }
+
+  .stage-enemy.has-enemy-party .stage-enemy-member-intent {
+    min-width: 18px;
+    max-width: 34px;
+    padding-inline: 2px;
+    font-size: 6.5px;
   }
 
   .pile-label {

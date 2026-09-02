@@ -2,10 +2,12 @@ import {
   completeRunNode,
   createRunState,
   enterRunNode,
+  isBattleRunNode,
   settleEventOutcome,
   spendRunGold,
   validateRunState,
   parseRunResultInput,
+  recordTowerEncounter,
   type RunNodeKind,
   type RunNodeOutcome,
   type RunState,
@@ -59,6 +61,7 @@ const BATTLE_GOLD: Record<RunNodeKind, number> = {
   event: 0,
   rest: 0,
   shop: 0,
+  treasure: 0,
 };
 
 function requireRecord(value: unknown, message: string): Record<string, any> {
@@ -269,15 +272,29 @@ export function settleBattleRunInStat(
   statValue: unknown,
   result: BattleRunResult,
   expectedNodeId?: string,
+  scoreSnapshot?: { playerDeckScore: number; enemyScore: number },
 ): RunMutationResult | null {
   const stat = requireRecord(statValue, 'stat_data is unavailable');
   const previous = readRunState(stat);
   if (!previous || previous.phase !== 'in_node' || !previous.currentNode) return null;
   if (expectedNodeId && previous.currentNode.id !== expectedNodeId) throw new Error('战斗结果所属路线节点已过期');
-  if (previous.currentNode.kind === 'rest' || previous.currentNode.kind === 'shop') return null;
+  if (!isBattleRunNode(previous.currentNode.kind)) return null;
   const outcome: RunNodeOutcome = result === 'victory' ? 'cleared' : result === 'defeat' ? 'failed' : 'escaped';
   const goldDelta = result === 'victory' ? BATTLE_GOLD[previous.currentNode.kind] : 0;
-  const run = completeRunNode(previous, { outcome, goldDelta });
+  const scoredPrevious = scoreSnapshot && previous.routeMode === 'map'
+    ? {
+        ...previous,
+        score: recordTowerEncounter(previous.score, {
+          nodeId: previous.currentNode.id,
+          act: previous.currentNode.act,
+          floor: previous.currentNode.floor,
+          playerDeckScore: scoreSnapshot.playerDeckScore,
+          enemyScore: scoreSnapshot.enemyScore,
+          outcome: result === 'victory' ? 'victory' : result === 'defeat' ? 'defeat' : 'escaped',
+        }),
+      }
+    : previous;
+  const run = completeRunNode(scoredPrevious, { outcome, goldDelta });
   stat.run = run;
   stat.run_upgrade = null;
   stat.run_transform = null;

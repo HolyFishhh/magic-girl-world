@@ -43,6 +43,32 @@ for (const battle of [variables.stat_data.battle]) {
 assert.equal(variables.battle, flatBattle, 'flat battle data is outside the current settlement contract');
 assert.deepEqual(variables.stat_data.reward.request, { marker: '[MVU_BATTLE_SETTLEMENT]', result: 'victory' });
 
+const depletedItemVariables = {
+  stat_data: {
+    battle: {
+      ...root(),
+      items: [
+        { id: 'empty_tonic', name: 'Empty tonic', count: 1 },
+        { id: 'spare_tonic', name: 'Spare tonic', count: 2 },
+      ],
+    },
+  },
+};
+settleTavernBattleVariables(depletedItemVariables, {
+  result: 'victory',
+  player: { currentHp: 12, currentLust: 7 },
+  items: [
+    { id: 'empty_tonic', count: 0 },
+    { id: 'spare_tonic', count: 1 },
+  ],
+  turns: 1,
+});
+assert.deepEqual(
+  depletedItemVariables.stat_data.battle.items.map(item => ({ id: item.id, count: item.count })),
+  [{ id: 'spare_tonic', count: 1 }],
+  'battle settlement removes a consumable after its final use',
+);
+
 const victoryWithRequest = { stat_data: { battle: { ...root(), exp: 10 } } };
 settleTavernBattleVariables(victoryWithRequest, {
   result: 'victory',

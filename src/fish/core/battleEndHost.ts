@@ -13,6 +13,7 @@ import {
   triggeredEffectProgramToDisplayTags,
   type BattleEndResult,
   type EffectProgram,
+  readGameMode,
 } from '../../game-core';
 import type { GameState } from '../../game-core';
 import { TavernBattleEffectPresenter, type BattleEndDialogRequest } from '../ui/battleEffectPresenter';
@@ -21,6 +22,7 @@ import { GameStateManager } from './gameStateManager';
 import { BattleLog } from '../modules/battleLog';
 import { readRunState } from '../../runtime/runStateAdapter';
 import { writeBackMvuCardProgression } from './mvuBattleAdapter';
+import { switchRuntimeView } from '../../runtime/runtimeViewSwitcher';
 
 export interface TavernBattleEndPorts {
   getState(): GameState;
@@ -32,6 +34,7 @@ export interface TavernBattleEndPorts {
   replaceVariables(variables: Record<string, any>): Promise<unknown>;
   settleBattle(input: Parameters<typeof settleCurrentMessageBattle>[0]): Promise<void>;
   reloadPage(): void;
+  openCommonView?(): void;
 }
 
 function battleEndsRun(variables: Record<string, any>, result: BattleEndResult): boolean {
@@ -142,6 +145,7 @@ function compactResources(value: unknown): Array<{ name: string; emoji?: string;
 /** Tavern-only continuation boundary for leaving a completed battle message. */
 export class TavernBattleEndHost {
   private static instance: TavernBattleEndHost;
+  private towerSettlementPending = false;
 
   public constructor(
     private readonly continuationHost = TavernContinuationHost.getInstance(),
@@ -158,6 +162,7 @@ export class TavernBattleEndHost {
         replaceVariables: variables => Promise.resolve(replaceCurrentMessageVariables(variables)),
         settleBattle: input => settleCurrentMessageBattle(input),
         reloadPage: () => location.reload(),
+        openCommonView: () => switchRuntimeView('common'),
       };
     })(),
     private readonly injectedPresentation?: TavernBattleEndPresentationPorts,
@@ -209,9 +214,56 @@ export class TavernBattleEndHost {
     });
   }
 
+  /** Settle a tower fight in-place without creating or triggering a chat floor. */
+  public async confirmTowerBattleEnd(result: BattleEndResult): Promise<void> {
+    if (this.towerSettlementPending) return;
+    this.towerSettlementPending = true;
+    const gameState = this.ports.getState();
+    const settlement: Parameters<TavernBattleEndPorts['settleBattle']>[0] = {
+      result,
+      request: gameState.battleRequest,
+      player: gameState.player,
+      items: gameState.player.items || [],
+      turns: gameState.currentTurn,
+      rewardRequest: null,
+    };
+    await this.ports.saveBattleSession?.();
+    const snapshot = cloneVariables(this.ports.readVariables());
+    try {
+      const persistentCards = this.ports.finalizeCardProgression?.(battleEndsRun(snapshot, result));
+      if (persistentCards) settlement.persistentCards = persistentCards;
+      await this.ports.clearBattleSession();
+      await this.ports.settleBattle(settlement);
+      this.ports.openCommonView?.();
+    } catch (error) {
+      try {
+        await this.restoreBeforeSend(snapshot);
+      } catch (rollbackError) {
+        throw new AggregateError([error, rollbackError], '爬塔战斗结算失败，且完整状态回滚失败');
+      } finally {
+        this.towerSettlementPending = false;
+      }
+      throw error;
+    }
+  }
+
+  private isActiveTowerBattle(): boolean {
+    const stat = this.ports.readVariables()?.stat_data;
+    const run = readRunState(stat);
+    return (
+      readGameMode(stat) === 'tower' &&
+      run?.schemaVersion === 3 &&
+      run.routeMode === 'map' &&
+      run.phase === 'in_node' &&
+      !!run.currentNode &&
+      ['battle', 'elite', 'boss'].includes(run.currentNode.kind)
+    );
+  }
+
   public async presentBattleEnd(result: BattleEndResult, narrativeText?: string): Promise<void> {
     try {
       const gameState = this.ports.getState();
+      const towerMode = this.isActiveTowerBattle();
       const player = gameState.player;
       const enemy = gameState.enemy;
       const enemies = [
@@ -332,11 +384,13 @@ export class TavernBattleEndHost {
         result,
         battleSummary: prompt.promptedBattleSummary,
         narrativeText,
+        mode: towerMode ? 'tower' : 'story',
         onConfirm: playerContinuation => {
+          if (towerMode) return this.confirmTowerBattleEnd(result);
           const continuationPrompt = formatBattleEndPrompt({ ...promptInput, playerContinuation });
           return this.confirmBattleEnd(result, continuationPrompt.promptedBattleSummary, rewardRequest);
         },
-        onRestart: () => this.restartBattle(),
+        ...(towerMode ? {} : { onRestart: () => this.restartBattle() }),
       });
       presentation.addLog(`战斗结束：${prompt.resultText}`, 'system');
     } catch (error) {

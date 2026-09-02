@@ -15,7 +15,11 @@ const interfaces = [
     scriptName: '开始模块',
     source: 'dist/src/start/index.html',
     output: 'dist/tavern/start-interface.json',
-    findRegex: '(?:\\[开始游戏.*\\]|<CHARACTER_INIT_PENDING>)\\s*(?:<StatusPlaceHolderImpl\\s*\\/?>)?',
+    // The start view belongs only to the immutable character greeting.  The
+    // first generated assistant response may carry CHARACTER_INIT_PENDING;
+    // matching that marker here makes both start and common emit fenced HTML
+    // on the same floor, and Tavern Helper renders only the first iframe.
+    findRegex: '^\\s*\\[开始游戏[^\\r\\n]*\\]\\s*(?:<StatusPlaceHolderImpl\\s*\\/?>)?\\s*$',
     placement: [2],
     minDepth: 0,
     maxDepth: 0,
@@ -28,7 +32,12 @@ const interfaces = [
     scriptName: '变量更新展示',
     source: 'dist/src/common/update/index.html',
     output: 'dist/tavern/update-interface.json',
-    findRegex: '<UpdateVariable>[\\s\\S]*?<\\/UpdateVariable>',
+    // A normal story or battle response also carries a page marker. Let that
+    // page consume the update block and marker in one replacement so Tavern
+    // Helper never receives two adjacent fenced HTML documents. The dedicated
+    // update view remains available for a rare update-only message.
+    findRegex:
+      '<UpdateVariable>[\\s\\S]*?<\\/UpdateVariable>(?![\\s\\S]*(?:<StatusPlaceHolderImpl\\s*\\/?>|<BATTLE_START>))',
     placement: [2],
     minDepth: 0,
     maxDepth: 2,
@@ -42,7 +51,7 @@ const interfaces = [
     source: 'dist/src/common/index.html',
     output: 'dist/tavern/common-interface.json',
     findRegex:
-      '(?<![\\s\\S]*<BATTLE_START>[\\s\\S]*)(?![\\s\\S]*<BATTLE_START>)(?:(?:<CONTENT_PENDING>\\s*)?<StatusPlaceHolderImpl\\s*\\/?>|<CONTENT_PENDING>)',
+      '(?<![\\s\\S]*<BATTLE_START>[\\s\\S]*)(?![\\s\\S]*<BATTLE_START>)(?:<CHARACTER_INIT_PENDING>\\s*)?(?:<UpdateVariable>[\\s\\S]*?<\\/UpdateVariable>\\s*)?(?:(?:<CONTENT_PENDING>\\s*)?<StatusPlaceHolderImpl\\s*\\/?>|<CONTENT_PENDING>)',
     placement: [2],
     minDepth: 0,
     maxDepth: 2,
@@ -56,7 +65,7 @@ const interfaces = [
     source: 'dist/src/fish/index.html',
     output: 'dist/tavern/fish-interface.json',
     findRegex:
-      '(?:<StatusPlaceHolderImpl\\s*\\/?>\\s*)?<BATTLE_START>\\s*(?:<StatusPlaceHolderImpl\\s*\\/?>)?',
+      '(?:<UpdateVariable>[\\s\\S]*?<\\/UpdateVariable>\\s*)?(?:<StatusPlaceHolderImpl\\s*\\/?>\\s*)?<BATTLE_START>\\s*(?:<StatusPlaceHolderImpl\\s*\\/?>)?',
     placement: [2],
     minDepth: 0,
     maxDepth: 0,

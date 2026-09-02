@@ -36,7 +36,11 @@ const originalVariables = {
 let variables = structuredClone(originalVariables);
 let chatVariables = structuredClone(originalVariables);
 let emitted = '';
+let emitCalls = 0;
+let globalExtraAnalysis = false;
 let createdMessages = 0;
+let lastRefresh = '';
+let emitMode = 'new-block';
 const mvuScriptId = 'mvu-script-id';
 
 function getStringHash(value, seed = 0) {
@@ -57,7 +61,9 @@ Object.assign(globalThis, {
   getLastMessageId: () => 3,
   getChatMessages: () => [{ message }],
   getVariables: options =>
-    structuredClone(options?.type === 'message' && options?.message_id === 2 ? baselineVariables : variables),
+    options?.type === 'global'
+      ? { extra_analysis: globalExtraAnalysis }
+      : structuredClone(options?.type === 'message' && options?.message_id === 2 ? baselineVariables : variables),
   updateVariablesWith: updater => {
     variables = updater(structuredClone(variables));
   },
@@ -66,8 +72,9 @@ Object.assign(globalThis, {
     if (options?.type === 'chat') chatVariables = structuredClone(value);
     else variables = structuredClone(value);
   },
-  setChatMessages: async updates => {
+  setChatMessages: async (updates, options) => {
     if (typeof updates[0]?.message === 'string') message = updates[0].message;
+    lastRefresh = options?.refresh || '';
   },
   getAllEnabledScriptButtons: () => ({
     character_script: [{ button_id: 'button:character:请求修复', button_name: '请求修复' }],
@@ -92,29 +99,48 @@ Object.assign(globalThis, {
       : [],
   eventEmit: async event => {
     emitted = event;
+    emitCalls += 1;
     assert.match(message, /\[战斗内容修复\]/);
     assert.doesNotMatch(message, /<(?:CHARACTER_INIT_PENDING|CONTENT_PENDING|BATTLE_PENDING|BATTLE_START)>/);
     assert.match(message, /<UpdateVariable>old<\/UpdateVariable>/);
-    message = message
-      .replace(/<UpdateVariable>[\s\S]*?<\/UpdateVariable>/, '')
-      .replace(/<BATTLE_START>/g, '')
-      .trimEnd();
-    // MVU retry deletes this floor's variables, rebases from the preceding floor,
-    // then applies only the repair commands returned by the second model.
-    variables = structuredClone(baselineVariables);
-    variables.stat_data.status.time = '00年04月07日 14:20';
-    variables.stat_data.status.location = '王都外环·试炼斗技场';
-    variables.stat_data.battle.player_lust_effect = {
-      name: '反面教材',
-      emoji: '😤',
-      effects: { damage: 8, draw: 1 },
-    };
-    variables.stat_data.battle.enemy.lust_effect = {
-      name: '灼热冲撞',
-      emoji: '🔥',
-      effects: { damage: 8, lust: 5 },
-    };
-    message += '\n\n<UpdateVariable>fixed</UpdateVariable>\n\n<StatusPlaceHolderImpl/>';
+    if (emitMode === 'dropped-first' && emitCalls === 1) return;
+    globalExtraAnalysis = true;
+    // Tavern Helper's event emitter resolves before the async extra-model
+    // handler finishes. The repair helper must wait for the later writeback.
+    setTimeout(() => {
+      if (emitMode === 'existing-ready') {
+        variables = structuredClone(originalVariables);
+        globalExtraAnalysis = false;
+        return;
+      }
+      if (emitMode === 'bare-block') {
+        message = message.replace(/<UpdateVariable>[\s\S]*?<\/UpdateVariable>/, '').trimEnd();
+        message += "\n\n<Analysis>Update.</Analysis>\n_.set('battle.core.emoji', '🪓');";
+        globalExtraAnalysis = false;
+        return;
+      }
+      message = message
+        .replace(/<UpdateVariable>[\s\S]*?<\/UpdateVariable>/, '')
+        .replace(/<BATTLE_START>/g, '')
+        .trimEnd();
+      // MVU retry deletes this floor's variables, rebases from the preceding floor,
+      // then applies only the repair commands returned by the second model.
+      variables = structuredClone(baselineVariables);
+      variables.stat_data.status.time = '00年04月07日 14:20';
+      variables.stat_data.status.location = '王都外环·试炼斗技场';
+      variables.stat_data.battle.player_lust_effect = {
+        name: '反面教材',
+        emoji: '😤',
+        effects: { damage: 8, draw: 1 },
+      };
+      variables.stat_data.battle.enemy.lust_effect = {
+        name: '灼热冲撞',
+        emoji: '🔥',
+        effects: { damage: 8, lust: 5 },
+      };
+      message += '\n\n<UpdateVariable>fixed</UpdateVariable>\n\n<StatusPlaceHolderImpl/>';
+      globalExtraAnalysis = false;
+    }, 20);
   },
   createChatMessages: () => {
     createdMessages += 1;
@@ -156,11 +182,60 @@ assert.deepEqual(variables.stat_data.battle.enemy.lust_effect, {
 });
 assert.deepEqual(chatVariables, variables, 'latest chat variables must retain the repaired complete floor');
 
+message = `${originalMessage}\n\n[MWG_REPAIR_REQUEST_BEGIN]\nstale\n[MWG_REPAIR_REQUEST_END]`;
+variables = structuredClone(originalVariables);
+chatVariables = structuredClone(originalVariables);
+emitMode = 'dropped-first';
+emitCalls = 0;
+await retryCurrentMessageWithExtraModel('[战斗内容修复]\n问题=battle.cards(DECK_TOO_SMALL)', {
+  eventReadyGraceMs: 1,
+  eventStartTimeoutMs: 30,
+  resultTimeoutMs: 1_000,
+  validateVariables: repaired => assert.equal(repaired.stat_data.battle.core.emoji, '🪓'),
+});
+assert.equal(emitCalls, 2, 'a chat-listener race may retry the dropped MVU event exactly once');
+assert.doesNotMatch(message, /MWG_REPAIR_REQUEST|stale/, 'successful repair must remove stale request markers');
+
+message = `${originalMessage}\n\n[MWG_REPAIR_REQUEST_BEGIN]\nstale\n[MWG_REPAIR_REQUEST_END]`;
+variables = structuredClone(originalVariables);
+chatVariables = structuredClone(originalVariables);
+emitMode = 'bare-block';
+emitCalls = 0;
+await assert.rejects(
+  retryCurrentMessageWithExtraModel('[战斗内容修复]\n问题=battle.cards(DECK_TOO_SMALL)', {
+    eventReadyGraceMs: 1,
+    eventStartTimeoutMs: 30,
+    resultTimeoutMs: 1_000,
+    validateVariables: () => {
+      throw new Error('still invalid');
+    },
+  }),
+  error => error?.name === 'ExtraModelCandidateRejectedError' && /缺少完整的 <UpdateVariable>/.test(error.message),
+);
+assert.equal(message, originalMessage, 'a rejected bare response must restore prose without the stale repair request');
+
+message = originalMessage;
+variables = structuredClone(baselineVariables);
+chatVariables = structuredClone(baselineVariables);
+emitMode = 'existing-ready';
+await retryCurrentMessageWithExtraModel('[战斗内容修复]\n问题=battle.cards(DECK_TOO_SMALL)', {
+  acceptCurrentVariablesWhenValid: true,
+  resultTimeoutMs: 1_000,
+  validateVariables: repaired => {
+    assert.equal(repaired.stat_data.battle.core.emoji, '🪓');
+  },
+});
+assert.equal(message, originalMessage, 'joining an in-flight valid write must keep the existing update block');
+assert.deepEqual(variables, originalVariables, 'the valid in-flight variable snapshot must be retained');
+assert.deepEqual(chatVariables, originalVariables, 'the joined snapshot must also become the chat snapshot');
+
 message = originalMessage;
 variables = structuredClone(originalVariables);
 chatVariables = structuredClone(originalVariables);
+emitMode = 'new-block';
 await assert.rejects(
   retryCurrentMessageWithExtraModel('[战斗内容修复]\n问题=battle.cards[0].effects(INVALID_VALUE)', {
+    refreshOnFailure: 'none',
     validateVariables: () => {
       throw new Error('修复后仍非法');
     },
@@ -170,5 +245,36 @@ await assert.rejects(
 assert.equal(message, originalMessage, 'failed post-repair validation must restore the untouched floor');
 assert.deepEqual(variables, originalVariables, 'failed validation must restore message variables');
 assert.deepEqual(chatVariables, originalVariables, 'failed validation must restore chat variables');
+assert.equal(lastRefresh, 'none', 'bounded follow-up repairs must keep the owning iframe alive after rollback');
+
+// Tavern Helper 4.9.3 may omit its old top-level eventEmit helper. The repair
+// transaction must use SillyTavern's official eventSource without weakening
+// any of the message or variable checks.
+const legacyEventEmit = globalThis.eventEmit;
+delete globalThis.eventEmit;
+globalThis.SillyTavern = {
+  getContext: () => ({
+    eventSource: { emit: legacyEventEmit },
+  }),
+};
+message = originalMessage;
+variables = structuredClone(originalVariables);
+chatVariables = structuredClone(originalVariables);
+emitMode = 'new-block';
+emitCalls = 0;
+await retryCurrentMessageWithExtraModel('[战斗内容修复]\n问题=battle.cards(DECK_TOO_SMALL)', {
+  resultTimeoutMs: 1_000,
+  validateVariables: repaired => assert.equal(repaired.stat_data.battle.core.emoji, '🪓'),
+});
+assert.equal(emitCalls, 1, 'official SillyTavern eventSource must replace the missing Tavern Helper eventEmit');
+
+delete globalThis.SillyTavern;
+message = originalMessage;
+await assert.rejects(
+  retryCurrentMessageWithExtraModel('[战斗内容修复]\n问题=battle.cards(DECK_TOO_SMALL)'),
+  /SillyTavern 事件接口缺失: eventSource\.emit/,
+  'only the absence of both event surfaces may stop an MVU retry',
+);
+globalThis.eventEmit = legacyEventEmit;
 
 console.log('MVU repair isolates anchors, keeps one validated block, and rolls back invalid retries.');

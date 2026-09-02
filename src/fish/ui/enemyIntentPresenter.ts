@@ -83,7 +83,7 @@ export class EnemyIntentPresenter {
     }
   }
 
-  private createDisplayModel(enemy: Enemy): {
+  public createDisplayModel(enemy: Enemy): {
     description: string;
     badges: IntentBadge[];
   } {

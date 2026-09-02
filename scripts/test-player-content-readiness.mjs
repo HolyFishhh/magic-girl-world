@@ -109,8 +109,59 @@ assert.match(display, /另有 \d+ 处$/);
 
 const repair = core.formatPlayerContentRepairPrompt(broken, 3);
 assert.match(repair, /^\[战斗内容修复\]\n问题=battle\.cards\[1\]\.id\(DUPLICATE_ID\)/);
+assert.match(repair, /一次补齐并修正上列全部初始内容/);
+assert.match(repair, /不得清空卡组、遗物、道具或欲望效果/);
+assert.match(repair, /仅输出世界书规定的一个完整变量更新块/);
+assert.match(repair, /约束=.*遗物或独立能力需要合法 trigger/);
 assert.doesNotMatch(repair, /昂贵攻击|错误关键词|生命之根/);
-assert.ok(repair.length < 240, 'repair request must stay bounded');
+assert.ok(repair.length < 900, 'repair request must stay bounded');
+
+const structuralRepair = core.formatPlayerContentRepairPrompt({
+  ...broken,
+  issues: [
+    { path: 'battle.cards[0].effects[1]', code: 'INVALID_EFFECT', message: 'ignored' },
+    { path: 'battle.cards[1].effects[0].copy', code: 'INVALID_CARD_COUNT', message: 'ignored' },
+    { path: 'battle.cards[2].effects[0].add_card', code: 'INVALID_CARD_ID', message: 'ignored' },
+    { path: 'battle.statuses[0].triggers.tick[0]', code: 'INVALID_STATUS', message: 'ignored' },
+  ],
+});
+assert.match(structuralRepair, /hits 只能与 damage 位于同一项/);
+assert.match(structuralRepair, /copy\/double 的值直接写数量或 all/);
+assert.match(structuralRepair, /creates 中已登记的模板 ID 字符串/);
+assert.match(structuralRepair, /持续数值修饰只能写在 hold/);
+
+const modifierRepair = core.formatPlayerContentRepairPrompt({
+  ...broken,
+  issues: [
+    {
+      path: 'battle.cards[1].effects[0].damage_modifier',
+      code: 'UNKNOWN_EFFECT',
+      message: 'ignored',
+    },
+    {
+      path: 'battle.statuses[1].triggers.apply[0]',
+      code: 'INVALID_STATUS',
+      message: 'ignored',
+    },
+  ],
+});
+assert.match(modifierRepair, /damage_modifier 等不是卡牌 effects 操作/);
+assert.match(modifierRepair, /持续修饰改为状态 triggers\.hold/);
+assert.match(modifierRepair, /apply\/stack\/tick\/remove 只执行瞬时浅层效果/);
+assert.ok(modifierRepair.length < 900, 'modifier repair request must stay bounded');
+
+const fullRepair = core.formatPlayerContentRepairPrompt({
+  ...broken,
+  issues: Array.from({ length: 9 }, (_, index) => ({
+    path: `battle.cards[${index}].effects`,
+    code: 'INVALID_EFFECT_SOURCE',
+    message: 'ignored',
+  })),
+});
+assert.match(
+  fullRepair,
+  /battle\.cards\[7\]\.effects\(INVALID_EFFECT_SOURCE\),\+1\n任务=一次补齐并修正上列全部初始内容/,
+);
 
 const missingResources = core.assessInitialPlayerContent(
   core.createContentPack({ cards: readyPack.cards, statuses: [] }),

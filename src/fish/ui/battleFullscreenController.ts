@@ -4,6 +4,10 @@ import {
   exitBattleFullscreenFallback,
   type BattleFullscreenFallbackSnapshot,
 } from './battleFullscreenFallback';
+import {
+  requestRuntimeParentFullscreen,
+  subscribeRuntimeParentFullscreen,
+} from '../../runtime/runtimeFullscreen';
 
 export class BattleFullscreenController {
   private button: HTMLButtonElement | null = null;
@@ -11,6 +15,8 @@ export class BattleFullscreenController {
   private fallbackSnapshot: BattleFullscreenFallbackSnapshot | null = null;
   private parentDocument: Document | null = null;
   private frame: HTMLElement | null = null;
+  private parentBridgeActive = false;
+  private unsubscribeParentFullscreen: (() => void) | null = null;
   private readonly onFullscreenChange = (): void => this.syncState();
   private readonly onKeyDown = (event: KeyboardEvent): void => {
     if (event.key === 'Escape' && this.fallbackActive) this.exitFallback();
@@ -22,6 +28,10 @@ export class BattleFullscreenController {
     this.frame = this.resolveFrameElement();
     this.parentDocument = this.frame?.ownerDocument || null;
     this.button.addEventListener('click', () => void this.toggle());
+    this.unsubscribeParentFullscreen = subscribeRuntimeParentFullscreen(active => {
+      this.parentBridgeActive = active;
+      this.syncState();
+    });
     document.addEventListener('fullscreenchange', this.onFullscreenChange);
     this.parentDocument?.addEventListener('fullscreenchange', this.onFullscreenChange);
     document.addEventListener('keydown', this.onKeyDown);
@@ -29,7 +39,10 @@ export class BattleFullscreenController {
   }
 
   public destroy(): void {
+    if (this.parentBridgeActive) void requestRuntimeParentFullscreen(false, 'fish');
     if (this.fallbackActive) this.exitFallback();
+    this.unsubscribeParentFullscreen?.();
+    this.unsubscribeParentFullscreen = null;
     document.removeEventListener('fullscreenchange', this.onFullscreenChange);
     this.parentDocument?.removeEventListener('fullscreenchange', this.onFullscreenChange);
     document.removeEventListener('keydown', this.onKeyDown);
@@ -52,7 +65,7 @@ export class BattleFullscreenController {
   }
 
   private isActive(): boolean {
-    return this.fallbackActive || this.isNativeFullscreen();
+    return this.parentBridgeActive || this.fallbackActive || this.isNativeFullscreen();
   }
 
   private async toggle(): Promise<void> {
@@ -64,6 +77,12 @@ export class BattleFullscreenController {
   }
 
   private async enter(): Promise<void> {
+    if (await requestRuntimeParentFullscreen(true, 'fish')) {
+      this.parentBridgeActive = true;
+      document.documentElement.classList.add('mwg-fullscreen-active');
+      this.syncState();
+      return;
+    }
     const candidates = [this.frame, document.documentElement].filter(
       (element): element is HTMLElement => Boolean(element?.requestFullscreen),
     );
@@ -81,6 +100,12 @@ export class BattleFullscreenController {
   }
 
   private async exit(): Promise<void> {
+    if (this.parentBridgeActive) {
+      await requestRuntimeParentFullscreen(false, 'fish');
+      this.parentBridgeActive = false;
+      this.syncState();
+      return;
+    }
     if (this.fallbackActive) {
       this.exitFallback();
       return;

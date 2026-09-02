@@ -3,7 +3,10 @@ import {
   canRestoreBattleSession,
   createBattleFingerprint,
   createBattleSessionSnapshot,
+  isBattleRunNode,
+  readGameMode,
   readBattleSessionSnapshot as readPortableBattleSessionSnapshot,
+  validateRunState,
   type BattleSessionSnapshot,
   type GameState,
 } from '../../game-core';
@@ -27,6 +30,29 @@ export interface BattleSessionVariablesStore {
   update(
     updater: (variables: Record<string, any>) => Record<string, any> | Promise<Record<string, any>>,
   ): Record<string, any> | Promise<Record<string, any>>;
+}
+
+/**
+ * A tower battle snapshot is writable only while its own route node remains
+ * active.  Common and fish are swapped inside one iframe, so an old singleton
+ * must never resurrect or save a completed node after the map has advanced.
+ */
+function belongsToCurrentTowerNode(variables: unknown, snapshot: BattleSessionSnapshot): boolean {
+  if (!isRecord(variables)) return false;
+  const stat = variables.stat_data;
+  if (readGameMode(stat) !== 'tower') return true;
+  if (!isRecord(stat)) return false;
+  const routeNodeId = snapshot.state.battleRequest?.route?.nodeId;
+  if (typeof routeNodeId !== 'string' || !routeNodeId) return false;
+  const runResult = validateRunState(stat.run);
+  if (!runResult.ok) return false;
+  const run = runResult.value;
+  return (
+    run.phase === 'in_node' &&
+    !!run.currentNode &&
+    isBattleRunNode(run.currentNode.kind) &&
+    run.currentNode.id === routeNodeId
+  );
 }
 
 const DEFAULT_SAVE_DELAY_MS = 75;
@@ -69,7 +95,7 @@ export class BattleSessionStore {
     const snapshot = readBattleSessionSnapshot(variables);
     this.fingerprint = fingerprint;
 
-    if (!canRestoreBattleSession(snapshot, fingerprint)) {
+    if (!canRestoreBattleSession(snapshot, fingerprint) || !belongsToCurrentTowerNode(variables, snapshot)) {
       this.enabled = false;
       return null;
     }
@@ -215,6 +241,7 @@ export class BattleSessionStore {
         if (generation !== this.generation || !this.enabled || fingerprint !== this.fingerprint) return;
         await Promise.resolve(
           this.variables.update(currentVariables => {
+            if (!belongsToCurrentTowerNode(currentVariables, snapshot)) return currentVariables;
             const currentNamespace = currentVariables?.[BATTLE_SESSION_NAMESPACE];
             currentVariables[BATTLE_SESSION_NAMESPACE] = {
               ...(currentNamespace && typeof currentNamespace === 'object' ? currentNamespace : {}),

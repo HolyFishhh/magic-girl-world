@@ -235,8 +235,59 @@ function normalizeNestedPatchCardInput(value: unknown): unknown {
   return flattened;
 }
 
+const EFFECT_ITEM_PRESENTATION_KEYS = ['description', 'emoji'] as const;
+
+/**
+ * Models sometimes repeat display copy inside each executable effect entry.
+ * Those fields do not change mechanics and already belong to the owning card,
+ * status, relic, item, ability, or action. Strip only these unambiguous
+ * presentation duplicates; an entry containing no real operation still fails
+ * normal empty-effect validation.
+ */
+function normalizeEffectItemPresentation(value: unknown): unknown {
+  if (!isRecord(value) || !EFFECT_ITEM_PRESENTATION_KEYS.some(key => key in value)) return value;
+  const normalized = { ...value };
+  EFFECT_ITEM_PRESENTATION_KEYS.forEach(key => delete normalized[key]);
+  return normalized;
+}
+
+/**
+ * A target is redundant on operations that can only affect the acting side's
+ * card flow (for example `{ draw: 1, to: 'self' }`). Models commonly repeat
+ * `to: self` on every array entry after authoring a targeted damage step.
+ * Remove only that exact no-op spelling; opponent/all targets, multi-operation
+ * bundles and operations that genuinely support targeting remain strict.
+ */
+function normalizeRedundantSelfTarget(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  const hasSelfTo = value.to === 'self';
+  const hasSelfTargets = Array.isArray(value.targets)
+    && value.targets.length === 1
+    && value.targets[0] === 'self';
+  if (!hasSelfTo && !hasSelfTargets) return value;
+
+  const operations = compactEffectOperationKeys(value);
+  if (operations.length !== 1) return value;
+  const supportedMeta = new Set(compactOperationMetaKeys(operations[0]));
+  const normalized = { ...value };
+  let changed = false;
+  if (hasSelfTo && !supportedMeta.has('to')) {
+    delete normalized.to;
+    changed = true;
+  }
+  if (hasSelfTargets && !supportedMeta.has('targets')) {
+    delete normalized.targets;
+    changed = true;
+  }
+  return changed ? normalized : value;
+}
+
 function normalizeCompactEffectInput(value: unknown): unknown {
-  return normalizeNestedPatchCardInput(normalizeNestedStatusInput(value));
+  return normalizeNestedPatchCardInput(
+    normalizeNestedStatusInput(
+      normalizeRedundantSelfTarget(normalizeEffectItemPresentation(value)),
+    ),
+  );
 }
 
 /** AI may omit the array wrapper when a card has exactly one shallow effect. */

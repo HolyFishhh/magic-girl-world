@@ -2,8 +2,11 @@ import {
   applyCardUpgrade,
   applyCardUpgradeToDeck,
   applyPersistentDeckMutation,
+  consumeTowerOpening,
   completeRunNode,
   migratePersistentRunDeck,
+  planTowerEventOutcome,
+  planTowerOpeningOutcome,
   planRestHeal,
   planShopPurchase,
   requireActiveRunNode,
@@ -23,10 +26,7 @@ import {
 import { normalizeMvuStatusDefinitions } from '../runtime/mvuArrays';
 import type { RewardPoolMutation } from '../game-core/rewardSettlement';
 import { validateRewardCandidateAgainstLibrary } from '../game-core/rewardCandidateValidation';
-import {
-  executeRunTransactionTriggers,
-  type RunTriggerInvocation,
-} from './runTransactionTriggers';
+import { executeRunTransactionTriggers, type RunTriggerInvocation } from './runTransactionTriggers';
 
 export interface RestHealResult {
   healed: number;
@@ -50,6 +50,25 @@ export interface EventRewardSettlementResult extends RewardSelectionSummary {
   run: RunState;
 }
 
+export interface TowerOpeningSettlementResult extends RewardSelectionSummary {
+  choiceId: string;
+  hp: number;
+  maxHp: number;
+  gold: number;
+  cardRemovalCount: number;
+  run: RunState;
+}
+
+export interface TowerEventChoiceSettlementResult {
+  choiceId: string;
+  pendingReward: boolean;
+  hp: number;
+  maxHp: number;
+  gold: number;
+  cardRemovalCount: number;
+  run: RunState;
+}
+
 export type RunTransactionSourceKind = 'player' | 'artifact' | 'ability' | 'status' | 'event' | 'system';
 
 export interface RunTransactionSource {
@@ -59,6 +78,7 @@ export interface RunTransactionSource {
 
 export type RunTransactionEventType =
   | 'reward_claimed'
+  | 'treasure_claimed'
   | 'event_reward_claimed'
   | 'reward_pool_changed'
   | 'shop_purchased'
@@ -71,6 +91,7 @@ export type RunTransactionEventType =
 
 export type UnifiedRunTransactionRequest = (
   | { kind: 'reward_claim'; selections: RewardSelections }
+  | { kind: 'treasure_reward_claim'; selections: RewardSelections }
   | { kind: 'event_reward_claim'; selections: RewardSelections }
   | { kind: 'reward_pool'; mutation: RewardPoolMutation; goldCost?: number }
   | { kind: 'shop_purchase'; selections: RewardSelections }
@@ -139,7 +160,14 @@ export interface UnifiedRunTransactionResult {
 
 const RUN_TRANSACTION_LOG_LIMIT = 200;
 const RUN_TRANSACTION_EVENT_LIMIT = 200;
-const RUN_SOURCE_KINDS = new Set<RunTransactionSourceKind>(['player', 'artifact', 'ability', 'status', 'event', 'system']);
+const RUN_SOURCE_KINDS = new Set<RunTransactionSourceKind>([
+  'player',
+  'artifact',
+  'ability',
+  'status',
+  'event',
+  'system',
+]);
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value));
@@ -181,13 +209,16 @@ function transactionEvents(stat: Record<string, any>): RunTransactionEvent[] {
 
 function transactionCounters(stat: Record<string, any>): RunTransactionCounters {
   const value = stat.run_transaction_counters ?? { total: 0, by_event: {}, by_source: {} };
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('run transaction counters are invalid');
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new Error('run transaction counters are invalid');
   const total = Number(value.total ?? 0);
   if (!Number.isInteger(total) || total < 0) throw new Error('run transaction counter total is invalid');
   const byEvent = value.by_event ?? {};
   const bySource = value.by_source ?? {};
-  if (!byEvent || typeof byEvent !== 'object' || Array.isArray(byEvent)) throw new Error('run event counters are invalid');
-  if (!bySource || typeof bySource !== 'object' || Array.isArray(bySource)) throw new Error('run source counters are invalid');
+  if (!byEvent || typeof byEvent !== 'object' || Array.isArray(byEvent))
+    throw new Error('run event counters are invalid');
+  if (!bySource || typeof bySource !== 'object' || Array.isArray(bySource))
+    throw new Error('run source counters are invalid');
   for (const count of [...Object.values(byEvent), ...Object.values(bySource)]) {
     if (!Number.isInteger(count) || Number(count) < 0) throw new Error('run transaction counter is invalid');
   }
@@ -196,7 +227,12 @@ function transactionCounters(stat: Record<string, any>): RunTransactionCounters 
 
 function transactionSource(request: UnifiedRunTransactionRequest): RunTransactionSource {
   const source = request.source || { kind: 'player' as const, id: 'common-ui' };
-  if (!RUN_SOURCE_KINDS.has(source.kind) || typeof source.id !== 'string' || !source.id.trim() || source.id.length > 96) {
+  if (
+    !RUN_SOURCE_KINDS.has(source.kind) ||
+    typeof source.id !== 'string' ||
+    !source.id.trim() ||
+    source.id.length > 96
+  ) {
     throw new Error('run transaction source is invalid');
   }
   return { kind: source.kind, id: source.id.trim() };
@@ -205,6 +241,7 @@ function transactionSource(request: UnifiedRunTransactionRequest): RunTransactio
 function transactionEventType(kind: UnifiedRunTransactionRequest['kind']): RunTransactionEventType {
   const events: Record<UnifiedRunTransactionRequest['kind'], RunTransactionEventType> = {
     reward_claim: 'reward_claimed',
+    treasure_reward_claim: 'treasure_claimed',
     event_reward_claim: 'event_reward_claimed',
     reward_pool: 'reward_pool_changed',
     shop_purchase: 'shop_purchased',
@@ -259,7 +296,9 @@ function persistentDeck(stat: Record<string, any>): Record<string, any>[] {
 function selectedRunCard(cards: readonly Record<string, any>[], runInstanceId: string): Record<string, any> {
   const matches = cards.filter(card => card.runInstanceId === runInstanceId);
   if (matches.length !== 1) {
-    throw new Error(matches.length === 0 ? 'selected run card was not found' : 'selected run card identity is ambiguous');
+    throw new Error(
+      matches.length === 0 ? 'selected run card was not found' : 'selected run card identity is ambiguous',
+    );
   }
   return matches[0];
 }
@@ -282,10 +321,14 @@ function preparePersistentReplacement(
     'origin',
     '$meta',
     'upgrade_level',
-  ]) delete prepared[key];
+  ])
+    delete prepared[key];
   const statusDefinitions = normalizeMvuStatusDefinitions(battle.statuses);
   const supportStatus = prepared.status;
-  if (supportStatus !== undefined && (!supportStatus || typeof supportStatus !== 'object' || Array.isArray(supportStatus))) {
+  if (
+    supportStatus !== undefined &&
+    (!supportStatus || typeof supportStatus !== 'object' || Array.isArray(supportStatus))
+  ) {
     throw new Error('卡牌变形失败：候选 status 必须是状态定义对象');
   }
   if (supportStatus && typeof supportStatus === 'object') {
@@ -315,13 +358,14 @@ function preparePersistentReplacement(
   return prepared;
 }
 
-function logSummary(
-  request: UnifiedRunTransactionRequest,
-  value: UnifiedRunTransactionResult['value'],
-): string {
+function logSummary(request: UnifiedRunTransactionRequest, value: UnifiedRunTransactionResult['value']): string {
   if (request.kind === 'reward_claim') {
     const summary = value as RewardSelectionSummary;
     return `领取奖励：${[...summary.cards, ...summary.artifacts, ...summary.items].join('、') || '跳过'}`;
+  }
+  if (request.kind === 'treasure_reward_claim') {
+    const summary = value as RewardSelectionSummary;
+    return `开启宝箱：${[...summary.cards, ...summary.artifacts, ...summary.items].join('、') || '未取得物品'}`;
   }
   if (request.kind === 'event_reward_claim') {
     const summary = value as RewardSelectionSummary;
@@ -342,19 +386,32 @@ function logSummary(
   return `营火删卡：${(value as { cardName: string }).cardName}`;
 }
 
-function requireActiveNode(stat: Record<string, any>, kind: 'rest' | 'shop' | 'event'): RunState {
+function requireActiveNode(stat: Record<string, any>, kind: 'rest' | 'shop' | 'event' | 'treasure'): RunState {
   const run = readRunState(stat);
   if (!run) {
-    const labels = { rest: '营火', shop: '商店', event: '事件' } as const;
+    const labels = { rest: '营火', shop: '商店', event: '事件', treasure: '宝箱' } as const;
     throw new Error(`当前不在${labels[kind]}节点`);
   }
   try {
     requireActiveRunNode(run, kind);
   } catch {
-    const labels = { rest: '营火', shop: '商店', event: '事件' } as const;
+    const labels = { rest: '营火', shop: '商店', event: '事件', treasure: '宝箱' } as const;
     throw new Error(`当前不在${labels[kind]}节点`);
   }
   return run;
+}
+
+function clearTowerNodePayload(stat: Record<string, any>): void {
+  stat.run_node = null;
+  stat.run_node_reward = null;
+  stat.run_event = null;
+  stat.run_shop = null;
+  stat.run_treasure = null;
+  stat.run_rest = null;
+}
+
+function hasRewardCandidates(reward: Record<string, any>): boolean {
+  return ['card', 'artifact', 'item'].some(key => normalizeMvuList(reward[key]).length > 0);
 }
 
 export function settleRestHealInStat(statValue: unknown, ratio = 0.3): RestHealResult {
@@ -368,6 +425,7 @@ export function settleRestHealInStat(statValue: unknown, ratio = 0.3): RestHealR
   core.hp = plan.hp;
   stat.run = plan.run;
   stat.run_upgrade = null;
+  clearTowerNodePayload(stat);
   return plan;
 }
 
@@ -394,6 +452,7 @@ export function settleRestUpgradeInStat(statValue: unknown): RestUpgradeResult {
   replaceMvuList(battle, 'cards', upgraded.cards);
   stat.run = nextRun;
   stat.run_upgrade = null;
+  clearTowerNodePayload(stat);
   return { cardName: String(upgraded.card.name || upgraded.card.id), level: upgraded.level, run: nextRun };
 }
 
@@ -404,10 +463,7 @@ function stripShopPrices(reward: Record<string, any>): void {
 }
 
 /** Validate on a clone, then commit rewards, gold, and route completion together. */
-export function settleShopSelectionsInStat(
-  statValue: unknown,
-  selections: RewardSelections,
-): ShopSettlementResult {
+export function settleShopSelectionsInStat(statValue: unknown, selections: RewardSelections): ShopSettlementResult {
   const stat = requireRecord(statValue, 'stat_data 不存在');
   const run = requireActiveNode(stat, 'shop');
   const reward = requireRecord(stat.reward, 'reward 数据不存在');
@@ -450,7 +506,74 @@ export function settleEventRewardSelectionsInStat(
   stat.run = draft.run;
   stat.run_result = draft.run_result;
   stat.run_upgrade = draft.run_upgrade;
+  clearTowerNodePayload(stat);
   return { ...summary, run: settlement.run };
+}
+
+/**
+ * Select one pre-generated tower event option without asking the narrative AI
+ * to repeat the event. Scalar costs are applied to a draft, while optional
+ * reward candidates continue through the established event reward transaction.
+ */
+export function settleTowerEventChoiceInStat(statValue: unknown, choiceId: string): TowerEventChoiceSettlementResult {
+  const stat = requireRecord(statValue, 'stat_data 不存在');
+  const run = requireActiveNode(stat, 'event');
+  if (run.routeMode !== 'map' || run.schemaVersion !== 3) throw new Error('当前事件不是爬塔预生成事件');
+  if (stat.run_result != null) throw new Error('当前事件选项已经选择，请先完成结算');
+  const event = requireRecord(stat.run_event, '事件内容不存在');
+  if (!Array.isArray(event.choices)) throw new Error('事件选项无效');
+  const matches = event.choices.filter(
+    (choice: unknown) =>
+      choice &&
+      typeof choice === 'object' &&
+      !Array.isArray(choice) &&
+      (choice as Record<string, unknown>).id === choiceId,
+  );
+  if (matches.length !== 1) throw new Error(matches.length ? '事件选项重复' : '事件选项不存在');
+  const selected = requireRecord(matches[0], '事件选项无效');
+  const outcome = requireRecord(selected.outcome, '事件结果无效');
+  const outcomePlan = planTowerEventOutcome(outcome);
+
+  const draft = clone(stat);
+  const battle = requireRecord(draft.battle, '事件结算失败：battle 数据不存在');
+  const core = requireRecord(battle.core, '事件结算失败：battle.core 数据不存在');
+  const oldMaxHp = Number(core.max_hp);
+  const oldHp = Number(core.hp);
+  const oldRemovalCount = Number(core.card_removal_count ?? 0);
+  if (!Number.isFinite(oldMaxHp) || oldMaxHp <= 0 || !Number.isFinite(oldHp) || oldHp < 0 || oldHp > oldMaxHp) {
+    throw new Error('事件结算失败：玩家生命数据无效');
+  }
+  if (!Number.isInteger(oldRemovalCount) || oldRemovalCount < 0) {
+    throw new Error('事件结算失败：删卡次数无效');
+  }
+  const maxHp = Math.max(1, oldMaxHp + outcomePlan.maxHpDelta);
+  const hpFloor = outcomePlan.routeOutcome === 'failed' ? 0 : 1;
+  const hp = Math.min(maxHp, Math.max(hpFloor, oldHp + outcomePlan.hpDelta));
+  const cardRemovalCount = Math.max(0, oldRemovalCount + outcomePlan.cardRemovalDelta);
+  const gold = Math.min(999999, Math.max(0, run.gold + outcomePlan.goldDelta));
+  core.max_hp = maxHp;
+  core.hp = hp;
+  core.card_removal_count = cardRemovalCount;
+  draft.run = { ...run, gold };
+
+  const reward =
+    outcomePlan.reward === null
+      ? { card: [], artifact: [], item: [], limits: {}, disabled_categories: [], pool_revision: 0, reroll_count: 0 }
+      : requireRecord(outcome.reward, '事件奖励无效');
+  draft.reward = clone(reward);
+  draft.run_result = { node_id: run.currentNode!.id, outcome: outcomePlan.routeOutcome };
+  draft.run_event = { ...clone(event), selected_choice_id: choiceId };
+
+  let settledRun = draft.run as RunState;
+  const pendingReward = hasRewardCandidates(reward);
+  if (!pendingReward) {
+    const settlement = consumePendingRunResultInStat(draft);
+    if (!settlement) throw new Error('事件结算失败：路线结果未生成');
+    settledRun = settlement.run;
+    clearTowerNodePayload(draft);
+  }
+  replaceRecord(stat, draft);
+  return { choiceId, pendingReward, hp, maxHp, gold, cardRemovalCount, run: clone(settledRun) };
 }
 
 export function leaveShopInStat(statValue: unknown): RunState {
@@ -471,7 +594,104 @@ export function leaveShopInStat(statValue: unknown): RunState {
   }
   stat.run = nextRun;
   stat.run_upgrade = null;
+  clearTowerNodePayload(stat);
   return nextRun;
+}
+
+/**
+ * Apply one AI-authored opening choice through existing reward validation. The
+ * whole choice is committed once; malformed cards, relics, items, or scalar
+ * costs leave both the player and the opening state untouched.
+ */
+export function settleTowerOpeningChoiceInStat(statValue: unknown, choiceId: string): TowerOpeningSettlementResult {
+  const stat = requireRecord(statValue, 'stat_data 不存在');
+  const run = readRunState(stat);
+  if (
+    !run ||
+    run.routeMode !== 'map' ||
+    run.phase !== 'awaiting_choice' ||
+    run.floor !== 0 ||
+    run.opening.phase !== 'ready' ||
+    !run.opening.content
+  ) {
+    throw new Error('当前没有可结算的开局馈赠');
+  }
+  const content = requireRecord(run.opening.content, '开局馈赠内容无效');
+  if (!Array.isArray(content.choices)) throw new Error('开局馈赠选项无效');
+  const matches = content.choices.filter(
+    (choice: unknown) =>
+      choice &&
+      typeof choice === 'object' &&
+      !Array.isArray(choice) &&
+      (choice as Record<string, unknown>).id === choiceId,
+  );
+  if (matches.length !== 1) throw new Error(matches.length ? '开局馈赠选项重复' : '开局馈赠选项不存在');
+  const selected = requireRecord(matches[0], '开局馈赠选项无效');
+  const plan = planTowerOpeningOutcome(selected.outcome);
+
+  const draft = clone(stat);
+  const battle = requireRecord(draft.battle, '开局馈赠结算失败：battle 数据不存在');
+  const core = requireRecord(battle.core, '开局馈赠结算失败：battle.core 数据不存在');
+  const reward = requireRecord(draft.reward, '开局馈赠结算失败：reward 数据不存在');
+  if (
+    normalizeMvuList(reward.card).length ||
+    normalizeMvuList(reward.artifact).length ||
+    normalizeMvuList(reward.item).length
+  ) {
+    throw new Error('开局馈赠结算失败：仍有未处理的奖励');
+  }
+
+  const oldMaxHp = Number(core.max_hp);
+  const oldHp = Number(core.hp);
+  const oldRemovalCount = Number(core.card_removal_count ?? 0);
+  if (!Number.isFinite(oldMaxHp) || oldMaxHp <= 0 || !Number.isFinite(oldHp) || oldHp < 0 || oldHp > oldMaxHp) {
+    throw new Error('开局馈赠结算失败：玩家生命数据无效');
+  }
+  if (!Number.isInteger(oldRemovalCount) || oldRemovalCount < 0) {
+    throw new Error('开局馈赠结算失败：删卡次数无效');
+  }
+  const maxHp = Math.max(1, oldMaxHp + plan.maxHpDelta);
+  const hp = Math.min(maxHp, Math.max(1, oldHp + plan.hpDelta));
+  const cardRemovalCount = Math.max(0, oldRemovalCount + plan.cardRemovalDelta);
+  const gold = Math.min(999999, Math.max(0, run.gold + plan.goldDelta));
+  core.max_hp = maxHp;
+  core.hp = hp;
+  core.card_removal_count = cardRemovalCount;
+
+  reward.card = plan.reward.cards;
+  reward.artifact = plan.reward.artifacts;
+  reward.item = plan.reward.items;
+  reward.limits = {
+    cards: plan.reward.cards.length,
+    artifacts: plan.reward.artifacts.length,
+    items: plan.reward.items.length,
+  };
+  reward.disabled_categories = [];
+  const summary = applyRewardSelectionsToStat(draft, {
+    cards: plan.reward.cards.map((_entry, index) => index),
+    artifacts: plan.reward.artifacts.map((_entry, index) => index),
+    items: plan.reward.items.map((_entry, index) => index),
+  });
+  persistentDeck(draft);
+
+  const consumed = consumeTowerOpening(run.opening);
+  const nextRun: RunState = {
+    ...run,
+    gold,
+    opening: consumed.opening,
+    stateRevision: run.stateRevision + 1,
+  };
+  draft.run = nextRun;
+  replaceRecord(stat, draft);
+  return {
+    choiceId,
+    ...summary,
+    hp,
+    maxHp,
+    gold,
+    cardRemovalCount,
+    run: clone(nextRun),
+  };
 }
 
 /**
@@ -500,6 +720,14 @@ export function executeUnifiedRunTransactionInStat(
   if (request.kind === 'reward_claim') {
     value = applyRewardSelectionsToStat(draft, request.selections);
     persistentDeck(draft);
+  } else if (request.kind === 'treasure_reward_claim') {
+    const run = requireActiveNode(draft, 'treasure');
+    const summary = applyRewardSelectionsToStat(draft, request.selections);
+    persistentDeck(draft);
+    const nextRun = completeRunNode(run, { outcome: 'cleared' });
+    draft.run = nextRun;
+    clearTowerNodePayload(draft);
+    value = { ...summary, run: nextRun };
   } else if (request.kind === 'event_reward_claim') {
     value = settleEventRewardSelectionsInStat(draft, request.selections);
     persistentDeck(draft);
@@ -548,12 +776,18 @@ export function executeUnifiedRunTransactionInStat(
       );
       if (!upgraded.ok) throw new Error(`卡牌升级失败：${upgraded.message}`);
       const index = cards.findIndex(card => card.runInstanceId === source.runInstanceId);
-      cards[index] = { ...upgraded.card, runInstanceId: source.runInstanceId, templateId: source.templateId, quantity: 1 };
+      cards[index] = {
+        ...upgraded.card,
+        runInstanceId: source.runInstanceId,
+        templateId: source.templateId,
+        quantity: 1,
+      };
       replaceMvuList(battle, 'cards', cards);
       const nextRun = completeRunNode(run, { outcome: 'cleared' });
       draft.run = nextRun;
       draft.run_upgrade = null;
       delete draft.run_upgrade_target;
+      clearTowerNodePayload(draft);
       value = {
         cardName: String(upgraded.card.name || upgraded.card.id),
         level: upgraded.level,
@@ -571,6 +805,7 @@ export function executeUnifiedRunTransactionInStat(
       draft.run_upgrade = null;
       draft.run_transform = null;
       delete draft.run_transform_target;
+      clearTowerNodePayload(draft);
       value = { runInstanceId: source.runInstanceId, cardName: String(replacement.name || replacement.id) };
     } else if (request.kind === 'rest_duplicate_card') {
       const result = applyPersistentDeckMutation(cards, {
@@ -580,6 +815,7 @@ export function executeUnifiedRunTransactionInStat(
       replaceMvuList(battle, 'cards', result.cards);
       draft.run = completeRunNode(run, { outcome: 'cleared' });
       draft.run_upgrade = null;
+      clearTowerNodePayload(draft);
       cardRunInstanceIds.push(result.createdRunInstanceId!);
       value = {
         sourceRunInstanceId: source.runInstanceId,
@@ -594,6 +830,7 @@ export function executeUnifiedRunTransactionInStat(
       replaceMvuList(battle, 'cards', result.cards);
       draft.run = completeRunNode(run, { outcome: 'cleared' });
       draft.run_upgrade = null;
+      clearTowerNodePayload(draft);
       value = { runInstanceId: source.runInstanceId, cardName: String(source.name || source.id) };
     }
   }

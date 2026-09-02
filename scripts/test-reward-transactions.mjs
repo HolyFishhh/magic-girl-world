@@ -431,6 +431,31 @@ const describedStack = {
 rewards.applyRewardSelectionsToStat(describedStack, { cards: [0], artifacts: [], items: [] });
 assert.equal(describedStack.battle.cards[0].quantity, 3, 'descriptions must not split identical card rules');
 
+const persistentOwnedCopies = {
+  battle: {
+    core: {},
+    cards: [
+      { ...strike, quantity: 1, runInstanceId: 'strike__run__1', templateId: 'strike', origin: 'initial' },
+      { ...strike, quantity: 1, runInstanceId: 'strike__run__2', templateId: 'strike', origin: 'initial' },
+    ],
+    artifacts: [],
+    items: [],
+    statuses: [],
+  },
+  reward: {
+    card: [{ ...strike, quantity: 1 }],
+    artifact: [],
+    item: [],
+    limits: { cards: 1 },
+  },
+};
+rewards.applyRewardSelectionsToStat(persistentOwnedCopies, { cards: [0], artifacts: [], items: [] });
+assert.equal(
+  persistentOwnedCopies.battle.cards.reduce((total, card) => total + Number(card.quantity || 0), 0),
+  3,
+  'owned-instance metadata must not create a false rule conflict',
+);
+
 const conflictingSelectedRewards = {
   battle: { core: {}, cards: [], artifacts: [], items: [], statuses: [] },
   reward: {

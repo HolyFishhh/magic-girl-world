@@ -2,13 +2,22 @@ import {
   ARCHETYPE_GRAPH,
   ARCHETYPE_GRAPH_SPEC,
   createContentMechanicsFingerprint,
+  extractContentMechanicFeatures,
   type EncounterLineageMemory,
 } from '../game-core';
 
-export const DESIGN_KNOWLEDGE_GRAPH_SPEC = 'mwg.st-knowledge-graph/v1' as const;
+export const DESIGN_KNOWLEDGE_GRAPH_SPEC = 'mwg.st-knowledge-graph/v2' as const;
 
-export type KnowledgeNodeKind = 'archetype' | 'constraint' | 'enemy-family' | 'enemy-action';
-export type KnowledgeEdgeKind = 'evolves-to' | 'anti-synergy' | 'uses-action' | 'related-to';
+export type KnowledgeNodeKind = 'archetype' | 'mechanic' | 'constraint' | 'enemy-family' | 'enemy-action';
+export type KnowledgeEdgeKind =
+  | 'evolves-to'
+  | 'requires'
+  | 'supports'
+  | 'pays-off'
+  | 'expresses'
+  | 'anti-synergy'
+  | 'uses-action'
+  | 'related-to';
 
 export interface KnowledgeNode {
   id: string;
@@ -47,10 +56,69 @@ export interface KnowledgeGraphView {
   }>;
 }
 
+export type KnowledgeGraphStorage = 'memory' | 'indexeddb' | 'unavailable';
+
+export interface KnowledgeGraphPersistence {
+  readonly storage: Exclude<KnowledgeGraphStorage, 'unavailable'>;
+  load(): Promise<KnowledgeGraphSnapshot | null>;
+  save(snapshot: KnowledgeGraphSnapshot): Promise<void>;
+}
+
 function stableId(...parts: unknown[]): string {
   return parts
     .map(part => String(part ?? '').trim().toLowerCase().replace(/[^a-z0-9_\-一-鿿]+/gi, '_'))
     .join(':');
+}
+
+function mechanicNodeId(field: string, value: string): string {
+  return `mechanic:${stableId(field)}:${stableId(value)}`;
+}
+
+function connectMechanic(
+  nodes: Map<string, KnowledgeNode>,
+  edges: Map<string, KnowledgeEdge>,
+  sourceId: string,
+  field: string,
+  value: string,
+  kind: Extract<KnowledgeEdgeKind, 'requires' | 'supports' | 'pays-off' | 'expresses'>,
+  data?: Record<string, unknown>,
+): void {
+  const normalizedValue = String(value || '').trim();
+  if (!normalizedValue) return;
+  const nodeId = mechanicNodeId(field, normalizedValue);
+  if (!nodes.has(nodeId)) {
+    nodes.set(nodeId, {
+      id: nodeId,
+      kind: 'mechanic',
+      label: normalizedValue,
+      data: { field, value: normalizedValue },
+    });
+  }
+  const edgeId = stableId(sourceId, kind, nodeId);
+  edges.set(edgeId, {
+    id: edgeId,
+    from: sourceId,
+    to: nodeId,
+    kind,
+    weight: kind === 'requires' || kind === 'pays-off' ? 1 : 0.7,
+    ...(data ? { data } : {}),
+  });
+}
+
+function connectPredicate(
+  nodes: Map<string, KnowledgeNode>,
+  edges: Map<string, KnowledgeEdge>,
+  sourceId: string,
+  predicate: { field: string; values?: string[]; minimum?: number; weight?: number },
+  kind: Extract<KnowledgeEdgeKind, 'requires' | 'supports' | 'pays-off'>,
+): void {
+  const values = Array.isArray(predicate.values) && predicate.values.length > 0
+    ? predicate.values
+    : [predicate.minimum ? `registered:${predicate.minimum}` : 'registered'];
+  values.forEach(value => connectMechanic(nodes, edges, sourceId, predicate.field, value, kind, {
+    ...(Number.isFinite(predicate.minimum) ? { minimum: Number(predicate.minimum) } : {}),
+    ...(Number.isFinite(predicate.weight) ? { featureWeight: Number(predicate.weight) } : {}),
+  }));
 }
 
 function baseGraph(): KnowledgeGraphSnapshot {
@@ -70,6 +138,10 @@ function baseGraph(): KnowledgeGraphSnapshot {
         genericRoles: archetype.genericRoles,
       },
     });
+    archetype.requiredFeatures.forEach(predicate => connectPredicate(nodes, edges, nodeId, predicate, 'requires'));
+    archetype.optionalFeatures.forEach(predicate => connectPredicate(nodes, edges, nodeId, predicate, 'supports'));
+    archetype.payoffFeatures.forEach(predicate => connectPredicate(nodes, edges, nodeId, predicate, 'pays-off'));
+    archetype.genericRoles.forEach(role => connectMechanic(nodes, edges, nodeId, 'roles', role, 'supports'));
     for (const neighbor of archetype.neighbors) {
       const targetId = `archetype:${neighbor.target}`;
       const id = stableId(nodeId, 'evolves-to', targetId);
@@ -128,6 +200,8 @@ function lineageGraph(lineage: EncounterLineageMemory): Pick<KnowledgeGraphSnaps
         statusIds: family.statusIds,
       },
     });
+    family.themeAxes.forEach(axis => connectMechanic(nodes, edges, familyId, 'axes', axis, 'expresses'));
+    family.statusIds.forEach(status => connectMechanic(nodes, edges, familyId, 'statuses', status, 'expresses'));
     for (const action of family.canonicalActions) {
       const actionId = `enemy-action:${family.key}:${stableId(action.id, action.structuralFingerprint)}`;
       nodes.set(actionId, {
@@ -141,18 +215,60 @@ function lineageGraph(lineage: EncounterLineageMemory): Pick<KnowledgeGraphSnaps
       });
       const id = stableId(familyId, 'uses-action', actionId);
       edges.set(id, { id, from: familyId, to: actionId, kind: 'uses-action', weight: 1 });
+      const features = extractContentMechanicFeatures(action.definition);
+      for (const field of ['operations', 'axes', 'targets', 'zones', 'triggers', 'resources', 'statuses', 'roles'] as const) {
+        features[field].forEach(value => connectMechanic(nodes, edges, actionId, field, value, 'expresses'));
+      }
     }
   }
   return { nodes: [...nodes.values()], edges: [...edges.values()] };
 }
 
-class IndexedGraphPersistence {
+function cloneSnapshot(snapshot: KnowledgeGraphSnapshot): KnowledgeGraphSnapshot {
+  return structuredClone(snapshot);
+}
+
+function graphFingerprint(snapshot: KnowledgeGraphSnapshot): string {
+  return createContentMechanicsFingerprint({
+    nodes: snapshot.nodes,
+    edges: snapshot.edges,
+  });
+}
+
+function isCompatibleSnapshot(value: unknown, expected: KnowledgeGraphSnapshot): value is KnowledgeGraphSnapshot {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const snapshot = value as Partial<KnowledgeGraphSnapshot>;
+  if (snapshot.spec !== DESIGN_KNOWLEDGE_GRAPH_SPEC || snapshot.contentVersion !== expected.contentVersion) return false;
+  if (!Array.isArray(snapshot.nodes) || !Array.isArray(snapshot.edges)) return false;
+  const nodeIds = new Set<string>();
+  for (const node of snapshot.nodes) {
+    if (!node || typeof node !== 'object' || typeof node.id !== 'string' || !node.id) return false;
+    if (!['archetype', 'mechanic', 'constraint', 'enemy-family', 'enemy-action'].includes(String(node.kind))) return false;
+    if (nodeIds.has(node.id)) return false;
+    nodeIds.add(node.id);
+  }
+  const edgeIds = new Set<string>();
+  for (const edge of snapshot.edges) {
+    if (!edge || typeof edge !== 'object' || typeof edge.id !== 'string' || !edge.id) return false;
+    if (![
+      'evolves-to', 'requires', 'supports', 'pays-off', 'expresses',
+      'anti-synergy', 'uses-action', 'related-to',
+    ].includes(String(edge.kind))) return false;
+    if (!nodeIds.has(String(edge.from)) || !nodeIds.has(String(edge.to))) return false;
+    if (!Number.isFinite(Number(edge.weight)) || edgeIds.has(edge.id)) return false;
+    edgeIds.add(edge.id);
+  }
+  return graphFingerprint(snapshot as KnowledgeGraphSnapshot) === graphFingerprint(expected);
+}
+
+class IndexedGraphPersistence implements KnowledgeGraphPersistence {
+  readonly storage = typeof indexedDB === 'undefined' ? 'memory' : 'indexeddb';
   private databasePromise: Promise<IDBDatabase> | null = null;
 
   private database(): Promise<IDBDatabase> {
     if (this.databasePromise) return this.databasePromise;
     this.databasePromise = new Promise((resolve, reject) => {
-      const request = indexedDB.open('magic-girl-world-design-graph-v1', 1);
+      const request = indexedDB.open('magic-girl-world-design-graph-v2', 1);
       request.onupgradeneeded = () => {
         if (!request.result.objectStoreNames.contains('snapshots')) {
           request.result.createObjectStore('snapshots');
@@ -162,6 +278,17 @@ class IndexedGraphPersistence {
       request.onerror = () => reject(request.error || new Error('无法打开流派图谱数据库'));
     });
     return this.databasePromise;
+  }
+
+  async load(): Promise<KnowledgeGraphSnapshot | null> {
+    if (typeof indexedDB === 'undefined') return null;
+    const database = await this.database();
+    return new Promise<KnowledgeGraphSnapshot | null>((resolve, reject) => {
+      const transaction = database.transaction('snapshots', 'readonly');
+      const request = transaction.objectStore('snapshots').get('base');
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error || new Error('无法读取流派图谱'));
+    });
   }
 
   async save(snapshot: KnowledgeGraphSnapshot): Promise<void> {
@@ -181,25 +308,46 @@ class IndexedGraphPersistence {
  * narrative names are stored only for enemy-family continuity, never for archetype scoring.
  */
 export class DesignKnowledgeGraph {
-  private readonly base = baseGraph();
-  private readonly persistence = new IndexedGraphPersistence();
+  private base = baseGraph();
+  private storage: KnowledgeGraphStorage = 'memory';
+
+  constructor(private readonly persistence: KnowledgeGraphPersistence = new IndexedGraphPersistence()) {}
 
   async initialize(): Promise<void> {
-    await this.persistence.save(this.base);
+    if (this.persistence.storage === 'memory') return;
+    try {
+      const persisted = await this.persistence.load();
+      if (isCompatibleSnapshot(persisted, this.base)) {
+        this.base = cloneSnapshot(persisted);
+      } else {
+        await this.persistence.save(cloneSnapshot(this.base));
+      }
+      this.storage = 'indexeddb';
+    } catch {
+      // IndexedDB can be blocked by private browsing or WebView policies. The
+      // bundled graph remains the authority and must keep gameplay available.
+      this.storage = 'unavailable';
+    }
   }
 
-  stats(lineage?: EncounterLineageMemory): { nodes: number; edges: number; version: string } {
+  stats(lineage?: EncounterLineageMemory): {
+    nodes: number;
+    edges: number;
+    version: string;
+    storage: KnowledgeGraphStorage;
+  } {
     const dynamic = lineage ? lineageGraph(lineage) : { nodes: [], edges: [] };
     return {
       nodes: this.base.nodes.length + dynamic.nodes.length,
       edges: this.base.edges.length + dynamic.edges.length,
       version: this.base.contentVersion,
+      storage: this.storage,
     };
   }
 
   query(archetypeIds: string[] = [], lineage?: EncounterLineageMemory, depth = 1, limit = 36): KnowledgeGraphView {
     const dynamic = lineage ? lineageGraph(lineage) : { nodes: [], edges: [] };
-    const allNodes = [...this.base.nodes, ...dynamic.nodes];
+    const allNodes = [...new Map([...this.base.nodes, ...dynamic.nodes].map(node => [node.id, node])).values()];
     const allEdges = [...this.base.edges, ...dynamic.edges];
     const byId = new Map(allNodes.map(node => [node.id, node]));
     const requested = archetypeIds

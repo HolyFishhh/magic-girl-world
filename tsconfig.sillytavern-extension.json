@@ -9,6 +9,7 @@
   "files": [
     "global.d.ts",
     "src/sillytavern-extension/index.ts",
+    "src/sillytavern-extension/sillyTavernHost.ts",
     "src/sillytavern-extension/designWorker.ts"
   ]
 }

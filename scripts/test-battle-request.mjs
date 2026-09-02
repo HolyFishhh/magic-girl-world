@@ -58,6 +58,47 @@ assert.equal(request.route.floorsPerAct, run.floorsPerAct);
 assert.deepEqual(request.route.nodeCounts, run.nodeCounts);
 assert.equal(request.player.level, 3);
 assert.equal(request.seed, adapter.createBattleRequestFromMvu(variables, structuredClone(battle)).seed);
+
+const fractionalTowerBattle = structuredClone(battle);
+fractionalTowerBattle.core.hp = 62.6;
+fractionalTowerBattle.core.max_hp = 80.2;
+fractionalTowerBattle.core.lust = 12.4;
+fractionalTowerBattle.core.max_lust = 99.6;
+const fractionalTowerVariables = {
+  stat_data: {
+    game_mode: 'tower',
+    run,
+    battle: fractionalTowerBattle,
+  },
+};
+const normalizedTowerRequest = adapter.createBattleRequestFromMvu(
+  fractionalTowerVariables,
+  fractionalTowerBattle,
+);
+assert.deepEqual(
+  {
+    hp: normalizedTowerRequest.player.hp,
+    maxHp: normalizedTowerRequest.player.maxHp,
+    lust: normalizedTowerRequest.player.lust,
+    maxLust: normalizedTowerRequest.player.maxLust,
+  },
+  { hp: 63, maxHp: 80, lust: 12, maxLust: 100 },
+  'tower battles normalize legacy fractional resources at the final battle-load boundary',
+);
+
+const storyFractionalBattle = structuredClone(fractionalTowerBattle);
+const storyFractionalRequest = adapter.createBattleRequestFromMvu(
+  {
+    stat_data: {
+      game_mode: 'story',
+      game_mode_lock: { schemaVersion: 1, mode: 'story' },
+      run: null,
+      battle: storyFractionalBattle,
+    },
+  },
+  storyFractionalBattle,
+);
+assert.equal(storyFractionalRequest.player.hp, 62.6, 'story mode keeps authored fractional resources');
 const otherRequest = core.createBattleRequest({
   content: request.content,
   player: request.player,

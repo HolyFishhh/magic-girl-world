@@ -85,6 +85,16 @@ assert.equal(compiled.ok, true);
 assert.equal(compiled.value.spec, 'mwg.effect/v1');
 assert.equal(Object.hasOwn(compact, 'spec'), false);
 
+const repeatedPresentation = compileCompactEffectList([
+  { damage: 6, description: '模型重复写进效果项的说明文字。', emoji: '✨' },
+  { block: 4, description: '展示文本不参与战斗结算。' },
+]);
+assert.equal(repeatedPresentation.ok, true, JSON.stringify(repeatedPresentation.issues));
+assert.deepEqual(repeatedPresentation.value.steps, [
+  { op: 'damage', target: 'opponent', amount: 6 },
+  { op: 'gain_block', target: 'self', amount: 4 },
+]);
+
 const state = {
   self: { hp: 20, maxHp: 20, lust: 0, maxLust: 100, energy: 3, maxEnergy: 3, block: 0 },
   opponent: { hp: 30, maxHp: 30, lust: 0, maxLust: 100, energy: 0, maxEnergy: 0, block: 0 },
@@ -357,6 +367,21 @@ assert.equal(cardOperationResult.ok, true);
 assert.deepEqual(
   cardOperationResult.events.map(event => event.type),
   ['recover_cards', 'draw_cards', 'scry_cards', 'discard_cards', 'exhaust_cards', 'recover_cards', 'reduce_card_cost', 'copy_cards', 'double_card_effect'],
+);
+
+const redundantSelfTargets = compileCompactEffectList([
+  { draw: 2, to: 'self' },
+  { scry: 1, targets: ['self'] },
+]);
+assert.equal(redundantSelfTargets.ok, true, JSON.stringify(redundantSelfTargets.issues));
+assert.deepEqual(redundantSelfTargets.value.steps, [
+  { op: 'draw_cards', amount: 2 },
+  { op: 'scry_cards', amount: 1 },
+]);
+assert.equal(
+  compileCompactEffectList({ draw: 1, to: 'opponent' }).ok,
+  false,
+  'a non-self target on an intrinsically self-side card-flow operation remains invalid',
 );
 
 const cardValueOperations = compileCompactEffectList([

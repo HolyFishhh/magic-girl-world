@@ -41,6 +41,19 @@ const validBattle = {
 const valid = preflightBattleContent(validBattle);
 assert.equal(valid.ok, true, JSON.stringify(valid.issues));
 
+const weightedAliasBattle = structuredClone(validBattle);
+weightedAliasBattle.enemy.actions = [
+  { name: '轻击', weight: 3, effects: { damage: 4 } },
+  { name: '重击', weight: 1, effects: { damage: 9 } },
+];
+weightedAliasBattle.enemy.action_mode = 'weighted';
+weightedAliasBattle.enemy.action_config = {};
+assert.equal(
+  preflightBattleContent(weightedAliasBattle).ok,
+  true,
+  'weighted model output should be accepted as a probability alias',
+);
+
 const validResourceBattle = structuredClone(validBattle);
 validResourceBattle.core.resources = [
   { id: 'stars', name: '星能', emoji: '⭐', current: 2, max: 5, refresh: 'retain' },

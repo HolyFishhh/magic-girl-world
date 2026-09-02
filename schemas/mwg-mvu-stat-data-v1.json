@@ -350,6 +350,15 @@
       "ai_operations": []
     },
     {
+      "id": "tower_node_program_state",
+      "paths": ["run_node", "run_node_reward", "run_event", "run_shop", "run_treasure", "run_rest"],
+      "shape": "nullable-object",
+      "owner": "program",
+      "lifecycle": "optional-run",
+      "writers": ["program:tower-runtime", "program:battle-settlement"],
+      "ai_operations": []
+    },
+    {
       "id": "run_result",
       "paths": ["run_result"],
       "shape": "nullable-object",
@@ -452,6 +461,24 @@
     {
       "id": "game_mode",
       "paths": ["game_mode"],
+      "shape": "string",
+      "owner": "program",
+      "lifecycle": "persistent",
+      "writers": ["program:start"],
+      "ai_operations": []
+    },
+    {
+      "id": "game_mode_lock",
+      "paths": ["game_mode_lock"],
+      "shape": "nullable-object",
+      "owner": "program",
+      "lifecycle": "persistent",
+      "writers": ["program:start"],
+      "ai_operations": []
+    },
+    {
+      "id": "tower_requirements",
+      "paths": ["tower_requirements"],
       "shape": "string",
       "owner": "program",
       "lifecycle": "persistent",

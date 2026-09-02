@@ -11,6 +11,8 @@ pnpm-debug.log*
 tmp/
 scripts/__pycache__/
 dist/test-cards/
+dist/release/*.png
+dist/tavern/*-e2e.png
 /.augment
 ui-demo-2-compact-vertical.html
 ui-demo-3-tab-layout.html

@@ -66,7 +66,10 @@ const battleMessageIndex = [...chat]
   .reverse()
   .find(({ message }) => {
     const layers = Array.isArray(message?.variables) ? message.variables : [message?.variables];
-    return layers.some(layer => layer?.stat_data?.battle?.enemy);
+    return layers.some(layer => {
+      const battle = layer?.stat_data?.battle;
+      return !!battle?.enemy || (Array.isArray(battle?.enemies) && battle.enemies.length > 0);
+    });
   })?.index;
 if (!Number.isInteger(battleMessageIndex)) {
   throw new Error(`Source chat ${sourceChatFile} has no message containing a battle enemy`);
@@ -81,7 +84,14 @@ if (process.env.BATTLE_FIXTURE_COMPACT === '1') {
     variableLayers[sourceSwipeId] ||
     [...variableLayers]
       .reverse()
-      .find(layer => layer?.__magic_girl_world?.battle_session?.state || layer?.stat_data?.battle?.enemy);
+      .find(layer => {
+        const battle = layer?.stat_data?.battle;
+        return (
+          !!layer?.__magic_girl_world?.battle_session?.state ||
+          !!battle?.enemy ||
+          (Array.isArray(battle?.enemies) && battle.enemies.length > 0)
+        );
+      });
   if (!activeBattleLayer) throw new Error('The source battle fixture has no active battle variable layer');
   const fixtureText = `战斗 UI 验收夹具 ${releaseConfig.cardVersion}\n\n<BATTLE_START>\n\n<StatusPlaceHolderImpl/>`;
   battleMessage.mes = fixtureText;
@@ -113,8 +123,16 @@ if (terminalResult && ['active', 'victory', 'defeat', 'terminated'].includes(ter
       state.player.currentHp = Math.max(1, Number(state.player.currentHp) || Number(state.player.maxHp) || 1);
       state.player.energy = Math.max(1, Number(state.player.energy) || Number(state.player.maxEnergy) || 3);
     }
-    if (state.enemy)
+    if (Array.isArray(state.enemies) && state.enemies.length > 0) {
+      for (const enemy of state.enemies) {
+        enemy.currentHp = Math.max(1, Number(enemy.maxHp) || Number(enemy.currentHp) || 1);
+      }
+      const activeEnemy = state.enemies.find(enemy => enemy.id === state.activeEnemyId) || state.enemies[0];
+      state.enemy = structuredClone(activeEnemy);
+      state.activeEnemyId = activeEnemy.id;
+    } else if (state.enemy) {
       state.enemy.currentHp = Math.max(1, Number(state.enemy.maxHp) || Number(state.enemy.currentHp) || 1);
+    }
   } else {
     state.phase = 'game_over';
     state.isGameOver = true;
@@ -125,7 +143,10 @@ if (terminalResult && ['active', 'victory', 'defeat', 'terminated'].includes(ter
         : terminalResult === 'defeat'
           ? '玩家失去继续战斗的能力。'
           : '双方暂时脱离战斗。';
-    if (terminalResult === 'victory' && state.enemy) state.enemy.currentHp = 0;
+    if (terminalResult === 'victory') {
+      if (Array.isArray(state.enemies)) state.enemies.forEach(enemy => { enemy.currentHp = 0; });
+      if (state.enemy) state.enemy.currentHp = 0;
+    }
     if (terminalResult === 'defeat' && state.player) state.player.currentHp = 0;
     state.battleHistory = [
       { turn: 1, type: 'action', message: '玩家使用攻击牌', actor: 'player', actionName: '灰爪撕咬' },

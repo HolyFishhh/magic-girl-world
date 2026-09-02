@@ -8,6 +8,8 @@
 import '../runtime/bootstrap';
 import { ensureMvuRuntimeReady } from '../runtime/messageVariables';
 import { registerNaturalLanguageCardRepairHandler } from '../runtime/naturalLanguageCardRepair';
+import { registerRuntimeViewLifecycle } from '../runtime/runtimeViewSwitcher';
+import { ensureRuntimeFrameHeightSync } from '../runtime/runtimeFrameHeight';
 import {
   formatBoundedContentIssueSummary,
   runBattleSessionAtomicAction,
@@ -29,6 +31,8 @@ import type { BattleContentIssue } from './core/battleContentPreflight';
 import { TavernBattleRepairHost } from './core/battleRepairHost';
 import { BattleSessionHost } from './core/battleSessionHost';
 import { TavernBattleShellPresenter } from './ui/battleShellPresenter';
+
+ensureRuntimeFrameHeightSync()?.request();
 
 /**
  * Fish RPG 战斗系统协调器
@@ -69,6 +73,7 @@ class FishRPGCoordinator {
     try {
       // Wait for the real MVU/Tavern Helper bridge before reading the battle floor.
       await ensureMvuRuntimeReady();
+      if (this.destroyed) return;
       try {
         this.disposeCardRepairHandler = registerNaturalLanguageCardRepairHandler();
       } catch (error) {
@@ -91,6 +96,7 @@ class FishRPGCoordinator {
 
       // 加载战斗数据
       await this.loadBattleData();
+      if (this.destroyed) return;
 
       const loadError = this.gameStateManager.getLastLoadError();
       if (loadError) {
@@ -116,16 +122,20 @@ class FishRPGCoordinator {
 
       // 刷新UI
       await this.refreshUI();
+      if (this.destroyed) return;
 
       // 初始化欲望溢出显示系统（在UI刷新后，确保DOM元素已存在）
       this.shellPresenter.initializeAfterFirstRender();
 
       // The portable session coordinator skips one-shot triggers when this iframe restored a snapshot.
       await this.triggerBattleStartEffects();
+      if (this.destroyed) return;
 
       // 战斗开始效果执行后，再次刷新UI以显示新的状态
       await this.refreshUI();
+      if (this.destroyed) return;
       await this.gameStateManager.saveToSillyTavern();
+      if (this.destroyed) return;
 
       if (this.gameStateManager.wasBattleSessionRestored() && this.gameStateManager.isGameOver()) {
         this.battleEndHost.resumeBattleEndDialog();
@@ -134,6 +144,7 @@ class FishRPGCoordinator {
       // 验证系统状态
       this.validateSystemState();
     } catch (error) {
+      if (this.destroyed) return;
       console.error('❌ 初始化失败:', error);
       const message = error instanceof Error ? error.message : String(error);
       this.shellPresenter.showBattleUnavailable(`酒馆运行环境未就绪：${message}`);
@@ -169,7 +180,6 @@ class FishRPGCoordinator {
       );
       return;
     }
-
   }
 
   /**
@@ -251,7 +261,6 @@ class FishRPGCoordinator {
       });
 
       if (result.status === 'busy') throw new Error('战斗会话正在处理另一项操作');
-
     } catch (error) {
       console.error('❌ 触发战斗开始时效果失败，已回滚初始化状态:', error);
       throw error;
@@ -437,5 +446,5 @@ class FishRPGCoordinator {
 }
 
 const coordinator = new FishRPGCoordinator();
+registerRuntimeViewLifecycle('fish', () => coordinator.destroy());
 void coordinator.initialize();
-window.addEventListener('pagehide', () => coordinator.destroy(), { once: true });

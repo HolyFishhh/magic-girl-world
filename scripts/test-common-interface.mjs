@@ -13,6 +13,7 @@ const exportSource = await readFile(resolve('scripts/export-tavern-interface.mjs
 const runPromptSource = await readFile(resolve('src/game-core/runPrompt.ts'), 'utf8');
 const commonActionHostSource = await readFile(resolve('src/common/commonActionHost.ts'), 'utf8');
 const runActionHostSource = await readFile(resolve('src/common/runActionHost.ts'), 'utf8');
+const towerNodePanelSource = await readFile(resolve('src/common/towerNodePanel.ts'), 'utf8');
 const document = parse(htmlSource);
 const nodes = [];
 const visit = node => {
@@ -74,6 +75,16 @@ assert.match(scriptSource, /reward-effect-summary/);
 assert.match(scriptSource, /function renderDeckArchetypeProfile/);
 assert.match(scriptSource, /design_context\?\.archetypes/);
 assert.match(styleSource, /\.archetype-share-bar/);
+assert.match(scriptSource, /CARD_RARITY_LABELS/);
+assert.match(scriptSource, /class="card rarity-\$\{escapeHtml\(rarity\)\}"/);
+assert.match(scriptSource, /class="card-rarity-chip"/);
+for (const rarity of ['Uncommon', 'Rare', 'Epic', 'Legendary', 'Corrupt']) {
+  assert.match(styleSource, new RegExp(`\\.battle-deck \\.card\\.rarity-${rarity}`));
+}
+assert.match(styleSource, /--card-rarity:/);
+assert.match(towerNodePanelSource, /tower-node-narrative-archive/);
+assert.match(towerNodePanelSource, /查看本次事件剧情/);
+assert.match(styleSource, /\.tower-node-narrative-archive/);
 assert.ok(
   htmlSource.indexOf('id="run-opt-in"') < htmlSource.indexOf('id="battle-hp"'),
   'the optional expedition entry must be the first card/resource control',
@@ -90,6 +101,15 @@ assert.match(scriptSource, /inspectRewardCandidates\(stat\)/);
 assert.match(scriptSource, /option-invalid/);
 assert.match(scriptSource, /不可领取：/);
 assert.match(scriptSource, /TavernRunActionHost/);
+assert.match(
+  scriptSource,
+  /async function retryTowerMapNode[\s\S]{0,900}finally \{\s*setSendingState\(false\);\s*setRunButtonsDisabled\(false\);\s*\}/,
+  'a completed tower-node retry must release the map busy overlay',
+);
+assert.match(scriptSource, /MAX_AUTOMATIC_INITIAL_TOWER_REPAIRS = 2/);
+assert.match(scriptSource, /mwg:tower-initial-repair:/);
+assert.match(scriptSource, /selectedGameMode\(__STAT__\) !== 'tower'/);
+assert.match(scriptSource, /scheduleAutomaticInitialTowerRepair\(readiness\)/);
 assert.match(runActionHostSource, /ensureRunStateInStat/);
 assert.match(runActionHostSource, /public async startRun\(\)/);
 assert.doesNotMatch(
@@ -124,13 +144,40 @@ assert.match(scriptSource, /worldContinuity: node\.kind === 'event' \? formatWor
 assert.match(scriptSource, /buildBudgetPrompt\(buildContext\)/);
 assert.match(scriptSource, /buildEnemyBudgetPrompt\(node, buildContext\)/);
 assert.match(scriptSource, /assessInitialPlayerContent\(pack, \{/);
-assert.match(scriptSource, /const needsInitialContentGate = run\.floor === 0/);
+assert.match(
+  scriptSource,
+  /const needsInitialContentGate =\s*run\.act === 1 && run\.floor === 0 && run\.phase === 'awaiting_choice' && !hasRewards;/,
+  'initial content readiness must gate only the untouched Act 1 entrance, not later-act floor-zero choices',
+);
 assert.match(scriptSource, /currentEl\.textContent = readiness\.deck\.deckQuantity === 0/);
-assert.match(scriptSource, /formatPlayerContentRepairPrompt\(readiness\)/);
-assert.match(scriptSource, /retryCurrentMessageWithExtraModel\(prompt\)/);
+assert.match(
+  scriptSource,
+  /formatPlayerContentRepairPrompt\(\{\s*\.\.\.readiness,\s*issues:\s*combinedIssues\s*\}\)/,
+);
+assert.match(scriptSource, /retryCurrentMessageWithExtraModel\(prompt,\s*\{/);
+assert.match(scriptSource, /validateVariables:\s*variables\s*=>/);
+assert.match(scriptSource, /initialContentReadinessFromStat\(variables\?\.stat_data\)/);
+assert.match(scriptSource, /readAutomaticRepairCandidateIssues\(repairKey\)/);
+assert.match(scriptSource, /writeAutomaticRepairCandidateIssues\(repairKey, candidateReadiness\.issues\)/);
+assert.match(scriptSource, /candidate-issues/);
+assert.match(scriptSource, /refreshOnFailure: 'none'/);
+assert.match(scriptSource, /requestInitialContentRepair\(current, \{ automatic: true \}\)/);
+assert.match(scriptSource, /reportMvuValidationFailure/);
+assert.match(
+  scriptSource,
+  /if \(isMvuGenerationBusy\(\)\)[\s\S]{0,900}await loadGameData\(\);[\s\S]{0,500}scheduleAutomaticInitialTowerRepair\(current\)/,
+);
+assert.match(scriptSource, /getMvuMonitorSnapshot/);
+assert.match(scriptSource, /snapshot\?\.phase === 'generating'/);
+assert.match(scriptSource, /if \(repaired \|\| selectedGameMode\(__STAT__\) === 'tower'\) await loadGameData\(\);/);
 assert.doesNotMatch(scriptSource, /requestInitialContentRepair[\s\S]{0,500}commonActionHost\.continueWithPrompt/);
 assert.match(scriptSource, /请求 AI 修复/);
 assert.match(scriptSource, /function contentDescriptionStatusNames/);
+assert.match(scriptSource, /let __REWARD_SELECTION_MEMORY: RewardSelectionMemory \| null = null/);
+assert.match(scriptSource, /selections: RewardSelections/);
+assert.match(scriptSource, /const selections = __REWARD_SELECTION_MEMORY\.selections/);
+assert.match(scriptSource, /poolRevision: Number\(reward\.pool_revision \|\| 0\)/);
+assert.match(scriptSource, /input\.checked = restored\.includes\(index\)/);
 assert.match(scriptSource, /function contentDescriptionResourceNames/);
 assert.match(
   scriptSource,
@@ -152,11 +199,14 @@ assert.doesNotMatch(scriptSource, /reward-diversity-warning/);
 assert.match(scriptSource, /\[构筑建议\]/);
 assert.equal(
   (scriptSource.match(/createContentPackFromMvuBattle\s*\(/g) || []).length,
-  1,
-  'common build summary, enemy budget, and guidance must share one complete content-pack boundary',
+  2,
+  'one complete content-pack boundary serves live build guidance and one independently validates repaired snapshots',
 );
 assert.doesNotMatch(scriptSource, /relics:\s*battle\.artifacts|activeStatuses:\s*battle\.player_status_effects/);
-assert.doesNotMatch(scriptSource, /console\.log\(|debugData|checkSendingState|resetSendingState|testVariableOperations|refreshData/);
+assert.doesNotMatch(
+  scriptSource,
+  /console\.log\(|debugData|checkSendingState|resetSendingState|testVariableOperations|refreshData/,
+);
 assert.match(scriptSource, /buildGuidance: node\.kind === 'shop' \? buildGuidancePrompt\(buildContext\) : null/);
 assert.match(scriptSource, /isCurrentMessageLatest/);
 assert.match(scriptSource, /历史记录/);
@@ -168,7 +218,12 @@ assert.match(scriptSource, /runActions\.replaceChildren\(\)/);
 assert.match(scriptSource, /TavernCommonActionHost/);
 assert.match(scriptSource, /runActionHost\.startRun\(\)/);
 assert.doesNotMatch(scriptSource, /target\.closest\('#run-start-btn'\)|startOptionalRun/);
-assert.match(scriptSource, /document\.addEventListener\('DOMContentLoaded', initializeCommonView/);
+assert.match(scriptSource, /if \(typeof window !== 'undefined'\) \{\s*initializeCommonView\(\);\s*\}/);
+assert.match(
+  scriptSource,
+  /async function loadGameData\(\)[\s\S]{0,900}await ensureMvuRuntimeReady\(\);[\s\S]{0,500}variables = getCurrentMessageVariables\(\);/,
+  'a restored common view must wait for MVU message variables before its first render',
+);
 assert.doesNotMatch(scriptSource, /\$jq\(\(\) =>/);
 assert.match(scriptSource, /if \(readRunState\(__STAT__\)\) \{/);
 assert.doesNotMatch(scriptSource, /\btriggerSlash\b|updateCurrentMessageVariablesWith/);
@@ -194,7 +249,9 @@ assert.doesNotMatch(scriptSource, /renderOptions|parseOptionTags|handleBattleOpt
 assert.doesNotMatch(scriptSource, /\[路线节点\]|\[事件选择\]|非战斗结局写 run_result/);
 assert.match(runPromptSource, /\[事件选择\]/);
 assert.match(runPromptSource, /gold\/hp 用实际 JSON 整数变化量/);
-assert.match(scriptSource, /getCurrentChatMessageText/);
+assert.match(scriptSource, /return readGameMode\(stat\)/);
+assert.match(scriptSource, /migrateGameModeInStat\(stat\)/);
+assert.doesNotMatch(scriptSource, /context\.includes\('\[远征模式\]'\)/);
 assert.doesNotMatch(exportSource, /findRegex:[\s\S]*?<Options>/);
 assert.doesNotMatch(exportSource, /<Story>/);
 assert.match(

@@ -4,10 +4,12 @@ import {
   ensureMvuRuntimeReady,
   isCurrentMessageLatest,
   rerenderHistoricalMessageForDepth,
+  updateCurrentChatVariablesWith,
   updateCurrentMessageVariablesWith,
   watchCurrentMessageUntilHistorical,
 } from '../../runtime/messageVariables';
 import { TavernContinuationError, TavernContinuationHost } from '../../runtime/tavernContinuation';
+import { lockGameModeInStat, normalizeGameMode, type GameMode } from '../../game-core/towerMode';
 import { createCharacterStartMessage } from './promptGenerator';
 
 const CONFIG_FIELDS: Array<[keyof CharacterConfig, string]> = [
@@ -17,6 +19,7 @@ const CONFIG_FIELDS: Array<[keyof CharacterConfig, string]> = [
   ['profession', 'identity'],
   ['opening', 'opening'],
   ['card', 'card'],
+  ['towerRequirements', 'tower_requirements'],
 ];
 
 export class CharacterCreator {
@@ -58,15 +61,17 @@ export class CharacterCreator {
   private initializeEventListeners(): void {
     this.container.querySelectorAll<HTMLButtonElement>('.mode-card').forEach(card => {
       card.addEventListener('click', () => {
-        const mode = card.dataset.mode;
-        if (mode === 'story' && !card.disabled) this.selectMode('story');
+        const mode = normalizeGameMode(card.dataset.mode);
+        if (mode && !card.disabled) this.selectMode(mode);
       });
     });
 
-    this.container.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('[data-config-field]').forEach(control => {
-      const eventName = control instanceof HTMLSelectElement ? 'change' : 'input';
-      control.addEventListener(eventName, () => this.syncAdvancedFields());
-    });
+    this.container
+      .querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('[data-config-field]')
+      .forEach(control => {
+        const eventName = control instanceof HTMLSelectElement ? 'change' : 'input';
+        control.addEventListener(eventName, () => this.syncAdvancedFields());
+      });
 
     this.container.querySelectorAll<HTMLButtonElement>('.preset-card[data-preset-field]').forEach(preset => {
       preset.addEventListener('click', () => {
@@ -88,13 +93,25 @@ export class CharacterCreator {
   }
 
   private selectMode(mode: CharacterConfig['mode']): void {
-    if (mode !== 'story') return;
-    this.currentConfig.mode = 'story';
+    const canonicalMode = normalizeGameMode(mode);
+    if (!canonicalMode) return;
+    this.currentConfig.mode = canonicalMode;
     this.container.querySelectorAll<HTMLButtonElement>('.mode-card').forEach(card => {
-      const selected = card.dataset.mode === 'story';
+      const selected = normalizeGameMode(card.dataset.mode) === canonicalMode;
       card.classList.toggle('selected', selected);
       card.setAttribute('aria-checked', String(selected));
     });
+    this.container.querySelectorAll<HTMLElement>('[data-mode-only]').forEach(section => {
+      const visible = section.dataset.modeOnly === canonicalMode;
+      section.hidden = !visible;
+      section.setAttribute('aria-hidden', String(!visible));
+      section.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input, textarea, select')
+        .forEach(control => {
+          control.disabled = !visible || this.isHistorical;
+        });
+    });
+    this.syncAdvancedFields();
+    this.updateStartButtonText();
     this.validateForm();
   }
 
@@ -108,8 +125,10 @@ export class CharacterCreator {
         if (key && value && !values.has(key)) values.set(key, value);
       });
 
-    const nextConfig: Partial<CharacterConfig> = { mode: 'story' };
+    const mode: GameMode = normalizeGameMode(this.currentConfig.mode) ?? 'story';
+    const nextConfig: Partial<CharacterConfig> = { mode };
     for (const [key] of CONFIG_FIELDS) {
+      if (key === 'towerRequirements' && mode !== 'tower') continue;
       const value = values.get(String(key));
       if (value) (nextConfig as Record<string, unknown>)[key] = value;
     }
@@ -156,14 +175,24 @@ export class CharacterCreator {
     const config = this.currentConfig as CharacterConfig;
     this.setCreatingState(true);
     try {
-      await ensureMvuRuntimeReady({ mvuTimeoutMs: 30000, battleDataTimeoutMs: 30000 });
-      const startMessage = createCharacterStartMessage(config);
-      await updateCurrentMessageVariablesWith(variables => {
-        if (!variables.stat_data || typeof variables.stat_data !== 'object') variables.stat_data = {};
-        variables.stat_data.game_mode = 'story';
-        variables.stat_data.run = null;
-        return variables;
+      await ensureMvuRuntimeReady({
+        mvuTimeoutMs: 30000,
+        battleDataTimeoutMs: 30000,
+        requireBattleData: false,
       });
+      const startMessage = createCharacterStartMessage(config);
+      const persistStartMode = (variables: Record<string, any>): Record<string, any> => {
+        if (!variables.stat_data || typeof variables.stat_data !== 'object') variables.stat_data = {};
+        lockGameModeInStat(variables.stat_data, config.mode);
+        if (normalizeGameMode(config.mode) === 'tower' && config.towerRequirements?.trim()) {
+          variables.stat_data.tower_requirements = config.towerRequirements.trim();
+        } else {
+          delete variables.stat_data.tower_requirements;
+        }
+        return variables;
+      };
+      await updateCurrentMessageVariablesWith(persistStartMode);
+      await updateCurrentChatVariablesWith(persistStartMode);
       await this.continuationHost.continueWithPrompt({ prompt: startMessage });
       this.showMessage('设定已提交，正在生成开场剧情。', 'info');
     } catch (error) {
@@ -183,17 +212,26 @@ export class CharacterCreator {
 
   private setCreatingState(active: boolean): void {
     this.isCreating = active;
-    const buttonText = document.querySelector('#create-character-btn .btn-text');
-    if (buttonText) buttonText.textContent = active ? '正在启动' : this.isHistorical ? '设定已提交' : '开始剧情';
+    this.updateStartButtonText();
     this.validateForm();
+  }
+
+  private updateStartButtonText(): void {
+    const buttonText = document.querySelector('#create-character-btn .btn-text');
+    if (buttonText) {
+      const idleText = normalizeGameMode(this.currentConfig.mode) === 'tower' ? '开始爬塔' : '开始剧情';
+      buttonText.textContent = this.isCreating ? '正在启动' : this.isHistorical ? '设定已提交' : idleText;
+    }
   }
 
   private lockHistoricalForm(): void {
     if (this.isHistorical) return;
     this.isHistorical = true;
-    this.container.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLButtonElement>('input, textarea, button').forEach(control => {
-      control.disabled = true;
-    });
+    this.container
+      .querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLButtonElement>('input, textarea, button')
+      .forEach(control => {
+        control.disabled = true;
+      });
     const buttonText = document.querySelector('#create-character-btn .btn-text');
     if (buttonText) buttonText.textContent = '设定已提交';
     const validationMessage = document.getElementById('validation-message');
@@ -201,7 +239,7 @@ export class CharacterCreator {
   }
 
   private isConfigValid(config: Partial<CharacterConfig>): config is CharacterConfig {
-    return config.mode === 'story';
+    return normalizeGameMode(config.mode) !== null;
   }
 
   private showMessage(message: string, type: 'success' | 'error' | 'warning' | 'info'): void {
@@ -224,7 +262,9 @@ export class CharacterCreator {
       field.value = '';
     });
     this.selectMode('story');
-    this.container.querySelectorAll<HTMLButtonElement>('.preset-card[data-preset-field]').forEach(card => card.classList.remove('selected'));
+    this.container
+      .querySelectorAll<HTMLButtonElement>('.preset-card[data-preset-field]')
+      .forEach(card => card.classList.remove('selected'));
 
     for (const field of ['world', 'card']) {
       const first = this.container.querySelector<HTMLButtonElement>(`.preset-card[data-preset-field="${field}"]`);
@@ -241,9 +281,11 @@ export class CharacterCreator {
   private renderDefaultState(): void {
     for (const field of ['world', 'card']) {
       const target = this.container.querySelector<HTMLTextAreaElement>(`[data-config-field="${field}"]`);
-      const selected = this.container.querySelector<HTMLButtonElement>(`.preset-card[data-preset-field="${field}"].selected`);
+      const selected = this.container.querySelector<HTMLButtonElement>(
+        `.preset-card[data-preset-field="${field}"].selected`,
+      );
       if (target && !target.value.trim() && selected?.dataset.value) target.value = selected.dataset.value;
     }
-    this.syncAdvancedFields();
+    this.selectMode(normalizeGameMode(this.currentConfig.mode) ?? 'story');
   }
 }

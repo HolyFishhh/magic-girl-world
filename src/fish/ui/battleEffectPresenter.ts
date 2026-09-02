@@ -17,8 +17,9 @@ export interface BattleEndDialogRequest {
   result: BattleEndResult;
   battleSummary: string;
   narrativeText?: string;
+  mode?: 'story' | 'tower';
   onConfirm(playerContinuation: string): Promise<void>;
-  onRestart(): Promise<void>;
+  onRestart?: () => Promise<void>;
 }
 
 export type BattleEffectLogType = 'info' | 'damage' | 'heal' | 'action' | 'system';
@@ -171,6 +172,7 @@ export class TavernBattleEffectPresenter {
         : request.result === 'victory'
           ? { text: '胜利', emoji: '🎉', color: '#4CAF50' }
           : { text: '失败', emoji: '💀', color: '#f44336' };
+    const towerMode = request.mode === 'tower';
     const dialog = $(`
       <div class="battle-end-dialog result-${request.result}" style="--result-color:${presentation.color}" role="dialog" aria-modal="true" aria-label="战斗结束">
         <div class="battle-end-backdrop"></div>
@@ -184,14 +186,16 @@ export class TavernBattleEffectPresenter {
           </header>
           <div class="battle-end-body">
             ${request.narrativeText ? '<p class="battle-end-narrative"></p>' : ''}
-            <p class="battle-end-guide">确认后会把回合摘要、最终状态和你的补充一起交给剧情模型。</p>
-            <label class="battle-end-choice-label" for="battle-end-choice">你希望战斗后做什么？<span>可选</span></label>
-            <textarea id="battle-end-choice" class="battle-end-choice" maxlength="500" rows="3" placeholder="例如：先检查战场，再与同伴讨论刚才发现的线索。"></textarea>
-            <div class="battle-end-choice-meta"><span>留空则由剧情自然发展</span><span class="battle-end-choice-count">0/500</span></div>
+            <p class="battle-end-guide">${towerMode ? (request.result === 'victory' ? '战利品已经在进入战斗前准备完成，结算后立即返回路线。' : '结算当前状态后返回本次远征结果。') : '确认后会把回合摘要、最终状态和你的补充一起交给剧情模型。'}</p>
+            ${towerMode ? '' : `
+              <label class="battle-end-choice-label" for="battle-end-choice">你希望战斗后做什么？<span>可选</span></label>
+              <textarea id="battle-end-choice" class="battle-end-choice" maxlength="500" rows="3" placeholder="例如：先检查战场，再与同伴讨论刚才发现的线索。"></textarea>
+              <div class="battle-end-choice-meta"><span>留空则由剧情自然发展</span><span class="battle-end-choice-count">0/500</span></div>
+            `}
           </div>
           <footer class="battle-end-actions">
-            <button class="battle-end-confirm">继续剧情</button>
-            <button class="battle-end-restart">重新开始</button>
+            <button class="battle-end-confirm">${towerMode ? (request.result === 'victory' ? '查看战利品' : '查看远征结果') : '继续剧情'}</button>
+            ${!towerMode && request.onRestart ? '<button class="battle-end-restart">重新开始</button>' : ''}
           </footer>
         </section>
       </div>
@@ -209,8 +213,8 @@ export class TavernBattleEffectPresenter {
     dialog.find('.battle-end-confirm').on('click', async event => {
       const button = $(event.currentTarget);
       const originalText = button.text();
-      const playerContinuation = choice.val()?.toString().trim() || '';
-      button.prop('disabled', true).text('正在继续剧情...');
+      const playerContinuation = towerMode ? '' : choice.val()?.toString().trim() || '';
+      button.prop('disabled', true).text(towerMode ? '正在结算...' : '正在继续剧情...');
       choice.prop('disabled', true);
       try {
         await request.onConfirm(playerContinuation);
@@ -226,7 +230,7 @@ export class TavernBattleEffectPresenter {
 
     dialog.find('.battle-end-restart').on('click', async () => {
       try {
-        await request.onRestart();
+        if (request.onRestart) await request.onRestart();
       } catch (error) {
         console.error('重新开始战斗失败:', error);
       }

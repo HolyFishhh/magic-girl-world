@@ -8,8 +8,15 @@ import extract from 'png-chunks-extract';
 import { buildMvuCardLoader } from './lib/mvu-card-loader.mjs';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const inputPath = resolve(process.argv[2] || resolve(root, '魔法少女世界.png'));
-const outputPath = resolve(process.argv[3] || inputPath);
+const cliArgs = process.argv.slice(2);
+const characterNameOptionIndex = cliArgs.indexOf('--character-name');
+const characterNameOverride =
+  characterNameOptionIndex >= 0 ? String(cliArgs[characterNameOptionIndex + 1] || '').trim() : '';
+const positionalArgs = cliArgs.filter(
+  (_argument, index) => index !== characterNameOptionIndex && index !== characterNameOptionIndex + 1,
+);
+const inputPath = resolve(positionalArgs[0] || resolve(root, '魔法少女世界.png'));
+const outputPath = resolve(positionalArgs[1] || inputPath);
 const legacyOutputPath = resolve(root, 'dist/tavern/魔法少女世界-酒馆兼容版.png');
 const interfacePaths = [
   resolve(root, 'dist/tavern/start-interface.json'),
@@ -70,7 +77,8 @@ const [image, interfaceTexts, worldbookManifestText, worldbookEntryConfigText, r
 ]);
 const releaseConfig = JSON.parse(releaseConfigText);
 const CARD_VERSION = releaseConfig.cardVersion;
-const CHARACTER_NAME = releaseConfig.characterName || `${releaseConfig.worldbookPrefix} ${CARD_VERSION}`;
+const CHARACTER_NAME =
+  characterNameOverride || releaseConfig.characterName || `${releaseConfig.worldbookPrefix} ${CARD_VERSION}`;
 const DESIGN_ASSISTANT_CARD_SCOPE = 'mwg.design-assistant-card/v1';
 const CHARACTER_RUNTIME_ID = `magic-girl-world-runtime-${CARD_VERSION.replace(/[^a-z0-9]+/gi, '-')}`;
 const WORLDBOOK_NAME = `${releaseConfig.worldbookPrefix}${CARD_VERSION}`;
@@ -115,6 +123,7 @@ const createWorldbookEntry = entryName => {
   entry.content = '';
   entry.keys = [];
   entry.secondary_keys = [];
+  entry.insertion_order = entry.id;
   entry.constant = false;
   entry.selective = true;
   entry.enabled = true;
@@ -128,9 +137,15 @@ const managedWorldbookEntries = [];
 for (const [entryName, sourceName] of Object.entries(worldbookManifest)) {
   const config = worldbookEntryConfig[entryName] || {};
   const expectedComment = typeof config.comment === 'string' ? config.comment : entryName;
+  const acceptedAliases = Array.isArray(config.aliases)
+    ? new Set(config.aliases.map(canonicalWorldbookComment))
+    : new Set();
   let matches = worldbookEntries.filter(entry => {
     const comment = entry.name || entry.comment;
-    return comment === expectedComment || canonicalWorldbookComment(comment) === canonicalWorldbookComment(entryName);
+    const canonicalComment = canonicalWorldbookComment(comment);
+    return comment === expectedComment
+      || canonicalComment === canonicalWorldbookComment(entryName)
+      || acceptedAliases.has(canonicalComment);
   });
   if (matches.length === 0 && config.create === true) {
     const entry = createWorldbookEntry(entryName);
@@ -147,9 +162,19 @@ for (const [entryName, sourceName] of Object.entries(worldbookManifest)) {
   for (const field of ['constant', 'keys', 'secondary_keys', 'enabled', 'selective', 'use_regex']) {
     if (Object.hasOwn(config, field)) entry[field] = structuredClone(config[field]);
   }
-  if (config.extensions && typeof config.extensions === 'object') {
-    entry.extensions = { ...(entry.extensions || {}), ...structuredClone(config.extensions) };
-  }
+  // The manifest/config pair is authoritative. Older source cards reused
+  // broad groups such as “基本格式” and newly-created entries inherited those
+  // groups from their template, which silently made only one matching entry
+  // active. Default every managed entry to no selection group unless its
+  // explicit config opts back into one.
+  entry.extensions = {
+    ...(entry.extensions || {}),
+    group: '',
+    group_override: false,
+    ...(config.extensions && typeof config.extensions === 'object' ? structuredClone(config.extensions) : {}),
+  };
+  entry.insertion_order = managedWorldbookEntries.length;
+  entry.extensions.display_index = managedWorldbookEntries.length;
   managedWorldbookEntries.push(entry);
 }
 // The source manifest is authoritative. Merely upserting entries leaves removed
@@ -233,6 +258,21 @@ if (mvuScripts.length !== 1) {
 mvuScripts[0].name = 'MVU变量框架';
 mvuScripts[0].content = MVU_IMPORT;
 mvuScripts[0].enabled = true;
+mvuScripts[0].button ||= {};
+const existingMvuButtons = Array.isArray(mvuScripts[0].button.buttons) ? mvuScripts[0].button.buttons : [];
+const extraModelRetryButton = existingMvuButtons.find(button => button?.name === '重试额外模型解析') || {};
+mvuScripts[0].button = {
+  ...mvuScripts[0].button,
+  enabled: true,
+  buttons: [
+    ...existingMvuButtons.filter(button => button?.name !== '重试额外模型解析'),
+    {
+      ...extraModelRetryButton,
+      name: '重试额外模型解析',
+      visible: true,
+    },
+  ],
+};
 mvuScripts[0].data = {
   ...(mvuScripts[0].data || {}),
   构建信息: `MagVarUpdate ${releaseConfig.mvuVersion} (pinned)`,
@@ -242,7 +282,7 @@ card.data.character_version = CARD_VERSION;
 card.name = CHARACTER_NAME;
 card.data.name = CHARACTER_NAME;
 card.data.creator_notes =
-  '剧情模式可直接开始游玩；角色卡已内置世界书、MVU 变量框架与交互界面。爬塔模式暂未开放。';
+  '剧情模式可直接开始游玩；角色卡已内置世界书、MVU 变量框架与交互界面。爬塔模式需要另行安装 0.2.0 或更高版本的“魔法少女世界设计辅助器”扩展。';
 // The start regex targets the marker itself. A Markdown fence here is parsed
 // as a second code block by SillyTavern and can turn the replacement HTML into
 // JavaScript, producing `Unexpected token '<'` in the message iframe.

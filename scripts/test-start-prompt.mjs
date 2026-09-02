@@ -40,40 +40,84 @@ const minimalMessage = createCharacterStartMessage({ mode: 'story' });
 assert.equal(minimalMessage, '[角色创建]\n{"mode":"story"}\n[剧情模式]\n[开始游戏]');
 assert.ok(encode(minimalMessage).length <= 32, 'an empty optional form must produce a minimal handoff');
 
+const towerMessage = createCharacterStartMessage({
+  mode: 'tower',
+  world: '随机世界',
+  towerRequirements: '短叙事，事件更偏向高风险取舍',
+});
+assert.equal(
+  towerMessage,
+  '[角色创建]\n{"mode":"tower","world":"随机世界","tower_requirements":"短叙事，事件更偏向高风险取舍"}\n[爬塔模式]\n[开始游戏]',
+);
+assert.doesNotMatch(towerMessage, /爬塔开局要求|中文字符|短段落|不直接开战/);
+assert.doesNotMatch(message, /爬塔开局要求|中文字符/, '剧情模式不能继承爬塔开局衔接说明');
+const legacyExpeditionMessage = createCharacterStartMessage({ mode: 'expedition' });
+assert.equal(
+  legacyExpeditionMessage,
+  '[角色创建]\n{"mode":"tower"}\n[爬塔模式]\n[开始游戏]',
+);
+
 const startHtml = await readFile(resolve('src/start/index.html'), 'utf8');
 assert.doesNotMatch(startHtml, /setup-tab|story-config|偏好|阵营/);
 assert.match(startHtml, /class="mode-card selected"[^>]*data-mode="story"/);
-assert.match(startHtml, /class="mode-card"[^>]*data-mode="expedition"[^>]*disabled/);
+assert.match(startHtml, /class="mode-card"[^>]*data-mode="tower"[^>]*aria-checked="false"/);
+assert.doesNotMatch(startHtml, /data-mode="tower"[^>]*disabled/);
+assert.match(startHtml, /data-tower-extension-check/);
+assert.match(startHtml, /data-action="install-tower-extension"/);
 assert.match(startHtml, /你也可以通过直接描述一段内容来开始游戏，体验卡牌战斗内容/);
-for (const field of ['name', 'customDescription', 'profession', 'opening', 'world', 'card']) {
+for (const field of ['name', 'customDescription', 'profession', 'opening', 'world', 'card', 'towerRequirements']) {
   assert.match(startHtml, new RegExp(`data-config-field="${field}"`));
 }
+assert.match(startHtml, /data-mode-only="tower"/);
+assert.match(startHtml, /难度控制/);
 assert.ok((startHtml.match(/data-preset-field="world"/g) || []).length >= 10, 'world presets must be discoverable');
 assert.ok((startHtml.match(/data-preset-field="card"/g) || []).length >= 10, 'card presets must be discoverable');
 for (const title of ['魔法少女', '现代都市', '修仙世界', '蒸汽朋克', '均衡构筑', '连击构筑', '状态持续']) {
-  assert.match(startHtml, new RegExp(`<strong>${title}</strong><span>`), `${title} must use one title followed by its description`);
+  assert.match(
+    startHtml,
+    new RegExp(`<strong>${title}</strong><span>`),
+    `${title} must use one title followed by its description`,
+  );
 }
 for (const removedTitle of ['白木市', '魔法公开', '双层世界', '经典构筑', '元素构筑', '叙事构筑']) {
-  assert.doesNotMatch(startHtml, new RegExp(`<strong>${removedTitle}</strong>`), `${removedTitle} must not remain in the rewritten presets`);
+  assert.doesNotMatch(
+    startHtml,
+    new RegExp(`<strong>${removedTitle}</strong>`),
+    `${removedTitle} must not remain in the rewritten presets`,
+  );
 }
-assert.doesNotMatch(startHtml, /<strong>[^<]+ [^<]+<\/strong>/, 'preset cards must not merge a subtitle into the title');
-assert.doesNotMatch(startHtml, /data-config-field="startingLocation"|data-config-field="faction"|data-config-field="theme"|data-config-field="plot"/);
+assert.doesNotMatch(
+  startHtml,
+  /<strong>[^<]+ [^<]+<\/strong>/,
+  'preset cards must not merge a subtitle into the title',
+);
+assert.doesNotMatch(
+  startHtml,
+  /data-config-field="startingLocation"|data-config-field="faction"|data-config-field="theme"|data-config-field="plot"/,
+);
 
 const creatorSource = await readFile(resolve('src/start/core/characterCreator.ts'), 'utf8');
 assert.match(creatorSource, /TavernContinuationHost\.getInstance\(\)/);
-assert.match(creatorSource, /ensureMvuRuntimeReady\(\{ mvuTimeoutMs: 30000, battleDataTimeoutMs: 30000 \}\)/);
+assert.match(creatorSource, /requireBattleData:\s*false/);
 assert.match(
   creatorSource,
-  /await ensureMvuRuntimeReady\(\{ mvuTimeoutMs: 30000, battleDataTimeoutMs: 30000 \}\);[\s\S]*await updateCurrentMessageVariablesWith/,
-  'the first generation must wait for the chat-level MVU listener before writing or sending the handoff',
+  /await ensureMvuRuntimeReady\([\s\S]*?requireBattleData:\s*false,[\s\S]*?\);[\s\S]*await updateCurrentMessageVariablesWith/,
+  'the first generation must wait for the MVU host without deadlocking on battle data that it creates itself',
 );
+assert.match(creatorSource, /this\.updateStartButtonText\(\);[\s\S]*this\.validateForm\(\);/);
 assert.doesNotMatch(creatorSource, /游戏模式暂未写入 MUV/);
 assert.match(creatorSource, /continuationHost\.continueWithPrompt\(\{ prompt: startMessage \}\)/);
 assert.doesNotMatch(creatorSource, /triggerSlash\(`\/send|triggerSlash\('\/send/);
-assert.match(creatorSource, /return config\.mode === 'story'/, 'story mode must be the only required form choice');
+assert.match(creatorSource, /return normalizeGameMode\(config\.mode\) !== null/, 'both start modes must be accepted');
 assert.doesNotMatch(creatorSource, /selectFaction|FACTION_INFO|startingLocation|\.setup-tab/);
 assert.match(creatorSource, /preset-card\[data-preset-field/);
 assert.match(creatorSource, /selectMode\('story'\)/);
+assert.match(creatorSource, /lockGameModeInStat\(variables\.stat_data, config\.mode\)/);
+assert.match(
+  creatorSource,
+  /await updateCurrentMessageVariablesWith\(persistStartMode\);[\s\S]*await updateCurrentChatVariablesWith\(persistStartMode\);/,
+  'the immutable mode lock must survive from the start-message floor into the generated assistant floor',
+);
 assert.doesNotMatch(creatorSource, / \u00b7 /, 'start preview must not restore the removed title separator');
 
 const patcherSource = await readFile(resolve('scripts/patch-character-card.mjs'), 'utf8');

@@ -28,6 +28,45 @@ const content = core.createContentPack({
 
 assert.equal(core.validateContentPackContract(content, { requireEnemy: true, requireExecutable: true }).ok, true);
 
+const structuredPassiveEnemyAbility = core.createContentPack({
+  ...content,
+  enemy: {
+    name: '巡卫',
+    actions: [{ name: '压杀', effects: [{ damage: 4 }] }],
+    abilities: [{
+      id: 'rail_pressure',
+      name: '轨压',
+      trigger: { on: 'passive', effects: [{ modify: 'damage', add: 1 }] },
+    }],
+  },
+});
+assert.equal(
+  core.validateContentPackContract(structuredPassiveEnemyAbility, {
+    requireEnemy: true,
+    requireExecutable: true,
+  }).ok,
+  true,
+  'enemy abilities must accept the same structured passive trigger used by player abilities and relics',
+);
+
+const invalidTimedEnemyModifier = core.createContentPack({
+  ...structuredPassiveEnemyAbility,
+  enemy: {
+    ...structuredPassiveEnemyAbility.enemy,
+    abilities: [{
+      id: 'invalid_timed_modifier',
+      name: '错误时序',
+      trigger: { on: 'turn_start', effects: [{ modify: 'damage', add: 1 }] },
+    }],
+  },
+});
+const invalidTimedEnemyModifierResult = core.validateContentPackContract(invalidTimedEnemyModifier, {
+  requireEnemy: true,
+  requireExecutable: true,
+});
+assert.equal(invalidTimedEnemyModifierResult.ok, false);
+assert.ok(invalidTimedEnemyModifierResult.issues.some(issue => issue.code === 'MODIFIER_NOT_ALLOWED'));
+
 const malformed = core.createContentPack({
   ...content,
   cards: [{ id: 'bad', effects: [{ damage: 'unknown()' }] }],
@@ -46,6 +85,36 @@ const duplicate = core.createContentPack({
 const duplicateResult = core.validateContentPackContract(duplicate, { requireEnemy: true, requireExecutable: true });
 assert.equal(duplicateResult.ok, false);
 assert.ok(duplicateResult.issues.some(issue => issue.code === 'DUPLICATE_ID'));
+
+const persistentOwnedCopies = core.createContentPack({
+  ...content,
+  cards: [
+    {
+      id: 'same_owned_card', runInstanceId: 'same_owned_card__run__1', name: '鎸佷箙鍓湰 1',
+      type: 'Attack', rarity: 'Common', cost: 1, quantity: 1, effects: [{ damage: 1 }],
+    },
+    {
+      id: 'same_owned_card', runInstanceId: 'same_owned_card__run__2', name: '鎸佷箙鍓湰 2',
+      type: 'Attack', rarity: 'Common', cost: 1, quantity: 1, effects: [{ damage: 1 }],
+    },
+  ],
+});
+assert.equal(
+  core.validateContentPackContract(persistentOwnedCopies, { requireEnemy: true, requireExecutable: true }).ok,
+  true,
+  'one record per owned card may share a template id when every run identity is unique',
+);
+
+const duplicateOwnedIdentity = core.createContentPack({
+  ...persistentOwnedCopies,
+  cards: persistentOwnedCopies.cards.map(card => ({ ...card, runInstanceId: 'same_owned_card__run__1' })),
+});
+const duplicateOwnedIdentityResult = core.validateContentPackContract(duplicateOwnedIdentity, {
+  requireEnemy: true,
+  requireExecutable: true,
+});
+assert.equal(duplicateOwnedIdentityResult.ok, false);
+assert.ok(duplicateOwnedIdentityResult.issues.some(issue => issue.code === 'DUPLICATE_RUN_INSTANCE_ID'));
 
 const incompleteModern = core.createContentPack({
   ...content,
