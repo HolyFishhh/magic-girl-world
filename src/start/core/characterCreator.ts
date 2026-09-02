@@ -3,6 +3,7 @@ import type { CharacterConfig } from '../types';
 import {
   ensureMvuRuntimeReady,
   getCurrentChatMessageText,
+  getCurrentMessageVariableOptions,
   isCurrentMessageLatest,
   rerenderHistoricalMessageForDepth,
   updateCurrentChatVariablesWith,
@@ -195,8 +196,22 @@ export class CharacterCreator {
       };
       await updateCurrentMessageVariablesWith(persistStartMode);
       await updateCurrentChatVariablesWith(persistStartMode);
-      await this.continuationHost.continueWithPrompt({ prompt: startMessage });
-      this.showMessage('设定已提交，正在生成开场剧情。', 'info');
+      if (normalizeGameMode(config.mode) === 'tower') {
+        const runtime = (globalThis as any).MagicGirlWorld;
+        if (typeof runtime?.startTowerSingleFloor !== 'function') {
+          throw new Error('爬塔组件版本过低，请先更新组件并刷新酒馆');
+        }
+        await runtime.startTowerSingleFloor({
+          spec: 'mwg.tower-single-floor-start/v1',
+          sourceMessageId: getCurrentMessageVariableOptions().message_id,
+          prompt: startMessage,
+          config,
+        });
+        this.showMessage('爬塔已经在当前楼层启动。', 'success');
+      } else {
+        await this.continuationHost.continueWithPrompt({ prompt: startMessage });
+        this.showMessage('设定已提交，正在生成开场剧情。', 'info');
+      }
     } catch (error) {
       console.error('❌ 创建角色失败:', error);
       this.showMessage(

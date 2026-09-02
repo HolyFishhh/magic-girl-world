@@ -11,6 +11,7 @@ const requiredEntries = [
   '卡牌常驻规范',
   '首条消息变量更新',
   '战斗内容生成要求',
+  '流派体系与设计方法',
   '变量更新规则',
   '[initvar]不要启用',
   '输出格式要求',
@@ -46,6 +47,7 @@ assert.deepEqual(Object.keys(manifest), [
   '变量数据结构',
   '卡牌常驻规范',
   '战斗内容生成要求',
+  '流派体系与设计方法',
   '首条消息变量更新',
   '战斗场景生成',
   '战斗结算生成',
@@ -80,6 +82,7 @@ const expectedMvuRoles = {
   '变量说明': 'plot',
   '变量数据结构': 'update',
   '战斗内容生成要求': 'update',
+  '流派体系与设计方法': 'update',
   '战斗场景生成': 'update',
   '战斗结算生成': 'update',
   '远征节点协议': 'update',
@@ -106,7 +109,7 @@ assert.deepEqual(entryConfig['爬塔开局剧情'].keys, ['[爬塔模式]']);
 for (const name of ['额外模型变量更新格式', '变量更新规则', '变量数据结构', '卡牌常驻规范']) {
   assert.match(entryConfig[name].comment, /\[数据契约\]/, `${name} must remain in the MVU contract group`);
 }
-for (const name of ['战斗内容生成要求', '战斗场景生成']) {
+for (const name of ['战斗内容生成要求', '流派体系与设计方法', '战斗场景生成']) {
   assert.match(entryConfig[name].comment, /\[战斗生成\]/, `${name} must remain in the battle generation group`);
 }
 for (const name of ['战斗结算生成', '初始战斗内容修复', '战斗场景修复']) {
@@ -665,6 +668,25 @@ assert.match(sceneGuide, /同时通过初始化门禁和敌人门禁/);
 assert.doesNotMatch(sceneGuide, /```|教学示例/);
 
 const contentGuide = sources.get('战斗内容生成要求');
+const archetypeGuide = sources.get('流派体系与设计方法');
+const archetypeGraphSource = await readFile(resolve(root, '..', 'src', 'game-core', 'archetypeGraph.ts'), 'utf8');
+const archetypeLabels = [...archetypeGraphSource.matchAll(/id:\s*'[^']+'\s*,\s*label:\s*'([^']+)'/g)].map(match => match[1]);
+assert.equal(archetypeLabels.length, 62, 'world-book coverage test must observe every current graph node');
+for (const label of archetypeLabels) {
+  assert.match(archetypeGuide, new RegExp(`- ${label}：`), `world-book must describe the ${label} composition`);
+}
+assert.equal(entryConfig['流派体系与设计方法']?.constant, false);
+assert.equal(entryConfig['流派体系与设计方法']?.selective, true);
+for (const marker of ['[开始游戏]', '<CHARACTER_INIT_PENDING>', '<CONTENT_PENDING>', '<BATTLE_PENDING>', '[MVU_BATTLE_SETTLEMENT]', '[战斗内容修复]', '[战斗场景修复]', '[爬塔后台节点生成]']) {
+  assert.ok(entryConfig['流派体系与设计方法']?.keys?.includes(marker), `archetype guide must load for ${marker}`);
+}
+assert.match(archetypeGuide, /启动端.*收益端/);
+assert.match(archetypeGuide, /卡名、emoji、描述.*不参与机制成立判定/);
+assert.match(archetypeGuide, /召唤协同：启动必须包含真实 `spawn_summon`/);
+assert.match(archetypeGuide, /敌人机制设计方法/);
+assert.match(archetypeGuide, /一个主要压力轴/);
+assert.match(archetypeGuide, /创作方法而非硬性牌表/);
+assert.doesNotMatch(archetypeGuide, /例如|比如|教学示例|固定卡牌|固定敌人/);
 assert.match(contentGuide, /`damage` 可同级配整数 `hits`/);
 assert.match(contentGuide, /self\.hand_size\/draw_pile_size\/discard_pile_size\/exhaust_pile_size/);
 assert.match(contentGuide, /turn_number/);

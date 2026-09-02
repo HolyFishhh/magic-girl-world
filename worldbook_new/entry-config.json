@@ -143,6 +143,21 @@
     "keys": ["<CHARACTER_INIT_PENDING>", "〈CHARACTER_INIT_PENDING〉", "＜CHARACTER_INIT_PENDING＞", "<CONTENT_PENDING>", "〈CONTENT_PENDING〉", "＜CONTENT_PENDING＞", "[开始战斗]", "<BATTLE_PENDING>", "〈BATTLE_PENDING〉", "＜BATTLE_PENDING＞", "[MVU_BATTLE_SETTLEMENT]", "[战斗内容修复]", "[玩家自然语言卡牌修复]"],
     "use_regex": false
   },
+  "流派体系与设计方法": {
+    "comment": "[mvu_update] [战斗生成] 流派图谱与创作方法",
+    "create": true,
+    "constant": false,
+    "selective": true,
+    "keys": ["[开始游戏]", "<CHARACTER_INIT_PENDING>", "〈CHARACTER_INIT_PENDING〉", "＜CHARACTER_INIT_PENDING＞", "<CONTENT_PENDING>", "〈CONTENT_PENDING〉", "＜CONTENT_PENDING＞", "[开始战斗]", "<BATTLE_PENDING>", "〈BATTLE_PENDING〉", "＜BATTLE_PENDING＞", "[MVU_BATTLE_SETTLEMENT]", "[战斗内容修复]", "[玩家自然语言卡牌修复]", "[战斗场景修复]", "[爬塔后台节点生成]", "[爬塔后台批量节点生成]", "[爬塔开局馈赠事件]", "流派", "构筑", "召唤", "弃牌", "消耗", "姿态", "Orb", "法球", "诅咒", "附魔", "回响"],
+    "use_regex": false,
+    "extensions": {
+      "group": "",
+      "group_override": false,
+      "prevent_recursion": true,
+      "exclude_recursion": true,
+      "depth": 0
+    }
+  },
   "首条消息变量更新": {
     "comment": "[mvu_update] [模式入口] 一次性初始化",
     "constant": true,

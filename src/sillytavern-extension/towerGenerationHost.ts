@@ -327,6 +327,22 @@ export class TowerGenerationHost {
     return deleted;
   }
 
+  /**
+   * Release one terminal request that is no longer needed by run persistence.
+   * This is used by silent opening prose and by explicit retry after a failed
+   * envelope so an old rejected promise cannot shadow the new request.
+   */
+  public forgetTerminalRecord(key: TowerGenerationTaskKey): boolean {
+    const fingerprint = towerGenerationTaskKey(key);
+    const record = this.records.get(fingerprint);
+    if (!record || record.progress.persistence) return false;
+    const status = this.queue.getStatus(key);
+    if (status && !['completed', 'failed', 'cancelled'].includes(status.phase)) return false;
+    const deleted = this.records.delete(fingerprint);
+    this.queue.forgetSettledRequest(key);
+    return deleted || Boolean(status);
+  }
+
   /** Drop terminal request text after the run state has already preserved the result. */
   public discardCompletedRecords(chatId: string): number {
     let discarded = 0;

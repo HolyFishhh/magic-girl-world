@@ -284,7 +284,7 @@ summary:focus-visible {
 
 .tower-player-metrics {
   display: grid;
-  grid-template-columns: repeat(6, minmax(76px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
   gap: 7px;
 }
 
@@ -303,8 +303,40 @@ summary:focus-visible {
 
 .tower-player-details {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
+}
+
+.tower-player-deck-section {
+  display: grid;
+  gap: 9px;
+  padding: 11px;
+  border: 1px solid rgba(145, 216, 255, 0.2);
+  border-radius: 14px;
+  background: rgba(7, 10, 28, 0.34);
+}
+
+.tower-player-deck-section > header {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tower-player-deck-section > header div {
+  display: grid;
+  gap: 1px;
+}
+
+.tower-player-deck-section > header small,
+.tower-player-deck-section > header span {
+  color: #aeb9da;
+  font-size: 10px;
+}
+
+.tower-player-deck-section > header strong {
+  color: #fff;
+  font-size: 15px;
 }
 
 .tower-player-details details {
@@ -339,22 +371,55 @@ summary:focus-visible {
 .tower-player-card-grid,
 .tower-player-resource-grid {
   display: grid;
-  max-height: 260px;
   gap: 6px;
   padding: 0 8px 8px;
+}
+
+.tower-player-card-grid {
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  padding: 0;
+}
+
+.tower-player-resource-grid {
+  max-height: 260px;
   overflow: auto;
   scrollbar-width: thin;
 }
 
-.tower-player-card,
 .tower-player-resource {
   display: grid;
   gap: 3px;
   padding: 8px;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  border-left: 3px solid var(--tower-rarity, #9ba7c6);
   border-radius: 9px;
   background: rgba(7, 10, 28, 0.42);
+}
+
+.tower-player-card {
+  --tower-rarity: #9ba7c6;
+  position: relative;
+  display: grid;
+  min-height: 142px;
+  gap: 7px;
+  padding: 10px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--tower-rarity) 68%, rgba(255, 255, 255, 0.12));
+  border-radius: 13px 9px 14px 8px;
+  background:
+    radial-gradient(circle at 92% 8%, color-mix(in srgb, var(--tower-rarity) 22%, transparent), transparent 38%),
+    linear-gradient(150deg, rgba(18, 23, 52, 0.96), rgba(7, 10, 28, 0.9));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.035), 0 7px 18px rgba(2, 4, 17, 0.2);
+}
+
+.tower-player-card::after {
+  position: absolute;
+  right: -22px;
+  bottom: -38px;
+  width: 92px;
+  height: 92px;
+  border: 1px solid color-mix(in srgb, var(--tower-rarity) 28%, transparent);
+  border-radius: 50%;
+  content: '';
 }
 
 .tower-player-card[data-rarity='Uncommon'] { --tower-rarity: #68d8a2; }
@@ -363,7 +428,6 @@ summary:focus-visible {
 .tower-player-card[data-rarity='Legendary'] { --tower-rarity: #ffcb5e; }
 .tower-player-card[data-rarity='Corrupt'] { --tower-rarity: #f06a7e; }
 
-.tower-player-card header,
 .tower-player-resource header {
   display: flex;
   align-items: center;
@@ -371,7 +435,53 @@ summary:focus-visible {
   gap: 6px;
 }
 
-.tower-player-card strong,
+.tower-player-card-head {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 31px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+}
+
+.tower-player-card-cost {
+  display: grid;
+  width: 31px;
+  height: 31px;
+  place-items: center;
+  border: 1px solid rgba(177, 226, 255, 0.5);
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 28%, #dff8ff, #4a92ce 48%, #173e78 100%);
+  color: #fff;
+  font-size: 13px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 3px 10px rgba(62, 159, 222, 0.34);
+}
+
+.tower-player-card-title {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.tower-player-card-title > span {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.tower-player-card-title i {
+  padding: 2px 5px;
+  border: 1px solid color-mix(in srgb, var(--tower-rarity) 50%, transparent);
+  border-radius: 999px;
+  background: rgba(2, 5, 20, 0.62);
+  color: #e9eeff;
+  font-size: 8.5px;
+  font-style: normal;
+  line-height: 1.25;
+}
+
+.tower-player-card-title strong,
 .tower-player-resource strong {
   min-width: 0;
   overflow: hidden;
@@ -381,7 +491,7 @@ summary:focus-visible {
   white-space: nowrap;
 }
 
-.tower-player-card em,
+.tower-player-card-head > em,
 .tower-player-resource em {
   flex: 0 0 auto;
   color: #9bdcff;
@@ -395,6 +505,24 @@ summary:focus-visible {
   color: #bdc5df;
   font-size: 10.5px;
   line-height: 1.45;
+}
+
+.tower-player-card .tower-player-card-flavor {
+  position: relative;
+  z-index: 1;
+  color: #d5d8e8;
+  font-size: 10px;
+}
+
+.tower-player-card .tower-player-card-rules {
+  position: relative;
+  z-index: 1;
+  margin-top: auto;
+  padding-top: 7px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  color: #f2efff;
+  font-size: 10.5px;
+  font-weight: 600;
 }
 
 .tower-player-empty {
@@ -422,11 +550,23 @@ summary:focus-visible {
   .tower-player-details {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .tower-player-card-grid {
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  }
 }
 
 @media (max-width: 420px) {
   .tower-player-details {
     grid-template-columns: 1fr;
+  }
+
+  .tower-player-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .tower-player-deck-section > header span {
+    display: none;
   }
 
   .tower-player-details details:not([open]) {

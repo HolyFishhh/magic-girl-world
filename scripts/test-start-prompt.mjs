@@ -107,6 +107,8 @@ assert.match(
 assert.match(creatorSource, /this\.updateStartButtonText\(\);[\s\S]*this\.validateForm\(\);/);
 assert.doesNotMatch(creatorSource, /游戏模式暂未写入 MUV/);
 assert.match(creatorSource, /continuationHost\.continueWithPrompt\(\{ prompt: startMessage \}\)/);
+assert.match(creatorSource, /normalizeGameMode\(config\.mode\) === 'tower'[\s\S]*runtime\.startTowerSingleFloor\([\s\S]*\}\s*else\s*\{[\s\S]*continuationHost\.continueWithPrompt/);
+assert.match(creatorSource, /sourceMessageId:\s*getCurrentMessageVariableOptions\(\)\.message_id/);
 assert.doesNotMatch(creatorSource, /triggerSlash\(`\/send|triggerSlash\('\/send/);
 assert.match(creatorSource, /return normalizeGameMode\(config\.mode\) !== null/, 'both start modes must be accepted');
 assert.doesNotMatch(creatorSource, /selectFaction|FACTION_INFO|startingLocation|\.setup-tab/);

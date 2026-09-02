@@ -268,11 +268,12 @@ const controller = new DesignAssistantController({
 controller.activate();
 assert.deepEqual(controller.getCapabilities(), {
   spec: 'mwg.design-assistant/v1',
-  version: '0.2.2',
+  version: '0.3.0',
   towerGeneration: true,
   towerCoordinator: true,
   towerArchive: true,
   persistentMvuRepair: true,
+  singleFloorStart: true,
 });
 
 const noOpRequest = {
@@ -822,6 +823,67 @@ assert.ok(
 );
 assert.equal(variables.stat_data.run.nodeContent[persistedRetry.request.nodeId].attempts, 2);
 restoredController.deactivate();
+
+// A failed opening must release every in-memory terminal cache before retrying.
+// The second request receives a new id and really reaches the model again.
+context.chatId = 'opening-retry-chat';
+context.chatMetadata = {};
+context.characters = [scopedCharacter];
+pendingMode = false;
+pendingResolve = null;
+pendingReject = null;
+const openingRetryBase = prepareTowerNode(20260902, false, 0).variables.stat_data.battle;
+const openingRetryStat = {
+  game_mode: 'tower',
+  game_mode_lock: { schemaVersion: 1, mode: 'tower' },
+  battle: structuredClone(openingRetryBase),
+  run: createRunState({ seed: 20260902 }),
+};
+const firstOpening = towerOpening.queueTowerOpeningInStat(openingRetryStat).request;
+towerOpening.claimTowerOpeningInStat(openingRetryStat, firstOpening.requestId);
+variables = { stat_data: openingRetryStat };
+generationError = new Error('first opening generation failed');
+calls.length = 0;
+const openingRetryController = new DesignAssistantController({
+  context: () => context,
+  mvu: () => mvu,
+  now: () => 97531,
+  notify() {},
+}, undefined, towerPorts);
+// Keep the coordinator dormant while creating the first terminal failure so
+// it cannot race the explicit request below.
+openingRetryController.active = true;
+openingRetryController.towerChatId = context.chatId;
+openingRetryController.towerGenerationHost.activateChat(context.chatId);
+await assert.rejects(openingRetryController.requestTowerGeneration({
+  generationType: 'opening',
+  requestId: firstOpening.requestId,
+  revision: firstOpening.revision,
+  prompt: 'generate opening once and fail',
+  maxAttempts: 1,
+}), /first opening generation failed/);
+assert.equal(variables.stat_data.run.opening.phase, 'failed');
+assert.equal(variables.stat_data.run.opening.requestId, firstOpening.requestId);
+const failedGenerationCount = calls.filter(call => call[0] === 'generate').length;
+
+generationError = null;
+generatedText = () => validOpeningResponse({
+  requestId: variables.stat_data.run.opening.requestId,
+  revision: variables.stat_data.run.opening.basedOnRevision,
+});
+narrativeText = '引路者重新整理了馈赠，让旅者再次选择。';
+openingRetryController.towerCoordinator.activateChat(context.chatId);
+assert.equal(await openingRetryController.retryTowerGeneration({ generationType: 'opening' }), true);
+assert.notEqual(variables.stat_data.run.opening.requestId, firstOpening.requestId);
+for (let index = 0; index < 300 && variables.stat_data.run.opening.phase !== 'ready'; index += 1) {
+  await new Promise(resolveDelay => setTimeout(resolveDelay, 0));
+}
+assert.equal(variables.stat_data.run.opening.phase, 'ready');
+assert.ok(
+  calls.filter(call => call[0] === 'generate').length > failedGenerationCount,
+  'manual opening retry must perform another real model call',
+);
+openingRetryController.deactivate();
 
 if (previousMonitor === undefined) delete globalThis.MagicGirlWorldMvuMonitor;
 else globalThis.MagicGirlWorldMvuMonitor = previousMonitor;

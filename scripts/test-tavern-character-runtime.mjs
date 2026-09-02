@@ -55,6 +55,9 @@ assert.match(runtimeSource, /正在按你的要求增量修复卡牌/);
 assert.match(runtimeSource, /getMvuMonitorSnapshot/);
 assert.doesNotMatch(runtimeSource, /mwg-card-repair-(?:form|error)\{display:none!important/);
 assert.match(runtimeSource, /data-mwg-monitor-loading-title>正在生成变量/);
+assert.match(runtimeSource, /data-mwg-mvu-request/);
+assert.match(runtimeSource, /data-mwg-mvu-request-meta/);
+assert.match(runtimeSource, /captureMvuRequest/);
 assert.match(runtimeSource, /setPointerCapture/);
 assert.match(runtimeSource, /orbPosition/);
 for (const productionInteractionToken of [
@@ -104,12 +107,15 @@ assert.match(
   /https:\/\/github\.com\/HolyFishhh\/magic-girl-world\/releases\/latest/,
   'the missing or outdated tower extension panel must link to the project release page',
 );
-assert.match(runtimeSource, /installExtension\([\s\S]*magic-girl-world\.git[\s\S]*extension/);
+assert.match(runtimeSource, /towerExtensionRepositoryUrl\s*=\s*'https:\/\/github\.com\/HolyFishhh\/magic-girl-world\.git'/);
+assert.match(runtimeSource, /installExtension\(towerExtensionRepositoryUrl, false, 'extension'\)/);
 assert.match(
   runtimeSource,
-  /compareSemanticVersions\(extensionVersion, requiredTowerExtensionVersion\) >= 0/,
+  /compareTowerExtensionVersions\(extensionVersion, requiredTowerExtensionVersion\) >= 0/,
   'tower capability detection must reject extensions below the required version',
 );
+assert.match(runtimeSource, /raw\.githubusercontent\.com\/HolyFishhh\/magic-girl-world\/extension\/manifest\.json/);
+assert.match(runtimeSource, /\/api\/extensions\/update/);
 assert.equal(nodesWithAttribute('data-mwg-design-setting', 'designAssistantEnabled').length, 1);
 assert.equal(nodesWithAttribute('data-mwg-design-setting', 'autoCalibration').length, 1);
 assert.equal(nodesWithAttribute('data-mwg-design-setting', 'simulationSeeds').length, 1);
@@ -257,11 +263,36 @@ assert.equal(cardRepairRequirement, '把星火改成两段攻击');
 disposeCardRepairHandler();
 await assert.rejects(sharedRuntime.requestCardRepair('再次修复'), /尚未完成第二轮修复接口加载/);
 let towerGenerationRequest = null;
+let towerSingleFloorStartRequest = null;
 let towerPersistenceRequest = null;
 let towerRetryRequest = null;
 let towerArchiveCalls = 0;
 let towerWakeReason = null;
+let extensionCapabilitiesVersion = '0.3.0';
+let extensionSupportsSingleFloor = true;
+let officialInstallCalls = 0;
+const extensionUpdateRequests = [];
+context.window.parent.fetch = async (url, options = {}) => {
+  if (String(url).includes('raw.githubusercontent.com')) {
+    return { ok: true, json: async () => ({ version: '0.3.0' }) };
+  }
+  if (url === '/api/extensions/update') {
+    extensionUpdateRequests.push(JSON.parse(options.body));
+    return { ok: true, text: async () => '' };
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+context.window.parent.Function = () => async () => [{
+  extensionNames: ['third-party/magic-girl-world'],
+  installExtension: async () => { officialInstallCalls += 1; return true; },
+}, {
+  getRequestHeaders: () => ({ 'Content-Type': 'application/json' }),
+}];
 context.window.parent.MagicGirlDesignAssistant = {
+  startTowerSingleFloor: async request => {
+    towerSingleFloorStartRequest = request;
+    return { spec: 'mwg.tower-single-floor-start-result/v1', floorCountBefore: 1, floorCountAfter: 1 };
+  },
   requestTowerGeneration: async request => {
     towerGenerationRequest = request;
     return { response: '预生成完成', generationId: 'tower-generation-1' };
@@ -285,10 +316,11 @@ context.window.parent.MagicGirlDesignAssistant = {
   getTowerCoordinatorStatus: () => ({ phase: 'waiting', message: '等待路线选择' }),
   getCapabilities: () => ({
     spec: 'mwg.design-assistant/v1',
-    version: '0.2.2',
+    version: extensionCapabilitiesVersion,
     towerGeneration: true,
     towerCoordinator: true,
     towerArchive: true,
+    singleFloorStart: extensionSupportsSingleFloor,
   }),
 };
 const towerGenerationEvents = [];
@@ -300,6 +332,13 @@ const towerGenerationResult = await sharedRuntime.requestTowerGeneration({
   requestId: 'request-1',
   prompt: '生成当前节点',
 });
+const towerSingleFloorStartResult = await sharedRuntime.startTowerSingleFloor({
+  spec: 'mwg.tower-single-floor-start/v1',
+  sourceMessageId: 7,
+  prompt: '开始单层爬塔',
+});
+assert.equal(towerSingleFloorStartRequest.sourceMessageId, 7);
+assert.equal(towerSingleFloorStartResult.floorCountAfter, 1);
 assert.equal(towerGenerationRequest.nodeId, 'act-1-floor-1-col-1');
 assert.equal(towerGenerationResult.response, '预生成完成');
 assert.equal(await sharedRuntime.persistTowerGeneration({ nodeId: 'act-1-floor-1-col-1', requestId: 'request-1' }), true);
@@ -313,11 +352,22 @@ assert.equal(towerArchiveCalls, 1);
 assert.equal(sharedRuntime.getTowerCoordinatorStatus().phase, 'waiting');
 assert.deepEqual(JSON.parse(JSON.stringify(sharedRuntime.getDesignAssistantCapabilities())), {
   spec: 'mwg.design-assistant/v1',
-  version: '0.2.2',
+  version: '0.3.0',
   towerGeneration: true,
   towerCoordinator: true,
   towerArchive: true,
+  singleFloorStart: true,
 });
+assert.equal((await sharedRuntime.checkTowerExtensionVersion(true)).status, 'current');
+extensionCapabilitiesVersion = '0.2.2';
+extensionSupportsSingleFloor = false;
+const outdatedExtension = await sharedRuntime.checkTowerExtensionVersion(true);
+assert.equal(outdatedExtension.status, 'outdated');
+assert.equal(await sharedRuntime.installTowerExtension(), true);
+assert.deepEqual(extensionUpdateRequests, [{ extensionName: 'third-party/magic-girl-world', global: false }]);
+assert.equal(officialInstallCalls, 0, 'an installed old extension must be updated instead of installed a second time');
+extensionCapabilitiesVersion = '0.3.0';
+extensionSupportsSingleFloor = true;
 context.MagicGirlWorldMvuMonitor.receiveTowerGenerationStatus({ phase: 'running' });
 context.MagicGirlWorldMvuMonitor.receiveTowerGenerationCompleted({ nodeId: 'act-1-floor-1-col-1' });
 context.MagicGirlWorldMvuMonitor.receiveTowerGenerationFailed({ nodeId: 'act-1-floor-2-col-1', error: '测试失败' });
@@ -337,11 +387,25 @@ assert.deepEqual(JSON.parse(JSON.stringify(context.MagicGirlWorldMvuMonitor.getS
   showNotifications: true,
   debug: false,
 });
+const exactMvuRequest = {
+  model: 'deepseek-reasoner',
+  max_tokens: 20000,
+  include_reasoning: true,
+  messages: [{ role: 'system', content: '最终 MVU 约束' }, { role: 'user', content: '本轮剧情与变量' }],
+};
+context.MagicGirlWorldMvuMonitor.captureMvuRequest({ source: 'tavern-helper', payload: exactMvuRequest });
+assert.deepEqual(
+  JSON.parse(context.MagicGirlWorldMvuMonitor.getSnapshot().requestContent),
+  exactMvuRequest,
+  'the monitor snapshot must preserve the complete final MVU request object',
+);
+assert.equal(context.MagicGirlWorldMvuMonitor.getSnapshot().requestSource, 'tavern-helper');
 assert.doesNotThrow(() => {
   globalExtraAnalysis = true;
   intervalCallbacks.forEach(callback => callback());
   assert.equal(context.MagicGirlWorldMvuMonitor.getSnapshot().phase, 'generating');
   assert.equal(context.MagicGirlWorldMvuMonitor.getSnapshot().open, true);
+  assert.deepEqual(JSON.parse(context.MagicGirlWorldMvuMonitor.getSnapshot().requestContent), exactMvuRequest);
 
   globalExtraAnalysis = false;
   intervalCallbacks.forEach(callback => callback());

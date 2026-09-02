@@ -419,9 +419,97 @@ function summarizeMvuUpdate(result: unknown): string[] {
     debug: boolean;
   };
 
-  const installPublishedTowerExtension = async (): Promise<boolean> => {
+  const requiredTowerExtensionVersion = '0.3.0';
+  const towerExtensionRepositoryUrl = 'https://github.com/HolyFishhh/magic-girl-world.git';
+  const towerExtensionManifestUrl =
+    'https://raw.githubusercontent.com/HolyFishhh/magic-girl-world/extension/manifest.json';
+  type TowerExtensionVersionStatus = {
+    status: 'missing' | 'outdated' | 'current' | 'newer' | 'unknown';
+    installedVersion: string;
+    latestVersion: string;
+    updateAvailable: boolean;
+    capabilitiesReady: boolean;
+    checkedAt: number;
+    message: string;
+  };
+  const compareTowerExtensionVersions = (left: string, right: string): number => {
+    const normalize = (value: string) => value.split(/[.-]/).map(part => Number.parseInt(part, 10) || 0);
+    const leftParts = normalize(left);
+    const rightParts = normalize(right);
+    const length = Math.max(leftParts.length, rightParts.length);
+    for (let index = 0; index < length; index += 1) {
+      const difference = (leftParts[index] || 0) - (rightParts[index] || 0);
+      if (difference !== 0) return difference;
+    }
+    return 0;
+  };
+  let towerExtensionVersionCache: TowerExtensionVersionStatus | null = null;
+  const checkPublishedTowerExtension = async (force = false): Promise<TowerExtensionVersionStatus> => {
+    if (
+      !force
+      && towerExtensionVersionCache
+      && Date.now() - towerExtensionVersionCache.checkedAt < 5 * 60_000
+    ) return { ...towerExtensionVersionCache };
     const provider = registryHost.MagicGirlDesignAssistant || host.MagicGirlDesignAssistant || null;
-    if (typeof provider?.getCapabilities === 'function') return true;
+    const capabilities = typeof provider?.getCapabilities === 'function' ? provider.getCapabilities() : null;
+    const installedVersion = typeof capabilities?.version === 'string' ? capabilities.version.trim() : '';
+    const capabilitiesReady = capabilities?.towerGeneration === true
+      && capabilities?.towerCoordinator === true
+      && capabilities?.singleFloorStart === true;
+    let latestVersion = '';
+    let fetchError = '';
+    try {
+      const parentWindow = (host.parent || host.window?.parent || host) as any;
+      const fetcher = typeof parentWindow?.fetch === 'function'
+        ? parentWindow.fetch.bind(parentWindow)
+        : typeof host.fetch === 'function'
+          ? host.fetch.bind(host)
+          : null;
+      if (!fetcher) throw new Error('当前页面没有可用的版本检查接口');
+      const response = await fetcher(`${towerExtensionManifestUrl}?t=${Date.now()}`, { cache: 'no-store' });
+      if (!response?.ok) throw new Error(`远端版本请求失败（${response?.status || 'network'}）`);
+      const manifest = await response.json();
+      latestVersion = typeof manifest?.version === 'string' ? manifest.version.trim() : '';
+      if (!latestVersion) throw new Error('远端扩展清单缺少版本号');
+    } catch (error) {
+      fetchError = error instanceof Error ? error.message : String(error);
+    }
+    let status: TowerExtensionVersionStatus['status'];
+    if (!installedVersion) status = 'missing';
+    else if (!latestVersion) status = 'unknown';
+    else if (compareTowerExtensionVersions(installedVersion, latestVersion) < 0) status = 'outdated';
+    else if (compareTowerExtensionVersions(installedVersion, latestVersion) > 0) status = 'newer';
+    else status = 'current';
+    const result: TowerExtensionVersionStatus = {
+      status,
+      installedVersion,
+      latestVersion,
+      updateAvailable: status === 'outdated',
+      capabilitiesReady,
+      checkedAt: Date.now(),
+      message: status === 'missing'
+        ? `未安装爬塔组件，当前角色卡需要 ${requiredTowerExtensionVersion} 或更高版本。`
+        : status === 'outdated'
+          ? `当前组件 ${installedVersion}，最新版 ${latestVersion}，请先更新。`
+          : status === 'current'
+            ? `爬塔组件 ${installedVersion} 已是最新版。`
+            : status === 'newer'
+              ? `当前组件 ${installedVersion} 高于公开版 ${latestVersion}。`
+              : `已安装组件 ${installedVersion}，但暂时无法检查远端版本：${fetchError}`,
+    };
+    towerExtensionVersionCache = result;
+    return { ...result };
+  };
+
+  const installPublishedTowerExtension = async (): Promise<boolean> => {
+    const version = await checkPublishedTowerExtension(true);
+    const provider = registryHost.MagicGirlDesignAssistant || host.MagicGirlDesignAssistant || null;
+    if (
+      typeof provider?.getCapabilities === 'function'
+      && version.status !== 'outdated'
+      && version.capabilitiesReady
+      && compareTowerExtensionVersions(version.installedVersion, requiredTowerExtensionVersion) >= 0
+    ) return true;
     const parentWindow = (host.parent || host.window?.parent || host) as any;
     if (typeof parentWindow?.Function !== 'function') {
       throw new Error('当前酒馆页面无法打开官方扩展安装器');
@@ -429,32 +517,41 @@ function summarizeMvuUpdate(result: unknown): string[] {
     // Create the dynamic import in SillyTavern's top-window realm. This calls
     // the official installer, including its own third-party confirmation and
     // request headers, instead of duplicating a private HTTP endpoint.
-    const loadOfficialInstaller = parentWindow.Function('return import("/scripts/extensions.js")');
-    const extensionModule = await loadOfficialInstaller();
+    const loadOfficialInstaller = parentWindow.Function(
+      'return Promise.all([import("/scripts/extensions.js"), import("/script.js")])',
+    );
+    const [extensionModule, scriptModule] = await loadOfficialInstaller();
     if (typeof extensionModule?.installExtension !== 'function') {
       throw new Error('当前酒馆版本没有提供官方扩展安装接口');
     }
-    return extensionModule.installExtension(
-      'https://github.com/HolyFishhh/magic-girl-world.git',
-      false,
-      'extension',
-    );
+    if (version.installedVersion) {
+      if (typeof scriptModule?.getRequestHeaders !== 'function') {
+        throw new Error('当前酒馆版本没有提供扩展更新请求接口');
+      }
+      const extensionNames = Array.isArray(extensionModule.extensionNames)
+        ? extensionModule.extensionNames.map(String)
+        : [];
+      const extensionName = extensionNames.find((name: string) => /(?:^|\/)magic-girl-world$/i.test(name))
+        || 'third-party/magic-girl-world';
+      const response = await parentWindow.fetch('/api/extensions/update', {
+        method: 'POST',
+        headers: scriptModule.getRequestHeaders(),
+        body: JSON.stringify({ extensionName, global: false }),
+      });
+      if (!response?.ok) {
+        const detail = await response?.text?.();
+        throw new Error(detail || `组件更新失败（${response?.status || 'network'}）`);
+      }
+      towerExtensionVersionCache = null;
+      return true;
+    }
+    const installed = await extensionModule.installExtension(towerExtensionRepositoryUrl, false, 'extension');
+    if (installed) towerExtensionVersionCache = null;
+    return installed;
   };
 
   const installMvuMonitor = () => {
-    const requiredTowerExtensionVersion = '0.2.2';
     const towerExtensionReleaseUrl = 'https://github.com/HolyFishhh/magic-girl-world/releases/latest';
-    const compareSemanticVersions = (left: string, right: string): number => {
-      const normalize = (value: string) => value.split(/[.-]/).map(part => Number.parseInt(part, 10) || 0);
-      const leftParts = normalize(left);
-      const rightParts = normalize(right);
-      const length = Math.max(leftParts.length, rightParts.length);
-      for (let index = 0; index < length; index += 1) {
-        const difference = (leftParts[index] || 0) - (rightParts[index] || 0);
-        if (difference !== 0) return difference;
-      }
-      return 0;
-    };
     const storageKey = 'mwg:settings-center:v2';
     const defaultSettings: MvuMonitorSettings = {
       showMvuWindow: true,
@@ -492,6 +589,9 @@ function summarizeMvuUpdate(result: unknown): string[] {
       rawOutput: '',
       pendingOutput: '',
       reasoning: '',
+      requestContent: '',
+      requestSource: '',
+      requestCapturedAt: 0,
       timeline: [] as Array<{ label: string; detail: string; at: number }>,
       detail: '等待下一次变量更新',
       startedAt: 0,
@@ -631,6 +731,27 @@ function summarizeMvuUpdate(result: unknown): string[] {
       return blocks.at(-1)?.[0] || text;
     };
 
+    const serializeCapturedRequest = (value: unknown): string => {
+      if (typeof value === 'string') return value;
+      const seen = new WeakSet<object>();
+      try {
+        return JSON.stringify(value, (_key, entry) => {
+          if (typeof entry === 'undefined') return '[undefined]';
+          if (typeof entry === 'function') return `[Function ${entry.name || 'anonymous'}]`;
+          if (typeof entry === 'bigint') return String(entry);
+          if (typeof entry === 'symbol') return String(entry);
+          if (typeof entry === 'number' && !Number.isFinite(entry)) return String(entry);
+          if (entry && typeof entry === 'object') {
+            if (seen.has(entry)) return '[Circular]';
+            seen.add(entry);
+          }
+          return entry;
+        }, 2);
+      } catch (error) {
+        return `请求对象无法序列化：${error instanceof Error ? error.message : String(error)}`;
+      }
+    };
+
     const setAllText = (selector: string, value: string): void => {
       root?.querySelectorAll<HTMLElement>(selector).forEach(element => {
         element.textContent = value;
@@ -687,6 +808,17 @@ function summarizeMvuUpdate(result: unknown): string[] {
       setAllText('[data-mwg-mvu-summary]', monitorState.output || (monitorState.phase === 'generating' ? '等待模型返回…' : '本次尚无变量变化摘要'));
       setAllText('[data-mwg-mvu-raw]', liveOrRaw || '模型尚未返回完整内容');
       setAllText(
+        '[data-mwg-mvu-request]',
+        monitorState.requestContent
+          || '尚未捕获本轮 MVU 二次请求；只有真正进入第二阶段后才会显示。',
+      );
+      setAllText(
+        '[data-mwg-mvu-request-meta]',
+        monitorState.requestCapturedAt
+          ? `${monitorState.requestSource || '未知事件源'} · ${new Date(monitorState.requestCapturedAt).toLocaleTimeString('zh-CN', { hour12: false })}`
+          : '',
+      );
+      setAllText(
         '[data-mwg-mvu-reasoning]',
         monitorState.reasoning || '服务尚未返回可展示的分析内容；若模型或接口不提供 reasoning，前端无法还原隐藏思考。',
       );
@@ -701,9 +833,11 @@ function summarizeMvuUpdate(result: unknown): string[] {
       const lineage = snapshot?.lineage || dashboard?.state?.lineage;
       const capabilities = designAssistant?.getCapabilities?.() || null;
       const extensionVersion = typeof capabilities?.version === 'string' ? capabilities.version : '';
-      const towerCapabilityReady = capabilities?.towerGeneration === true && capabilities?.towerCoordinator === true;
+      const towerCapabilityReady = capabilities?.towerGeneration === true
+        && capabilities?.towerCoordinator === true
+        && capabilities?.singleFloorStart === true;
       const towerVersionReady = extensionVersion.length > 0
-        && compareSemanticVersions(extensionVersion, requiredTowerExtensionVersion) >= 0;
+        && compareTowerExtensionVersions(extensionVersion, requiredTowerExtensionVersion) >= 0;
       const towerAvailable = towerCapabilityReady && towerVersionReady;
       const towerStatus = towerAvailable ? designAssistant?.getTowerCoordinatorStatus?.() : null;
       if (root) {
@@ -1091,20 +1225,20 @@ function summarizeMvuUpdate(result: unknown): string[] {
     <details class="mwg-settings-group" data-mwg-component="tower-install" open>
       <summary>爬塔组件需要安装</summary>
       <div class="mwg-group-body">
-        <div class="mwg-design-status-card"><strong data-mwg-tower-extension>需要设计辅助器 0.2.2 或更高版本</strong><small data-mwg-tower-requirement>安装完整扩展包后刷新酒馆；剧情模式不受影响。</small></div>
+        <div class="mwg-design-status-card"><strong data-mwg-tower-extension>需要设计辅助器 0.3.0 或更高版本</strong><small data-mwg-tower-requirement>安装完整扩展包后刷新酒馆；剧情模式不受影响。</small></div>
         <button class="mwg-extension-download" type="button" data-action="install-tower-extension">快捷安装爬塔组件</button>
         <a class="mwg-extension-download" href="${towerExtensionReleaseUrl}" target="_blank" rel="noopener noreferrer">安装失败时打开手动下载页面</a>
       </div>
     </details>
     <details class="mwg-settings-group" data-mwg-component="mvu-history">
       <summary>最近一次 MVU 生成全过程</summary>
-      <div class="mwg-group-body"><div class="mwg-process-grid"><details class="mwg-process-block" open><summary>阶段时间线</summary><pre data-mwg-mvu-timeline></pre></details><details class="mwg-process-block" open><summary>变量变化摘要</summary><pre data-mwg-mvu-summary></pre></details><details class="mwg-process-block"><summary>模型返回原文</summary><pre data-mwg-mvu-raw></pre></details><details class="mwg-process-block"><summary>服务返回的分析内容</summary><pre data-mwg-mvu-reasoning></pre></details></div></div>
+      <div class="mwg-group-body"><div class="mwg-process-grid"><details class="mwg-process-block" open><summary>阶段时间线</summary><pre data-mwg-mvu-timeline></pre></details><details class="mwg-process-block" open><summary>变量变化摘要</summary><pre data-mwg-mvu-summary></pre></details><details class="mwg-process-block"><summary>最终实际二次请求（注入后） <small data-mwg-mvu-request-meta></small></summary><pre data-mwg-mvu-request></pre></details><details class="mwg-process-block"><summary>模型返回原文</summary><pre data-mwg-mvu-raw></pre></details><details class="mwg-process-block"><summary>服务返回的分析内容</summary><pre data-mwg-mvu-reasoning></pre></details></div></div>
     </details>
   </div>
 </section>
 <section class="mwg-mvu-panel" aria-label="MVU 二阶段生成状态">
   <header class="mwg-monitor-head"><span class="mwg-monitor-pulse"></span><div class="mwg-monitor-title"><strong data-mwg-monitor-title></strong><small data-mwg-monitor-detail></small></div><span class="mwg-monitor-time" data-mwg-monitor-elapsed></span><button class="mwg-icon-button" type="button" data-action="close-mvu" title="收起变量生成窗" aria-label="收起变量生成窗">×</button></header>
-  <div class="mwg-monitor-body"><div class="mwg-monitor-loading" data-mwg-monitor-loading><div><span class="mwg-monitor-spinner" aria-hidden="true"></span><strong data-mwg-monitor-loading-title>正在生成变量</strong><small data-mwg-monitor-loading-detail></small></div></div><div class="mwg-monitor-complete" data-mwg-monitor-complete><div><strong>变量更新已完成</strong><small>可以在下方查看变化摘要与模型完整返回。</small></div></div><div class="mwg-monitor-process mwg-process-grid"><details class="mwg-process-block" open><summary>阶段时间线</summary><pre data-mwg-mvu-timeline></pre></details><details class="mwg-process-block" open><summary>变量变化摘要</summary><pre data-mwg-mvu-summary></pre></details><details class="mwg-process-block"><summary>模型返回原文</summary><pre data-mwg-mvu-raw></pre></details><details class="mwg-process-block"><summary>服务返回的分析内容</summary><pre data-mwg-mvu-reasoning></pre></details></div></div>
+  <div class="mwg-monitor-body"><div class="mwg-monitor-loading" data-mwg-monitor-loading><div><span class="mwg-monitor-spinner" aria-hidden="true"></span><strong data-mwg-monitor-loading-title>正在生成变量</strong><small data-mwg-monitor-loading-detail></small></div></div><div class="mwg-monitor-complete" data-mwg-monitor-complete><div><strong>变量更新已完成</strong><small>可以在下方查看实际请求、变化摘要与模型完整返回。</small></div></div><div class="mwg-monitor-process mwg-process-grid"><details class="mwg-process-block" open><summary>阶段时间线</summary><pre data-mwg-mvu-timeline></pre></details><details class="mwg-process-block" open><summary>变量变化摘要</summary><pre data-mwg-mvu-summary></pre></details><details class="mwg-process-block"><summary>最终实际二次请求（注入后） <small data-mwg-mvu-request-meta></small></summary><pre data-mwg-mvu-request></pre></details><details class="mwg-process-block"><summary>模型返回原文</summary><pre data-mwg-mvu-raw></pre></details><details class="mwg-process-block"><summary>服务返回的分析内容</summary><pre data-mwg-mvu-reasoning></pre></details></div></div>
 </section>`;
       doc.body.appendChild(root);
       root.querySelector('[data-action="open-settings"]')?.addEventListener('click', () => {
@@ -1300,12 +1434,20 @@ function summarizeMvuUpdate(result: unknown): string[] {
     const api = {
       begin(meta: { generationId?: string } = {}) {
         clearApplyTimer();
+        const preserveCapturedRequest = monitorState.phase === 'generating'
+          && monitorState.requestCapturedAt > 0
+          && Date.now() - monitorState.requestCapturedAt < 5_000;
         monitorState.phase = 'generating';
         monitorState.generationId = String(meta.generationId || '');
         monitorState.output = '';
         monitorState.rawOutput = '';
         monitorState.pendingOutput = '';
         monitorState.reasoning = '';
+        if (!preserveCapturedRequest) {
+          monitorState.requestContent = '';
+          monitorState.requestSource = '';
+          monitorState.requestCapturedAt = 0;
+        }
         monitorState.timeline = [];
         monitorState.detail = '剧情已完成，正在进行第二轮变量整理';
         monitorState.startedAt = Date.now();
@@ -1324,6 +1466,21 @@ function summarizeMvuUpdate(result: unknown): string[] {
         monitorState.detail = input.detail || '正在生成结构化游戏内容';
         monitorState.open = settings.showMvuWindow;
         pushTimeline('后台结构化请求开始', monitorState.detail);
+        render();
+      },
+      captureMvuRequest(input: { source?: string; payload: unknown }) {
+        monitorState.requestContent = serializeCapturedRequest(input.payload);
+        monitorState.requestSource = String(input.source || 'MVU 二次请求');
+        monitorState.requestCapturedAt = Date.now();
+        if (monitorState.phase === 'idle') {
+          monitorState.phase = 'generating';
+          monitorState.startedAt = monitorState.requestCapturedAt;
+          monitorState.finishedAt = 0;
+          monitorState.open = settings.showMvuWindow;
+          startElapsedTimer();
+        }
+        pushTimeline('捕获最终二次请求', `${monitorState.requestSource} · 已完成请求策略与设计上下文注入`);
+        ensureDom();
         render();
       },
       applyStructuredOperation(input: { generationId: string; detail: string; rawOutput?: string }) {
@@ -2048,6 +2205,13 @@ function summarizeMvuUpdate(result: unknown): string[] {
       }
       return Promise.resolve(provider.requestTowerGeneration(request));
     },
+    startTowerSingleFloor(request: unknown): Promise<unknown> {
+      const provider = registryHost.MagicGirlDesignAssistant || host.MagicGirlDesignAssistant || null;
+      if (typeof provider?.startTowerSingleFloor !== 'function') {
+        return Promise.reject(new Error('爬塔单层启动组件尚未就绪，请更新扩展后刷新酒馆'));
+      }
+      return Promise.resolve(provider.startTowerSingleFloor(request));
+    },
     persistTowerGeneration(request: unknown): Promise<unknown> {
       const provider = registryHost.MagicGirlDesignAssistant || host.MagicGirlDesignAssistant || null;
       if (typeof provider?.persistTowerGeneration !== 'function') {
@@ -2081,6 +2245,9 @@ function summarizeMvuUpdate(result: unknown): string[] {
     getDesignAssistantCapabilities(): unknown {
       const provider = registryHost.MagicGirlDesignAssistant || host.MagicGirlDesignAssistant || null;
       return typeof provider?.getCapabilities === 'function' ? provider.getCapabilities() : null;
+    },
+    checkTowerExtensionVersion(force = false): Promise<TowerExtensionVersionStatus> {
+      return checkPublishedTowerExtension(force);
     },
     installTowerExtension(): Promise<boolean> {
       return installPublishedTowerExtension();

@@ -50,14 +50,16 @@
             <span><small>欲望</small><b id="tower-player-lust">0/0</b></span>
             <span><small>等级</small><b id="tower-player-level">LV 1</b></span>
             <span><small>经验</small><b id="tower-player-exp">0</b></span>
+            <span><small>基础能量</small><b id="tower-player-energy">3</b></span>
+            <span><small>牌组</small><b id="tower-player-deck-count">0</b></span>
             <span><small>删卡</small><b id="tower-player-removals">0</b></span>
             <span><small>道具槽</small><b id="tower-player-item-slots">0/3</b></span>
           </div>
+          <section class="tower-player-deck-section" aria-label="完整卡组">
+            <header><div><small>当前构筑</small><strong>我的卡组</strong></div><span>卡片会随同层进度即时更新</span></header>
+            <div id="tower-player-deck" class="tower-player-card-grid"></div>
+          </section>
           <div class="tower-player-details">
-            <details open>
-              <summary>牌组 <b id="tower-player-deck-count">0</b></summary>
-              <div id="tower-player-deck" class="tower-player-card-grid"></div>
-            </details>
             <details>
               <summary>遗物 <b id="tower-player-artifact-count">0</b></summary>
               <div id="tower-player-artifacts" class="tower-player-resource-grid"></div>

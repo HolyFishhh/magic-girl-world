@@ -159,6 +159,22 @@ export type TowerGenerationBridgeRequest = Omit<TowerGenerationRequest, 'chatId'
   sourceMessageId?: number | 'latest';
 };
 
+export interface TowerSingleFloorStartRequest {
+  spec: 'mwg.tower-single-floor-start/v1';
+  sourceMessageId?: number | 'latest';
+  prompt: string;
+  config?: {
+    mode?: string;
+    name?: string;
+    customDescription?: string;
+    world?: string;
+    profession?: string;
+    opening?: string;
+    card?: string;
+    towerRequirements?: string;
+  };
+}
+
 interface NormalizedTowerBridgeRequest {
   generationType: 'node' | 'opening' | 'batch';
   request: TowerGenerationRequest;
@@ -188,6 +204,7 @@ interface TowerGenerationMonitorBridge {
   beginStructuredOperation?(input: { generationId: string; detail: string }): void;
   applyStructuredOperation?(input: { generationId: string; detail: string; rawOutput?: string }): void;
   completeStructuredOperation?(input: { generationId: string; summary: string; rawOutput?: string }): void;
+  captureMvuRequest?(input: { source?: string; payload: unknown }): void;
   fail?(error: unknown, generationId?: string): void;
 }
 
@@ -227,7 +244,92 @@ function parseStructuredRecord(value: string | Record<string, any>): Record<stri
       // Try the next bounded JSON candidate.
     }
   }
-  throw new Error('营火后台没有返回合法 JSON');
+  throw new Error('结构化后台没有返回合法 JSON');
+}
+
+function towerInitialContentJsonSchema(): Record<string, any> {
+  return {
+    name: 'mwg_tower_single_floor_initial_content',
+    description: '魔法少女世界爬塔模式初始角色与可执行卡组',
+    strict: false,
+    value: {
+      type: 'object',
+      properties: {
+        status: { type: 'object' },
+        battle: { type: 'object' },
+      },
+      required: ['status', 'battle'],
+      additionalProperties: false,
+    },
+  };
+}
+
+function sanitizeTowerStartConfig(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return { mode: 'tower' };
+  const result: Record<string, string> = { mode: 'tower' };
+  for (const key of [
+    'name',
+    'customDescription',
+    'world',
+    'profession',
+    'opening',
+    'card',
+    'towerRequirements',
+  ]) {
+    const text = typeof value[key] === 'string' ? value[key].trim().slice(0, 4_000) : '';
+    if (text) result[key] = text;
+  }
+  return result;
+}
+
+function towerSingleFloorNarrativePrompt(prompt: string, config: Record<string, string>): string {
+  return [
+    '[爬塔模式单层开场]',
+    prompt,
+    '使用当前角色卡、聊天记录和玩家当前启用的原预设，生成玩家真正进入本次远征的开场剧情。',
+    '只规定叙事架构：承接玩家设定，说明角色为何进入一个必须不断前进、连续面对战斗与各种节点的境地，并在可以接受启程馈赠的位置结束。',
+    '题材、文风、篇幅、段落和具体表现完全服从玩家设定与原预设；不要替玩家选择馈赠，不要提前生成地图节点、敌人数值或战斗结果。',
+    '只返回玩家可阅读的剧情正文，不输出 JSON、Markdown 代码块、UpdateVariable、变量命令、系统说明或后台分析。',
+    `[玩家开局设定]\n${JSON.stringify(config)}`,
+  ].join('\n');
+}
+
+function towerSingleFloorInitialContentPrompt(input: {
+  startPrompt: string;
+  config: Record<string, string>;
+  narrative: string;
+  currentStat: Record<string, any>;
+  designGuidance?: string | null;
+  validationError?: string;
+  rejectedCandidate?: string;
+}): string {
+  const current = {
+    game_mode: input.currentStat.game_mode,
+    tower_requirements: input.currentStat.tower_requirements,
+    status: input.currentStat.status,
+    battle: input.currentStat.battle,
+  };
+  return [
+    '[爬塔模式单层初始化数据]',
+    '你是魔法少女世界的第二阶段结构化变量模型。剧情已经生成；只建立一次初始玩家数据，不续写剧情。',
+    `START_REQUEST=${JSON.stringify(input.startPrompt)}`,
+    `PLAYER_CONFIG=${JSON.stringify(input.config)}`,
+    `OPENING_NARRATIVE=${JSON.stringify(input.narrative).slice(0, 24_000)}`,
+    `CURRENT_STAT_DATA=${JSON.stringify(current).slice(0, 36_000)}`,
+    input.designGuidance || '',
+    '只返回 {"status":完整基础状态对象,"battle":完整初始战斗对象}，不得返回其他顶层键。',
+    'status 只保留爬塔需要的 time、location、profession；profession 必须含 name 与 ability。不要生成 NPC、势力、倾向、关系或普通剧情背包。',
+    'battle 必须含 core、cards、artifacts、items、statuses、player_abilities、player_status_effects、player_lust_effect、level、exp、enemy、enemies。enemy 固定 null，enemies 固定 []，level 至少 1，exp 为非负整数。',
+    '初始牌组总 quantity 至少 10，数量没有上限校验；至少有一种能结束战斗的真实输出路径。卡组是否包含格挡或治疗由设计自由决定，不以此判错。',
+    '卡牌 type 只能是 Attack、Skill、Power、Event、Curse；rarity 只能是 Common、Uncommon、Rare、Epic、Legendary、Corrupt；Curse 省略 cost，其他卡 cost 为非负整数或 energy。',
+    '每个 effects 项必须是浅层执行对象，例如操作名与其数值、to、from、pick、when 等同级；禁止 source、operation、target、value 这套抽象字段，禁止在 effects 项内再写 trigger。多步效果使用数组并按顺序逐项结算。',
+    'Power、遗物和独立能力使用 trigger:{on, effects}；状态先在 statuses 完整登记再由 apply_status 引用。自定义资源、临时牌模板、召唤物或卡牌修改也必须先定义再引用。',
+    '若玩家明确指定流派，必须用真实 effects、trigger、状态、资源、牌区、召唤或选择机制形成“启动→运转→收益”；只有名称、emoji 和描述符合主题视为未实现。召唤流必须真实使用 spawn_summon 并让召唤物参与收益循环。',
+    '至少生成一件可执行遗物、一个可执行道具和一个具名且可执行的玩家欲望满溢效果。所有 id 使用以字母或下划线开头的稳定英文标识。',
+    input.validationError ? `上一份结果未通过程序校验：${input.validationError}` : '',
+    input.rejectedCandidate ? `REJECTED_CANDIDATE=${input.rejectedCandidate.slice(0, 16_000)}` : '',
+    '修复时保留已经合法且符合剧情的设计，只改程序指出的结构；最终只返回一个 JSON 对象，不输出 Markdown、UpdateVariable、解释或思考过程。',
+  ].filter(Boolean).join('\n');
 }
 
 function restMutationJsonSchema(kind: RestMutationBridgeRequest['kind']): Record<string, any> {
@@ -490,6 +592,7 @@ export class DesignAssistantController {
   private readonly towerRequestPromises = new Map<string, Promise<TowerGenerationResult>>();
   private readonly towerNarrativePromises = new Map<string, Promise<void>>();
   private readonly towerPreGenerationSnapshots = new Map<string, Record<string, any>>();
+  private readonly singleFloorStartPromises = new Map<string, Promise<Record<string, unknown>>>();
   private towerArchivePromise: Promise<number> | null = null;
   private readonly archivedTowerRuns = new Set<string>();
   private readonly towerActivityTouches = new Map<string, { revision: number; touchedAt: number }>();
@@ -615,6 +718,7 @@ export class DesignAssistantController {
     this.towerRequestPromises.clear();
     this.towerNarrativePromises.clear();
     this.towerPreGenerationSnapshots.clear();
+    this.singleFloorStartPromises.clear();
     this.persistentMvuRepairHost.clear();
     this.automaticSettlementAttempts.clear();
     this.settlementRecoveryWatchGeneration += 1;
@@ -652,12 +756,278 @@ export class DesignAssistantController {
   getCapabilities() {
     return {
       spec: 'mwg.design-assistant/v1' as const,
-      version: '0.2.2' as const,
+      version: '0.3.0' as const,
       towerGeneration: true as const,
       towerCoordinator: true as const,
       towerArchive: true as const,
       persistentMvuRepair: true as const,
+      singleFloorStart: true as const,
     };
+  }
+
+  /**
+   * Start tower mode inside the existing greeting floor. Both model calls are
+   * silent Tavern Helper generations; no user or assistant message is ever
+   * appended to SillyTavern's chat array.
+   */
+  async startTowerSingleFloor(input: TowerSingleFloorStartRequest): Promise<Record<string, unknown> | null> {
+    const context = this.host.context();
+    const chatId = this.currentChatId();
+    const messageId = this.latestMessageId();
+    if (!this.active || !context || !chatId || !isMagicGirlWorldCharacter(context)) return null;
+    if (!input || input.spec !== 'mwg.tower-single-floor-start/v1') {
+      throw new Error('爬塔单层启动请求版本无效');
+    }
+    if (messageId === 'latest' || input.sourceMessageId !== undefined && input.sourceMessageId !== messageId) {
+      throw new Error('爬塔开场已经变化，请在最新开场页重新开始');
+    }
+    if (!this.isFirstAssistantFloor()) {
+      throw new Error('爬塔模式只能在第一条助手开场楼层启动');
+    }
+    if (!this.isTowerLockedScope(chatId, messageId)) {
+      throw new Error('当前存档尚未锁定为爬塔模式');
+    }
+    const startPrompt = String(input.prompt || '').trim();
+    if (!startPrompt) throw new Error('爬塔开局请求不能为空');
+    const key = `${chatId}:${messageId}`;
+    const duplicate = this.singleFloorStartPromises.get(key);
+    if (duplicate) return duplicate;
+    const generationId = `mwg-single-floor-start-${messageId}-${this.host.now()}`;
+    const floorCountBefore = Array.isArray(context.chat) ? context.chat.length : 0;
+    const promise = this.executeTowerSingleFloorStart({
+      chatId,
+      messageId,
+      generationId,
+      floorCountBefore,
+      startPrompt,
+      config: sanitizeTowerStartConfig(input.config),
+    });
+    this.singleFloorStartPromises.set(key, promise);
+    try {
+      return await promise;
+    } catch (error) {
+      this.onStructuredRepairProgress({
+        phase: 'error',
+        generationId,
+        detail: error instanceof Error ? error.message : String(error),
+        error,
+      });
+      throw error;
+    } finally {
+      if (this.singleFloorStartPromises.get(key) === promise) this.singleFloorStartPromises.delete(key);
+    }
+  }
+
+  private async executeTowerSingleFloorStart(input: {
+    chatId: string;
+    messageId: number;
+    generationId: string;
+    floorCountBefore: number;
+    startPrompt: string;
+    config: Record<string, string>;
+  }): Promise<Record<string, unknown>> {
+    const generationId = input.generationId;
+    this.onStructuredRepairProgress({
+      phase: 'begin',
+      generationId,
+      detail: '正在使用当前剧情预设生成单层爬塔开场',
+    });
+    let narrative = '';
+    let lastRawOutput = '';
+    const narrativeRequest: TowerGenerationRequest = {
+      chatId: input.chatId,
+      nodeId: '__tower_single_floor_start_story__',
+      requestId: `${generationId}__story`,
+      prompt: towerSingleFloorNarrativePrompt(input.startPrompt, input.config),
+      maxAttempts: 2,
+      userExtra: { mwg_tower_single_floor_start: true, phase: 'story' },
+      assistantExtra: { mwg_tower_single_floor_start: true, phase: 'story' },
+    };
+    try {
+      const result = await this.towerGenerationHost.generateNarrative(narrativeRequest);
+      narrative = cleanTowerNarrative(result.response);
+      if (!narrative) throw new Error('当前预设没有返回可显示的爬塔开场剧情');
+    } finally {
+      this.towerGenerationHost.forgetTerminalRecord(narrativeRequest);
+    }
+
+    let draft = this.readLatestMvuData(input.messageId);
+    if (!this.isTowerLockedScope(input.chatId, input.messageId)) {
+      throw new TowerGenerationCancelledError('开场生成期间聊天或游戏模式已经变化');
+    }
+    normalizeMvuVariablesBattleInPlace(draft);
+    let readiness = assessInitialTowerContent(draft);
+    // This endpoint is reachable only from the first assistant greeting. Always
+    // author the initial deck here, even if a stale/template snapshot happens
+    // to contain playable cards; later floors never call this endpoint.
+    const designGuidance = this.engine.createInitializationPrompt(draft);
+    let lastError = readiness?.ok
+      ? '首次爬塔必须按本次玩家设定重新生成完整初始牌组'
+      : readiness ? formatPlayerContentReadiness(readiness, 12) : '缺少 stat_data.battle';
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+        const prompt = towerSingleFloorInitialContentPrompt({
+          startPrompt: input.startPrompt,
+          config: input.config,
+          narrative,
+          currentStat: draft.stat_data,
+          designGuidance,
+          ...(attempt > 0 ? { validationError: lastError, rejectedCandidate: lastRawOutput } : {}),
+        });
+        const generated = await this.structuredGenerate({
+          generation_id: `${generationId}__variables_${attempt + 1}`,
+          user_input: prompt,
+          should_stream: true,
+          should_silence: true,
+          max_chat_history: 0,
+          json_schema: towerInitialContentJsonSchema(),
+        });
+        lastRawOutput = typeof generated === 'string' ? generated : JSON.stringify(generated, null, 2);
+        this.onStructuredRepairProgress({
+          phase: 'applying',
+          generationId,
+          detail: attempt === 0 ? '初始变量已返回，正在校验完整卡组' : `第 ${attempt + 1} 份修正结果已返回，正在复核`,
+          rawOutput: lastRawOutput,
+        });
+        try {
+          const parsed = parseStructuredRecord(generated as string | Record<string, any>);
+          if (!isRecord(parsed.status) || !isRecord(parsed.battle)) {
+            throw new Error('初始化结果必须同时包含 status 与 battle 对象');
+          }
+          const profession = parsed.status.profession;
+          if (
+            !isRecord(profession)
+            || typeof profession.name !== 'string'
+            || !profession.name.trim()
+            || typeof profession.ability !== 'string'
+            || !profession.ability.trim()
+          ) {
+            throw new Error('status.profession 必须包含非空 name 与 ability');
+          }
+          const candidate = clone(draft);
+          const previousStatus = isRecord(candidate.stat_data.status) ? candidate.stat_data.status : {};
+          const previousBattle = isRecord(candidate.stat_data.battle) ? candidate.stat_data.battle : {};
+          const previousCore = isRecord(previousBattle.core) ? previousBattle.core : {};
+          candidate.stat_data.status = {
+            ...previousStatus,
+            ...clone(parsed.status),
+            profession: clone(profession),
+          };
+          candidate.stat_data.battle = {
+            ...previousBattle,
+            ...clone(parsed.battle),
+            core: {
+              ...previousCore,
+              ...(isRecord(parsed.battle.core) ? clone(parsed.battle.core) : {}),
+            },
+            cards: Array.isArray(parsed.battle.cards) ? clone(parsed.battle.cards) : [],
+            artifacts: Array.isArray(parsed.battle.artifacts) ? clone(parsed.battle.artifacts) : [],
+            items: Array.isArray(parsed.battle.items) ? clone(parsed.battle.items) : [],
+            statuses: Array.isArray(parsed.battle.statuses) ? clone(parsed.battle.statuses) : [],
+            player_abilities: Array.isArray(parsed.battle.player_abilities)
+              ? clone(parsed.battle.player_abilities)
+              : [],
+            player_status_effects: Array.isArray(parsed.battle.player_status_effects)
+              ? clone(parsed.battle.player_status_effects)
+              : [],
+            level: Number.isInteger(Number(parsed.battle.level)) ? Number(parsed.battle.level) : 1,
+            exp: Number.isInteger(Number(parsed.battle.exp)) && Number(parsed.battle.exp) >= 0
+              ? Number(parsed.battle.exp)
+              : 0,
+            enemy: null,
+            enemies: [],
+          };
+          normalizeMvuVariablesBattleInPlace(candidate);
+          readiness = assessInitialTowerContent(candidate);
+          if (!readiness?.ok) {
+            throw new Error(readiness ? formatPlayerContentReadiness(readiness, 14) : '缺少可用 battle 对象');
+          }
+          draft = candidate;
+          break;
+        } catch (error) {
+          lastError = error instanceof Error ? error.message : String(error);
+          if (attempt >= 2) throw new Error(`初始牌组经过自动修正后仍不可用：${lastError}`);
+          this.onStructuredRepairProgress({
+            phase: 'begin',
+            generationId,
+            detail: `初始变量未通过校验，正在自动修正：${lastError}`,
+            rawOutput: lastRawOutput,
+          });
+        }
+    }
+
+    readiness = assessInitialTowerContent(draft);
+    if (!readiness?.ok) {
+      throw new Error(`初始战斗内容不可用：${readiness ? formatPlayerContentReadiness(readiness, 14) : '缺少 battle'}`);
+    }
+    if (draft.stat_data.run == null) {
+      ensureRunStateInStat(draft.stat_data, deriveRunSeed(draft.stat_data));
+    }
+    await this.replaceLatestMvuData(draft, input.chatId, input.messageId);
+    const helper = (globalThis as Record<string, any>).TavernHelper;
+    if (typeof helper?.replaceVariables === 'function') {
+      await helper.replaceVariables(clone(draft), { type: 'chat' });
+    }
+    await this.replaceTowerGreetingWithSingleFloor(narrative, input.chatId, input.messageId);
+    const floorCountAfter = this.host.context()?.chat?.length ?? 0;
+    if (floorCountAfter !== input.floorCountBefore) {
+      throw new TowerGenerationCancelledError('单层启动期间酒馆楼层发生变化，已停止继续写入');
+    }
+    this.saveTowerArchiveMetadata(input.chatId);
+    this.scheduleTowerChatActivityTouch(draft);
+    this.towerCoordinator?.schedule('single-floor-start');
+    this.scheduleWarmup();
+    this.onStructuredRepairProgress({
+      phase: 'complete',
+      generationId,
+      detail: '单层爬塔开场已经写回原始楼层',
+      summary: `已在当前楼层建立 ${readiness.deck.deckQuantity} 张起始卡牌并启动馈赠生成`,
+      rawOutput: lastRawOutput,
+    });
+    return {
+      spec: 'mwg.tower-single-floor-start-result/v1',
+      chatId: input.chatId,
+      messageId: input.messageId,
+      cardQuantity: readiness.deck.deckQuantity,
+      floorCountBefore: input.floorCountBefore,
+      floorCountAfter,
+    };
+  }
+
+  private async replaceTowerGreetingWithSingleFloor(
+    narrative: string,
+    expectedChatId: string,
+    expectedMessageId: number,
+  ): Promise<void> {
+    if (this.currentChatId() !== expectedChatId || this.latestMessageId() !== expectedMessageId) {
+      throw new TowerGenerationCancelledError('写回开场前聊天楼层已经变化');
+    }
+    const context = this.host.context();
+    const message = context?.chat?.[expectedMessageId];
+    if (!context || !message || message.is_user === true || message.is_system === true) {
+      throw new Error('原始助手开场楼层不可写入');
+    }
+    const nextMessage = `${narrative.trim()}\n\n<StatusPlaceHolderImpl/>`;
+    if (typeof context.updateMessageBlock === 'function') {
+      message.mes = nextMessage;
+      context.updateMessageBlock(expectedMessageId, message, { rerenderMessage: true });
+      await context.eventSource.emit?.(
+        context.eventTypes.MESSAGE_UPDATED || 'message_updated',
+        expectedMessageId,
+      );
+    } else {
+      const helper = (globalThis as Record<string, any>).TavernHelper;
+      if (typeof helper?.setChatMessages !== 'function') {
+        throw new Error('当前酒馆版本不支持原楼层正文更新');
+      }
+      await helper.setChatMessages(
+        [{ message_id: expectedMessageId, message: nextMessage }],
+        { refresh: 'affected' },
+      );
+    }
+    await context.saveChat?.();
+    if (this.currentChatId() !== expectedChatId || this.latestMessageId() !== expectedMessageId) {
+      throw new TowerGenerationCancelledError('写回开场时酒馆意外创建了新楼层');
+    }
   }
 
   getDashboard(): DesignAssistantDashboard {
@@ -1131,18 +1501,38 @@ export class DesignAssistantController {
   async retryTowerGeneration(input: { generationType?: 'node' | 'opening'; nodeId?: string }): Promise<boolean | null> {
     const chatId = this.currentChatId();
     if (!this.active || !chatId || !this.isTowerLockedScope(chatId) || !this.towerCoordinator) return null;
+    const latest = this.readLatestMvuData(this.latestMessageId());
+    const parsed = validateRunState(latest.stat_data?.run);
+    if (!parsed.ok) throw new Error(`爬塔存档不可用：${parsed.message}`);
     if (input?.generationType === 'opening' || input?.nodeId === '__tower_opening__' || input?.nodeId === 'tower-opening') {
+      if (parsed.value.opening.phase === 'failed' && parsed.value.opening.requestId) {
+        this.forgetTowerGenerationRecord({
+          chatId,
+          nodeId: '__tower_opening__',
+          requestId: parsed.value.opening.requestId,
+        });
+      }
       return this.towerCoordinator.retryOpening();
     }
     let nodeId = String(input?.nodeId || '').trim();
     if (!nodeId) {
-      const latest = this.readLatestMvuData(this.latestMessageId());
-      const parsed = validateRunState(latest.stat_data?.run);
-      if (!parsed.ok) throw new Error(`爬塔存档不可用：${parsed.message}`);
-      if (parsed.value.opening.phase === 'failed') return this.towerCoordinator.retryOpening();
+      if (parsed.value.opening.phase === 'failed') {
+        if (parsed.value.opening.requestId) {
+          this.forgetTowerGenerationRecord({
+            chatId,
+            nodeId: '__tower_opening__',
+            requestId: parsed.value.opening.requestId,
+          });
+        }
+        return this.towerCoordinator.retryOpening();
+      }
       nodeId = nearestReachableFailedTowerNode(parsed.value);
     }
     if (!nodeId) throw new Error('当前存档中没有可重试的爬塔节点');
+    const envelope = parsed.value.nodeContent[nodeId];
+    if (envelope?.phase === 'failed' && envelope.requestId) {
+      this.forgetTowerGenerationRecord({ chatId, nodeId, requestId: envelope.requestId });
+    }
     return this.towerCoordinator.retryNode(nodeId);
   }
 
@@ -1527,13 +1917,24 @@ export class DesignAssistantController {
     // Apply synchronously before any snapshot work. The same request can be
     // exposed through two SillyTavern events; this mutation is idempotent.
     applyMvuRequestPolicy(payload);
+    const captureRequest = (): void => {
+      try {
+        this.towerMonitor()?.captureMvuRequest?.({ source, payload });
+      } catch (error) {
+        this.debug('failed to expose the captured MVU request', error);
+      }
+    };
     const settings = this.getSettings();
     // The request policy is part of the card's MVU reliability contract and
     // stays active for this card's second stage even when optional design
     // scoring/context injection is disabled.
-    if (!settings.enabled) return;
+    if (!settings.enabled) {
+      captureRequest();
+      return;
+    }
     if (!mvu) {
       this.debug('captured MVU request before the MVU global became available; request policy applied without design context');
+      captureRequest();
       return;
     }
     // SillyTavern and Tavern Helper can expose both the modern request event and
@@ -1542,6 +1943,7 @@ export class DesignAssistantController {
     // injection error or repeating the deck simulation.
     if (hasDesignContext(payload)) {
       this.debug('design context already present; skipped duplicate request event');
+      captureRequest();
       return;
     }
     this.setStatus('injecting', '正在读取最新变量并生成设计上下文…');
@@ -1552,6 +1954,7 @@ export class DesignAssistantController {
       const snapshot = await this.workerClient.createSnapshot(variables, state, settings);
       if (!this.active || !this.isCurrentChatScope(chatScope)) {
         this.debug('chat changed while preparing design context; discarded stale snapshot');
+        captureRequest();
         return;
       }
       if (!snapshot) {
@@ -1564,9 +1967,11 @@ export class DesignAssistantController {
           this.persistState(state);
           this.setStatus('ready', '已注入首轮卡组初始化约束');
           this.debug('injected initialization context', initializationPrompt);
+          captureRequest();
           return;
         }
         this.setStatus('idle', '当前没有可评分的玩家卡组');
+        captureRequest();
         return;
       }
       if (!injectDesignContext(payload, snapshot.prompt)) {
@@ -1578,9 +1983,11 @@ export class DesignAssistantController {
             `已注入：卡组 ${snapshot.deckProfile.totalScore} 分，目标 ${snapshot.enemyEnvelope.targetScore} 分`,
             snapshot,
           );
+          captureRequest();
           return;
         }
         this.setStatus('error', 'Tavern Helper 请求结构无法注入，已保持原请求');
+        captureRequest();
         return;
       }
       this.latestSnapshot = snapshot;
@@ -1595,7 +2002,9 @@ export class DesignAssistantController {
         snapshot,
       );
       this.debug('injected design context', snapshot.prompt);
+      captureRequest();
     } catch (error) {
+      captureRequest();
       this.fail('第二轮设计上下文生成失败', error);
     }
   }
@@ -1940,7 +2349,9 @@ export class DesignAssistantController {
     this.towerChatId = nextChatId;
     this.publishedTowerTerminals.clear();
     this.towerRequestPromises.clear();
+    this.towerNarrativePromises.clear();
     this.towerPreGenerationSnapshots.clear();
+    this.singleFloorStartPromises.clear();
     this.towerArchivePromise = null;
     this.archivedTowerRuns.clear();
     this.rerenderedTowerRestoreSnapshots.clear();
@@ -2996,6 +3407,18 @@ export class DesignAssistantController {
     const fingerprint = towerGenerationTaskKey(key);
     this.towerGenerationHost.releaseCompletedRecord(key);
     this.towerPreGenerationSnapshots.delete(fingerprint);
+  }
+
+  private forgetTowerGenerationRecord(key: TowerGenerationTaskKey): void {
+    const fingerprint = towerGenerationTaskKey(key);
+    this.towerGenerationHost.forgetTerminalRecord(key);
+    this.publishedTowerTerminals.delete(fingerprint);
+    this.towerPreGenerationSnapshots.delete(fingerprint);
+    for (const promiseKey of this.towerRequestPromises.keys()) {
+      if (promiseKey === fingerprint || promiseKey.startsWith(`${fingerprint}::run=`)) {
+        this.towerRequestPromises.delete(promiseKey);
+      }
+    }
   }
 
   private saveSettings(settings: DesignAssistantSettings): void {

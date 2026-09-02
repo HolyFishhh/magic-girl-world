@@ -36,6 +36,10 @@ assert.match(prompt, /战斗效果结构边界/);
 assert.match(prompt, /禁止旧 effect、内部 spec\/op\/steps，以及 target、condition、operator、value 字段/);
 assert.match(prompt, /敌人 abilities 每项必须有稳定英文 id/);
 assert.match(prompt, /状态 triggers\.hold 只能放 modify\/出牌规则/);
+assert.match(prompt, /\[流派与敌人创作方法\]/);
+assert.match(prompt, /启动→运转→收益/);
+assert.match(prompt, /召唤作为核心时必须真实使用 spawn_summon/);
+assert.match(prompt, /一个主压力与零到两个有因果协同的副机制/);
 assert.doesNotMatch(prompt, /```|<UpdateVariable>/);
 assert.match(prompt, /只输出一个 JSON 对象/);
 
@@ -145,6 +149,7 @@ const openingInput = {
 };
 const openingPrompt = tower.formatTowerOpeningGenerationPrompt(openingInput);
 assert.match(openingPrompt, /二至四个中文选择/);
+assert.match(openingPrompt, /\[流派与敌人创作方法\]/);
 const completeOpeningPrompt = tower.formatTowerOpeningGenerationPrompt({
   ...openingInput,
   context: { completeMvuContext, difficultyPercent: 100 },
@@ -312,6 +317,7 @@ const batchPrompt = tower.formatTowerNodeBatchGenerationPrompt(batchId, batchJob
 assert.match(batchPrompt, /必须在这一次响应中全部生成/);
 assert.match(batchPrompt, /node_count=2/);
 assert.match(batchPrompt, /results 必须恰好 2 项/);
+assert.match(batchPrompt, /\[流派与敌人创作方法\]/);
 assert.equal((batchPrompt.match(/LATEST_MVU_TAIL_IS_VISIBLE/g) || []).length, 1);
 const batchSchema = tower.createTowerNodeBatchJsonSchema(batchId, batchJobs).value;
 assert.equal(batchSchema.properties.batch_id.const, batchId);

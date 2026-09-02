@@ -68,6 +68,12 @@ assert.match(commonSource, /classList\.toggle\('has-tower-rewards', lockedTowerM
 assert.match(commonSource, /runActionHost\.activateTowerRunNode\(node\.id\)/);
 assert.doesNotMatch(commonSource, /enterTowerRunNode\(node, routePrompt\(node\)\)/);
 assert.match(commonSource, /runActionHost\.retryTowerNodeGeneration\(nodeId\)/);
+assert.match(commonSource, /capabilities\.singleFloorStart !== true/);
+assert.match(commonSource, /至少需要 0\.3\.0/);
+assert.match(html, /id="tower-player-energy"/);
+assert.match(html, /class="tower-player-deck-section"/);
+assert.match(commonSource, /class="tower-player-card-cost"/);
+assert.match(commonSource, /class="tower-player-card-rules"/);
 assert.match(
   commonSource,
   /run\.act === 1 && run\.floor === 0 && run\.phase === 'awaiting_choice'/,

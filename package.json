@@ -151,7 +151,7 @@
     "test:tower-battle-reward-settlement": "node scripts/test-tower-battle-reward-settlement.mjs",
     "test:tower-generation-host": "node scripts/test-tower-generation-host.mjs",
     "test:tower-archive-store": "node scripts/test-tower-archive-store.mjs",
-    "test:tower-generation-controller": "node scripts/test-tower-generation-controller.mjs && node scripts/test-tower-enemy-balance.mjs",
+    "test:tower-generation-controller": "node scripts/test-tower-generation-controller.mjs && node scripts/test-tower-single-floor-start.mjs && node scripts/test-tower-enemy-balance.mjs",
     "test:tower-enemy-balance": "node scripts/test-tower-enemy-balance.mjs",
     "test:tower-map-ui": "node scripts/test-tower-map-presenter.mjs && node scripts/test-tower-map-dom.mjs && node scripts/test-tower-node-panel.mjs && node scripts/test-tower-node-settlement.mjs && node scripts/test-common-tower-map-integration.mjs",
     "test:tower-request": "node scripts/test-tower-request.mjs",

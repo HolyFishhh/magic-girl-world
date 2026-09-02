@@ -1870,6 +1870,7 @@ function renderTowerPlayerSummary(stat: any, active: boolean): void {
   setText('tower-player-lust', `${core.lust ?? 0}/${core.max_lust ?? 0}`);
   setText('tower-player-level', `LV ${battle.level ?? 1}`);
   setText('tower-player-exp', battle.exp ?? 0);
+  setText('tower-player-energy', core.max_energy ?? core.energy ?? 3);
   setText('tower-player-removals', core.card_removal_count ?? 0);
   setText('tower-player-item-slots', `${towerItemSlotsUsed(battle.items)}/${MAX_TOWER_ITEM_SLOTS}`);
 
@@ -1882,7 +1883,22 @@ function renderTowerPlayerSummary(stat: any, active: boolean): void {
       ? cards.map(card => {
           const rarity = towerRarity(card.rarity);
           const rules = contentRuleDescription(card, card.description || '查看卡牌效果');
-          return `<article class="tower-player-card" data-rarity="${rarity}"><header><strong>${escapeHtml(card.emoji || '🃏')} ${escapeHtml(card.name || card.id || '未命名卡牌')}</strong><em>${escapeHtml(rarity)} · ${escapeHtml(translateCardType(card.type || 'Skill'))} · ×${escapeHtml(card.quantity || 1)}</em></header><p>${escapeHtml(rules)}</p></article>`;
+          const description = String(card.description || '').trim();
+          const cost = card.type === 'Curse' || card.cost === undefined
+            ? '—'
+            : card.cost === 'energy'
+              ? 'X'
+              : String(card.cost);
+          const source = String(card.source || card.origin_name || '').trim();
+          return `<article class="tower-player-card" data-rarity="${rarity}">
+            <header class="tower-player-card-head">
+              <b class="tower-player-card-cost" title="能量费用">${escapeHtml(cost)}</b>
+              <div class="tower-player-card-title"><strong>${escapeHtml(card.emoji || '🃏')} ${escapeHtml(card.name || card.id || '未命名卡牌')}</strong><span><i>${escapeHtml(translateCardType(card.type || 'Skill'))}</i><i>${escapeHtml(rarity)}</i>${source ? `<i>来源：${escapeHtml(source)}</i>` : ''}</span></div>
+              <em>×${escapeHtml(card.quantity || 1)}</em>
+            </header>
+            ${description ? `<p class="tower-player-card-flavor">${escapeHtml(description)}</p>` : ''}
+            <p class="tower-player-card-rules">${escapeHtml(rules)}</p>
+          </article>`;
         }).join('')
       : '<p class="tower-player-empty">正在初始化起始牌组…</p>';
   }
@@ -1901,10 +1917,27 @@ function renderTowerPlayerSummary(stat: any, active: boolean): void {
   renderResources('tower-player-artifacts', artifacts, '暂无遗物');
   renderResources('tower-player-items', items, '暂无道具');
   const abilities = normalizeOptionsList<Record<string, any>>(battle.player_abilities);
+  const statusDefinitions = new Map(
+    normalizeOptionsList<Record<string, any>>(battle.statuses)
+      .map(value => [String(value.id || value.name || ''), value] as const),
+  );
+  const activeStatuses = normalizeOptionsList<Record<string, any>>(battle.player_status_effects).map(value => {
+    const definition = statusDefinitions.get(String(value.id || value.name || '')) || {};
+    return { ...definition, ...value, name: value.name || definition.name || value.id };
+  });
+  const permanentStatuses = normalizeOptionsList<Record<string, any>>(stat?.status?.permanent_status);
+  const resources = normalizeOptionsList<Record<string, any>>(core.resources).map(value => ({
+    ...value,
+    description: `${value.current ?? 0}/${value.max ?? 0}${value.refresh ? ` · ${value.refresh}` : ''}`,
+  }));
   const lustEffect = battle.player_lust_effect && typeof battle.player_lust_effect === 'object'
     ? [{ emoji: '💗', ...battle.player_lust_effect }]
     : [];
-  renderResources('tower-player-effects', [...lustEffect, ...abilities], '暂无额外战斗能力');
+  renderResources(
+    'tower-player-effects',
+    [...lustEffect, ...abilities, ...activeStatuses, ...permanentStatuses, ...resources],
+    '暂无额外战斗能力或状态',
+  );
 }
 
 function renderRunData(stat: any): void {
@@ -2131,11 +2164,18 @@ function towerExtensionReadiness(): { ready: boolean; message: string } {
   const version = String(capabilities.version || '0.0.0')
     .split('.')
     .map((part: string) => Number(part) || 0);
-  const supported = (version[0] || 0) > 0 || (version[1] || 0) >= 2;
-  if (!supported || capabilities.towerGeneration !== true || capabilities.towerCoordinator !== true) {
+  const supported = (version[0] || 0) > 0
+    || (version[1] || 0) > 3
+    || (version[1] || 0) === 3 && (version[2] || 0) >= 0;
+  if (
+    !supported
+    || capabilities.towerGeneration !== true
+    || capabilities.towerCoordinator !== true
+    || capabilities.singleFloorStart !== true
+  ) {
     return {
       ready: false,
-      message: `设计辅助器版本过低（当前 ${capabilities.version || '未知'}，至少需要 0.2.2）。`,
+      message: `设计辅助器版本过低（当前 ${capabilities.version || '未知'}，至少需要 0.3.0）。`,
     };
   }
   return { ready: true, message: '' };

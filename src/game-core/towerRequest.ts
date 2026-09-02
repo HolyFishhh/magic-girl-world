@@ -175,6 +175,18 @@ function towerRewardDslContract(): string {
   ].join('\n');
 }
 
+/** Soft creative method shared by enemies and rewards; it deliberately contains no copyable content preset. */
+function towerArchetypeDesignMethod(): string {
+  return [
+    '[流派与敌人创作方法]',
+    '先读取玩家明确要求、当前卡组的流派画像与本轮剧情。明确指定的流派必须用真实 effects、trigger、状态、资源、牌区、召唤或规则字段形成“启动→运转→收益”；卡名、emoji、description 和题材换皮不算实现。未指定流派时不强行套图谱，允许通用散卡与剧情需要的简单机制。',
+    '卡牌内容应让启动端能在正常抽牌中实际进入循环，并提供可兑现收益；可以深化当前流派、连接相邻机制、渐进转向或补独立短板，不按标签数量评价质量。',
+    '召唤作为核心时必须真实使用 spawn_summon，并让召唤实例通过行动、触发、援护、资源、强化、选择或离场关系参与玩法；普通伤害与格挡仅改写召唤措辞不成立。',
+    '敌人先把剧情身份转成可执行动作，再选择一个主压力与零到两个有因果协同的副机制；按铺垫、施压、兑现、保护或调整组织节奏，并提供可观察反制。它们是方法而非固定行动表，简单遭遇不必强行复杂化。',
+    '敌人核心行为删去描述后仍须从可执行字段中成立；生命、欲望、控制、成长、格挡、召唤与牌库压力共享数值预算，增加一种强压力时减少其他压力。',
+  ].join('\n');
+}
+
 /** Compact node prompt: topology and reward timing stay program-owned. */
 export function formatTowerNodeGenerationPrompt(
   job: TowerGenerationJobDescriptor,
@@ -192,6 +204,7 @@ export function formatTowerNodeGenerationPrompt(
   ];
   if (isBattleRunNode(job.kind)) lines.push(towerBattleDslContract());
   if (job.kind !== 'rest') lines.push(towerRewardDslContract());
+  lines.push(towerArchetypeDesignMethod());
   const completeMvu = compactContext(context.completeMvuContext, 32_000);
   const world = completeMvu ? null : compactContext(context.worldContext, 8000);
   const player = completeMvu ? null : compactContext(context.playerContext, 10_000);
@@ -239,6 +252,7 @@ export function formatTowerNodeBatchGenerationPrompt(
   ];
   if (jobs.some(job => isBattleRunNode(job.kind))) lines.push(towerBattleDslContract());
   if (jobs.some(job => job.kind !== 'rest')) lines.push(towerRewardDslContract());
+  lines.push(towerArchetypeDesignMethod());
   const completeMvu = compactContext(context.completeMvuContext, 32_000);
   const world = completeMvu ? null : compactContext(context.worldContext, 8000);
   const player = completeMvu ? null : compactContext(context.playerContext, 10_000);
@@ -364,6 +378,7 @@ export function formatTowerOpeningStructureRepairPrompt(
     'outcome 只允许 hp、max_hp、gold、card_removals、reward；这些数值必须是整数且表示相对变化。',
     'reward 只允许 cards、artifacts、items 数组；省略没有奖励的类别，不得写单个对象、数字、字符串、limits 或运行时奖励池字段。',
     towerRewardDslContract(),
+    towerArchetypeDesignMethod(),
     '不得修改 request_id、based_on_revision 或顶层 spec，不得输出解释、思考过程、Markdown、UpdateVariable 或第二个结果。',
     `原始响应：${String(response || '').slice(0, 30_000)}`,
     '只输出一个满足本次 json_schema 的 JSON 对象。',
@@ -389,6 +404,7 @@ export function formatTowerOpeningGenerationPrompt(input: TowerOpeningPromptInpu
     '爬塔模式最多携带三个战斗道具；根据当前事实中的 battle.items 控制馈赠道具数量，不能让任一选项结算后超过三个。',
     '不要修改地图、模式和 run，不要展开后续节点；这里的 narrative 不覆盖剧情模型所用的原预设。',
   ];
+  lines.push(towerRewardDslContract(), towerArchetypeDesignMethod());
   const completeMvu = compactContext(input.context.completeMvuContext, 32_000);
   const world = completeMvu ? null : compactContext(input.context.worldContext, 8000);
   const player = completeMvu ? null : compactContext(input.context.playerContext, 10_000);

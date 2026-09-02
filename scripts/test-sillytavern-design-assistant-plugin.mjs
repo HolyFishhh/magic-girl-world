@@ -81,6 +81,15 @@ const settings = {
   debug: false,
 };
 
+const emptyVariables = variables(false);
+emptyVariables.stat_data.battle.cards = [];
+const initializationPrompt = engine.createInitializationPrompt(emptyVariables);
+assert.match(initializationPrompt, /流派体系与设计方法/);
+assert.match(initializationPrompt, /启动、运转与收益/);
+assert.match(initializationPrompt, /真实 effects、trigger、状态、资源、牌区或召唤字段/);
+assert.match(initializationPrompt, /必须实际产生 spawn_summon/);
+assert.match(initializationPrompt, /通用散卡/);
+
 const legacyAppliedState = normalizeDesignAssistantChatState({
   spec: 'mwg.st-design-assistant/v1',
   lastCalibration: {
@@ -117,6 +126,8 @@ assert.ok(first.deckProfile.totalScore > 0);
 assert.equal(first.enemyEnvelope.requestedRatio, 80);
 assert.match(first.prompt, /^\[MWG_DESIGN_CONTEXT\/v1\]/);
 assert.match(first.prompt, /当前流派：/);
+assert.match(first.prompt, /核心组成=.*→/);
+assert.match(first.prompt, /删去描述后仍须能从 effects、trigger、状态、资源、召唤、增援、牌区干扰或规则字段中成立/);
 assert.match(first.prompt, /知识图谱邻接路径：/);
 assert.match(first.prompt, /self恒指该效果的拥有者/);
 assert.match(first.prompt, /蚀光软泥斥候/);
@@ -298,6 +309,11 @@ let hostNow = 123456;
 const notifications = [];
 const lifecyclePromptCalls = [];
 let lifecyclePromptCleanupCount = 0;
+const capturedMvuRequests = [];
+globalThis.MagicGirlWorldMvuMonitor = {
+  captureMvuRequest: input => capturedMvuRequests.push(structuredClone(input)),
+  setDesignAssistant() {},
+};
 globalThis.TavernHelper = {
   injectPrompts(prompts, options) {
     lifecyclePromptCalls.push({ prompts: structuredClone(prompts), options: structuredClone(options) });
@@ -346,10 +362,22 @@ assert.equal(
 );
 assert.equal(unrelatedAfter.stat_data.battle.enemy.max_hp, 400);
 context.characters = [scopedCharacter];
-const extraPayload = { prompt: [{ role: 'system', content: 'mvu' }, { role: 'user', content: 'update' }] };
+const extraPayload = {
+  max_tokens: 2600,
+  prompt: [{ role: 'system', content: 'mvu' }, { role: 'user', content: 'update' }],
+};
 await events.emit('generate_after_data', extraPayload);
 assert.equal(hasDesignContext(extraPayload), true, 'MVU extra-model request must receive dynamic context');
 assert.equal(extraPayload.include_reasoning, true, 'MVU extra-model request must preserve provider reasoning');
+assert.equal(extraPayload.max_tokens, 20000, 'captured MVU request must reflect the final output budget policy');
+assert.equal(capturedMvuRequests.length, 1);
+assert.equal(capturedMvuRequests[0].source, 'official');
+assert.equal(
+  hasDesignContext(capturedMvuRequests[0].payload),
+  true,
+  'the monitor must receive the exact request after design context injection, not the pre-injection draft',
+);
+assert.deepEqual(capturedMvuRequests[0].payload, extraPayload);
 assert.equal(context.chatMetadata[DESIGN_ASSISTANT_METADATA_KEY].lastInjectionAt, 123456);
 assert.equal(context.chatMetadata[DESIGN_ASSISTANT_METADATA_KEY].lastInjectionSource, 'official');
 assert.equal(context.chatMetadata[DESIGN_ASSISTANT_METADATA_KEY].lastInjectionMessageId, 'latest');
@@ -362,6 +390,7 @@ assert.equal(
   markerCountAfterPrimaryEvent,
   'compatibility event must keep the same request idempotent',
 );
+assert.equal(capturedMvuRequests.length, 1, 'the same physical request object must only be captured once');
 assert.equal(controller.getStatus().phase, 'ready', 'duplicate compatibility event must not report a false error');
 assert.equal(
   context.chatMetadata[DESIGN_ASSISTANT_METADATA_KEY].lastInjectionCount,
@@ -539,6 +568,7 @@ assert.equal(advisoryCalibration.state.lastCalibration.mode, 'advisory');
 assert.match(advisoryCalibration.state.lastCalibration.warnings.join('\n'), /trigger/);
 
 controller.deactivate();
+delete globalThis.MagicGirlWorldMvuMonitor;
 
 // A selected assistant floor may still contain a durable settlement request
 // after SillyTavern or the card iframe restarts. Lifecycle recovery must read

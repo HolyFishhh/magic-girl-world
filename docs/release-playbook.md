@@ -21,12 +21,14 @@
 7. 提交并推送卡图仓库，确认公开链接仍可访问。
 8. 向用户提供版本号、两个提交、公开卡图链接、本次完整玩家更新条目和验证结果。
 
+配套扩展采用持续发布：只要扩展内容或版本发生变化，就在同一次任务中提交主项目、同步并推送远端 `extension` 分支，不等待额外许可。发布后必须读取远端 `manifest.json`，确认版本与本地一致。
+
 ## 本次发布
 
-- 角色卡版本：`0.6.2`
-- 玩家更新阶段：`beta0.3.2`
+- 角色卡版本：`0.6.3`
+- 玩家更新阶段：`beta0.3.3`
 - 主卡：`魔法少女世界.png`
-- 爬塔扩展：`dist/release/magic-girl-design-assistant-0.2.2.zip`
+- 爬塔扩展：`dist/release/magic-girl-design-assistant-0.3.0.zip`
 - 卡图仓库目标：根目录与 `cards/魔法少女世界.png`
 - 完整玩家记录：`docs/player-release-notes.md`
-- 单次论坛快照：`docs/forum-update-0.6.2.md`
+- 单次论坛快照：`docs/forum-update-0.6.3.md`
