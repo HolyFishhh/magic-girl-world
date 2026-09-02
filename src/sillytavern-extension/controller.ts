@@ -846,7 +846,7 @@ export class DesignAssistantController {
   getCapabilities() {
     return {
       spec: 'mwg.design-assistant/v1' as const,
-      version: '0.3.1' as const,
+      version: '0.3.2' as const,
       towerGeneration: true as const,
       towerCoordinator: true as const,
       towerArchive: true as const,

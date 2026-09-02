@@ -69,7 +69,7 @@ assert.match(commonSource, /runActionHost\.activateTowerRunNode\(node\.id\)/);
 assert.doesNotMatch(commonSource, /enterTowerRunNode\(node, routePrompt\(node\)\)/);
 assert.match(commonSource, /runActionHost\.retryTowerNodeGeneration\(nodeId\)/);
 assert.match(commonSource, /capabilities\.singleFloorStart !== true/);
-assert.match(commonSource, /至少需要 0\.3\.1/);
+assert.match(commonSource, /至少需要 0\.3\.2/);
 assert.match(html, /id="tower-player-energy"/);
 assert.match(html, /class="tower-player-deck-section"/);
 assert.match(commonSource, /class="tower-player-card-cost"/);

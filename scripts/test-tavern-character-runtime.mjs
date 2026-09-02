@@ -268,24 +268,31 @@ let towerPersistenceRequest = null;
 let towerRetryRequest = null;
 let towerArchiveCalls = 0;
 let towerWakeReason = null;
-let extensionCapabilitiesVersion = '0.3.1';
+let extensionCapabilitiesVersion = '0.3.2';
 let extensionSupportsSingleFloor = true;
-let officialInstallCalls = 0;
+const officialInstallCalls = [];
 const extensionUpdateRequests = [];
+const extensionDeleteRequests = [];
+let installedExtensionNames = ['third-party/magic-girl-world'];
+let installedExtensionTypes = { 'third-party/magic-girl-world': 'local' };
 context.window.parent.fetch = async (url, options = {}) => {
   if (String(url).includes('raw.githubusercontent.com')) {
-    return { ok: true, json: async () => ({ version: '0.3.1' }) };
+    return { ok: true, json: async () => ({ version: '0.3.2' }) };
   }
   if (url === '/api/extensions/update') {
     extensionUpdateRequests.push(JSON.parse(options.body));
     return { ok: true, text: async () => '' };
   }
+  if (url === '/api/extensions/delete') {
+    extensionDeleteRequests.push(JSON.parse(options.body));
+    return { ok: true, text: async () => '' };
+  }
   throw new Error(`unexpected fetch: ${url}`);
 };
 context.window.parent.Function = () => async () => [{
-  extensionNames: ['third-party/magic-girl-world'],
-  extensionTypes: { 'third-party/magic-girl-world': 'local' },
-  installExtension: async () => { officialInstallCalls += 1; return true; },
+  extensionNames: installedExtensionNames,
+  extensionTypes: installedExtensionTypes,
+  installExtension: async (...args) => { officialInstallCalls.push(args); return true; },
 }, {
   getRequestHeaders: () => ({ 'Content-Type': 'application/json' }),
 }];
@@ -353,21 +360,35 @@ assert.equal(towerArchiveCalls, 1);
 assert.equal(sharedRuntime.getTowerCoordinatorStatus().phase, 'waiting');
 assert.deepEqual(JSON.parse(JSON.stringify(sharedRuntime.getDesignAssistantCapabilities())), {
   spec: 'mwg.design-assistant/v1',
-  version: '0.3.1',
+  version: '0.3.2',
   towerGeneration: true,
   towerCoordinator: true,
   towerArchive: true,
   singleFloorStart: true,
 });
 assert.equal((await sharedRuntime.checkTowerExtensionVersion(true)).status, 'current');
-extensionCapabilitiesVersion = '0.2.2';
+extensionCapabilitiesVersion = '0.3.1';
 extensionSupportsSingleFloor = false;
 const outdatedExtension = await sharedRuntime.checkTowerExtensionVersion(true);
 assert.equal(outdatedExtension.status, 'outdated');
 assert.equal(await sharedRuntime.installTowerExtension(), true);
 assert.deepEqual(extensionUpdateRequests, [{ extensionName: 'magic-girl-world', global: false }]);
-assert.equal(officialInstallCalls, 0, 'an installed old extension must be updated instead of installed a second time');
-extensionCapabilitiesVersion = '0.3.1';
+assert.equal(officialInstallCalls.length, 0, 'a repository installation must update in place');
+
+extensionCapabilitiesVersion = '0.2.2';
+installedExtensionNames = ['third-party/magic-girl-design-assistant'];
+installedExtensionTypes = { 'third-party/magic-girl-design-assistant': 'global' };
+assert.equal((await sharedRuntime.checkTowerExtensionVersion(true)).status, 'outdated');
+assert.equal(await sharedRuntime.installTowerExtension(), true);
+assert.deepEqual(extensionDeleteRequests, [{ extensionName: 'magic-girl-design-assistant', global: true }]);
+assert.deepEqual(officialInstallCalls, [[
+  'https://github.com/HolyFishhh/magic-girl-world.git',
+  true,
+  'extension',
+]]);
+assert.equal(extensionUpdateRequests.length, 1, 'a copied legacy folder must migrate instead of calling git update');
+
+extensionCapabilitiesVersion = '0.3.2';
 extensionSupportsSingleFloor = true;
 context.MagicGirlWorldMvuMonitor.receiveTowerGenerationStatus({ phase: 'running' });
 context.MagicGirlWorldMvuMonitor.receiveTowerGenerationCompleted({ nodeId: 'act-1-floor-1-col-1' });
