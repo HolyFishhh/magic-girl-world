@@ -315,6 +315,7 @@ assert.match(battleGuide, /禁止把内部动作名 `gain_block\/gain_energy\/ga
 assert.match(battleGuide, /状态操作的固定写法是 `\{apply_status:\"状态ID\"/);
 assert.match(battleGuide, /`stacks\/to` 与操作同级/);
 assert.doesNotMatch(battleGuide, /`apply_status\/remove_status` 对象，其中 `id`/);
+assert.doesNotMatch(sources.get('战斗场景生成'), /`apply_status\/remove_status` 对象引用/);
 assert.match(battleGuide, /禁止把 `attribute\/operation\/value` 对象嵌套进 `modify`/);
 assert.match(battleGuide, /递归预检会拒绝未知字段、未知状态/);
 assert.match(battleGuide, /`scope\/ordinal\/n\/event\/phase\/reason\/source_kind\/source_id\/damage_type\/card_type\/template_id\/card_instance_id\/actor_id\/target_id`/);
