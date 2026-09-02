@@ -83,6 +83,11 @@ class FakeDocument {
   createElement(tagName) {
     return new FakeElement(this, tagName);
   }
+  createTextNode(value) {
+    const node = new FakeElement(this, '#text');
+    node.textContent = value;
+    return node;
+  }
 }
 
 function descendants(root) {

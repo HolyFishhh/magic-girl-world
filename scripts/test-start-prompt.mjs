@@ -111,7 +111,10 @@ assert.doesNotMatch(creatorSource, /triggerSlash\(`\/send|triggerSlash\('\/send/
 assert.match(creatorSource, /return normalizeGameMode\(config\.mode\) !== null/, 'both start modes must be accepted');
 assert.doesNotMatch(creatorSource, /selectFaction|FACTION_INFO|startingLocation|\.setup-tab/);
 assert.match(creatorSource, /preset-card\[data-preset-field/);
-assert.match(creatorSource, /selectMode\('story'\)/);
+assert.match(creatorSource, /getCurrentChatMessageText\(\)/);
+assert.match(creatorSource, /greeting\.includes\('\[爬塔模式开场\]'\)/);
+assert.match(creatorSource, /greeting\.includes\('\[剧情模式开场\]'\)/);
+assert.match(creatorSource, /this\.selectMode\(this\.openingMode \?\?/);
 assert.match(creatorSource, /lockGameModeInStat\(variables\.stat_data, config\.mode\)/);
 assert.match(
   creatorSource,

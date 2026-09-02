@@ -45,7 +45,15 @@ const enemy = {
 };
 
 function activeTowerStat(seed = 400) {
-  const awaiting = runCore.createRunState({ seed });
+  let awaiting = runCore.createRunState({ seed });
+  awaiting = {
+    ...awaiting,
+    opening: { ...awaiting.opening, phase: 'skipped' },
+  };
+  awaiting = runCore.completeRunNode(
+    runCore.enterRunNode(awaiting, awaiting.choices[0].id),
+    { outcome: 'cleared' },
+  );
   const choice = awaiting.choices[0];
   const run = runCore.enterRunNode(awaiting, choice.id);
   return {

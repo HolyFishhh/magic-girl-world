@@ -282,11 +282,12 @@ card.data.character_version = CARD_VERSION;
 card.name = CHARACTER_NAME;
 card.data.name = CHARACTER_NAME;
 card.data.creator_notes =
-  '剧情模式可直接开始游玩；角色卡已内置世界书、MVU 变量框架与交互界面。爬塔模式需要另行安装 0.2.1 或更高版本的“魔法少女世界设计辅助器”扩展。';
+  '剧情模式可直接开始游玩；角色卡已内置世界书、MVU 变量框架与交互界面。爬塔模式需要另行安装 0.2.2 或更高版本的“魔法少女世界设计辅助器”扩展。';
 // The start regex targets the marker itself. A Markdown fence here is parsed
 // as a second code block by SillyTavern and can turn the replacement HTML into
 // JavaScript, producing `Unexpected token '<'` in the message iframe.
-card.data.first_mes = '[开始游戏]';
+card.data.first_mes = '[开始游戏]\n[剧情模式开场]';
+card.data.alternate_greetings = ['[开始游戏]\n[爬塔模式开场]'];
 card.spec = 'chara_card_v3';
 card.spec_version = '3.0';
 

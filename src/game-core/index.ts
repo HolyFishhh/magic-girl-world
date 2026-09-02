@@ -97,3 +97,4 @@ export * from './towerFinale';
 export * from './worldContinuity';
 export * from './playerContentReadiness';
 export * from './towerMode';
+export * from './towerInventory';

@@ -36,6 +36,42 @@
             <span><small>金币</small><b id="run-gold">99</b></span>
           </div>
         </div>
+        <section id="tower-player-panel" class="tower-player-panel" style="display: none" aria-label="爬塔角色与构筑">
+          <div class="tower-player-identity">
+            <span id="tower-player-emoji" aria-hidden="true">✨</span>
+            <div>
+              <small>当前角色</small>
+              <strong id="tower-player-profession">未知职业</strong>
+              <span id="tower-player-ability">等待初始化能力</span>
+            </div>
+          </div>
+          <div class="tower-player-metrics" aria-live="polite">
+            <span><small>生命</small><b id="tower-player-hp">0/0</b></span>
+            <span><small>欲望</small><b id="tower-player-lust">0/0</b></span>
+            <span><small>等级</small><b id="tower-player-level">LV 1</b></span>
+            <span><small>经验</small><b id="tower-player-exp">0</b></span>
+            <span><small>删卡</small><b id="tower-player-removals">0</b></span>
+            <span><small>道具槽</small><b id="tower-player-item-slots">0/3</b></span>
+          </div>
+          <div class="tower-player-details">
+            <details open>
+              <summary>牌组 <b id="tower-player-deck-count">0</b></summary>
+              <div id="tower-player-deck" class="tower-player-card-grid"></div>
+            </details>
+            <details>
+              <summary>遗物 <b id="tower-player-artifact-count">0</b></summary>
+              <div id="tower-player-artifacts" class="tower-player-resource-grid"></div>
+            </details>
+            <details>
+              <summary>道具 <b id="tower-player-item-count">0</b></summary>
+              <div id="tower-player-items" class="tower-player-resource-grid"></div>
+            </details>
+            <details>
+              <summary>战斗能力</summary>
+              <div id="tower-player-effects" class="tower-player-resource-grid"></div>
+            </details>
+          </div>
+        </section>
         <div
           id="tower-node-panel-root"
           class="tower-node-panel-host"

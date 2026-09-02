@@ -12,13 +12,18 @@ import { commitTowerOpening, failTowerOpening } from '../game-core/towerOpeningS
 import { executeUnifiedRunTransactionInStat } from '../common/runTransactions';
 import { normalizeMvuList } from '../common/rewardTransactions';
 import {
+  createTowerNodeBatchJsonSchema,
   createTowerNodeJsonSchema,
   createTowerOpeningJsonSchema,
   formatTowerBattleBalanceRepairPrompt,
+  formatTowerNodeBatchStructureRepairPrompt,
   formatTowerNodeStructureRepairPrompt,
   formatTowerOpeningStructureRepairPrompt,
+  parseTowerNodeBatchResult,
   parseTowerNodeResult,
   parseTowerOpeningResult,
+  type TowerGenerationJobDescriptor,
+  type TowerNodeBatchResult,
   type TowerNodeResult,
 } from '../game-core/towerRequest';
 import {
@@ -132,8 +137,20 @@ interface ActiveMvuLifecyclePrompt {
 export type TowerGenerationBridgeRequest = Omit<TowerGenerationRequest, 'chatId' | 'nodeId'> & {
   /** Ignored at the trust boundary; the active SillyTavern chat always wins. */
   chatId?: string;
-  generationType?: 'node' | 'opening';
+  generationType?: 'node' | 'opening' | 'batch';
   nodeId?: string;
+  batchId?: string;
+  jobs?: Array<{
+    nodeId: string;
+    requestId: string;
+    revision: number;
+    kind: RunNodeKind;
+    act: number;
+    floor: number;
+    contentSeed: number;
+    rewardSeed: number;
+    difficultyMultiplier: number;
+  }>;
   basedOnRevision?: number;
   /** Compatibility alias used by towerStateAdapter request descriptors. */
   revision?: number;
@@ -143,9 +160,11 @@ export type TowerGenerationBridgeRequest = Omit<TowerGenerationRequest, 'chatId'
 };
 
 interface NormalizedTowerBridgeRequest {
-  generationType: 'node' | 'opening';
+  generationType: 'node' | 'opening' | 'batch';
   request: TowerGenerationRequest;
   basedOnRevision: number;
+  batchId?: string;
+  jobs?: TowerGenerationJobDescriptor[];
   kind?: RunNodeKind;
   act?: number;
   floor?: number;
@@ -310,9 +329,16 @@ function towerNarrativePrompt(stat: Record<string, any>, activeNode: Record<stri
       title: activeNode.title,
       prepared_context: activeNode.narrative,
     },
-    status: stat.status,
-    npcs: stat.npcs,
-    factions: stat.factions,
+    player: {
+      profession: stat.status?.profession,
+      core: stat.battle?.core,
+    },
+    tower_progress: {
+      act: stat.run?.act,
+      floor: stat.run?.floor,
+      previous_node: stat.run?.lastNodeKind,
+    },
+    custom_requirements: stat.tower_requirements,
   };
   if (isBattleRunNode(kind as RunNodeKind)) {
     facts.encounter = {
@@ -325,7 +351,7 @@ function towerNarrativePrompt(stat: Record<string, any>, activeNode: Record<stri
   const serializedFacts = JSON.stringify(facts).slice(0, 20_000);
   return [
     '[爬塔节点剧情]',
-    '玩家已经在单页爬塔界面进入了以下节点。请使用当前角色卡、世界书、聊天记录和当前启用的原预设，自然续写这个节点的剧情正文。',
+    '玩家已经在单页爬塔界面进入了以下节点。请使用当前角色卡、聊天记录、玩家要求和当前启用的原预设，自然续写这个节点的剧情正文。',
     '不要规定或解释正文长度、段落数量、节奏、文风；按当前预设正常发挥。',
     '下面的节点类型、人物和已准备内容是已经确定的事实，请保持一致；不要提前替玩家结算尚未进行的战斗、事件选择、购买、领奖或营火操作。',
     '只返回供玩家阅读的剧情正文，不输出 JSON、UpdateVariable、变量命令、系统说明或后台分析。',
@@ -347,15 +373,18 @@ function towerOpeningNarrativePrompt(stat: Record<string, any>, openingContent: 
       prepared_context: openingContent.narrative,
       choices,
     },
-    status: stat.status,
-    npcs: stat.npcs,
-    factions: stat.factions,
+    player: {
+      profession: stat.status?.profession,
+      core: stat.battle?.core,
+    },
+    custom_requirements: stat.tower_requirements,
   };
   const serializedFacts = JSON.stringify(facts).slice(0, 20_000);
   return [
     '[爬塔开局馈赠剧情]',
-    '玩家正在单页爬塔界面开始新的远征。请使用当前角色卡、世界书、聊天记录和当前启用的原预设，自然生成这次开局馈赠事件的剧情正文。',
-    '下列事件框架与可选行动已经确定；正文可以自由发挥表现方式，但不要改变选择的身份或暗示不存在的选项。',
+    '玩家正在单页爬塔界面开始新的远征。请使用当前角色卡、聊天记录、玩家要求和当前启用的原预设，自然生成这次开局馈赠事件的剧情正文。',
+    '叙事必须承接开场已经建立的处境，并进一步明确玩家接下来会不断前进、连续面对战斗与节点；原因和表现完全服从当前题材。',
+    '下列事件框架与可选行动已经确定；正文可以自由发挥表现方式，但不要改变选择的身份或暗示不存在的选项，也不要替玩家选择。',
     '只返回玩家可阅读的剧情正文，不要输出 JSON、Markdown 代码块、UpdateVariable、变量命令或运行标记。',
     '正文长度、段落、节奏、文风和推进速度完全交给当前原预设决定。',
     serializedFacts,
@@ -623,7 +652,7 @@ export class DesignAssistantController {
   getCapabilities() {
     return {
       spec: 'mwg.design-assistant/v1' as const,
-      version: '0.2.1' as const,
+      version: '0.2.2' as const,
       towerGeneration: true as const,
       towerCoordinator: true as const,
       towerArchive: true as const,
@@ -1058,13 +1087,17 @@ export class DesignAssistantController {
       throw new TowerGenerationCancelledError('The tower request belongs to an older message floor.');
     }
     const normalized = this.normalizeTowerRequest(chatId, input, messageId);
-    const key = towerGenerationTaskKey(normalized.request);
+    const beforeGeneration = this.readLatestMvuData(messageId);
+    // Node ids and revision counters intentionally restart from the same
+    // values when the player begins a new run in the same single-floor chat.
+    // Scope the in-memory duplicate guard by run seed so an old completed
+    // promise cannot suppress generation in the new run.
+    const key = `${towerGenerationTaskKey(normalized.request)}::run=${String(beforeGeneration.stat_data?.run?.seed ?? 'none')}`;
     const duplicate = this.towerRequestPromises.get(key);
     if (duplicate) return duplicate;
 
-    const beforeGeneration = this.readLatestMvuData(messageId);
     const promise = this.executeTowerGeneration(normalized, beforeGeneration);
-    this.towerPreGenerationSnapshots.set(key, clone(beforeGeneration));
+    this.towerPreGenerationSnapshots.set(towerGenerationTaskKey(normalized.request), clone(beforeGeneration));
     this.towerRequestPromises.set(key, promise);
     return promise;
   }
@@ -1388,7 +1421,11 @@ export class DesignAssistantController {
     const cancelled = this.towerGenerationHost.queue.cancelRequest(key, reason);
     if (cancelled) {
       const fingerprint = towerGenerationTaskKey(key);
-      this.towerRequestPromises.delete(fingerprint);
+      for (const promiseKey of this.towerRequestPromises.keys()) {
+        if (promiseKey === fingerprint || promiseKey.startsWith(`${fingerprint}::run=`)) {
+          this.towerRequestPromises.delete(promiseKey);
+        }
+      }
       this.towerPreGenerationSnapshots.delete(fingerprint);
     }
     return cancelled;
@@ -2179,7 +2216,11 @@ export class DesignAssistantController {
     input: TowerGenerationBridgeRequest,
     messageId: number | 'latest',
   ): NormalizedTowerBridgeRequest {
-    const generationType = input.generationType === 'opening' ? 'opening' : 'node';
+    const generationType = input.generationType === 'opening'
+      ? 'opening'
+      : input.generationType === 'batch'
+        ? 'batch'
+        : 'node';
     const requestId = String(input.requestId || '').trim();
     const prompt = String(input.prompt || '').trim();
     const basedOnRevision = input.basedOnRevision ?? input.revision;
@@ -2189,9 +2230,12 @@ export class DesignAssistantController {
       throw new Error('爬塔生成 revision 必须是非负整数');
     }
 
+    const batchId = generationType === 'batch' ? String(input.batchId || requestId).trim() : undefined;
     const nodeId = generationType === 'opening'
       ? '__tower_opening__'
-      : String(input.nodeId || '').trim();
+      : generationType === 'batch'
+        ? `__tower_batch__${batchId}`
+        : String(input.nodeId || '').trim();
     if (!nodeId) throw new Error('爬塔节点 nodeId 不能为空');
     if (generationType === 'node' && !RUN_NODE_KINDS.includes(input.kind as RunNodeKind)) {
       throw new Error('爬塔节点 kind 无效');
@@ -2199,17 +2243,47 @@ export class DesignAssistantController {
 
     let nodeAct: number | undefined;
     let nodeFloor: number | undefined;
-    if (generationType === 'node') {
+    let jobs: TowerGenerationJobDescriptor[] | undefined;
+    if (generationType === 'node' || generationType === 'batch') {
       const current = this.readLatestMvuData(messageId);
       const run = validateRunState(current.stat_data?.run);
       if (!run.ok) throw new Error(`爬塔状态无效：${run.message}`);
-      const node = run.value.map?.nodes.find(entry => entry.id === nodeId)
-        || run.value.choices.find(entry => entry.id === nodeId)
-        || (run.value.currentNode?.id === nodeId ? run.value.currentNode : null);
-      if (!node) throw new Error('爬塔节点不属于当前地图');
-      if (node.kind !== input.kind) throw new Error('爬塔节点 kind 与地图不一致');
-      nodeAct = node.act;
-      nodeFloor = node.floor;
+      if (generationType === 'node') {
+        const node = run.value.map?.nodes.find(entry => entry.id === nodeId)
+          || run.value.choices.find(entry => entry.id === nodeId)
+          || (run.value.currentNode?.id === nodeId ? run.value.currentNode : null);
+        if (!node) throw new Error('爬塔节点不属于当前地图');
+        if (node.kind !== input.kind) throw new Error('爬塔节点 kind 与地图不一致');
+        nodeAct = node.act;
+        nodeFloor = node.floor;
+      } else {
+        if (!batchId) throw new Error('爬塔批量生成 batchId 不能为空');
+        if (!Array.isArray(input.jobs) || input.jobs.length < 1 || input.jobs.length > 3) {
+          throw new Error('爬塔批量生成必须包含一至三个节点');
+        }
+        const seen = new Set<string>();
+        jobs = input.jobs.map(source => {
+          const mapNode = run.value.map?.nodes.find(entry => entry.id === source.nodeId);
+          if (!mapNode || seen.has(mapNode.id)) throw new Error('爬塔批量节点不属于当前地图或重复');
+          if (mapNode.kind !== source.kind || mapNode.act !== source.act || mapNode.floor !== source.floor) {
+            throw new Error('爬塔批量节点与地图不一致');
+          }
+          if (source.revision !== Number(basedOnRevision)) throw new Error('爬塔批量节点 revision 不一致');
+          seen.add(mapNode.id);
+          return {
+            nodeId: mapNode.id,
+            requestId: String(source.requestId || '').trim(),
+            basedOnRevision: Number(source.revision),
+            kind: mapNode.kind,
+            act: mapNode.act,
+            floor: mapNode.floor,
+            contentSeed: Number(source.contentSeed),
+            rewardSeed: Number(source.rewardSeed),
+            difficultyMultiplier: Number(source.difficultyMultiplier),
+          };
+        });
+        if (jobs.some(job => !job.requestId)) throw new Error('爬塔批量节点 requestId 不能为空');
+      }
     }
 
     const request: TowerGenerationRequest = {
@@ -2225,11 +2299,13 @@ export class DesignAssistantController {
         max_chat_history: 0,
         json_schema: generationType === 'opening'
           ? createTowerOpeningJsonSchema()
-          : createTowerNodeJsonSchema(input.kind as RunNodeKind, {
-            nodeId,
-            act: nodeAct,
-            floor: nodeFloor,
-          }),
+          : generationType === 'batch'
+            ? createTowerNodeBatchJsonSchema(batchId!, jobs!)
+            : createTowerNodeJsonSchema(input.kind as RunNodeKind, {
+              nodeId,
+              act: nodeAct,
+              floor: nodeFloor,
+            }),
       },
     };
     return {
@@ -2237,6 +2313,7 @@ export class DesignAssistantController {
       request,
       basedOnRevision: Number(basedOnRevision),
       messageId,
+      ...(generationType === 'batch' ? { batchId, jobs } : {}),
       ...(generationType === 'node' ? {
         kind: input.kind as RunNodeKind,
         act: nodeAct,
@@ -2453,6 +2530,109 @@ export class DesignAssistantController {
         if (!candidate.ok) throw new Error(`开局事件提交后状态无效：${candidate.message}`);
         draft.stat_data.run = candidate.value;
         parsedResult = parsed;
+      } else if (generationType === 'batch') {
+        const jobs = normalized.jobs || [];
+        const batchId = normalized.batchId || request.requestId;
+        const validateOne = (candidate: TowerNodeResult, job: TowerGenerationJobDescriptor): void => {
+          const route = { id: job.nodeId, kind: job.kind, act: job.act, floor: job.floor };
+          if (isBattleRunNode(job.kind)) {
+            validateTowerBattleNodeForActivation(
+              draft.stat_data.battle,
+              candidate.payload?.battle,
+              candidate.reward,
+              route,
+            );
+          } else if (job.kind === 'event') {
+            validateTowerEventNodeForActivation(draft.stat_data.battle, candidate.payload?.event);
+          } else if (job.kind === 'shop' || job.kind === 'treasure') {
+            normalizeTowerReward(candidate.reward, draft.stat_data.battle);
+          }
+        };
+        const parseAndValidateBatch = (response: string): TowerNodeBatchResult => {
+          const candidate = parseTowerNodeBatchResult(response, batchId, jobs);
+          candidate.results.forEach((entry, index) => validateOne(entry, jobs[index]));
+          return candidate;
+        };
+        let parsed: TowerNodeBatchResult | null = null;
+        let structureError: unknown = null;
+        const maximumStructureRepairs = 2;
+        for (let repairIndex = 0; repairIndex <= maximumStructureRepairs; repairIndex += 1) {
+          try {
+            parsed = parseAndValidateBatch(result.response);
+            break;
+          } catch (error) {
+            structureError = error;
+            if (repairIndex >= maximumStructureRepairs) throw error;
+            const repairRequest: TowerGenerationRequest = {
+              ...request,
+              requestId: `${request.requestId}__structure_repair_${repairIndex + 1}`,
+              prompt: formatTowerNodeBatchStructureRepairPrompt(batchId, jobs, result.response, error),
+              maxAttempts: 1,
+              userExtra: {
+                ...(request.userExtra || {}),
+                mwg_tower_batch_structure_repair: true,
+                mwg_tower_batch_structure_repair_attempt: repairIndex + 1,
+              },
+            };
+            this.towerPreGenerationSnapshots.set(towerGenerationTaskKey(repairRequest), clone(draft));
+            result = await this.towerGenerationHost.generateNode(repairRequest);
+          }
+        }
+        if (!parsed) throw structureError || new Error('爬塔批量节点结构修复未返回可执行结果');
+
+        for (let index = 0; index < jobs.length; index += 1) {
+          const job = jobs[index];
+          let candidate = parsed.results[index];
+          if (isBattleRunNode(job.kind)) {
+            const nodeRequest: TowerGenerationRequest = {
+              ...request,
+              nodeId: job.nodeId,
+              requestId: job.requestId,
+              act: job.act,
+              floor: job.floor,
+              difficultyMultiplier: job.difficultyMultiplier,
+              generation: {
+                ...(request.generation || {}),
+                json_schema: createTowerNodeJsonSchema(job.kind, {
+                  nodeId: job.nodeId,
+                  act: job.act,
+                  floor: job.floor,
+                }),
+              },
+            };
+            candidate = await this.balanceTowerNodeResult(candidate, draft, {
+              generationType: 'node',
+              request: nodeRequest,
+              basedOnRevision: job.basedOnRevision,
+              kind: job.kind,
+              act: job.act,
+              floor: job.floor,
+              messageId,
+            });
+            validateOne(candidate, job);
+            parsed.results[index] = candidate;
+          }
+        }
+
+        for (let index = 0; index < jobs.length; index += 1) {
+          const job = jobs[index];
+          const currentRun = validateRunState(draft.stat_data.run);
+          if (!currentRun.ok) throw new Error(`爬塔状态无效：${currentRun.message}`);
+          const envelope = currentRun.value.nodeContent[job.nodeId];
+          // A route can change while a batch is in flight. Results for the
+          // discarded branch are intentionally ignored; still-reachable
+          // siblings commit together in the one MVU replacement below.
+          if (envelope?.phase === 'abandoned') continue;
+          const candidate = parsed.results[index];
+          commitTowerGenerationInStat(draft.stat_data, {
+            nodeId: job.nodeId,
+            requestId: job.requestId,
+            revision: job.basedOnRevision,
+            content: candidate,
+            ...(candidate.reward === undefined ? {} : { reward: candidate.reward }),
+          });
+        }
+        parsedResult = parsed;
       } else {
         const expectedNode = {
           nodeId: request.nodeId,
@@ -2658,6 +2838,23 @@ export class DesignAssistantController {
           const candidate = validateRunState({ ...run.value, opening: mutation.opening });
           if (!candidate.ok) throw new Error(`开局失败状态无效：${candidate.message}`);
           draft.stat_data.run = candidate.value;
+        } else if (generationType === 'batch') {
+          for (const job of normalized.jobs || []) {
+            const run = validateRunState(draft.stat_data.run);
+            if (!run.ok) throw new Error(`爬塔状态无效：${run.message}`);
+            const envelope = run.value.nodeContent[job.nodeId];
+            if (
+              envelope?.phase !== 'generating'
+              || envelope.requestId !== job.requestId
+              || envelope.basedOnRevision !== job.basedOnRevision
+            ) continue;
+            failTowerGenerationInStat(draft.stat_data, {
+              nodeId: job.nodeId,
+              requestId: job.requestId,
+              revision: job.basedOnRevision,
+              error: detail,
+            });
+          }
         } else {
           failTowerGenerationInStat(draft.stat_data, {
             nodeId: request.nodeId,

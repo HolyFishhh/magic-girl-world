@@ -61,6 +61,8 @@ import {
   migrateGameModeInStat,
   readGameMode,
   readGameModeLock,
+  MAX_TOWER_ITEM_SLOTS,
+  towerItemSlotsUsed,
   type GameMode,
 } from '../game-core';
 import { mountTowerApp, type TowerAppCallbacks, type TowerAppController } from '../tower/towerApp';
@@ -108,7 +110,6 @@ let __RUN_ERROR: string | null = null;
 let __INITIAL_TOWER_REPAIR_TIMER: ReturnType<typeof setTimeout> | null = null;
 let __INITIAL_TOWER_EXTENSION_WAIT_ATTEMPTS = 0;
 const __INITIAL_TOWER_REPAIR_FALLBACK_ATTEMPTS = new Map<string, number>();
-const __INITIAL_TOWER_REPAIR_FALLBACK_ISSUES = new Map<string, Array<{ path: string; code: string }>>();
 let __TOWER_MAP_APP: TowerAppController | null = null;
 let __stopLatestMessageGuard: (() => void) | null = null;
 let __disposeTowerGenerationListener: (() => void) | null = null;
@@ -1507,7 +1508,6 @@ async function requestInitialContentRepair(
 }
 
 const MAX_AUTOMATIC_INITIAL_TOWER_REPAIRS = 2;
-const MAX_AUTOMATIC_INITIAL_TOWER_REPAIR_CANDIDATES = 2;
 
 function stableRepairKeyHash(value: string): string {
   let hash = 2166136261;
@@ -1543,46 +1543,6 @@ function writeAutomaticRepairAttempts(key: string, count: number): void {
     window.sessionStorage?.setItem(key, String(count));
   } catch {
     // The fallback map still prevents an in-frame retry loop.
-  }
-}
-
-function automaticRepairCandidateIssueKey(key: string): string {
-  return `${key}:candidate-issues`;
-}
-
-function readAutomaticRepairCandidateIssues(key: string): Array<{ path: string; code: string; message: string }> {
-  const fallback = __INITIAL_TOWER_REPAIR_FALLBACK_ISSUES.get(key) || [];
-  try {
-    const parsed = JSON.parse(window.sessionStorage?.getItem(automaticRepairCandidateIssueKey(key)) || '[]');
-    if (!Array.isArray(parsed)) return fallback.map(issue => ({ ...issue, message: '' }));
-    return parsed
-      .filter(issue => issue && typeof issue.path === 'string' && typeof issue.code === 'string')
-      .slice(0, 8)
-      .map(issue => ({ path: issue.path, code: issue.code, message: '' }));
-  } catch {
-    return fallback.map(issue => ({ ...issue, message: '' }));
-  }
-}
-
-function writeAutomaticRepairCandidateIssues(
-  key: string,
-  issues: ReadonlyArray<{ path: string; code: string }>,
-): void {
-  const bounded = issues.slice(0, 8).map(issue => ({ path: issue.path, code: issue.code }));
-  __INITIAL_TOWER_REPAIR_FALLBACK_ISSUES.set(key, bounded);
-  try {
-    window.sessionStorage?.setItem(automaticRepairCandidateIssueKey(key), JSON.stringify(bounded));
-  } catch {
-    // The in-frame fallback still improves a manual retry when storage is denied.
-  }
-}
-
-function clearAutomaticRepairCandidateIssues(key: string): void {
-  __INITIAL_TOWER_REPAIR_FALLBACK_ISSUES.delete(key);
-  try {
-    window.sessionStorage?.removeItem(automaticRepairCandidateIssueKey(key));
-  } catch {
-    // Nothing else owns this diagnostic cache.
   }
 }
 
@@ -1883,6 +1843,70 @@ function renderTowerNodeContent(stat: any, run: RunState, active: boolean): bool
   });
 }
 
+function towerRarity(value: unknown): string {
+  const rarity = String(value || 'Common');
+  return ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Corrupt'].includes(rarity) ? rarity : 'Common';
+}
+
+function renderTowerPlayerSummary(stat: any, active: boolean): void {
+  const container = document.querySelector<HTMLElement>('.mwg-statusbar');
+  const panel = document.getElementById('tower-player-panel');
+  container?.classList.toggle('is-tower-mode', active);
+  if (!panel) return;
+  panel.style.display = active ? '' : 'none';
+  if (!active) return;
+
+  const battle = stat?.battle || {};
+  const core = battle.core || {};
+  const profession = readStatusProfession(stat?.status || {});
+  const setText = (id: string, value: unknown, fallback = '') => {
+    const element = document.getElementById(id);
+    if (element) element.textContent = String(value ?? '').trim() || fallback;
+  };
+  setText('tower-player-emoji', core.emoji, '✨');
+  setText('tower-player-profession', profession.name, '未命名角色');
+  setText('tower-player-ability', profession.ability, '能力会随起始牌组一同建立');
+  setText('tower-player-hp', `${core.hp ?? 0}/${core.max_hp ?? 0}`);
+  setText('tower-player-lust', `${core.lust ?? 0}/${core.max_lust ?? 0}`);
+  setText('tower-player-level', `LV ${battle.level ?? 1}`);
+  setText('tower-player-exp', battle.exp ?? 0);
+  setText('tower-player-removals', core.card_removal_count ?? 0);
+  setText('tower-player-item-slots', `${towerItemSlotsUsed(battle.items)}/${MAX_TOWER_ITEM_SLOTS}`);
+
+  const cards = migratePersistentRunDeck(normalizeOptionsList<Record<string, any>>(battle.cards));
+  const deckQuantity = cards.reduce((sum, card) => sum + Math.max(1, Number(card.quantity) || 1), 0);
+  setText('tower-player-deck-count', deckQuantity);
+  const deckRoot = document.getElementById('tower-player-deck');
+  if (deckRoot) {
+    deckRoot.innerHTML = cards.length
+      ? cards.map(card => {
+          const rarity = towerRarity(card.rarity);
+          const rules = contentRuleDescription(card, card.description || '查看卡牌效果');
+          return `<article class="tower-player-card" data-rarity="${rarity}"><header><strong>${escapeHtml(card.emoji || '🃏')} ${escapeHtml(card.name || card.id || '未命名卡牌')}</strong><em>${escapeHtml(rarity)} · ${escapeHtml(translateCardType(card.type || 'Skill'))} · ×${escapeHtml(card.quantity || 1)}</em></header><p>${escapeHtml(rules)}</p></article>`;
+        }).join('')
+      : '<p class="tower-player-empty">正在初始化起始牌组…</p>';
+  }
+
+  const renderResources = (rootId: string, values: Record<string, any>[], empty: string) => {
+    const root = document.getElementById(rootId);
+    if (!root) return;
+    root.innerHTML = values.length
+      ? values.map(value => `<article class="tower-player-resource"><header><strong>${escapeHtml(value.emoji || '✦')} ${escapeHtml(value.name || value.id || '未命名')}</strong>${value.count ? `<em>×${escapeHtml(value.count)}</em>` : ''}</header><p>${escapeHtml(contentRuleDescription(value, value.description || '效果见规则'))}</p></article>`).join('')
+      : `<p class="tower-player-empty">${escapeHtml(empty)}</p>`;
+  };
+  const artifacts = normalizeOptionsList<Record<string, any>>(battle.artifacts);
+  const items = normalizeOptionsList<Record<string, any>>(battle.items);
+  setText('tower-player-artifact-count', artifacts.length);
+  setText('tower-player-item-count', towerItemSlotsUsed(items));
+  renderResources('tower-player-artifacts', artifacts, '暂无遗物');
+  renderResources('tower-player-items', items, '暂无道具');
+  const abilities = normalizeOptionsList<Record<string, any>>(battle.player_abilities);
+  const lustEffect = battle.player_lust_effect && typeof battle.player_lust_effect === 'object'
+    ? [{ emoji: '💗', ...battle.player_lust_effect }]
+    : [];
+  renderResources('tower-player-effects', [...lustEffect, ...abilities], '暂无额外战斗能力');
+}
+
 function renderRunData(stat: any): void {
   const section = document.getElementById('run-section');
   const currentEl = document.getElementById('run-current');
@@ -2111,7 +2135,7 @@ function towerExtensionReadiness(): { ready: boolean; message: string } {
   if (!supported || capabilities.towerGeneration !== true || capabilities.towerCoordinator !== true) {
     return {
       ready: false,
-      message: `设计辅助器版本过低（当前 ${capabilities.version || '未知'}，至少需要 0.2.1）。`,
+      message: `设计辅助器版本过低（当前 ${capabilities.version || '未知'}，至少需要 0.2.2）。`,
     };
   }
   return { ready: true, message: '' };
@@ -2273,6 +2297,19 @@ async function loadGameData() {
     }
 
     if (!viewIsActive()) return;
+
+    const loadedRun = readRunState(rpgData);
+    const towerOnly = isLockedTowerMapRun(rpgData, loadedRun);
+    renderTowerPlayerSummary(rpgData, towerOnly);
+    if (towerOnly) {
+      // Tower mode is a self-contained single-floor game surface. Avoid the
+      // story-only NPC/faction/outfit renderers and their growing DOM cost.
+      if (!applyHistoricalReadOnlyMode()) renderActionArea();
+      renderRunData(rpgData);
+      startLatestMessageGuard();
+      maybeOpenTowerBattle(rpgData);
+      return;
+    }
 
     // 渲染各模块数据
     renderStatusData(rpgData);

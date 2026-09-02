@@ -8,12 +8,12 @@ require('tsconfig-paths/register');
 const tower = require('../src/game-core/towerRequest.ts');
 
 const job = {
-  nodeId: 'act-1-floor-1-col-1',
+  nodeId: 'act-1-floor-2-col-0',
   requestId: 'tower_1_1_test',
   basedOnRevision: 1,
   kind: 'battle',
   act: 1,
-  floor: 1,
+  floor: 2,
   contentSeed: 10,
   rewardSeed: 11,
   difficultyMultiplier: 1,
@@ -167,7 +167,11 @@ assert.equal(
   2,
 );
 assert.equal(tower.createTowerOpeningJsonSchema().value.properties.spec.const, tower.TOWER_OPENING_RESULT_SPEC);
-const battleSchema = tower.createTowerNodeJsonSchema('battle').value;
+const battleSchema = tower.createTowerNodeJsonSchema('battle', {
+  nodeId: job.nodeId,
+  act: job.act,
+  floor: job.floor,
+}).value;
 assert.equal(battleSchema.properties.kind.const, 'battle');
 assert.ok(battleSchema.required.includes('reward'));
 assert.deepEqual(battleSchema.properties.payload.required, ['battle']);
@@ -294,6 +298,48 @@ assert.throws(
   () => tower.parseTowerNodeResult(invalidRosterId, job),
   /payload is invalid/,
   'multi-enemy IDs with transport punctuation must be repaired before a node becomes ready',
+);
+
+const batchId = 'batch-current-window';
+const batchJobs = [job, eventJob];
+const batchPrompt = tower.formatTowerNodeBatchGenerationPrompt(batchId, batchJobs, {
+  completeMvuContext,
+  deckBalanceContext: '共享卡组强度预算',
+  enemyLineageContext: '共享敌人谱系',
+  customRequirements: '共享玩家要求',
+  difficultyPercent: 80,
+});
+assert.match(batchPrompt, /必须在这一次响应中全部生成/);
+assert.match(batchPrompt, /node_count=2/);
+assert.match(batchPrompt, /results 必须恰好 2 项/);
+assert.equal((batchPrompt.match(/LATEST_MVU_TAIL_IS_VISIBLE/g) || []).length, 1);
+const batchSchema = tower.createTowerNodeBatchJsonSchema(batchId, batchJobs).value;
+assert.equal(batchSchema.properties.batch_id.const, batchId);
+assert.equal(batchSchema.properties.results.minItems, 2);
+assert.equal(batchSchema.properties.results.maxItems, 2);
+assert.equal(batchSchema.properties.results.items.oneOf.length, 2);
+const battleEntry = JSON.parse(validBattle.slice('<TOWER_NODE_RESULT>'.length, -'</TOWER_NODE_RESULT>'.length));
+const eventEntry = JSON.parse(eventText.slice('<TOWER_NODE_RESULT>'.length, -'</TOWER_NODE_RESULT>'.length));
+const batchText = JSON.stringify({
+  spec: tower.TOWER_NODE_BATCH_RESULT_SPEC,
+  batch_id: batchId,
+  based_on_revision: job.basedOnRevision,
+  results: [eventEntry, battleEntry],
+});
+const parsedBatch = tower.parseTowerNodeBatchResult(batchText, batchId, batchJobs);
+assert.deepEqual(parsedBatch.results.map(entry => entry.node_id), batchJobs.map(entry => entry.nodeId));
+assert.throws(
+  () => tower.parseTowerNodeBatchResult(JSON.stringify({
+    spec: tower.TOWER_NODE_BATCH_RESULT_SPEC,
+    batch_id: batchId,
+    based_on_revision: job.basedOnRevision,
+    results: [battleEntry],
+  }), batchId, batchJobs),
+  /exactly 2 results/,
+);
+assert.match(
+  tower.formatTowerNodeBatchStructureRepairPrompt(batchId, batchJobs, '{}', new Error('missing event')),
+  /不得遗漏节点、增加节点、交换 request_id/,
 );
 
 console.log('tower node and opening prompt/result contracts passed');

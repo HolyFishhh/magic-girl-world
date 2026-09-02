@@ -442,7 +442,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
   };
 
   const installMvuMonitor = () => {
-    const requiredTowerExtensionVersion = '0.2.1';
+    const requiredTowerExtensionVersion = '0.2.2';
     const towerExtensionReleaseUrl = 'https://github.com/HolyFishhh/magic-girl-world/releases/latest';
     const compareSemanticVersions = (left: string, right: string): number => {
       const normalize = (value: string) => value.split(/[.-]/).map(part => Number.parseInt(part, 10) || 0);
@@ -1091,7 +1091,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
     <details class="mwg-settings-group" data-mwg-component="tower-install" open>
       <summary>爬塔组件需要安装</summary>
       <div class="mwg-group-body">
-        <div class="mwg-design-status-card"><strong data-mwg-tower-extension>需要设计辅助器 0.2.1 或更高版本</strong><small data-mwg-tower-requirement>安装完整扩展包后刷新酒馆；剧情模式不受影响。</small></div>
+        <div class="mwg-design-status-card"><strong data-mwg-tower-extension>需要设计辅助器 0.2.2 或更高版本</strong><small data-mwg-tower-requirement>安装完整扩展包后刷新酒馆；剧情模式不受影响。</small></div>
         <button class="mwg-extension-download" type="button" data-action="install-tower-extension">快捷安装爬塔组件</button>
         <a class="mwg-extension-download" href="${towerExtensionReleaseUrl}" target="_blank" rel="noopener noreferrer">安装失败时打开手动下载页面</a>
       </div>

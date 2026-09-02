@@ -36,7 +36,8 @@ const initialRunReference = initial.run;
 const lookahead = adapter.collectTowerLookahead(initial.run);
 assert.ok(lookahead.length >= 1 && lookahead.length <= 3);
 assert.equal(lookahead.length, 3);
-assert.deepEqual([...new Set(lookahead.map(node => node.depth))], [1]);
+assert.deepEqual([...new Set(lookahead.map(node => node.depth))], [1, 2]);
+assert.equal(lookahead.filter(node => node.depth === 1).length, 1, 'the unique reward start is the only depth-one node');
 assert.ok(lookahead.every(node => node.act === 1 && node.floor >= 1 && node.floor <= 3));
 assert.ok(lookahead.every(node => node.difficultyMultiplier === 1));
 assert.ok(initial.run.map.nodes.filter(node => node.act === 1).length > lookahead.length);
@@ -160,6 +161,14 @@ assert.throws(() => adapter.retryTowerNodeGenerationInStat(restored, retry.nodeI
 
 // Choosing a branch abandons only nodes no longer reachable in this act.
 const routeStat = towerStat(991);
+routeStat.run = {
+  ...routeStat.run,
+  opening: { ...routeStat.run.opening, phase: 'skipped' },
+};
+routeStat.run = runCore.completeRunNode(
+  runCore.enterRunNode(routeStat.run, routeStat.run.choices[0].id),
+  { outcome: 'cleared' },
+);
 const routeQueue = adapter.queueTowerLookaheadInStat(routeStat);
 const chosen = routeStat.run.choices[0];
 const sibling = routeStat.run.choices.find(choice => choice.id !== chosen.id);

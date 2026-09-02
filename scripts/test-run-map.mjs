@@ -60,8 +60,8 @@ assert.ok(
 );
 
 for (const act of first.acts) {
-  assert.equal(act.paths.length, 6, `act ${act.act} should expose six generated routes`);
-  assert.equal(new Set(act.startNodeIds).size, 6, `act ${act.act} should start in six distinct columns`);
+  assert.equal(act.paths.length, 5, `act ${act.act} should expose five branch tracks`);
+  assert.equal(act.startNodeIds.length, 1, `act ${act.act} should have one reward start`);
   assert.equal(act.nodes.find(node => node.id === act.bossNodeId)?.kind, 'boss');
   assert.equal(new Set(Object.values(act.seeds)).size, 4, `act ${act.act} should retain independent random streams`);
   for (const node of act.nodes) {
@@ -86,7 +86,8 @@ for (const act of first.acts) {
   }
 
   for (const node of act.nodes) {
-    if (node.floor === 1) assert.equal(node.kind, 'battle');
+    if (node.floor === 1) assert.equal(node.kind, 'treasure');
+    if (node.floor === 2) assert.equal(node.kind, 'battle');
     if (node.floor === 9) assert.equal(node.kind, 'treasure');
     if (node.floor === 15) assert.equal(node.kind, 'rest');
     if (node.floor === 16) assert.equal(node.kind, 'boss');
@@ -96,25 +97,34 @@ for (const act of first.acts) {
   }
 
   for (const [parentId, children] of outgoing) {
-    assert.equal(
-      new Set(children.map(childId => nodes.get(childId).kind)).size,
-      children.length,
-      `${parentId} has duplicate sibling room kinds`,
-    );
+    const parent = nodes.get(parentId);
+    const forcedChildren = children.every(childId => [1, 2, 9, 15, 16].includes(nodes.get(childId).floor));
+    if (!forcedChildren) {
+      assert.equal(
+        new Set(children.map(childId => nodes.get(childId).kind)).size,
+        children.length,
+        `${parentId} has duplicate sibling room kinds`,
+      );
+    }
+    assert.ok(children.length <= (parent.floor === 1 ? 3 : 2), `${parentId} has too many branches`);
   }
+
+  const startId = act.startNodeIds[0];
+  assert.equal(outgoing.get(startId)?.length, 3, `act ${act.act} reward start should open three main routes`);
 
   const special = new Set(['elite', 'rest', 'shop', 'treasure']);
   for (const edge of act.edges) {
     const from = nodes.get(edge.from);
     const to = nodes.get(edge.to);
     assert.equal(to.floor, from.floor + 1);
-    if (to.kind !== 'boss') {
+    if (to.kind !== 'boss' && from.id !== startId) {
       assert.ok(Math.abs(to.column - from.column) <= 1, `${edge.from}>${edge.to} moves more than one column`);
     }
     assert.ok(!(from.kind === to.kind && special.has(from.kind)), `${from.kind} repeats along ${edge.from}>${edge.to}`);
   }
 
   for (let floor = 1; floor <= 15; floor += 1) {
+    assert.ok(act.nodes.filter(node => node.floor === floor).length <= 5, `act ${act.act} floor ${floor} exceeds five branches`);
     const floorEdges = act.edges.filter(edge => nodes.get(edge.from).floor === floor);
     for (let left = 0; left < floorEdges.length; left += 1) {
       for (let right = left + 1; right < floorEdges.length; right += 1) {

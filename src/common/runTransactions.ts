@@ -4,9 +4,11 @@ import {
   applyPersistentDeckMutation,
   consumeTowerOpening,
   completeRunNode,
+  enterRunNode,
   migratePersistentRunDeck,
   planTowerEventOutcome,
   planTowerOpeningOutcome,
+  fitTowerRewardItems,
   planRestHeal,
   planShopPurchase,
   requireActiveRunNode,
@@ -658,29 +660,39 @@ export function settleTowerOpeningChoiceInStat(statValue: unknown, choiceId: str
   core.hp = hp;
   core.card_removal_count = cardRemovalCount;
 
+  const openingItems = fitTowerRewardItems(plan.reward.items, battle);
+
   reward.card = plan.reward.cards;
   reward.artifact = plan.reward.artifacts;
-  reward.item = plan.reward.items;
+  reward.item = openingItems;
   reward.limits = {
     cards: plan.reward.cards.length,
     artifacts: plan.reward.artifacts.length,
-    items: plan.reward.items.length,
+    items: openingItems.length,
   };
   reward.disabled_categories = [];
   const summary = applyRewardSelectionsToStat(draft, {
     cards: plan.reward.cards.map((_entry, index) => index),
     artifacts: plan.reward.artifacts.map((_entry, index) => index),
-    items: plan.reward.items.map((_entry, index) => index),
+    items: openingItems.map((_entry, index) => index),
   });
   persistentDeck(draft);
 
   const consumed = consumeTowerOpening(run.opening);
-  const nextRun: RunState = {
+  const openingRun: RunState = {
     ...run,
     gold,
     opening: consumed.opening,
     stateRevision: run.stateRevision + 1,
   };
+  const start = openingRun.choices.length === 1 ? openingRun.choices[0] : null;
+  if (!start || start.kind !== 'treasure' || start.floor !== 1) {
+    throw new Error('开局馈赠结算失败：地图没有唯一的奖励起点');
+  }
+  // The benefactor is the map's sole start/reward node. Resolve it in this
+  // same transaction so the next visible choices are the three main routes,
+  // rather than forcing the player to enter a duplicate treasure room.
+  const nextRun = completeRunNode(enterRunNode(openingRun, start.id), { outcome: 'cleared' });
   draft.run = nextRun;
   replaceRecord(stat, draft);
   return {

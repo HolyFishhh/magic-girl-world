@@ -2,9 +2,11 @@ import { createBattleRandomState, drawBattleRandom, stableHash32 } from './deter
 
 export const RUN_MAP_SCHEMA_VERSION = 1 as const;
 export const DEFAULT_RUN_MAP_ACTS = 3 as const;
-export const DEFAULT_RUN_MAP_COLUMNS = 7 as const;
+export const DEFAULT_RUN_MAP_COLUMNS = 5 as const;
 export const DEFAULT_RUN_MAP_ROUTE_FLOORS = 15 as const;
-export const DEFAULT_RUN_MAP_PATHS = 6 as const;
+/** Five route tracks form three visible main routes and may merge/split later. */
+export const DEFAULT_RUN_MAP_PATHS = 5 as const;
+export const DEFAULT_RUN_MAP_MAIN_ROUTES = 3 as const;
 export const RUN_MAP_ROOM_ASSIGNMENT_ATTEMPTS = 256 as const;
 
 export type RunMapSeed = number | string;
@@ -41,7 +43,7 @@ export interface RunMapAct {
   roomAssignmentSeed: number;
   nodes: RunMapNode[];
   edges: RunMapEdge[];
-  /** Six independently generated routes. Shared ids represent route merges. */
+  /** Five route tracks carried by three main entrances. Shared ids represent route merges. */
   paths: string[][];
   startNodeIds: string[];
   bossNodeId: string;
@@ -183,28 +185,36 @@ function chooseNextColumns(current: readonly number[], targetFloor: number, rand
   // These forced floors share one room kind, so merged paths may not split into same-kind siblings here.
   if (targetFloor === 9 || targetFloor === 15) return [...current];
 
-  let fallback: number[] | undefined;
+  let fallback = [...current];
   for (let attempt = 0; attempt < 32; attempt += 1) {
     const proposed = current
       .map(column => Math.max(0, Math.min(DEFAULT_RUN_MAP_COLUMNS - 1, column + random.integer(3) - 1)))
       .sort((left, right) => left - right);
-    fallback ??= proposed;
-    if (new Set(proposed).size >= 4) return proposed;
-    if (new Set(proposed).size > new Set(fallback).size) fallback = proposed;
+    const outgoing = new Map<number, Set<number>>();
+    current.forEach((column, index) => {
+      const targets = outgoing.get(column) ?? new Set<number>();
+      targets.add(proposed[index]);
+      outgoing.set(column, targets);
+    });
+    const respectsBinaryBranches = [...outgoing.values()].every(targets => targets.size <= 2);
+    if (respectsBinaryBranches && new Set(proposed).size >= 3) return proposed;
+    if (respectsBinaryBranches && new Set(proposed).size > new Set(fallback).size) fallback = proposed;
   }
-  return fallback ?? [...current];
+  return fallback;
 }
 
 function generateActTopology(act: number, topologySeed: number): GeneratedTopology {
   const random = createRandomSource(topologySeed);
-  const omittedStartColumn = random.integer(DEFAULT_RUN_MAP_COLUMNS);
-  const positions = Array.from({ length: DEFAULT_RUN_MAP_COLUMNS }, (_, column) => column).filter(
-    column => column !== omittedStartColumn,
-  );
-  const pathColumns = positions.map(column => [column]);
-  let current = positions;
+  const startColumn = Math.floor(DEFAULT_RUN_MAP_COLUMNS / 2);
+  const startId = nodeId(act, 1, startColumn);
+  // Three main entrances (left / centre / right) are represented by five
+  // tracks. Duplicate tracks may separate later, which creates optional
+  // branches without allowing the map to grow exponentially.
+  const mainRouteColumns = [0, 0, startColumn, DEFAULT_RUN_MAP_COLUMNS - 1, DEFAULT_RUN_MAP_COLUMNS - 1];
+  const pathColumns = mainRouteColumns.map(column => [startColumn, column]);
+  let current = mainRouteColumns;
 
-  for (let floor = 2; floor <= DEFAULT_RUN_MAP_ROUTE_FLOORS; floor += 1) {
+  for (let floor = 3; floor <= DEFAULT_RUN_MAP_ROUTE_FLOORS; floor += 1) {
     const next = chooseNextColumns(current, floor, random);
     next.forEach((column, index) => pathColumns[index].push(column));
     current = next;
@@ -216,6 +226,7 @@ function generateActTopology(act: number, topologySeed: number): GeneratedTopolo
   const bossColumn = Math.floor(DEFAULT_RUN_MAP_COLUMNS / 2);
   const bossNodeId = nodeId(act, bossFloor, bossColumn);
   topologyNodes.set(bossNodeId, { id: bossNodeId, act, floor: bossFloor, column: bossColumn });
+  topologyNodes.set(startId, { id: startId, act, floor: 1, column: startColumn });
 
   const paths = pathColumns.map(columns => {
     const path = columns.map((column, index) => {
@@ -251,13 +262,14 @@ function generateActTopology(act: number, topologySeed: number): GeneratedTopolo
     nodes,
     edges,
     paths,
-    startNodeIds: [...new Set(paths.map(path => path[0]))],
+    startNodeIds: [startId],
     bossNodeId,
   };
 }
 
 function forcedKind(floor: number): RunMapNodeKind | undefined {
-  if (floor === 1) return 'battle';
+  if (floor === 1) return 'treasure';
+  if (floor === 2) return 'battle';
   if (floor === 9) return 'treasure';
   if (floor === 15) return 'rest';
   if (floor === 16) return 'boss';
@@ -471,7 +483,7 @@ export function validateRunMap(map: Omit<RunMap, 'validation'> | RunMap): RunMap
       recordError(errors, Boolean(to), `edge target is missing: ${edge.to}`);
       if (!from || !to) continue;
       recordError(errors, to.floor === from.floor + 1, `edge ${edgeKey(edge.from, edge.to)} skips a floor`);
-      if (to.kind !== 'boss') {
+      if (to.kind !== 'boss' && from.id !== act.startNodeIds[0]) {
         recordError(
           errors,
           Math.abs(to.column - from.column) <= 1,
@@ -507,10 +519,40 @@ export function validateRunMap(map: Omit<RunMap, 'validation'> | RunMap): RunMap
 
     for (const [parentId, children] of outgoing) {
       const childKinds = children.map(childId => nodesById.get(childId)!.kind);
+      const childrenUseForcedKind = children.every(childId => Boolean(forcedKind(nodesById.get(childId)!.floor)));
+      if (!childrenUseForcedKind) {
+        recordError(
+          errors,
+          new Set(childKinds).size === childKinds.length,
+          `siblings from ${parentId} must use distinct room kinds`,
+        );
+      }
+    }
+
+    const startNode = act.nodes.find(node => node.id === act.startNodeIds[0]);
+    const bossNodes = act.nodes.filter(node => node.kind === 'boss');
+    recordError(errors, act.startNodeIds.length === 1, `act ${act.act} must have exactly one start node`);
+    recordError(errors, Boolean(startNode), `act ${act.act} start node is missing`);
+    if (startNode) {
+      recordError(errors, startNode.floor === 1, `act ${act.act} start node must be on floor 1`);
+      recordError(errors, startNode.kind === 'treasure', `act ${act.act} start node must be a reward room`);
       recordError(
         errors,
-        new Set(childKinds).size === childKinds.length,
-        `siblings from ${parentId} must use distinct room kinds`,
+        (outgoing.get(startNode.id)?.length ?? 0) === DEFAULT_RUN_MAP_MAIN_ROUTES,
+        `act ${act.act} start node must connect to three main routes`,
+      );
+    }
+    recordError(errors, bossNodes.length === 1, `act ${act.act} must have exactly one boss node`);
+    for (const node of act.nodes) {
+      const childCount = outgoing.get(node.id)?.length ?? 0;
+      const maximum = node.id === startNode?.id ? DEFAULT_RUN_MAP_MAIN_ROUTES : 2;
+      recordError(errors, childCount <= maximum, `node ${node.id} has too many outgoing branches`);
+    }
+    for (let floor = 1; floor <= DEFAULT_RUN_MAP_ROUTE_FLOORS; floor += 1) {
+      recordError(
+        errors,
+        act.nodes.filter(node => node.floor === floor).length <= DEFAULT_RUN_MAP_COLUMNS,
+        `act ${act.act} floor ${floor} exceeds five branches`,
       );
     }
 
@@ -543,7 +585,7 @@ export function validateRunMap(map: Omit<RunMap, 'validation'> | RunMap): RunMap
         recordError(errors, (incoming.get(node.id)?.length ?? 0) > 0, `node ${node.id} has no parent`);
     });
 
-    recordError(errors, act.paths.length === DEFAULT_RUN_MAP_PATHS, `act ${act.act} must contain six routes`);
+    recordError(errors, act.paths.length === DEFAULT_RUN_MAP_PATHS, `act ${act.act} must contain five route tracks`);
     act.paths.forEach((path, index) => {
       recordError(
         errors,

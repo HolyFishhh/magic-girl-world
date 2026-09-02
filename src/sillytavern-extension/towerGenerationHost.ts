@@ -322,7 +322,9 @@ export class TowerGenerationHost {
     const fingerprint = towerGenerationTaskKey(key);
     const record = this.records.get(fingerprint);
     if (!record || !record.progress.eventDispatched || record.progress.persistence) return false;
-    return this.records.delete(fingerprint);
+    const deleted = this.records.delete(fingerprint);
+    if (deleted) this.queue.forgetSettledRequest(key);
+    return deleted;
   }
 
   /** Drop terminal request text after the run state has already preserved the result. */
@@ -339,6 +341,7 @@ export class TowerGenerationHost {
         discarded += 1;
       }
     }
+    this.queue.forgetSettled(chatId);
     return discarded;
   }
 

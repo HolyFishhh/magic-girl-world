@@ -158,7 +158,15 @@ const enterRollbackHarness = createHarness({ run: structuredClone(awaiting) }, {
 await assert.rejects(enterRollbackHarness.host.enterRunNode(choice, 'route prompt'), /simulated send failure/);
 assert.deepEqual(enterRollbackHarness.stat().run, awaiting, 'failed message creation restores the awaiting route');
 
-const towerAwaiting = core.createRunState({ seed: 4242 });
+let towerAwaiting = core.createRunState({ seed: 4242 });
+towerAwaiting = {
+  ...towerAwaiting,
+  opening: { ...towerAwaiting.opening, phase: 'skipped' },
+};
+towerAwaiting = core.completeRunNode(
+  core.enterRunNode(towerAwaiting, towerAwaiting.choices[0].id),
+  { outcome: 'cleared' },
+);
 const towerChoice = towerAwaiting.choices[0];
 const towerHarness = createHarness({
   game_mode: 'tower',
@@ -189,7 +197,15 @@ await assert.rejects(
 assert.deepEqual(towerRollbackHarness.stat().run, towerAwaiting, 'failed tower continuation restores the whole DAG');
 
 function readyTowerBattleStat() {
-  const run = core.createRunState({ seed: 5151 });
+  let run = core.createRunState({ seed: 5151 });
+  run = {
+    ...run,
+    opening: { ...run.opening, phase: 'skipped' },
+  };
+  run = core.completeRunNode(
+    core.enterRunNode(run, run.choices[0].id),
+    { outcome: 'cleared' },
+  );
   const choice = run.choices[0];
   const stat = {
     game_mode: 'tower',

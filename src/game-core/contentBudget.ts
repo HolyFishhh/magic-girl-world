@@ -1,6 +1,7 @@
 import type { BattleRouteContext } from './battleContract';
 import type { RunNodeKind } from './runState';
 import { normalizeRunAct, recommendRunNodePacing, type RunPacingContext } from './runPacing';
+import { stableHash32 } from './deterministicRandom';
 
 export interface BattleRewardBudget {
   cards: { candidates: number; pick: number; rarities: string[] };
@@ -38,7 +39,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** Build the fixed battle reward budget without asking callers to invent pacing fields. */
 export function recommendTowerBattleRewardBudget(context: TowerBattleRewardContext): BattleRewardBudget {
   const danger = context.kind === 'boss' ? 3 : context.kind === 'elite' ? 2 : 1;
-  return recommendBattleRewardBudget({
+  const budget = recommendBattleRewardBudget({
     nodeId: context.nodeId,
     kind: context.kind,
     act: context.act,
@@ -47,6 +48,18 @@ export function recommendTowerBattleRewardBudget(context: TowerBattleRewardConte
     floorsPerAct: context.floorsPerAct ?? 16,
     danger,
   });
+  const chance = context.kind === 'boss' ? 0 : context.kind === 'elite' ? 0.5 : 0.4;
+  const roll = stableHash32({
+    namespace: 'mwg-tower-item-drop-v1',
+    nodeId: context.nodeId,
+    kind: context.kind,
+    act: context.act,
+    floor: context.floor,
+  }) / 0x1_0000_0000;
+  return {
+    ...budget,
+    items: roll < chance ? { candidates: 1, pick: 1 } : null,
+  };
 }
 
 /**

@@ -9,8 +9,10 @@ import { planTowerOpeningOutcome } from './towerOpeningOutcome';
 import { planTowerEventOutcome } from './towerEventOutcome';
 
 export const TOWER_NODE_RESULT_SPEC = 'mwg.tower-node-result/v1' as const;
+export const TOWER_NODE_BATCH_RESULT_SPEC = 'mwg.tower-node-batch-result/v1' as const;
 export const TOWER_OPENING_RESULT_SPEC = 'mwg.tower-opening-result/v1' as const;
 export const TOWER_NODE_RESULT_TAG = 'TOWER_NODE_RESULT' as const;
+export const TOWER_NODE_BATCH_RESULT_TAG = 'TOWER_NODE_BATCH_RESULT' as const;
 export const TOWER_OPENING_RESULT_TAG = 'TOWER_OPENING_RESULT' as const;
 
 export interface TowerGenerationJobDescriptor {
@@ -48,6 +50,13 @@ export interface TowerNodeResult {
   reward?: Record<string, unknown>;
   /** Program-authored after parsing; model output is never trusted for this field. */
   program_balance?: TowerProgramBalanceAudit;
+}
+
+export interface TowerNodeBatchResult {
+  spec: typeof TOWER_NODE_BATCH_RESULT_SPEC;
+  batch_id: string;
+  based_on_revision: number;
+  results: TowerNodeResult[];
 }
 
 export interface TowerProgramBalanceAudit {
@@ -205,6 +214,54 @@ export function formatTowerNodeGenerationPrompt(
   return lines.join('\n');
 }
 
+/** Generate the complete currently reachable window in one model call. */
+export function formatTowerNodeBatchGenerationPrompt(
+  batchId: string,
+  jobs: readonly TowerGenerationJobDescriptor[],
+  context: TowerGenerationContext,
+): string {
+  if (!batchId.trim()) throw new Error('tower batch id is invalid');
+  if (jobs.length < 1 || jobs.length > 3) throw new Error('tower batch must contain one to three nodes');
+  const revisions = new Set(jobs.map(job => job.basedOnRevision));
+  if (revisions.size !== 1) throw new Error('tower batch revisions must match');
+  const lines = [
+    '[爬塔后台批量节点生成]',
+    `batch_id=${batchId} revision=${jobs[0].basedOnRevision} node_count=${jobs.length}`,
+    '以下节点属于玩家当前真正可达的预生成窗口。必须在这一次响应中全部生成，不要拆成多次请求，也不要生成清单以外的地图节点。',
+    ...jobs.map((job, index) => [
+      `[节点 ${index + 1}] node_id=${job.nodeId} request_id=${job.requestId}`,
+      `act=${job.act} floor=${job.floor} kind=${job.kind}`,
+      `content_seed=${job.contentSeed} reward_seed=${job.rewardSeed} 本幕倍率=${job.difficultyMultiplier}`,
+      resultContractFor(job),
+    ].join('\n')),
+    `玩家难度=${requireDifficulty(context.difficultyPercent)}%`,
+    '每个结果的 title 和 narrative 使用中文，只描述自己的节点；不得改变地图、模式、run、玩家已有内容或其他节点。',
+  ];
+  if (jobs.some(job => isBattleRunNode(job.kind))) lines.push(towerBattleDslContract());
+  if (jobs.some(job => job.kind !== 'rest')) lines.push(towerRewardDslContract());
+  const completeMvu = compactContext(context.completeMvuContext, 32_000);
+  const world = completeMvu ? null : compactContext(context.worldContext, 8000);
+  const player = completeMvu ? null : compactContext(context.playerContext, 10_000);
+  const balance = compactContext(context.deckBalanceContext, 3000);
+  const lineage = compactContext(context.enemyLineageContext, 1600);
+  const custom = compactContext(context.customRequirements, 1200);
+  if (completeMvu) lines.push(`[当前完整游戏事实]\n${completeMvu}`);
+  else {
+    if (world) lines.push(`[世界与当前进度]\n${world}`);
+    if (player) lines.push(`[玩家状态]\n${player}`);
+  }
+  if (balance) lines.push(`[构筑与数值预算]\n${balance}`);
+  if (lineage) lines.push(`[敌人谱系连续性]\n${lineage}`);
+  if (custom) lines.push(`[玩家额外要求]\n${custom}`);
+  lines.push(
+    '只输出一个 JSON 对象，不要使用 XML 标签或 Markdown 代码块。',
+    `顶层固定为 spec="${TOWER_NODE_BATCH_RESULT_SPEC}"、batch_id、based_on_revision、results。`,
+    `results 必须恰好 ${jobs.length} 项，每个指定 node_id/request_id 各出现一次，并保持清单顺序；每项仍使用 spec="${TOWER_NODE_RESULT_SPEC}" 的完整节点结构。`,
+    '不要输出解释、思考过程、变量命令、额外正文或第二个对象。',
+  );
+  return lines.join('\n');
+}
+
 /** One optional, bounded repair after deterministic numeric calibration fails. */
 export function formatTowerBattleBalanceRepairPrompt(
   result: TowerNodeResult,
@@ -267,6 +324,30 @@ export function formatTowerNodeStructureRepairPrompt(
   ].join('\n');
 }
 
+export function formatTowerNodeBatchStructureRepairPrompt(
+  batchId: string,
+  jobs: readonly TowerGenerationJobDescriptor[],
+  response: string,
+  error: unknown,
+): string {
+  const detail = error instanceof Error ? error.message : String(error);
+  return [
+    '[爬塔后台批量节点结构修复]',
+    `batch_id=${batchId} revision=${jobs[0]?.basedOnRevision ?? 0} node_count=${jobs.length}`,
+    `上一份批量结果未通过可执行校验：${detail.slice(0, 1200)}`,
+    ...jobs.map(job => [
+      `node_id=${job.nodeId} request_id=${job.requestId} kind=${job.kind} act=${job.act} floor=${job.floor}`,
+      resultContractFor(job),
+    ].join('\n')),
+    ...(jobs.some(job => isBattleRunNode(job.kind)) ? [towerBattleDslContract()] : []),
+    ...(jobs.some(job => job.kind !== 'rest') ? [towerRewardDslContract()] : []),
+    '保留原有题材、身份、标题、叙事、机制意图和数值，只修正缺失、错位、非法或不完整的结构。',
+    '不得遗漏节点、增加节点、交换 request_id，也不得修改玩家、地图、模式、run 或请求标识。',
+    `原始响应：${String(response || '').slice(0, 60_000)}`,
+    '只输出一个满足本次 JSON Schema 的批量 JSON 对象，不输出解释、Markdown、UpdateVariable 或第二个结果。',
+  ].join('\n');
+}
+
 /** Bounded repair for a structurally invalid opening gift response. */
 export function formatTowerOpeningStructureRepairPrompt(
   job: Pick<TowerOpeningPromptInput, 'requestId' | 'basedOnRevision'>,
@@ -302,8 +383,10 @@ export function formatTowerOpeningGenerationPrompt(input: TowerOpeningPromptInpu
     `request_id=${input.requestId} revision=${input.basedOnRevision} seed=${input.seed}`,
     `玩家难度=${requireDifficulty(input.context.difficultyPercent)}%`,
     '根据当前世界、角色与卡组创造一位适合开场的馈赠者或引路存在，不绑定固定身份。',
+    'narrative 要承接玩家已经进入的处境，并让馈赠自然成为连续战斗旅程的起点；只限定这一叙事架构，不限定文风或长度。',
     '提供二至四个中文选择；可以无条件馈赠，也可以让玩家用明确代价换取更高收益。所有结果必须结构化且可由程序一次结算。',
     '每个 outcome 只允许 hp、max_hp、gold、card_removals、reward；数值都是相对变化。reward 只允许 cards、artifacts、items 数组，可省略不变化的字段。',
+    '爬塔模式最多携带三个战斗道具；根据当前事实中的 battle.items 控制馈赠道具数量，不能让任一选项结算后超过三个。',
     '不要修改地图、模式和 run，不要展开后续节点；这里的 narrative 不覆盖剧情模型所用的原预设。',
   ];
   const completeMvu = compactContext(input.context.completeMvuContext, 32_000);
@@ -762,6 +845,48 @@ export function createTowerNodeJsonSchema(kind: RunNodeKind, scope: Partial<Pick
   };
 }
 
+export function createTowerNodeBatchJsonSchema(
+  batchId: string,
+  jobs: readonly TowerGenerationJobDescriptor[],
+): TowerJsonSchema {
+  if (!batchId.trim()) throw new Error('tower batch id is invalid');
+  if (jobs.length < 1 || jobs.length > 3) throw new Error('tower batch must contain one to three nodes');
+  const nodeSchemas = jobs.map(job => {
+    const value = structuredClone(createTowerNodeJsonSchema(job.kind, {
+      nodeId: job.nodeId,
+      act: job.act,
+      floor: job.floor,
+    }).value) as Record<string, any>;
+    value.properties.node_id = { type: 'string', const: job.nodeId };
+    value.properties.request_id = { type: 'string', const: job.requestId };
+    value.properties.based_on_revision = { type: 'integer', const: job.basedOnRevision };
+    return value;
+  });
+  return {
+    name: 'mwg_tower_node_batch_result',
+    description: '魔法少女世界爬塔模式当前可达窗口的批量节点结果',
+    strict: false,
+    value: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        spec: { type: 'string', const: TOWER_NODE_BATCH_RESULT_SPEC },
+        batch_id: { type: 'string', const: batchId },
+        based_on_revision: { type: 'integer', const: jobs[0].basedOnRevision },
+        results: {
+          type: 'array',
+          minItems: jobs.length,
+          maxItems: jobs.length,
+          items: {
+            oneOf: nodeSchemas,
+          },
+        },
+      },
+      required: ['spec', 'batch_id', 'based_on_revision', 'results'],
+    },
+  };
+}
+
 function unwrapJsonFence(text: string): string {
   const trimmed = text.trim();
   const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
@@ -918,6 +1043,48 @@ export function parseTowerNodeResult(
   }
   delete parsed.program_balance;
   return parsed;
+}
+
+export function parseTowerNodeBatchResult(
+  text: string,
+  batchId: string,
+  jobs: readonly TowerGenerationJobDescriptor[],
+): TowerNodeBatchResult {
+  if (jobs.length < 1 || jobs.length > 3) throw new Error('tower batch must contain one to three nodes');
+  const expectedRevision = jobs[0].basedOnRevision;
+  const value = parseTaggedJson(text, TOWER_NODE_BATCH_RESULT_TAG, candidate =>
+    isRecord(candidate)
+    && candidate.spec === TOWER_NODE_BATCH_RESULT_SPEC
+    && candidate.batch_id === batchId
+    && candidate.based_on_revision === expectedRevision,
+  );
+  if (!isRecord(value) || value.spec !== TOWER_NODE_BATCH_RESULT_SPEC) {
+    throw new Error('tower node batch result spec is invalid');
+  }
+  if (value.batch_id !== batchId || value.based_on_revision !== expectedRevision) {
+    throw new Error('tower node batch scope is stale or mismatched');
+  }
+  if (!Array.isArray(value.results) || value.results.length !== jobs.length) {
+    throw new Error(`tower node batch must contain exactly ${jobs.length} results`);
+  }
+  const rawByNodeId = new Map<string, unknown>();
+  for (const entry of value.results) {
+    if (!isRecord(entry) || typeof entry.node_id !== 'string' || rawByNodeId.has(entry.node_id)) {
+      throw new Error('tower node batch contains an invalid or duplicate node result');
+    }
+    rawByNodeId.set(entry.node_id, entry);
+  }
+  const results = jobs.map(job => {
+    const entry = rawByNodeId.get(job.nodeId);
+    if (!entry) throw new Error(`tower node batch is missing ${job.nodeId}`);
+    return parseTowerNodeResult(JSON.stringify(entry), job);
+  });
+  return {
+    spec: TOWER_NODE_BATCH_RESULT_SPEC,
+    batch_id: batchId,
+    based_on_revision: expectedRevision,
+    results,
+  };
 }
 
 export function parseTowerOpeningResult(

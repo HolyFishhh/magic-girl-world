@@ -212,6 +212,14 @@ export class TowerGenerationQueue {
     }
   }
 
+  /** Release one terminal dedupe entry after its result is durable elsewhere. */
+  public forgetSettledRequest(key: TowerGenerationTaskKey): boolean {
+    const fingerprint = towerGenerationTaskKey(key);
+    const job = this.jobs.get(fingerprint);
+    if (!job || !['completed', 'failed', 'cancelled'].includes(job.phase)) return false;
+    return this.jobs.delete(fingerprint);
+  }
+
   public getStatus(key: TowerGenerationTaskKey): TowerGenerationQueueStatus | null {
     const job = this.jobs.get(towerGenerationTaskKey(key));
     return job ? this.snapshot(job) : null;

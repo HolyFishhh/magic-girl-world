@@ -2,6 +2,7 @@
 import type { CharacterConfig } from '../types';
 import {
   ensureMvuRuntimeReady,
+  getCurrentChatMessageText,
   isCurrentMessageLatest,
   rerenderHistoricalMessageForDepth,
   updateCurrentChatVariablesWith,
@@ -27,6 +28,7 @@ export class CharacterCreator {
   private userName = '{{user}}';
   private isCreating = false;
   private isHistorical = false;
+  private openingMode: GameMode | null = null;
   private readonly continuationHost = TavernContinuationHost.getInstance();
   private currentConfig: Partial<CharacterConfig> = { mode: 'story' };
 
@@ -257,11 +259,11 @@ export class CharacterCreator {
   }
 
   private resetForm(): void {
-    this.currentConfig = { mode: 'story' };
+    this.currentConfig = { mode: this.openingMode ?? 'story' };
     this.container.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('[data-config-field]').forEach(field => {
       field.value = '';
     });
-    this.selectMode('story');
+    this.selectMode(this.openingMode ?? 'story');
     this.container
       .querySelectorAll<HTMLButtonElement>('.preset-card[data-preset-field]')
       .forEach(card => card.classList.remove('selected'));
@@ -279,6 +281,13 @@ export class CharacterCreator {
   }
 
   private renderDefaultState(): void {
+    try {
+      const greeting = getCurrentChatMessageText();
+      if (greeting.includes('[爬塔模式开场]')) this.openingMode = 'tower';
+      else if (greeting.includes('[剧情模式开场]')) this.openingMode = 'story';
+    } catch {
+      this.openingMode = null;
+    }
     for (const field of ['world', 'card']) {
       const target = this.container.querySelector<HTMLTextAreaElement>(`[data-config-field="${field}"]`);
       const selected = this.container.querySelector<HTMLButtonElement>(
@@ -286,6 +295,14 @@ export class CharacterCreator {
       );
       if (target && !target.value.trim() && selected?.dataset.value) target.value = selected.dataset.value;
     }
-    this.selectMode(normalizeGameMode(this.currentConfig.mode) ?? 'story');
+    this.selectMode(this.openingMode ?? normalizeGameMode(this.currentConfig.mode) ?? 'story');
+    if (this.openingMode) {
+      this.container.querySelectorAll<HTMLButtonElement>('.mode-card').forEach(card => {
+        card.disabled = true;
+        card.hidden = normalizeGameMode(card.dataset.mode) !== this.openingMode;
+      });
+      const section = this.container.querySelector<HTMLElement>('[data-mode-section]');
+      if (section) section.dataset.lockedByGreeting = this.openingMode;
+    }
   }
 }

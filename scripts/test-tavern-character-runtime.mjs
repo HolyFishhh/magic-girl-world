@@ -285,7 +285,7 @@ context.window.parent.MagicGirlDesignAssistant = {
   getTowerCoordinatorStatus: () => ({ phase: 'waiting', message: '等待路线选择' }),
   getCapabilities: () => ({
     spec: 'mwg.design-assistant/v1',
-    version: '0.2.1',
+    version: '0.2.2',
     towerGeneration: true,
     towerCoordinator: true,
     towerArchive: true,
@@ -313,7 +313,7 @@ assert.equal(towerArchiveCalls, 1);
 assert.equal(sharedRuntime.getTowerCoordinatorStatus().phase, 'waiting');
 assert.deepEqual(JSON.parse(JSON.stringify(sharedRuntime.getDesignAssistantCapabilities())), {
   spec: 'mwg.design-assistant/v1',
-  version: '0.2.1',
+  version: '0.2.2',
   towerGeneration: true,
   towerCoordinator: true,
   towerArchive: true,

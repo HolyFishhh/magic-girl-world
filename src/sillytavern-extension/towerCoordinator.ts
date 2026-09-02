@@ -1,7 +1,8 @@
 import {
-  formatTowerNodeGenerationPrompt,
+  formatTowerNodeBatchGenerationPrompt,
   formatTowerOpeningGenerationPrompt,
   type TowerGenerationContext,
+  type TowerGenerationJobDescriptor,
 } from '../game-core/towerRequest';
 import { validateRunState, type RunState } from '../game-core/runState';
 import {
@@ -14,6 +15,7 @@ import {
   queueTowerLookaheadInStat,
   recoverTowerGenerationsInStat,
   retryTowerNodeGenerationInStat,
+  type TowerGenerationRequest as TowerStateGenerationRequest,
 } from '../runtime/towerStateAdapter';
 import type {
   DesignAssistantChatState,
@@ -31,8 +33,10 @@ export interface TowerCoordinatorScope {
 }
 
 export interface TowerCoordinatorGenerationRequest {
-  generationType?: 'node' | 'opening';
+  generationType?: 'node' | 'opening' | 'batch';
   nodeId?: string;
+  batchId?: string;
+  jobs?: TowerStateGenerationRequest[];
   requestId: string;
   basedOnRevision?: number;
   revision?: number;
@@ -138,6 +142,17 @@ export function buildTowerSemanticMvuContext(mvuData: Record<string, any>): Reco
   delete stat.reward;
   delete stat.run_node_reward;
   delete stat.run_reward_reroll;
+  // Tower mode does not run the story-mode relationship simulation. Keep only
+  // compact player/location facts that help author the next encounter.
+  delete stat.npcs;
+  delete stat.factions;
+  if (isRecord(stat.status)) {
+    stat.status = {
+      time: stat.status.time,
+      location: stat.status.location,
+      profession: clone(stat.status.profession),
+    };
+  }
 
   if (isRecord(stat.run)) {
     const run = stat.run;
@@ -422,17 +437,18 @@ export class TowerLookaheadCoordinator {
   private async generateNextLookahead(scope: TowerCoordinatorScope, epoch: number): Promise<void> {
     const draft = clone(scope.mvuData);
     const queued = queueTowerLookaheadInStat(draft.stat_data, 3, { retryFailed: false });
-    const claimed = claimQueuedTowerGenerationsInStat(draft.stat_data, 1);
+    const claimed = claimQueuedTowerGenerationsInStat(draft.stat_data, 3);
     if (queued.changed || claimed.changed) {
       await this.ports.replaceLatest(draft, scope.chatId, scope.messageId);
       if (epoch !== this.epoch) return;
     }
-    const request = claimed.requests[0];
-    if (!request) {
+    const requests = claimed.requests;
+    if (!requests.length) {
       this.setStatus('waiting', '当前可达节点均已准备或等待手动重试');
       return;
     }
-    const prompt = formatTowerNodeGenerationPrompt({
+    const batchId = this.batchIdFor(requests);
+    const jobs: TowerGenerationJobDescriptor[] = requests.map(request => ({
       nodeId: request.nodeId,
       requestId: request.requestId,
       basedOnRevision: request.revision,
@@ -442,18 +458,21 @@ export class TowerLookaheadCoordinator {
       contentSeed: request.contentSeed,
       rewardSeed: request.rewardSeed,
       difficultyMultiplier: request.difficultyMultiplier,
-    }, buildTowerGenerationContext({ ...scope, mvuData: draft }));
-    this.setStatus('lookahead', `正在预生成第 ${request.floor} 层 ${request.kind} 节点`);
+    }));
+    const prompt = formatTowerNodeBatchGenerationPrompt(
+      batchId,
+      jobs,
+      buildTowerGenerationContext({ ...scope, mvuData: draft }),
+    );
+    this.setStatus('lookahead', `正在一次准备 ${requests.length} 个可达节点`);
     const generationRequest: TowerCoordinatorGenerationRequest = {
-      generationType: 'node',
-      nodeId: request.nodeId,
-      requestId: request.requestId,
-      basedOnRevision: request.revision,
-      kind: request.kind,
-      act: request.act,
-      floor: request.floor,
+      generationType: 'batch',
+      nodeId: `__tower_batch__${batchId}`,
+      batchId,
+      jobs: clone(requests),
+      requestId: batchId,
+      basedOnRevision: requests[0].revision,
       maxAttempts: 3,
-      difficultyMultiplier: request.difficultyMultiplier,
       prompt,
       sourceMessageId: scope.messageId,
     };
@@ -483,17 +502,29 @@ export class TowerLookaheadCoordinator {
 
   private cancelObsoleteGeneration(): void {
     const request = this.activeGeneration;
-    if (!request || request.generationType !== 'node' || !request.nodeId) return;
+    if (!request) return;
     const scope = this.currentScope();
     const parsed = scope ? readTowerScope(scope) : null;
     if (!parsed) return;
-    const envelope = parsed.run.nodeContent[request.nodeId];
-    if (envelope?.phase !== 'abandoned') return;
+    const nodeIds = request.generationType === 'batch'
+      ? (request.jobs || []).map(job => job.nodeId)
+      : request.nodeId ? [request.nodeId] : [];
+    if (!nodeIds.length || !nodeIds.every(nodeId => parsed.run.nodeContent[nodeId]?.phase === 'abandoned')) return;
     try {
       this.ports.cancelGeneration?.(request, '路线已改变，过期分支的后台生成已取消');
     } catch (error) {
       this.ports.onError?.('取消过期爬塔分支失败，迟到结果仍会被状态校验拒绝', error);
     }
+  }
+
+  private batchIdFor(requests: readonly TowerStateGenerationRequest[]): string {
+    const source = requests.map(request => `${request.nodeId}:${request.requestId}`).join('|');
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < source.length; index += 1) {
+      hash ^= source.charCodeAt(index);
+      hash = Math.imul(hash, 0x01000193);
+    }
+    return `tower_batch_${requests[0]?.revision ?? 0}_${(hash >>> 0).toString(36)}`;
   }
 
   private async waitForCurrentPass(): Promise<void> {

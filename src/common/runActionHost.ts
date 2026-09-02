@@ -1,4 +1,10 @@
-import { formatRestUpgradePrompt, migratePersistentRunDeck, type RunNodeChoice, type RunState } from '../game-core';
+import {
+  formatRestUpgradePrompt,
+  migratePersistentRunDeck,
+  normalizeTowerItemInventory,
+  type RunNodeChoice,
+  type RunState,
+} from '../game-core';
 import {
   consumePendingRunResultInStat,
   deriveRunSeed,
@@ -388,6 +394,7 @@ export class TavernRunActionHost {
     let run: RunState | null = null;
     await this.ports.updateVariablesWith((variables: Record<string, any>) => {
       const stat = statRoot(variables);
+      if (isRecord(stat.battle)) stat.battle.items = normalizeTowerItemInventory(stat.battle.items);
       run = ensureRunStateInStat(stat, deriveRunSeed(stat)).run;
       return variables;
     });
@@ -829,7 +836,9 @@ export class TavernRunActionHost {
   public async restartRun(): Promise<RunState> {
     let run: RunState | null = null;
     await this.ports.updateVariablesWith((variables: Record<string, any>) => {
-      run = restartRunInStat(statRoot(variables));
+      const stat = statRoot(variables);
+      if (isRecord(stat.battle)) stat.battle.items = normalizeTowerItemInventory(stat.battle.items);
+      run = restartRunInStat(stat);
       return variables;
     });
     if (!run) throw new Error('新远征初始化失败：MUV 更新未返回状态');

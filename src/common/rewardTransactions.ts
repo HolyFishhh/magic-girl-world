@@ -9,6 +9,8 @@ import {
   type RewardPoolMutation,
 } from '../game-core/rewardSettlement';
 import type { RewardCategory, RewardSelections } from '../game-core/rewardSelection';
+import { readGameMode } from '../game-core/towerMode';
+import { towerItemSlotsRemaining, towerRewardItemSlots } from '../game-core/towerInventory';
 import { flattenMvuArray, normalizeMvuStatusDefinitions } from '../runtime/mvuArrays';
 
 export type { RewardCategory, RewardSelections } from '../game-core/rewardSelection';
@@ -67,8 +69,12 @@ export function readRewardRoot(statRoot: unknown): Record<string, any> | null {
 export function hasSelectableRewards(statRoot: unknown): boolean {
   const reward = readRewardRoot(statRoot);
   const disabled = new Set(readDisabledRewardCategories(statRoot));
+  const limits = readRewardLimits(statRoot);
   return Boolean(
-    reward && REWARD_CATEGORIES.some(category => !disabled.has(category) && normalizeMvuList(reward[REWARD_KEYS[category]]).length > 0),
+    reward && REWARD_CATEGORIES.some(category =>
+      !disabled.has(category)
+      && limits[category] > 0
+      && normalizeMvuList(reward[REWARD_KEYS[category]]).length > 0),
   );
 }
 
@@ -102,11 +108,15 @@ export function readRewardLimits(statRoot: unknown): Record<RewardCategory, numb
   if (!reward) return { cards: 1, artifacts: 1, items: 1 };
   const limits = isRecord(reward.limits) ? reward.limits : {};
   const disabled = new Set(readDisabledRewardCategories(statRoot));
-  return {
+  const result = {
     cards: disabled.has('cards') ? 0 : readLimit(limits.cards),
     artifacts: disabled.has('artifacts') ? 0 : readLimit(limits.artifacts),
     items: disabled.has('items') ? 0 : readLimit(limits.items),
   };
+  if (isRecord(statRoot) && readGameMode(statRoot) === 'tower') {
+    result.items = Math.min(result.items, towerItemSlotsRemaining(statRoot.battle));
+  }
+  return result;
 }
 
 function rewardPoolCandidates(reward: Record<string, any>): Record<RewardCategory, Record<string, any>[]> {
@@ -297,6 +307,12 @@ export function applyRewardSelectionsToStat(
     knownResourceIds,
     limits,
   });
+  if (readGameMode(stat) === 'tower') {
+    const selectedItems = plan.entries.filter(entry => entry.category === 'items').map(entry => entry.value);
+    if (towerRewardItemSlots(selectedItems) > towerItemSlotsRemaining(battle)) {
+      throw new Error('战斗道具栏已满，爬塔模式最多携带三个道具');
+    }
+  }
 
   const targets = {} as Partial<Record<RewardCategory, any[]>>;
   plan.entries.forEach(entry => {

@@ -17,7 +17,7 @@ const MAP_HEIGHT = 1600;
 const MAP_X_PADDING = 60;
 const MAP_Y_PADDING = 70;
 const MAP_FLOORS = 16;
-const MAP_COLUMNS = 7;
+const MAP_COLUMNS = 5;
 
 export interface TowerAppCallbacks {
   onNodeSelect?: (node: RunMapNode, snapshot: RunState) => void;

@@ -460,13 +460,18 @@ assert.equal(patchedCard.data.name, releaseConfig.characterName);
 assert.equal(patchedCard.data.character_version, releaseConfig.cardVersion);
 assert.equal(
   patchedCard.data.creator_notes,
-  '剧情模式可直接开始游玩；角色卡已内置世界书、MVU 变量框架与交互界面。爬塔模式需要另行安装 0.2.1 或更高版本的“魔法少女世界设计辅助器”扩展。',
+  '剧情模式可直接开始游玩；角色卡已内置世界书、MVU 变量框架与交互界面。爬塔模式需要另行安装 0.2.2 或更高版本的“魔法少女世界设计辅助器”扩展。',
   'patched card creator notes must describe the embedded current architecture',
 );
 assert.equal(
   patchedCard.data.first_mes,
-  '[开始游戏]',
-  'patched card first_mes must contain the bare start marker without a Markdown fence',
+  '[开始游戏]\n[剧情模式开场]',
+  'patched card first_mes must contain the story opening marker without a Markdown fence',
+);
+assert.deepEqual(
+  patchedCard.data.alternate_greetings,
+  ['[开始游戏]\n[爬塔模式开场]'],
+  'patched card must expose tower mode as an alternate first-message greeting',
 );
 assert.equal(patchedExtensions.regex_scripts.some(script => script.scriptName === '去除变量'), false);
 assert.equal(patchedExtensions.regex_scripts.length, 7, 'update display must replace, not duplicate, the old removal regex');

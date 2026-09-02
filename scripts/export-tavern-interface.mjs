@@ -19,7 +19,7 @@ const interfaces = [
     // first generated assistant response may carry CHARACTER_INIT_PENDING;
     // matching that marker here makes both start and common emit fenced HTML
     // on the same floor, and Tavern Helper renders only the first iframe.
-    findRegex: '^\\s*\\[开始游戏[^\\r\\n]*\\]\\s*(?:<StatusPlaceHolderImpl\\s*\\/?>)?\\s*$',
+    findRegex: '^\\s*\\[开始游戏[^\\r\\n]*\\]\\s*(?:\\[(?:剧情模式|爬塔模式)开场\\]\\s*)?(?:<StatusPlaceHolderImpl\\s*\\/?>)?\\s*$',
     placement: [2],
     minDepth: 0,
     maxDepth: 0,

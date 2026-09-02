@@ -268,7 +268,7 @@ const controller = new DesignAssistantController({
 controller.activate();
 assert.deepEqual(controller.getCapabilities(), {
   spec: 'mwg.design-assistant/v1',
-  version: '0.2.1',
+  version: '0.2.2',
   towerGeneration: true,
   towerCoordinator: true,
   towerArchive: true,
@@ -443,7 +443,11 @@ await controller.requestTowerGeneration({
   prompt: '生成带可选卡牌奖励的事件',
 });
 const eventRewardRepairCalls = calls.filter(call => call[0] === 'generate');
-assert.equal(eventRewardRepairCalls.length, 2, 'invalid event rewards receive one bounded structure repair');
+assert.equal(
+  eventRewardRepairCalls.length,
+  2,
+  `invalid event rewards receive one bounded structure repair: ${JSON.stringify(eventRewardRepairCalls)}`,
+);
 assert.match(eventRewardRepairCalls[1][1].user_input, /必须提供浅层 effects/);
 assert.equal(variables.stat_data.run.nodeContent[eventRewardRepairCase.request.nodeId].phase, 'ready');
 assert.deepEqual(

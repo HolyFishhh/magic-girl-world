@@ -82,7 +82,7 @@ assert.equal(mapped.routeMode, 'map');
 assert.equal(mapped.actCount, 3);
 assert.equal(mapped.floorsPerAct, 16);
 assert.equal(mapped.opening.phase, 'pending');
-assert.equal(mapped.choices.length, 6);
+assert.equal(mapped.choices.length, 1);
 assert.deepEqual(
   mapped.choices.map(choice => choice.id).sort(),
   [...mapped.map.startNodeIds[1]].sort(),
@@ -105,7 +105,7 @@ for (let act = 1; act <= 3; act += 1) {
   }
 }
 assert.equal(mappedProgress.phase, 'won');
-assert.equal(mappedProgress.nodeCounts.treasure, 3);
+assert.equal(mappedProgress.nodeCounts.treasure, 6);
 assert.equal(mappedProgress.nodeCounts.boss, 3);
 
 const tamperedMapChoice = structuredClone(mapped);

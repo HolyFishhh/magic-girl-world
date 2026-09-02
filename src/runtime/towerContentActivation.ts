@@ -14,6 +14,7 @@ import {
   type RunState,
 } from '../game-core/runState';
 import { planTowerEventOutcome } from '../game-core/towerEventOutcome';
+import { towerItemSlotsRemaining, towerRewardItemSlots } from '../game-core/towerInventory';
 import {
   validateRewardCandidateAgainstLibrary,
   type RewardCandidateCategory,
@@ -409,6 +410,8 @@ export function normalizeTowerReward(
     artifacts: 0,
     items: 0,
   };
+  const availableItemSlots = towerItemSlotsRemaining(battle);
+  let reservedItemSlots = 0;
   const statusDefinitions = normalizeMvuStatusDefinitions(battle.statuses);
   const knownResourceIds = flattenMvuArray<JsonRecord>(battle.core?.resources, { objectsOnly: true })
     .map(resource => String(resource.id || ''))
@@ -417,6 +420,14 @@ export function normalizeTowerReward(
   for (const category of Object.keys(pools) as RewardCandidateCategory[]) {
     const accepted: unknown[] = [];
     for (const candidate of pools[category]) {
+      if (category === 'items') {
+        const slots = towerRewardItemSlots([candidate]);
+        if (reservedItemSlots + slots > availableItemSlots) {
+          removedCounts.items += 1;
+          continue;
+        }
+        reservedItemSlots += slots;
+      }
       let validation = validateRewardCandidateAgainstLibrary(category, candidate, {
         existing: libraries[category],
         statusDefinitions,

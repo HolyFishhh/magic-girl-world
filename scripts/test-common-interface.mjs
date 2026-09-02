@@ -89,7 +89,11 @@ assert.ok(
   htmlSource.indexOf('id="run-opt-in"') < htmlSource.indexOf('id="battle-hp"'),
   'the optional expedition entry must be the first card/resource control',
 );
-assert.equal(nodes.filter(node => node.nodeName === 'details').length, 4, 'status details must use four stable panels');
+assert.equal(
+  nodes.filter(node => node.nodeName === 'details' && classes(node).includes('status-panel')).length,
+  4,
+  'story status details must keep four stable panels beside the tower-only summaries',
+);
 assert.ok(!nodes.some(node => classes(node).includes('story-text')));
 assert.ok(!nodes.some(node => classes(node).includes('tab-navigation')));
 assert.ok(!htmlSource.includes('当前剧情'));
@@ -152,16 +156,14 @@ assert.match(
 assert.match(scriptSource, /currentEl\.textContent = readiness\.deck\.deckQuantity === 0/);
 assert.match(
   scriptSource,
-  /formatPlayerContentRepairPrompt\(\{\s*\.\.\.readiness,\s*issues:\s*combinedIssues\s*\}\)/,
+  /formatPlayerContentRepairPrompt\(readiness\)/,
 );
 assert.match(scriptSource, /retryCurrentMessageWithExtraModel\(prompt,\s*\{/);
 assert.match(scriptSource, /validateVariables:\s*variables\s*=>/);
 assert.match(scriptSource, /initialContentReadinessFromStat\(variables\?\.stat_data\)/);
-assert.match(scriptSource, /readAutomaticRepairCandidateIssues\(repairKey\)/);
-assert.match(scriptSource, /writeAutomaticRepairCandidateIssues\(repairKey, candidateReadiness\.issues\)/);
-assert.match(scriptSource, /candidate-issues/);
+assert.doesNotMatch(scriptSource, /AutomaticRepairCandidateIssues|candidate-issues/);
 assert.match(scriptSource, /refreshOnFailure: 'none'/);
-assert.match(scriptSource, /requestInitialContentRepair\(current, \{ automatic: true \}\)/);
+assert.match(scriptSource, /requestInitialContentRepair\(current\)/);
 assert.match(scriptSource, /reportMvuValidationFailure/);
 assert.match(
   scriptSource,
@@ -169,7 +171,7 @@ assert.match(
 );
 assert.match(scriptSource, /getMvuMonitorSnapshot/);
 assert.match(scriptSource, /snapshot\?\.phase === 'generating'/);
-assert.match(scriptSource, /if \(repaired \|\| selectedGameMode\(__STAT__\) === 'tower'\) await loadGameData\(\);/);
+assert.match(scriptSource, /if \(repaired\) await loadGameData\(\);/);
 assert.doesNotMatch(scriptSource, /requestInitialContentRepair[\s\S]{0,500}commonActionHost\.continueWithPrompt/);
 assert.match(scriptSource, /请求 AI 修复/);
 assert.match(scriptSource, /function contentDescriptionStatusNames/);

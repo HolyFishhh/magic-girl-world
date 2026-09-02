@@ -43,7 +43,7 @@ assert.equal(
 );
 
 const normalTowerBudget = core.recommendTowerBattleRewardBudget({
-  nodeId: 'act-1-floor-2-col-1',
+  nodeId: 'act-1-floor-2-col-0',
   kind: 'battle',
   act: 1,
   floor: 2,
@@ -63,6 +63,24 @@ assert.deepEqual(normalizedTowerReward, {
 assert.throws(
   () => core.enforceBattleRewardBudget({ card: [{ id: 'a' }], artifact: [], item: [{ id: 'potion' }] }, normalTowerBudget),
   /requires 3 candidates/,
+);
+assert.equal(core.recommendTowerBattleRewardBudget({
+  nodeId: 'act-1-floor-2-col-1',
+  kind: 'battle',
+  act: 1,
+  floor: 2,
+}).items, null, 'ordinary battles do not guarantee a potion drop');
+assert.equal(core.recommendTowerBattleRewardBudget({
+  nodeId: 'act-1-floor-16-col-2',
+  kind: 'boss',
+  act: 1,
+  floor: 16,
+}).items, null, 'boss rewards use relic choices rather than guaranteed potions');
+assert.equal(core.towerItemSlotsUsed([{ id: 'a', count: 2 }, { id: 'b', count: 1 }]), 3);
+assert.equal(core.towerItemSlotsRemaining({ items: [{ id: 'a', count: 2 }] }), 1);
+assert.deepEqual(
+  core.normalizeTowerItemInventory([{ id: 'a', count: 2 }, { id: 'b', count: 3 }]),
+  [{ id: 'a', count: 2 }, { id: 'b', count: 1 }],
 );
 
 const standardShop = { act: 2, floor: 4, kind: 'shop', danger: 0, floorsPerAct: 10, actCount: 3 };

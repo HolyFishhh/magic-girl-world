@@ -55,6 +55,85 @@ function createElement<K extends keyof HTMLElementTagNameMap>(
   return element;
 }
 
+function appendInlineText(document: Document, parent: HTMLElement, value: string): void {
+  const pattern = /(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g;
+  let cursor = 0;
+  for (const match of value.matchAll(pattern)) {
+    const index = match.index ?? 0;
+    if (index > cursor) parent.append(document.createTextNode(value.slice(cursor, index)));
+    const token = match[0];
+    if (token.startsWith('**')) parent.append(createElement(document, 'strong', '', token.slice(2, -2)));
+    else if (token.startsWith('`')) parent.append(createElement(document, 'code', '', token.slice(1, -1)));
+    else parent.append(createElement(document, 'em', '', token.slice(1, -1)));
+    cursor = index + token.length;
+  }
+  if (cursor < value.length) parent.append(document.createTextNode(value.slice(cursor)));
+}
+
+/** Small safe Markdown-like renderer for model prose; it never uses innerHTML. */
+function createNarrative(document: Document, value: string, className = 'tower-node-narrative'): HTMLElement {
+  const root = createElement(document, 'div', `${className} tower-node-richtext`);
+  const lines = value.replace(/\r\n?/g, '\n').split('\n');
+  let paragraph: string[] = [];
+  let list: HTMLUListElement | null = null;
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    const p = createElement(document, 'p');
+    paragraph.forEach((line, index) => {
+      if (index) p.append(document.createElement('br'));
+      appendInlineText(document, p, line);
+    });
+    root.append(p);
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (!list) return;
+    root.append(list);
+    list = null;
+  };
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      const tag = `h${Math.min(4, heading[1].length + 2)}` as 'h3' | 'h4';
+      const element = createElement(document, tag);
+      appendInlineText(document, element, heading[2]);
+      root.append(element);
+      continue;
+    }
+    const bullet = line.match(/^[-*]\s+(.+)$/);
+    if (bullet) {
+      flushParagraph();
+      list ??= createElement(document, 'ul');
+      const item = createElement(document, 'li');
+      appendInlineText(document, item, bullet[1]);
+      list.append(item);
+      continue;
+    }
+    const quote = line.match(/^>\s*(.+)$/);
+    if (quote) {
+      flushParagraph();
+      flushList();
+      const block = createElement(document, 'blockquote');
+      appendInlineText(document, block, quote[1]);
+      root.append(block);
+      continue;
+    }
+    flushList();
+    paragraph.push(line);
+  }
+  flushParagraph();
+  flushList();
+  return root;
+}
+
 function text(value: unknown, fallback = ''): string {
   const normalized = typeof value === 'string' ? value.trim() : '';
   return normalized || fallback;
@@ -179,7 +258,7 @@ function renderOpening(options: TowerNodePanelOptions, shell: HTMLElement): bool
       shell.append(state);
     } else {
       const narrative = text(opening.content.narrative);
-      if (narrative) shell.append(createElement(document, 'p', 'tower-node-narrative', narrative));
+      if (narrative) shell.append(createNarrative(document, narrative));
       if (narrativePhase === 'failed') {
         shell.append(createElement(
           document,
@@ -242,16 +321,16 @@ function appendNarrative(
     if (collapsed) {
       const archive = createElement(document, 'details', 'tower-node-narrative-archive');
       archive.append(createElement(document, 'summary', '', '查看本次事件剧情'));
-      archive.append(createElement(document, 'p', 'tower-node-narrative', narrative));
+      archive.append(createNarrative(document, narrative));
       shell.append(archive);
     } else {
-      shell.append(createElement(document, 'p', 'tower-node-narrative', narrative));
+      shell.append(createNarrative(document, narrative));
     }
   }
   const payload = isRecord(stat[`run_${kind}`]) ? stat[`run_${kind}`] : {};
   const description = text(payload.description);
   if (description && description !== narrative)
-    shell.append(createElement(document, 'p', 'tower-node-description', description));
+    shell.append(createNarrative(document, description, 'tower-node-description'));
 }
 
 function renderEvent(options: TowerNodePanelOptions, shell: HTMLElement): void {

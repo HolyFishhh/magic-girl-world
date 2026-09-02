@@ -9,8 +9,12 @@ require('tsconfig-paths/register');
 
 const { TowerLookaheadCoordinator } = require(resolve('src/sillytavern-extension/towerCoordinator.ts'));
 const { TowerGenerationCancelledError } = require(resolve('src/sillytavern-extension/towerGenerationQueue.ts'));
-const { createRunState } = require(resolve('src/game-core/runState.ts'));
-const { parseTowerNodeResult, parseTowerOpeningResult } = require(resolve('src/game-core/towerRequest.ts'));
+const { completeRunNode, createRunState, enterRunNode } = require(resolve('src/game-core/runState.ts'));
+const {
+  parseTowerNodeBatchResult,
+  parseTowerNodeResult,
+  parseTowerOpeningResult,
+} = require(resolve('src/game-core/towerRequest.ts'));
 const towerState = require(resolve('src/runtime/towerStateAdapter.ts'));
 const towerOpening = require(resolve('src/runtime/towerOpeningAdapter.ts'));
 const { settleTowerOpeningChoiceInStat } = require(resolve('src/common/runTransactions.ts'));
@@ -147,6 +151,19 @@ function openingResult(request) {
   })}</TOWER_OPENING_RESULT>`;
 }
 
+function batchResult(request) {
+  const results = request.jobs.map(job => JSON.parse(
+    nodeResult({ ...job, basedOnRevision: job.revision })
+      .slice('<TOWER_NODE_RESULT>'.length, -'</TOWER_NODE_RESULT>'.length),
+  ));
+  return JSON.stringify({
+    spec: 'mwg.tower-node-batch-result/v1',
+    batch_id: request.batchId,
+    based_on_revision: request.basedOnRevision,
+    results,
+  });
+}
+
 function createHarness(seed, options = {}) {
   let chatId = 'tower-chat';
   let variables = towerVariables(seed);
@@ -170,13 +187,21 @@ function createHarness(seed, options = {}) {
     },
     requestGeneration: async request => {
       requests.push(structuredClone(request));
-      if (options.failNodeId && options.failNodeId === request.nodeId && !options.failedOnce) {
+      const failedJob = options.failNodeId
+        ? request.generationType === 'batch'
+          ? request.jobs.find(job => job.nodeId === options.failNodeId)
+          : request.nodeId === options.failNodeId
+            ? request
+            : null
+        : null;
+      if (failedJob && !options.failedOnce) {
         options.failedOnce = true;
-        if (request.generationType === 'node') {
+        const failedJobs = request.generationType === 'batch' ? request.jobs : [request];
+        for (const job of failedJobs) {
           towerState.failTowerGenerationInStat(variables.stat_data, {
-            nodeId: request.nodeId,
-            requestId: request.requestId,
-            revision: request.basedOnRevision,
+            nodeId: job.nodeId,
+            requestId: job.requestId,
+            revision: job.revision ?? job.basedOnRevision,
             error: '模拟生成失败',
           });
         }
@@ -188,6 +213,21 @@ function createHarness(seed, options = {}) {
           basedOnRevision: request.revision,
         });
         towerOpening.commitTowerOpeningInStat(variables.stat_data, parsed);
+      } else if (request.generationType === 'batch') {
+        const parsed = parseTowerNodeBatchResult(batchResult(request), request.batchId, request.jobs.map(job => ({
+          ...job,
+          basedOnRevision: job.revision,
+        })));
+        parsed.results.forEach((entry, index) => {
+          const job = request.jobs[index];
+          towerState.commitTowerGenerationInStat(variables.stat_data, {
+            nodeId: job.nodeId,
+            requestId: job.requestId,
+            revision: job.revision,
+            content: entry,
+            ...(entry.reward ? { reward: entry.reward } : {}),
+          });
+        });
       } else {
         const parsed = parseTowerNodeResult(nodeResult(request), {
           nodeId: request.nodeId,
@@ -234,14 +274,18 @@ function createHarness(seed, options = {}) {
 {
   const harness = createHarness(20260840);
   harness.coordinator.activateChat('tower-chat');
-  await waitFor(() => harness.variables().stat_data.run.opening.phase === 'ready', 'opening ready');
+  try {
+    await waitFor(() => harness.variables().stat_data.run.opening.phase === 'ready', 'opening ready');
+  } catch (error) {
+    throw new Error(`${error.message}; requests=${JSON.stringify(harness.requests)}; errors=${JSON.stringify(harness.errors.map(entry => String(entry[1])))}`);
+  }
   assert.equal(harness.requests.length, 1);
   assert.equal(harness.requests[0].generationType, 'opening');
   assert.equal(harness.requests[0].timeoutMs, undefined, 'structured opening generation has no business-layer hard timeout');
   assert.equal(harness.requests[0].maxAttempts, 3, 'empty structured responses receive bounded automatic retries');
   assert.match(harness.requests[0].prompt, /偏好具有机制互动的敌人/);
   await tick();
-  assert.equal(harness.requests.filter(request => request.generationType === 'node').length, 0);
+  assert.equal(harness.requests.filter(request => request.generationType === 'batch').length, 0);
 
   settleTowerOpeningChoiceInStat(harness.variables().stat_data, 'accept');
   harness.coordinator.schedule('opening-consumed');
@@ -249,7 +293,7 @@ function createHarness(seed, options = {}) {
   assert.ok(expectedLookaheadCount >= 1 && expectedLookaheadCount <= 3);
   try {
     await waitFor(
-      () => harness.requests.filter(request => request.generationType === 'node').length === expectedLookaheadCount,
+      () => harness.requests.filter(request => request.generationType === 'batch').length === 1,
       'reachable lookahead generation',
     );
   } catch (error) {
@@ -263,14 +307,12 @@ function createHarness(seed, options = {}) {
     return envelopes.filter(envelope => envelope.phase === 'ready').length === expectedLookaheadCount;
   }, 'lookahead ready');
   assert.ok(expectedLookaheadCount > 0);
-  assert.ok(harness.requests.filter(request => request.generationType === 'node')
-    .every(request => request.prompt.includes('mwg.tower-semantic-mvu/v1')));
-  assert.ok(harness.requests.filter(request => request.generationType === 'node')
-    .every(request => Number.isFinite(request.difficultyMultiplier)));
-  assert.ok(harness.requests.filter(request => request.generationType === 'node')
-    .every(request => request.maxAttempts === 3));
-  assert.ok(harness.requests.filter(request => request.generationType === 'node')
-    .every(request => request.timeoutMs === undefined), 'structured nodes have no business-layer hard timeout');
+  const lookaheadBatch = harness.requests.find(request => request.generationType === 'batch');
+  assert.equal(lookaheadBatch.jobs.length, expectedLookaheadCount);
+  assert.match(lookaheadBatch.prompt, /mwg\.tower-semantic-mvu\/v1/);
+  assert.ok(lookaheadBatch.jobs.every(request => Number.isFinite(request.difficultyMultiplier)));
+  assert.equal(lookaheadBatch.maxAttempts, 3);
+  assert.equal(lookaheadBatch.timeoutMs, undefined, 'structured nodes have no business-layer hard timeout');
   assert.ok(harness.requests.every(request => request.prompt.includes('COORDINATOR_SEMANTIC_MVU_TAIL')));
   assert.ok(harness.requests.every(request => request.prompt.includes('semantic_card_probe')));
   assert.ok(harness.requests.every(request => !request.prompt.includes('runtime_only_probe')));
@@ -282,8 +324,8 @@ function createHarness(seed, options = {}) {
   harness.coordinator.deactivate();
 }
 
-// One failed reachable candidate must not strand its queued siblings. The
-// failed branch stays explicitly retryable while the other two become ready.
+// A failed batch leaves every member explicitly retryable. Retrying one node
+// creates a one-node batch instead of regenerating unrelated siblings.
 {
   const options = {};
   const harness = createHarness(20260843, options);
@@ -294,15 +336,19 @@ function createHarness(seed, options = {}) {
   options.failNodeId = lookahead[0].nodeId;
   harness.coordinator.activateChat('tower-chat');
   await waitFor(
-    () => harness.requests.filter(request => request.generationType === 'node').length === lookahead.length,
-    'lookahead siblings after one failure',
+    () => harness.requests.filter(request => request.generationType === 'batch').length === 1,
+    'failed lookahead batch',
   );
   await waitFor(() => {
     const envelopes = lookahead.map(request => harness.variables().stat_data.run.nodeContent[request.nodeId]);
-    return envelopes.filter(envelope => envelope.phase === 'ready').length === lookahead.length - 1;
-  }, 'remaining lookahead ready');
-  assert.equal(harness.variables().stat_data.run.nodeContent[lookahead[0].nodeId].phase, 'failed');
-  assert.ok(lookahead.slice(1).every(request => harness.variables().stat_data.run.nodeContent[request.nodeId].phase === 'ready'));
+    return envelopes.every(envelope => envelope.phase === 'failed');
+  }, 'failed batch members');
+  assert.equal(await harness.coordinator.retryNode(lookahead[0].nodeId), true);
+  await waitFor(
+    () => harness.variables().stat_data.run.nodeContent[lookahead[0].nodeId].phase === 'ready',
+    'one-node retry batch',
+  );
+  assert.equal(harness.requests.filter(request => request.generationType === 'batch').at(-1).jobs.length, 1);
   assert.equal(harness.errors.length, 1);
   harness.coordinator.deactivate();
 }
@@ -315,6 +361,13 @@ function createHarness(seed, options = {}) {
     ...variables.stat_data.run,
     opening: { ...variables.stat_data.run.opening, phase: 'skipped' },
   };
+  variables.stat_data.run = completeRunNode(
+    enterRunNode(
+      variables.stat_data.run,
+      variables.stat_data.run.choices[0].id,
+    ),
+    { outcome: 'cleared' },
+  );
   const window = towerState.queueTowerLookaheadInStat(variables.stat_data).queued;
   assert.equal(window.length, 3);
   const obsolete = window[0];
@@ -339,7 +392,7 @@ function createHarness(seed, options = {}) {
     replaceLatest: async next => { variables = structuredClone(next); },
     requestGeneration: request => {
       requests.push(structuredClone(request));
-      if (request.nodeId === obsolete.nodeId) {
+      if (request.generationType === 'batch' && request.jobs.some(job => job.nodeId === obsolete.nodeId)) {
         return new Promise((_resolve, reject) => { rejectObsolete = reject; });
       }
       return Promise.resolve();
@@ -358,7 +411,8 @@ function createHarness(seed, options = {}) {
   coordinator.schedule('route-changed');
   await waitFor(() => cancelled.length === 1, 'obsolete branch cancellation');
   await waitFor(() => coordinator.getStatus().phase !== 'lookahead', 'cancelled coordinator pass');
-  assert.equal(cancelled[0].request.nodeId, obsolete.nodeId);
+  assert.match(cancelled[0].request.nodeId, /^__tower_batch__/);
+  assert.ok(cancelled[0].request.jobs.some(job => job.nodeId === obsolete.nodeId));
   assert.match(cancelled[0].reason, /路线已改变/);
   assert.equal(errors.length, 0);
   assert.notEqual(coordinator.getStatus().phase, 'error');
@@ -375,12 +429,17 @@ function createHarness(seed, options = {}) {
   const stale = towerState.claimTowerGenerationInStat(stat, queued[0].nodeId, queued[0].requestId).request;
   harness.coordinator.activateChat('tower-chat');
   await waitFor(() => harness.variables().stat_data.run.nodeContent[stale.nodeId].phase === 'failed', 'stale recovery');
-  const requestsBeforeRetry = harness.requests.filter(request => request.nodeId === stale.nodeId).length;
+  const requestsBeforeRetry = harness.requests.filter(request =>
+    request.nodeId === stale.nodeId || request.jobs?.some(job => job.nodeId === stale.nodeId)
+  ).length;
   await harness.coordinator.retryNode(stale.nodeId);
   await waitFor(() => harness.variables().stat_data.run.nodeContent[stale.nodeId].phase === 'ready', 'manual retry ready');
-  const retried = harness.requests.filter(request => request.nodeId === stale.nodeId);
+  const retried = harness.requests.filter(request =>
+    request.nodeId === stale.nodeId || request.jobs?.some(job => job.nodeId === stale.nodeId)
+  );
   assert.equal(retried.length, requestsBeforeRetry + 1);
-  assert.notEqual(retried.at(-1).requestId, stale.requestId);
+  const retriedJob = retried.at(-1).jobs?.find(job => job.nodeId === stale.nodeId) ?? retried.at(-1);
+  assert.notEqual(retriedJob.requestId, stale.requestId);
   harness.coordinator.deactivate();
 }
 

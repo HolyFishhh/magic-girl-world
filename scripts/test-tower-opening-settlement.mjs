@@ -61,6 +61,9 @@ assert.equal(result.cardRemovalCount, 2);
 assert.deepEqual(result.items, ['启程药剂']);
 assert.equal(stat.battle.items[0].id, 'opening_tonic');
 assert.equal(stat.run.opening.phase, 'consumed');
+assert.equal(stat.run.floor, 1, 'choosing the opening gift also completes the unique reward start');
+assert.equal(stat.run.choices.length, 3, 'the reward start opens the three main routes');
+assert.ok(stat.run.choices.every(choice => choice.floor === 2));
 assert.throws(() => settleTowerOpeningChoiceInStat(stat, 'accept'), /没有可结算/);
 
 const invalid = statWithOpening({ reward: { items: [{ id: 'broken' }] } });
@@ -91,7 +94,7 @@ const treasureResult = executeUnifiedRunTransactionInStat(treasureStat, {
 });
 assert.equal(treasureStat.run.phase, 'awaiting_choice');
 assert.equal(treasureStat.run.floor, 9);
-assert.equal(treasureStat.run.nodeCounts.treasure, 1);
+assert.equal(treasureStat.run.nodeCounts.treasure, 2, 'the opening reward and floor-nine chest are both counted');
 assert.equal(treasureResult.event.type, 'treasure_claimed');
 
 console.log('tower opening and treasure settlements are atomic');
