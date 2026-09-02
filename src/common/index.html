@@ -25,6 +25,33 @@
       </header>
 
       <section class="section run-section" id="run-section" style="display: none" aria-label="远征路线">
+        <section id="tower-start-panel" class="tower-start-panel" style="display: none" aria-label="爬塔开局设置">
+          <header class="tower-start-header">
+            <span aria-hidden="true">🗺️</span>
+            <div>
+              <small>单层连续游玩</small>
+              <strong>建立本次远征</strong>
+              <p>填写你关心的内容，其余交给 AI。开始后会在当前页面依次出现引导剧情、馈赠、地图与后续节点。</p>
+            </div>
+          </header>
+          <div class="tower-start-grid">
+            <label><span>角色名</span><input id="tower-start-name" type="text" placeholder="留空则使用当前玩家名" /></label>
+            <label><span>身份或职业</span><input id="tower-start-profession" type="text" placeholder="例如流浪法师、见习修士" /></label>
+            <label class="tower-start-wide"><span>角色形象与主体</span><textarea id="tower-start-description" rows="2" placeholder="外观、性格、能力来源等"></textarea></label>
+            <label class="tower-start-wide"><span>世界与故事方向</span><textarea id="tower-start-world" rows="2" placeholder="世界观、进入高塔的原因、希望保留的剧情设定"></textarea></label>
+            <label><span>开场时机</span><textarea id="tower-start-opening" rows="2" placeholder="留空由 AI 安排"></textarea></label>
+            <label><span>卡组要求</span><textarea id="tower-start-card" rows="2" placeholder="例如召唤流、弃牌循环，也可以只描述玩法体验"></textarea></label>
+            <label class="tower-start-wide"><span>本局额外要求</span><textarea id="tower-start-requirements" rows="2" placeholder="敌人、事件、叙事或主题偏好；难度在设置悬浮球中调整"></textarea></label>
+          </div>
+          <div class="tower-start-extension" id="tower-start-extension" role="status">
+            <span id="tower-start-extension-text">正在检查爬塔组件…</span>
+            <button id="tower-start-extension-button" type="button" style="display: none">安装或更新组件</button>
+          </div>
+          <div class="tower-start-actions">
+            <span id="tower-start-status" role="status">地图将在玩家与馈赠生成完成后由程序建立。</span>
+            <button id="tower-start-button" type="button">开始爬塔</button>
+          </div>
+        </section>
         <div class="run-heading">
           <div>
             <small>远征</small>

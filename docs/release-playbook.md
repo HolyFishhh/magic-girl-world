@@ -25,10 +25,10 @@
 
 ## 本次发布
 
-- 角色卡版本：`0.6.3`
-- 玩家更新阶段：`beta0.3.3`
+- 角色卡版本：`0.6.4`
+- 玩家更新阶段：`beta0.3.4`
 - 主卡：`魔法少女世界.png`
-- 爬塔扩展：`dist/release/magic-girl-design-assistant-0.3.0.zip`
+- 爬塔扩展：`dist/release/magic-girl-design-assistant-0.3.1.zip`
 - 卡图仓库目标：根目录与 `cards/魔法少女世界.png`
 - 完整玩家记录：`docs/player-release-notes.md`
-- 单次论坛快照：`docs/forum-update-0.6.3.md`
+- 单次论坛快照：`docs/forum-update-0.6.4.md`

@@ -268,13 +268,13 @@ let towerPersistenceRequest = null;
 let towerRetryRequest = null;
 let towerArchiveCalls = 0;
 let towerWakeReason = null;
-let extensionCapabilitiesVersion = '0.3.0';
+let extensionCapabilitiesVersion = '0.3.1';
 let extensionSupportsSingleFloor = true;
 let officialInstallCalls = 0;
 const extensionUpdateRequests = [];
 context.window.parent.fetch = async (url, options = {}) => {
   if (String(url).includes('raw.githubusercontent.com')) {
-    return { ok: true, json: async () => ({ version: '0.3.0' }) };
+    return { ok: true, json: async () => ({ version: '0.3.1' }) };
   }
   if (url === '/api/extensions/update') {
     extensionUpdateRequests.push(JSON.parse(options.body));
@@ -284,6 +284,7 @@ context.window.parent.fetch = async (url, options = {}) => {
 };
 context.window.parent.Function = () => async () => [{
   extensionNames: ['third-party/magic-girl-world'],
+  extensionTypes: { 'third-party/magic-girl-world': 'local' },
   installExtension: async () => { officialInstallCalls += 1; return true; },
 }, {
   getRequestHeaders: () => ({ 'Content-Type': 'application/json' }),
@@ -352,7 +353,7 @@ assert.equal(towerArchiveCalls, 1);
 assert.equal(sharedRuntime.getTowerCoordinatorStatus().phase, 'waiting');
 assert.deepEqual(JSON.parse(JSON.stringify(sharedRuntime.getDesignAssistantCapabilities())), {
   spec: 'mwg.design-assistant/v1',
-  version: '0.3.0',
+  version: '0.3.1',
   towerGeneration: true,
   towerCoordinator: true,
   towerArchive: true,
@@ -364,9 +365,9 @@ extensionSupportsSingleFloor = false;
 const outdatedExtension = await sharedRuntime.checkTowerExtensionVersion(true);
 assert.equal(outdatedExtension.status, 'outdated');
 assert.equal(await sharedRuntime.installTowerExtension(), true);
-assert.deepEqual(extensionUpdateRequests, [{ extensionName: 'third-party/magic-girl-world', global: false }]);
+assert.deepEqual(extensionUpdateRequests, [{ extensionName: 'magic-girl-world', global: false }]);
 assert.equal(officialInstallCalls, 0, 'an installed old extension must be updated instead of installed a second time');
-extensionCapabilitiesVersion = '0.3.0';
+extensionCapabilitiesVersion = '0.3.1';
 extensionSupportsSingleFloor = true;
 context.MagicGirlWorldMvuMonitor.receiveTowerGenerationStatus({ phase: 'running' });
 context.MagicGirlWorldMvuMonitor.receiveTowerGenerationCompleted({ nodeId: 'act-1-floor-1-col-1' });

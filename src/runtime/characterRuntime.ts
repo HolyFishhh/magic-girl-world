@@ -419,7 +419,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
     debug: boolean;
   };
 
-  const requiredTowerExtensionVersion = '0.3.0';
+  const requiredTowerExtensionVersion = '0.3.1';
   const towerExtensionRepositoryUrl = 'https://github.com/HolyFishhh/magic-girl-world.git';
   const towerExtensionManifestUrl =
     'https://raw.githubusercontent.com/HolyFishhh/magic-girl-world/extension/manifest.json';
@@ -531,12 +531,20 @@ function summarizeMvuUpdate(result: unknown): string[] {
       const extensionNames = Array.isArray(extensionModule.extensionNames)
         ? extensionModule.extensionNames.map(String)
         : [];
-      const extensionName = extensionNames.find((name: string) => /(?:^|\/)magic-girl-world$/i.test(name))
-        || 'third-party/magic-girl-world';
+      const installedExtensionName = extensionNames.find(
+        (name: string) => /(?:^|[\\/])magic-girl-world$/i.test(name),
+      ) || '';
+      // SillyTavern exposes third-party extensions to the browser as
+      // `third-party/<folder>`, while its update endpoint accepts only the
+      // physical folder name. Passing the public id makes sanitize-filename
+      // collapse it to `third-partymagic-girl-world` and produces a 404.
+      const extensionName = installedExtensionName.split(/[\\/]/).filter(Boolean).pop()
+        || 'magic-girl-world';
+      const globalExtension = extensionModule?.extensionTypes?.[installedExtensionName] === 'global';
       const response = await parentWindow.fetch('/api/extensions/update', {
         method: 'POST',
         headers: scriptModule.getRequestHeaders(),
-        body: JSON.stringify({ extensionName, global: false }),
+        body: JSON.stringify({ extensionName, global: globalExtension }),
       });
       if (!response?.ok) {
         const detail = await response?.text?.();
@@ -1225,7 +1233,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
     <details class="mwg-settings-group" data-mwg-component="tower-install" open>
       <summary>爬塔组件需要安装</summary>
       <div class="mwg-group-body">
-        <div class="mwg-design-status-card"><strong data-mwg-tower-extension>需要设计辅助器 0.3.0 或更高版本</strong><small data-mwg-tower-requirement>安装完整扩展包后刷新酒馆；剧情模式不受影响。</small></div>
+        <div class="mwg-design-status-card"><strong data-mwg-tower-extension>需要设计辅助器 0.3.1 或更高版本</strong><small data-mwg-tower-requirement>安装完整扩展包后刷新酒馆；剧情模式不受影响。</small></div>
         <button class="mwg-extension-download" type="button" data-action="install-tower-extension">快捷安装爬塔组件</button>
         <a class="mwg-extension-download" href="${towerExtensionReleaseUrl}" target="_blank" rel="noopener noreferrer">安装失败时打开手动下载页面</a>
       </div>

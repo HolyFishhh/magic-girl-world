@@ -378,18 +378,22 @@ export class TowerLookaheadCoordinator {
       const parsed = readTowerScope(scope);
       if (!parsed) return;
       const openingPhase = parsed.run.opening.phase;
-      if (openingPhase !== 'consumed' && openingPhase !== 'skipped') {
-        if (openingPhase === 'pending') {
-          await this.generateOpening(scope, epoch);
-        } else {
-          this.setStatus('waiting', openingPhase === 'ready'
-            ? '等待玩家选择开局馈赠'
-            : openingPhase === 'failed'
-              ? '开局馈赠生成失败，等待手动重试'
-              : '等待开局馈赠生成完成');
-        }
+      if (openingPhase === 'pending') {
+        await this.generateOpening(scope, epoch);
         return;
       }
+      if (openingPhase === 'generating' || openingPhase === 'failed') {
+        this.setStatus('waiting', openingPhase === 'failed'
+          ? '开局馈赠生成失败，等待手动重试'
+          : '等待开局馈赠生成完成');
+        return;
+      }
+
+      // Once the gift is visible, the player can read and choose it while the
+      // reachable map nodes are prepared in one batch. Route activation still
+      // remains gated by the opening settlement in the UI/transaction layer.
+      // This overlaps model latency with actual play without exposing or
+      // generating unreachable branches.
 
       if (parsed.run.phase === 'won' || parsed.run.phase === 'lost') {
         this.setStatus('waiting', '本局已结束，等待终局归档');

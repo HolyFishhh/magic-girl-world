@@ -213,6 +213,171 @@ summary:focus-visible {
   background: var(--surface-raised);
 }
 
+.run-section.is-tower-setup {
+  min-height: min(760px, calc(100vh - 32px));
+  padding: 16px;
+  align-content: start;
+  overflow: hidden;
+  border: 1px solid rgb(232 200 118 / 28%);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 12% 0%, rgb(99 146 255 / 22%), transparent 36%),
+    radial-gradient(circle at 92% 8%, rgb(195 135 255 / 16%), transparent 32%),
+    linear-gradient(155deg, #171933 0%, #090b20 62%, #111126 100%);
+  color: #f7eed9;
+  box-shadow: 0 20px 58px rgb(3 5 22 / 38%);
+}
+
+.run-section.is-tower-setup > .run-heading,
+.run-section.is-tower-setup > .tower-player-panel,
+.run-section.is-tower-setup > .tower-node-panel-host,
+.run-section.is-tower-setup > .tower-map-common-host,
+.run-section.is-tower-setup > .run-actions,
+.run-section.is-tower-setup > .run-error {
+  display: none !important;
+}
+
+.tower-start-panel {
+  display: grid;
+  gap: 14px;
+  width: min(920px, 100%);
+  margin: auto;
+  padding: 18px;
+  border: 1px solid rgb(232 200 118 / 25%);
+  border-radius: 18px;
+  background: rgb(17 20 45 / 84%);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 3%);
+}
+
+.tower-start-header {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+}
+
+.tower-start-header > span {
+  display: grid;
+  width: 58px;
+  height: 58px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgb(232 200 118 / 36%);
+  border-radius: 18px;
+  background: rgb(232 200 118 / 8%);
+  font-size: 31px;
+}
+
+.tower-start-header div {
+  display: grid;
+  gap: 2px;
+}
+
+.tower-start-header small,
+.tower-start-header p,
+.tower-start-actions > span,
+.tower-start-extension span {
+  color: #bbb8ca;
+}
+
+.tower-start-header small {
+  color: #e8c876;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+}
+
+.tower-start-header strong {
+  font-size: clamp(20px, 3vw, 28px);
+}
+
+.tower-start-header p {
+  margin: 2px 0 0;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.tower-start-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.tower-start-grid label {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.tower-start-grid label > span {
+  color: #d9d7e8;
+  font-size: 11px;
+}
+
+.tower-start-grid input,
+.tower-start-grid textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  resize: vertical;
+  border: 1px solid rgb(225 202 139 / 22%);
+  border-radius: 10px;
+  outline: 0;
+  background: rgb(5 8 25 / 62%);
+  color: #f7f2e8;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.tower-start-grid input:focus,
+.tower-start-grid textarea:focus {
+  border-color: #7cd8da;
+  box-shadow: 0 0 0 2px rgb(124 216 218 / 13%);
+}
+
+.tower-start-wide {
+  grid-column: 1 / -1;
+}
+
+.tower-start-extension,
+.tower-start-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgb(255 255 255 / 9%);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 4%);
+}
+
+.tower-start-extension button,
+.tower-start-actions button {
+  min-height: 38px;
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  border: 1px solid rgb(232 200 118 / 42%);
+  border-radius: 10px;
+  background: linear-gradient(145deg, rgb(232 200 118 / 18%), rgb(124 216 218 / 10%));
+  color: #fff3c5;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tower-start-actions button {
+  min-width: 126px;
+  border-color: rgb(124 216 218 / 52%);
+  background: linear-gradient(145deg, #315f75, #5f4985);
+  color: #fff;
+}
+
+.tower-start-extension button:disabled,
+.tower-start-actions button:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
 .mwg-statusbar.is-tower-mode {
   max-width: min(1180px, calc(100vw - 18px));
 }
@@ -553,6 +718,36 @@ summary:focus-visible {
 
   .tower-player-card-grid {
     grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  }
+
+  .run-section.is-tower-setup {
+    min-height: auto;
+    padding: 8px;
+    border-radius: 14px;
+  }
+
+  .tower-start-panel {
+    padding: 12px;
+    border-radius: 14px;
+  }
+
+  .tower-start-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .tower-start-wide {
+    grid-column: auto;
+  }
+
+  .tower-start-extension,
+  .tower-start-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .tower-start-extension button,
+  .tower-start-actions button {
+    width: 100%;
   }
 }
 

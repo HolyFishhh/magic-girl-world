@@ -268,7 +268,7 @@ const controller = new DesignAssistantController({
 controller.activate();
 assert.deepEqual(controller.getCapabilities(), {
   spec: 'mwg.design-assistant/v1',
-  version: '0.3.0',
+  version: '0.3.1',
   towerGeneration: true,
   towerCoordinator: true,
   towerArchive: true,

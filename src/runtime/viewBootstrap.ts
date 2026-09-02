@@ -11,6 +11,7 @@ type SharedRuntime = Readonly<{
   spec: 'mwg.tavern-runtime/v1';
   version: string;
   getViewAsset(view: RuntimeViewName): RuntimeViewAsset;
+  getMessageText?: (messageId?: number | 'latest') => string;
   getMessageVariables?: (messageId?: number | 'latest') => Record<string, any>;
 }>;
 
@@ -98,6 +99,18 @@ function isolatedRuntimeScript(source: string): string {
       (globalThis as any).MagicGirlWorld = api;
 
       let resolvedView = view;
+      if (view === 'start' && typeof api.getMessageText === 'function') {
+        try {
+          const message = String(api.getMessageText(currentMessageId() ?? 'latest') || '');
+          // The tower alternate greeting owns one persistent common/tower
+          // surface. Its setup form, generated gift, map and later nodes all
+          // evolve inside that view instead of mounting the story creator and
+          // then replacing it with a second UI.
+          if (message.includes('[爬塔模式开场]')) resolvedView = 'common';
+        } catch {
+          // The ordinary start view remains the safe fallback.
+        }
+      }
       if (view === 'fish' && typeof api.getMessageVariables === 'function') {
         try {
           const variables = api.getMessageVariables(currentMessageId() ?? 'latest');

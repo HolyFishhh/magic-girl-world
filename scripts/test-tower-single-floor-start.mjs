@@ -160,11 +160,25 @@ const controller = new DesignAssistantController({
   createChatMessages: async () => { createChatMessageCalls += 1; },
   generate: async config => {
     modelCalls.push(['structured', structuredClone(config)]);
-    return JSON.stringify(initialContent);
+    return JSON.stringify({
+      narrative: '雾中的高塔吞没了归路，守门人告诉旅者：只有连续越过三幕试炼，出口才会重新出现。',
+      player: {
+        status: initialContent.status,
+        ...initialContent.battle,
+      },
+      opening: {
+        title: '守门人的星火馈赠',
+        narrative: '守门人摊开两枚仍在发光的星屑，示意旅者选一枚带走。',
+        choices: [
+          { id: 'warm_star', label: '温暖星屑', outcome: { hp: 8 } },
+          { id: 'sharp_star', label: '锐利星屑', outcome: { gold: 40 } },
+        ],
+      },
+    });
   },
   generateNarrative: async config => {
-    modelCalls.push(['narrative', structuredClone(config)]);
-    return '雾中的高塔吞没了归路，守门人告诉旅者：只有连续越过三幕试炼，出口才会重新出现。';
+    modelCalls.push(['unexpected-narrative', structuredClone(config)]);
+    throw new Error('single-floor start must not issue a separate narrative request');
   },
   stopGenerationById: () => true,
   emitInternalEvent: async () => {},
@@ -185,20 +199,24 @@ try {
   assert.equal(result.floorCountAfter, 1);
   assert.equal(context.chat.length, floorCountBefore, 'silent initialization must not append a Tavern floor');
   assert.equal(createChatMessageCalls, 0, 'single-floor start must never use createChatMessages');
-  assert.equal(modelCalls.filter(([kind]) => kind === 'narrative').length, 1);
+  assert.equal(modelCalls.filter(([kind]) => kind === 'unexpected-narrative').length, 0);
   assert.equal(modelCalls.filter(([kind]) => kind === 'structured').length, 1);
-  const narrativeConfig = modelCalls.find(([kind]) => kind === 'narrative')[1];
   const structuredConfig = modelCalls.find(([kind]) => kind === 'structured')[1];
-  assert.equal(narrativeConfig.preset_name, 'in_use');
-  assert.equal(narrativeConfig.should_silence, true);
   assert.equal(structuredConfig.should_silence, true);
   assert.equal(structuredConfig.max_chat_history, 0);
   assert.equal(structuredConfig.json_schema.name, 'mwg_tower_single_floor_initial_content');
+  assert.deepEqual(structuredConfig.json_schema.value.required, ['narrative', 'player', 'opening']);
+  assert.equal('battle' in structuredConfig.json_schema.value.properties, false);
+  assert.match(structuredConfig.user_input, /CURRENT_START_STATE=/);
+  assert.doesNotMatch(structuredConfig.user_input, /CURRENT_STAT_DATA=/);
+  assert.doesNotMatch(structuredConfig.user_input, /stale_star_strike|旧模板星火斩/);
   assert.equal(mvuWrites.length, 1);
   assert.equal(chatVariableWrites.length, 1);
   assert.equal(variables.stat_data.battle.cards.reduce((sum, card) => sum + card.quantity, 0), 10);
   assert.equal(variables.stat_data.battle.cards.some(card => card.id.startsWith('stale_')), false);
   assert.ok(Number(variables.stat_data.run.schemaVersion) >= 1);
+  assert.equal(variables.stat_data.run.opening.phase, 'ready');
+  assert.equal(variables.stat_data.run.opening.content.title, '守门人的星火馈赠');
   assert.match(context.chat[0].mes, /只有连续越过三幕试炼/);
   assert.match(context.chat[0].mes, /<StatusPlaceHolderImpl\/>/);
   assert.ok(saveChatCalls >= 1, 'the rewritten greeting and MVU snapshot must be saved');
@@ -208,4 +226,4 @@ try {
   else globalThis.TavernHelper = previousTavernHelper;
 }
 
-console.log('Tower single-floor start performs two silent calls, persists MVU, and rewrites only the greeting floor.');
+console.log('Tower single-floor start performs one silent call, persists the deck/gift/map, and rewrites only the greeting floor.');

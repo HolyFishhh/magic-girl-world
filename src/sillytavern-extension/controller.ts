@@ -12,6 +12,7 @@ import { commitTowerOpening, failTowerOpening } from '../game-core/towerOpeningS
 import { executeUnifiedRunTransactionInStat } from '../common/runTransactions';
 import { normalizeMvuList } from '../common/rewardTransactions';
 import {
+  TOWER_OPENING_RESULT_SPEC,
   createTowerNodeBatchJsonSchema,
   createTowerNodeJsonSchema,
   createTowerOpeningJsonSchema,
@@ -247,6 +248,84 @@ function parseStructuredRecord(value: string | Record<string, any>): Record<stri
   throw new Error('结构化后台没有返回合法 JSON');
 }
 
+/**
+ * Structured-output adapters and models do not agree on whether the schema
+ * result is returned directly or under stat_data/data/result. Accept those
+ * transport wrappers without weakening the actual player-content gate.
+ */
+function unwrapTowerInitialContent(value: string | Record<string, any>): {
+  narrative: string;
+  status: Record<string, any>;
+  player: Record<string, any> | null;
+  opening: Record<string, any> | null;
+} {
+  const root = parseStructuredRecord(value);
+  const queue: Record<string, any>[] = [root];
+  const visited = new Set<Record<string, any>>();
+  for (let depth = 0; depth < 3 && queue.length > 0; depth += 1) {
+    const layer = queue.splice(0);
+    for (const candidate of layer) {
+      if (visited.has(candidate)) continue;
+      visited.add(candidate);
+      if (isRecord(candidate.player)) {
+        const player = candidate.player;
+        const playerContent = isRecord(player.battle)
+          ? player.battle
+          : isRecord(player.core) && Array.isArray(player.cards)
+            ? {
+              core: player.core,
+              cards: player.cards,
+              artifacts: player.artifacts,
+              items: player.items,
+              statuses: player.statuses,
+              player_abilities: player.player_abilities,
+              player_status_effects: player.player_status_effects,
+              player_lust_effect: player.player_lust_effect,
+              level: player.level,
+              exp: player.exp,
+            }
+            : null;
+        if (playerContent) {
+          return {
+            narrative: String(candidate.narrative || '').trim(),
+            status: isRecord(player.status) ? player.status : {},
+            player: playerContent,
+            opening: isRecord(candidate.opening) ? candidate.opening : null,
+          };
+        }
+      }
+      if (isRecord(candidate.battle)) {
+        return {
+          narrative: String(candidate.narrative || '').trim(),
+          status: isRecord(candidate.status) ? candidate.status : {},
+          player: candidate.battle,
+          opening: isRecord(candidate.opening) ? candidate.opening : null,
+        };
+      }
+      if (isRecord(candidate.core) && Array.isArray(candidate.cards)) {
+        return { narrative: '', status: {}, player: candidate, opening: null };
+      }
+      for (const key of ['stat_data', 'variables', 'data', 'result', 'output', 'content']) {
+        const nested = candidate[key];
+        if (isRecord(nested)) queue.push(nested);
+        else if (typeof nested === 'string' && nested.trim()) {
+          try {
+            queue.push(parseStructuredRecord(nested));
+          } catch {
+            // Non-JSON explanatory fields are irrelevant to the payload.
+          }
+        }
+      }
+    }
+  }
+  return {
+    narrative: String(root.narrative || '').trim(),
+    status: isRecord(root.status) ? root.status : {},
+    player: null,
+    opening: isRecord(root.opening) ? root.opening : null,
+  };
+}
+
 function towerInitialContentJsonSchema(): Record<string, any> {
   return {
     name: 'mwg_tower_single_floor_initial_content',
@@ -255,10 +334,35 @@ function towerInitialContentJsonSchema(): Record<string, any> {
     value: {
       type: 'object',
       properties: {
-        status: { type: 'object' },
-        battle: { type: 'object' },
+        narrative: { type: 'string' },
+        player: {
+          type: 'object',
+          properties: {
+            status: { type: 'object' },
+            core: { type: 'object' },
+            cards: { type: 'array' },
+            artifacts: { type: 'array' },
+            items: { type: 'array' },
+            statuses: { type: 'array' },
+            player_abilities: { type: 'array' },
+            player_status_effects: { type: 'array' },
+            player_lust_effect: { type: 'object' },
+            level: { type: 'integer' },
+            exp: { type: 'integer' },
+          },
+          required: ['status', 'core', 'cards'],
+        },
+        opening: {
+          type: 'object',
+          properties: {
+            title: { type: 'string' },
+            narrative: { type: 'string' },
+            choices: { type: 'array', minItems: 2, maxItems: 4 },
+          },
+          required: ['title', 'narrative', 'choices'],
+        },
       },
-      required: ['status', 'battle'],
+      required: ['narrative', 'player', 'opening'],
       additionalProperties: false,
     },
   };
@@ -282,22 +386,9 @@ function sanitizeTowerStartConfig(value: unknown): Record<string, string> {
   return result;
 }
 
-function towerSingleFloorNarrativePrompt(prompt: string, config: Record<string, string>): string {
-  return [
-    '[爬塔模式单层开场]',
-    prompt,
-    '使用当前角色卡、聊天记录和玩家当前启用的原预设，生成玩家真正进入本次远征的开场剧情。',
-    '只规定叙事架构：承接玩家设定，说明角色为何进入一个必须不断前进、连续面对战斗与各种节点的境地，并在可以接受启程馈赠的位置结束。',
-    '题材、文风、篇幅、段落和具体表现完全服从玩家设定与原预设；不要替玩家选择馈赠，不要提前生成地图节点、敌人数值或战斗结果。',
-    '只返回玩家可阅读的剧情正文，不输出 JSON、Markdown 代码块、UpdateVariable、变量命令、系统说明或后台分析。',
-    `[玩家开局设定]\n${JSON.stringify(config)}`,
-  ].join('\n');
-}
-
 function towerSingleFloorInitialContentPrompt(input: {
   startPrompt: string;
   config: Record<string, string>;
-  narrative: string;
   currentStat: Record<string, any>;
   designGuidance?: string | null;
   validationError?: string;
@@ -307,28 +398,27 @@ function towerSingleFloorInitialContentPrompt(input: {
     game_mode: input.currentStat.game_mode,
     tower_requirements: input.currentStat.tower_requirements,
     status: input.currentStat.status,
-    battle: input.currentStat.battle,
   };
   return [
     '[爬塔模式单层初始化数据]',
-    '你是魔法少女世界的第二阶段结构化变量模型。剧情已经生成；只建立一次初始玩家数据，不续写剧情。',
+    '你是魔法少女世界爬塔模式的单次开局生成器。本次请求同时建立引导剧情、启程馈赠、玩家信息与初始牌组；不要生成敌人或开场战斗。',
     `START_REQUEST=${JSON.stringify(input.startPrompt)}`,
     `PLAYER_CONFIG=${JSON.stringify(input.config)}`,
-    `OPENING_NARRATIVE=${JSON.stringify(input.narrative).slice(0, 24_000)}`,
-    `CURRENT_STAT_DATA=${JSON.stringify(current).slice(0, 36_000)}`,
+    `CURRENT_START_STATE=${JSON.stringify(current).slice(0, 12_000)}`,
     input.designGuidance || '',
-    '只返回 {"status":完整基础状态对象,"battle":完整初始战斗对象}，不得返回其他顶层键。',
-    'status 只保留爬塔需要的 time、location、profession；profession 必须含 name 与 ability。不要生成 NPC、势力、倾向、关系或普通剧情背包。',
-    'battle 必须含 core、cards、artifacts、items、statuses、player_abilities、player_status_effects、player_lust_effect、level、exp、enemy、enemies。enemy 固定 null，enemies 固定 []，level 至少 1，exp 为非负整数。',
+    '只返回 {"narrative":引导剧情,"player":玩家与卡组,"opening":馈赠事件}，不得返回 battle、敌人、地图或其他顶层键。',
+    'narrative 承接玩家设定，说明角色为何进入必须不断前进并连续面对战斗与节点的境地，在可以接受馈赠的位置结束。它是玩家可读正文，不包含变量、系统说明或战斗结果。',
+    'player.status 只保留 time、location、profession；profession 含 name 与 ability。player 还包含 core、cards、artifacts、items、statuses、player_abilities、player_status_effects、player_lust_effect、level、exp。不要生成 NPC、势力、倾向、关系或普通剧情背包。',
+    'opening 包含 title、narrative、choices；choices 为 2-4 项，每项含唯一 id、label、可选 description 与 outcome。outcome 只可使用 hp、max_hp、gold、card_removals、reward；reward 只含 cards、artifacts、items 数组。馈赠可以无代价，也可以用合理代价换取更好收益。',
     '初始牌组总 quantity 至少 10，数量没有上限校验；至少有一种能结束战斗的真实输出路径。卡组是否包含格挡或治疗由设计自由决定，不以此判错。',
     '卡牌 type 只能是 Attack、Skill、Power、Event、Curse；rarity 只能是 Common、Uncommon、Rare、Epic、Legendary、Corrupt；Curse 省略 cost，其他卡 cost 为非负整数或 energy。',
     '每个 effects 项必须是浅层执行对象，例如操作名与其数值、to、from、pick、when 等同级；禁止 source、operation、target、value 这套抽象字段，禁止在 effects 项内再写 trigger。多步效果使用数组并按顺序逐项结算。',
     'Power、遗物和独立能力使用 trigger:{on, effects}；状态先在 statuses 完整登记再由 apply_status 引用。自定义资源、临时牌模板、召唤物或卡牌修改也必须先定义再引用。',
     '若玩家明确指定流派，必须用真实 effects、trigger、状态、资源、牌区、召唤或选择机制形成“启动→运转→收益”；只有名称、emoji 和描述符合主题视为未实现。召唤流必须真实使用 spawn_summon 并让召唤物参与收益循环。',
-    '至少生成一件可执行遗物、一个可执行道具和一个具名且可执行的玩家欲望满溢效果。所有 id 使用以字母或下划线开头的稳定英文标识。',
+    '至少生成一件可执行遗物、一个可执行道具和一个具名且可执行的玩家欲望满溢效果。所有 id 使用以字母或下划线开头的稳定英文标识。地图由程序在本次结果通过后生成，绝对不要输出地图结构。',
     input.validationError ? `上一份结果未通过程序校验：${input.validationError}` : '',
     input.rejectedCandidate ? `REJECTED_CANDIDATE=${input.rejectedCandidate.slice(0, 16_000)}` : '',
-    '修复时保留已经合法且符合剧情的设计，只改程序指出的结构；最终只返回一个 JSON 对象，不输出 Markdown、UpdateVariable、解释或思考过程。',
+    '修复时保留已经合法且符合剧情的设计，只改程序指出的结构；最终只返回一个 JSON 对象，不输出 Markdown、UpdateVariable、battle 包装、解释或思考过程。',
   ].filter(Boolean).join('\n');
 }
 
@@ -756,7 +846,7 @@ export class DesignAssistantController {
   getCapabilities() {
     return {
       spec: 'mwg.design-assistant/v1' as const,
-      version: '0.3.0' as const,
+      version: '0.3.1' as const,
       towerGeneration: true as const,
       towerCoordinator: true as const,
       towerArchive: true as const,
@@ -766,9 +856,9 @@ export class DesignAssistantController {
   }
 
   /**
-   * Start tower mode inside the existing greeting floor. Both model calls are
-   * silent Tavern Helper generations; no user or assistant message is ever
-   * appended to SillyTavern's chat array.
+   * Start tower mode inside the existing greeting floor. One structured,
+   * silent request creates the prose, player deck and opening gift together;
+   * no user or assistant message is appended to SillyTavern's chat array.
    */
   async startTowerSingleFloor(input: TowerSingleFloorStartRequest): Promise<Record<string, unknown> | null> {
     const context = this.host.context();
@@ -830,27 +920,11 @@ export class DesignAssistantController {
     this.onStructuredRepairProgress({
       phase: 'begin',
       generationId,
-      detail: '正在使用当前剧情预设生成单层爬塔开场',
+      detail: '正在一次生成引导剧情、玩家卡组与启程馈赠',
     });
     let narrative = '';
+    let openingContent: Record<string, any> | null = null;
     let lastRawOutput = '';
-    const narrativeRequest: TowerGenerationRequest = {
-      chatId: input.chatId,
-      nodeId: '__tower_single_floor_start_story__',
-      requestId: `${generationId}__story`,
-      prompt: towerSingleFloorNarrativePrompt(input.startPrompt, input.config),
-      maxAttempts: 2,
-      userExtra: { mwg_tower_single_floor_start: true, phase: 'story' },
-      assistantExtra: { mwg_tower_single_floor_start: true, phase: 'story' },
-    };
-    try {
-      const result = await this.towerGenerationHost.generateNarrative(narrativeRequest);
-      narrative = cleanTowerNarrative(result.response);
-      if (!narrative) throw new Error('当前预设没有返回可显示的爬塔开场剧情');
-    } finally {
-      this.towerGenerationHost.forgetTerminalRecord(narrativeRequest);
-    }
-
     let draft = this.readLatestMvuData(input.messageId);
     if (!this.isTowerLockedScope(input.chatId, input.messageId)) {
       throw new TowerGenerationCancelledError('开场生成期间聊天或游戏模式已经变化');
@@ -860,15 +934,17 @@ export class DesignAssistantController {
     // This endpoint is reachable only from the first assistant greeting. Always
     // author the initial deck here, even if a stale/template snapshot happens
     // to contain playable cards; later floors never call this endpoint.
-    const designGuidance = this.engine.createInitializationPrompt(draft);
+    // The alternate greeting may contain compatibility defaults. They are not
+    // the player's authored deck, so always request the initialization guide
+    // against an intentionally empty card list at this one valid boundary.
+    const designGuidance = this.engine.createInitializationPrompt({ stat_data: { battle: { cards: [] } } });
     let lastError = readiness?.ok
       ? '首次爬塔必须按本次玩家设定重新生成完整初始牌组'
-      : readiness ? formatPlayerContentReadiness(readiness, 12) : '缺少 stat_data.battle';
+      : readiness ? formatPlayerContentReadiness(readiness, 12) : '缺少可用的玩家初始牌组资料';
     for (let attempt = 0; attempt < 3; attempt += 1) {
         const prompt = towerSingleFloorInitialContentPrompt({
           startPrompt: input.startPrompt,
           config: input.config,
-          narrative,
           currentStat: draft.stat_data,
           designGuidance,
           ...(attempt > 0 ? { validationError: lastError, rejectedCandidate: lastRawOutput } : {}),
@@ -885,53 +961,68 @@ export class DesignAssistantController {
         this.onStructuredRepairProgress({
           phase: 'applying',
           generationId,
-          detail: attempt === 0 ? '初始变量已返回，正在校验完整卡组' : `第 ${attempt + 1} 份修正结果已返回，正在复核`,
+          detail: attempt === 0 ? '开局内容已返回，正在校验卡组与馈赠' : `第 ${attempt + 1} 份修正结果已返回，正在复核`,
           rawOutput: lastRawOutput,
         });
         try {
-          const parsed = parseStructuredRecord(generated as string | Record<string, any>);
-          if (!isRecord(parsed.status) || !isRecord(parsed.battle)) {
-            throw new Error('初始化结果必须同时包含 status 与 battle 对象');
-          }
-          const profession = parsed.status.profession;
-          if (
-            !isRecord(profession)
-            || typeof profession.name !== 'string'
-            || !profession.name.trim()
-            || typeof profession.ability !== 'string'
-            || !profession.ability.trim()
-          ) {
-            throw new Error('status.profession 必须包含非空 name 与 ability');
-          }
+          const parsed = unwrapTowerInitialContent(generated as string | Record<string, any>);
+          if (!parsed.player) throw new Error('初始化结果缺少可执行 player.cards');
+          narrative = cleanTowerNarrative(parsed.narrative);
+          if (!narrative) throw new Error('初始化结果缺少玩家可读的引导剧情');
+          if (!parsed.opening) throw new Error('初始化结果缺少启程馈赠 opening');
+          const openingRequestId = `${generationId}__opening`;
+          const parsedOpening = parseTowerOpeningResult(JSON.stringify({
+            spec: TOWER_OPENING_RESULT_SPEC,
+            request_id: openingRequestId,
+            based_on_revision: 0,
+            ...clone(parsed.opening),
+          }), { requestId: openingRequestId, basedOnRevision: 0 });
           const candidate = clone(draft);
           const previousStatus = isRecord(candidate.stat_data.status) ? candidate.stat_data.status : {};
           const previousBattle = isRecord(candidate.stat_data.battle) ? candidate.stat_data.battle : {};
           const previousCore = isRecord(previousBattle.core) ? previousBattle.core : {};
+          const generatedProfession = isRecord(parsed.status.profession) ? parsed.status.profession : {};
+          const previousProfession = isRecord(previousStatus.profession) ? previousStatus.profession : {};
+          const profession = {
+            name: String(
+              generatedProfession.name
+              || input.config.profession
+              || previousProfession.name
+              || '冒险者',
+            ).trim(),
+            ability: String(
+              generatedProfession.ability
+              || previousProfession.ability
+              || '通过卡牌、遗物与状态在远征中持续成长。',
+            ).trim(),
+          };
           candidate.stat_data.status = {
             ...previousStatus,
             ...clone(parsed.status),
+            time: String(parsed.status.time || previousStatus.time || '远征开始'),
+            location: String(parsed.status.location || previousStatus.location || '高塔入口'),
             profession: clone(profession),
           };
           candidate.stat_data.battle = {
             ...previousBattle,
-            ...clone(parsed.battle),
+            ...clone(parsed.player),
             core: {
               ...previousCore,
-              ...(isRecord(parsed.battle.core) ? clone(parsed.battle.core) : {}),
+              ...(isRecord(parsed.player.core) ? clone(parsed.player.core) : {}),
             },
-            cards: Array.isArray(parsed.battle.cards) ? clone(parsed.battle.cards) : [],
-            artifacts: Array.isArray(parsed.battle.artifacts) ? clone(parsed.battle.artifacts) : [],
-            items: Array.isArray(parsed.battle.items) ? clone(parsed.battle.items) : [],
-            statuses: Array.isArray(parsed.battle.statuses) ? clone(parsed.battle.statuses) : [],
-            player_abilities: Array.isArray(parsed.battle.player_abilities)
-              ? clone(parsed.battle.player_abilities)
+            cards: Array.isArray(parsed.player.cards) ? clone(parsed.player.cards) : [],
+            artifacts: Array.isArray(parsed.player.artifacts) ? clone(parsed.player.artifacts) : [],
+            items: Array.isArray(parsed.player.items) ? clone(parsed.player.items) : [],
+            statuses: Array.isArray(parsed.player.statuses) ? clone(parsed.player.statuses) : [],
+            player_abilities: Array.isArray(parsed.player.player_abilities)
+              ? clone(parsed.player.player_abilities)
               : [],
-            player_status_effects: Array.isArray(parsed.battle.player_status_effects)
-              ? clone(parsed.battle.player_status_effects)
+            player_status_effects: Array.isArray(parsed.player.player_status_effects)
+              ? clone(parsed.player.player_status_effects)
               : [],
-            level: Number.isInteger(Number(parsed.battle.level)) ? Number(parsed.battle.level) : 1,
-            exp: Number.isInteger(Number(parsed.battle.exp)) && Number(parsed.battle.exp) >= 0
-              ? Number(parsed.battle.exp)
+            level: Number.isInteger(Number(parsed.player.level)) ? Number(parsed.player.level) : 1,
+            exp: Number.isInteger(Number(parsed.player.exp)) && Number(parsed.player.exp) >= 0
+              ? Number(parsed.player.exp)
               : 0,
             enemy: null,
             enemies: [],
@@ -939,8 +1030,13 @@ export class DesignAssistantController {
           normalizeMvuVariablesBattleInPlace(candidate);
           readiness = assessInitialTowerContent(candidate);
           if (!readiness?.ok) {
-            throw new Error(readiness ? formatPlayerContentReadiness(readiness, 14) : '缺少可用 battle 对象');
+            throw new Error(readiness ? formatPlayerContentReadiness(readiness, 14) : '缺少可用初始牌组');
           }
+          openingContent = {
+            title: parsedOpening.title,
+            narrative: parsedOpening.narrative,
+            choices: clone(parsedOpening.choices),
+          };
           draft = candidate;
           break;
         } catch (error) {
@@ -957,11 +1053,29 @@ export class DesignAssistantController {
 
     readiness = assessInitialTowerContent(draft);
     if (!readiness?.ok) {
-      throw new Error(`初始战斗内容不可用：${readiness ? formatPlayerContentReadiness(readiness, 14) : '缺少 battle'}`);
+      throw new Error(`初始牌组不可用：${readiness ? formatPlayerContentReadiness(readiness, 14) : '缺少卡组数据'}`);
     }
+    if (!openingContent || !narrative) throw new Error('开局剧情或启程馈赠没有通过校验');
     if (draft.stat_data.run == null) {
       ensureRunStateInStat(draft.stat_data, deriveRunSeed(draft.stat_data));
     }
+    const run = validateRunState(draft.stat_data.run);
+    if (!run.ok) throw new Error(`程序地图初始化失败：${run.message}`);
+    const openingRequestId = `${generationId}__opening`;
+    const readyRun = validateRunState({
+      ...run.value,
+      opening: {
+        phase: 'ready',
+        requestId: openingRequestId,
+        basedOnRevision: run.value.stateRevision,
+        attempts: 1,
+        content: clone(openingContent),
+        narrativePhase: 'ready',
+        narrativeRequestId: `${openingRequestId}__narrative`,
+      },
+    });
+    if (!readyRun.ok) throw new Error(`启程馈赠写入失败：${readyRun.message}`);
+    draft.stat_data.run = readyRun.value;
     await this.replaceLatestMvuData(draft, input.chatId, input.messageId);
     const helper = (globalThis as Record<string, any>).TavernHelper;
     if (typeof helper?.replaceVariables === 'function') {
@@ -980,7 +1094,7 @@ export class DesignAssistantController {
       phase: 'complete',
       generationId,
       detail: '单层爬塔开场已经写回原始楼层',
-      summary: `已在当前楼层建立 ${readiness.deck.deckQuantity} 张起始卡牌并启动馈赠生成`,
+      summary: `已在当前楼层建立 ${readiness.deck.deckQuantity} 张起始卡牌、程序地图与启程馈赠`,
       rawOutput: lastRawOutput,
     });
     return {
@@ -1149,6 +1263,11 @@ export class DesignAssistantController {
             || typeof message.mes !== 'string'
             || !message.mes.trim()
           ) return;
+          // The dedicated first-floor tower page owns initialization. A
+          // template deck may already be present in the greeting variables;
+          // never mistake it for the player's generated deck before they
+          // press Start.
+          if (message.mes.includes('[爬塔模式开场]')) return;
           const persisted = readPersistedMessageVariableSnapshot(context, messageId);
           if (!persisted) {
             await new Promise<void>(resolve => globalThis.setTimeout(resolve, 150));

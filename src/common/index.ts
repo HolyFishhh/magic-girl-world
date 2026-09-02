@@ -8,6 +8,8 @@ import {
   isCurrentMessageLatest,
   isCurrentMessageWithinDepth,
   rerenderHistoricalMessageForDepth,
+  updateCurrentChatVariablesWith,
+  updateCurrentMessageVariablesWith,
   watchCurrentMessageDepth,
 } from '../runtime/messageVariables';
 import { readRunState } from '../runtime/runStateAdapter';
@@ -59,6 +61,7 @@ import {
   type PlayerContentReadiness,
   type EffectDisplayTag,
   migrateGameModeInStat,
+  lockGameModeInStat,
   readGameMode,
   readGameModeLock,
   MAX_TOWER_ITEM_SLOTS,
@@ -92,6 +95,8 @@ import {
   InitialContentCandidateRejectedError,
   runInitialContentRepairLoop,
 } from './initialContentRepairLoop';
+import { createCharacterStartMessage } from '../start/core/promptGenerator';
+import type { CharacterConfig } from '../start/types';
 import './index.scss';
 
 const commonActionHost = TavernCommonActionHost.getInstance();
@@ -114,6 +119,7 @@ let __TOWER_MAP_APP: TowerAppController | null = null;
 let __stopLatestMessageGuard: (() => void) | null = null;
 let __disposeTowerGenerationListener: (() => void) | null = null;
 let __towerGenerationRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+let __towerStartInFlight = false;
 let __BATTLE_BOOK_DATA: { playerStatusEffects: any[]; statuses: any[] } = {
   playerStatusEffects: [],
   statuses: [],
@@ -1225,6 +1231,10 @@ function translateCardType(type: string): string {
 function initializeUI() {
   document.getElementById('delete-mode-toggle')?.addEventListener('click', toggleDeleteMode);
   document.querySelector('.battle-book-btn')?.addEventListener('click', toggleBattleBook);
+  document.getElementById('tower-start-button')?.addEventListener('click', () => void startTowerFromPanel());
+  document.getElementById('tower-start-extension-button')?.addEventListener('click', () => {
+    void installTowerExtensionFromPanel();
+  });
   document.addEventListener('click', handleCommonDocumentClick);
 }
 
@@ -1957,9 +1967,16 @@ function renderRunData(stat: any): void {
 
   if (!run) {
     teardownTowerMap();
-    section.style.display = 'none';
     const isLatest = isCurrentMessageLatest();
     const expeditionMode = selectedGameMode(stat) === 'tower';
+    section.classList.toggle('is-tower-setup', expeditionMode && isLatest);
+    section.style.display = expeditionMode && isLatest ? '' : 'none';
+    renderTowerStartPanel(expeditionMode && isLatest);
+    if (expeditionMode && isLatest) {
+      currentEl.textContent = '建立本次远征';
+      if (actionSection) actionSection.style.display = 'none';
+      return;
+    }
     const readiness = isLatest ? currentInitialContentReadiness() : null;
     const needsRepair = !!readiness && !readiness.ok;
     if (optIn) optIn.style.display = isLatest && (expeditionMode || needsRepair) ? '' : 'none';
@@ -1975,6 +1992,8 @@ function renderRunData(stat: any): void {
     return;
   }
 
+  section.classList.remove('is-tower-setup');
+  renderTowerStartPanel(false);
   if (optIn) optIn.style.display = 'none';
   section.style.display = '';
   const isLatest = isCurrentMessageLatest();
@@ -2154,6 +2173,137 @@ function selectedGameMode(stat: any): GameMode {
   return readGameMode(stat);
 }
 
+function isTowerOpeningGreeting(): boolean {
+  try {
+    return getCurrentChatMessageText().includes('[爬塔模式开场]');
+  } catch {
+    return false;
+  }
+}
+
+function setTowerStartStatus(message: string, error = false): void {
+  const status = document.getElementById('tower-start-status');
+  if (!status) return;
+  status.textContent = message;
+  status.toggleAttribute('data-error', error);
+}
+
+function setTowerStartBusy(active: boolean): void {
+  __towerStartInFlight = active;
+  document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
+    '#tower-start-panel input, #tower-start-panel textarea',
+  ).forEach(control => {
+    control.disabled = active;
+  });
+  const button = document.getElementById('tower-start-button') as HTMLButtonElement | null;
+  if (button) {
+    button.disabled = active || !towerExtensionReadiness().ready;
+    button.textContent = active ? '正在建立远征…' : '开始爬塔';
+  }
+}
+
+function towerStartField(id: string): string {
+  return String((document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement | null)?.value || '').trim();
+}
+
+function readTowerStartConfig(): CharacterConfig {
+  return {
+    mode: 'tower',
+    name: towerStartField('tower-start-name') || undefined,
+    customDescription: towerStartField('tower-start-description') || undefined,
+    world: towerStartField('tower-start-world') || undefined,
+    profession: towerStartField('tower-start-profession') || undefined,
+    opening: towerStartField('tower-start-opening') || undefined,
+    card: towerStartField('tower-start-card') || undefined,
+    towerRequirements: towerStartField('tower-start-requirements') || undefined,
+  };
+}
+
+async function persistTowerMode(config?: CharacterConfig): Promise<void> {
+  const update = (variables: Record<string, any>): Record<string, any> => {
+    if (!variables.stat_data || typeof variables.stat_data !== 'object') variables.stat_data = {};
+    lockGameModeInStat(variables.stat_data, 'tower');
+    if (config?.towerRequirements) variables.stat_data.tower_requirements = config.towerRequirements;
+    else if (config) delete variables.stat_data.tower_requirements;
+    return variables;
+  };
+  await updateCurrentMessageVariablesWith(update);
+  await updateCurrentChatVariablesWith(update);
+}
+
+async function installTowerExtensionFromPanel(): Promise<void> {
+  const runtime = (globalThis as any).MagicGirlWorld;
+  const button = document.getElementById('tower-start-extension-button') as HTMLButtonElement | null;
+  const detail = document.getElementById('tower-start-extension-text');
+  if (typeof runtime?.installTowerExtension !== 'function') {
+    if (detail) detail.textContent = '角色运行时尚未提供组件安装器，请刷新酒馆后重试。';
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = '正在安装或更新…';
+  }
+  try {
+    const installed = await runtime.installTowerExtension();
+    if (detail) detail.textContent = installed ? '组件已更新，请刷新酒馆后开始爬塔。' : '安装已取消。';
+    if (button) {
+      button.disabled = Boolean(installed);
+      button.textContent = installed ? '等待刷新' : '重新安装或更新';
+    }
+  } catch (error) {
+    if (detail) detail.textContent = error instanceof Error ? error.message : '组件安装或更新失败。';
+    if (button) {
+      button.disabled = false;
+      button.textContent = '重新安装或更新';
+    }
+  }
+}
+
+async function startTowerFromPanel(): Promise<void> {
+  if (__towerStartInFlight || !isCurrentMessageLatest()) return;
+  const readiness = towerExtensionReadiness();
+  if (!readiness.ready) {
+    setTowerStartStatus(readiness.message, true);
+    return;
+  }
+  const runtime = (globalThis as any).MagicGirlWorld;
+  if (typeof runtime?.startTowerSingleFloor !== 'function') {
+    setTowerStartStatus('爬塔组件没有加载单层启动功能，请更新组件并刷新酒馆。', true);
+    return;
+  }
+  const config = readTowerStartConfig();
+  setTowerStartBusy(true);
+  setTowerStartStatus('正在一次生成引导剧情、初始牌组与启程馈赠…');
+  try {
+    await ensureMvuRuntimeReady({ mvuTimeoutMs: 30_000, battleDataTimeoutMs: 30_000, requireBattleData: false });
+    await persistTowerMode(config);
+    await runtime.startTowerSingleFloor({
+      spec: 'mwg.tower-single-floor-start/v1',
+      sourceMessageId: getCurrentMessageVariableOptions().message_id,
+      prompt: createCharacterStartMessage(config),
+      config,
+    });
+    setTowerStartStatus('远征已建立，正在显示馈赠与程序地图。');
+    if (__commonViewInitialized) void loadGameData();
+  } catch (error) {
+    setTowerStartStatus(error instanceof Error ? error.message : '爬塔初始化失败，请重试。', true);
+    setTowerStartBusy(false);
+  }
+}
+
+function renderTowerStartPanel(active: boolean): void {
+  const panel = document.getElementById('tower-start-panel');
+  const detail = document.getElementById('tower-start-extension-text');
+  const extensionButton = document.getElementById('tower-start-extension-button') as HTMLButtonElement | null;
+  const startButton = document.getElementById('tower-start-button') as HTMLButtonElement | null;
+  if (panel) panel.style.display = active ? '' : 'none';
+  if (!active) return;
+  const readiness = towerExtensionReadiness();
+  if (detail) detail.textContent = readiness.ready ? '爬塔组件已就绪。' : readiness.message;
+  if (extensionButton) extensionButton.style.display = readiness.ready ? 'none' : '';
+  if (startButton) startButton.disabled = __towerStartInFlight || !readiness.ready;
+}
+
 function towerExtensionReadiness(): { ready: boolean; message: string } {
   const runtime = (globalThis as any).MagicGirlWorld;
   const capabilities =
@@ -2166,7 +2316,7 @@ function towerExtensionReadiness(): { ready: boolean; message: string } {
     .map((part: string) => Number(part) || 0);
   const supported = (version[0] || 0) > 0
     || (version[1] || 0) > 3
-    || (version[1] || 0) === 3 && (version[2] || 0) >= 0;
+    || (version[1] || 0) === 3 && (version[2] || 0) >= 1;
   if (
     !supported
     || capabilities.towerGeneration !== true
@@ -2175,7 +2325,7 @@ function towerExtensionReadiness(): { ready: boolean; message: string } {
   ) {
     return {
       ready: false,
-      message: `设计辅助器版本过低（当前 ${capabilities.version || '未知'}，至少需要 0.3.0）。`,
+      message: `设计辅助器版本过低（当前 ${capabilities.version || '未知'}，至少需要 0.3.1）。`,
     };
   }
   return { ready: true, message: '' };
@@ -2197,11 +2347,9 @@ async function synchronizeSelectedGameMode(): Promise<void> {
     __STAT__.game_mode_lock = { schemaVersion: 1, mode };
     if (mode === 'story') __STAT__.run = null;
   }
-  if (mode !== 'tower' || readRunState(__STAT__)) return;
-  const readiness = currentInitialContentReadiness();
-  if (!readiness?.ok) return;
-  await runActionHost.startRun();
-  __PENDING_RUN_SUMMARY = '{{user}}选择了远征模式';
+  // Tower initialization is owned by the first-floor tower panel and the
+  // persistent extension. Never promote template cards into a run merely
+  // because the mode lock was written while the player is still configuring.
 }
 
 let __CONTENT_PROFILE_SEQUENCE = 0;
@@ -2273,7 +2421,12 @@ async function loadGameData() {
     // otherwise not mounted again. Wait for this exact message snapshot before
     // the first read so reopening a saved chat restores without another AI
     // generation or a manual "重新读取变量" action.
-    await ensureMvuRuntimeReady();
+    const towerOpeningGreeting = isTowerOpeningGreeting();
+    await ensureMvuRuntimeReady(
+      towerOpeningGreeting
+        ? { mvuTimeoutMs: 30_000, battleDataTimeoutMs: 30_000, requireBattleData: false }
+        : undefined,
+    );
     if (!viewIsActive()) return;
 
     // 获取当前变量数据
@@ -2290,6 +2443,14 @@ async function loadGameData() {
       return;
     }
 
+    if (towerOpeningGreeting && readGameModeLock(__STAT__)?.mode !== 'tower') {
+      await persistTowerMode();
+      variables = getCurrentMessageVariables();
+      __STAT__ = getStatRootRef(variables) || {};
+      __DELTA__ = variables?.delta_data || variables?.delta || {};
+      rpgData = __STAT__;
+    }
+
     try {
       await synchronizeSelectedGameMode();
       if (!viewIsActive()) return;
@@ -2299,6 +2460,13 @@ async function loadGameData() {
       rpgData = __STAT__;
     } catch (error) {
       console.warn('同步游戏模式失败：', error);
+    }
+
+    if (selectedGameMode(rpgData) === 'tower' && !readRunState(rpgData)) {
+      renderTowerPlayerSummary(rpgData, true);
+      renderRunData(rpgData);
+      startLatestMessageGuard();
+      return;
     }
 
     // 剧情模式不触发远征事务；远征模式仅在开始页选择后由程序初始化。
@@ -2339,7 +2507,8 @@ async function loadGameData() {
     if (!viewIsActive()) return;
 
     const loadedRun = readRunState(rpgData);
-    const towerOnly = isLockedTowerMapRun(rpgData, loadedRun);
+    const towerOnly = selectedGameMode(rpgData) === 'tower'
+      && (!loadedRun || isLockedTowerMapRun(rpgData, loadedRun));
     renderTowerPlayerSummary(rpgData, towerOnly);
     if (towerOnly) {
       // Tower mode is a self-contained single-floor game surface. Avoid the

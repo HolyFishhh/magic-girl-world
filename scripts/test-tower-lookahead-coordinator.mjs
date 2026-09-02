@@ -270,7 +270,8 @@ function createHarness(seed, options = {}) {
   harness.coordinator.deactivate();
 }
 
-// Opening is generated first and blocks all node prefetch until consumed.
+// Opening is generated first; as soon as it is visible, reachable nodes are
+// prepared in parallel while the player reads and chooses the gift.
 {
   const harness = createHarness(20260840);
   harness.coordinator.activateChat('tower-chat');
@@ -279,16 +280,10 @@ function createHarness(seed, options = {}) {
   } catch (error) {
     throw new Error(`${error.message}; requests=${JSON.stringify(harness.requests)}; errors=${JSON.stringify(harness.errors.map(entry => String(entry[1])))}`);
   }
-  assert.equal(harness.requests.length, 1);
   assert.equal(harness.requests[0].generationType, 'opening');
   assert.equal(harness.requests[0].timeoutMs, undefined, 'structured opening generation has no business-layer hard timeout');
   assert.equal(harness.requests[0].maxAttempts, 3, 'empty structured responses receive bounded automatic retries');
   assert.match(harness.requests[0].prompt, /偏好具有机制互动的敌人/);
-  await tick();
-  assert.equal(harness.requests.filter(request => request.generationType === 'batch').length, 0);
-
-  settleTowerOpeningChoiceInStat(harness.variables().stat_data, 'accept');
-  harness.coordinator.schedule('opening-consumed');
   const expectedLookaheadCount = towerState.collectTowerLookahead(harness.variables().stat_data.run).length;
   assert.ok(expectedLookaheadCount >= 1 && expectedLookaheadCount <= 3);
   try {
@@ -321,6 +316,8 @@ function createHarness(seed, options = {}) {
   assert.equal(harness.requests.some(request => request.prompt.includes('COORDINATOR_LATEST_MVU_TAIL')), false);
   assert.equal(harness.requests.some(request => request.prompt.includes('repeated_report')), false);
   assert.equal(harness.requests.some(request => request.prompt.includes('createChatMessages')), false);
+  settleTowerOpeningChoiceInStat(harness.variables().stat_data, 'accept');
+  harness.coordinator.schedule('opening-consumed');
   harness.coordinator.deactivate();
 }
 
