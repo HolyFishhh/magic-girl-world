@@ -45,7 +45,7 @@ assert.equal(extra.破限方案, '使用内置破限');
 assert.equal(extra.其他预设名称, '');
 assert.equal(extra.兼容假流式, true);
 assert.equal(settings.通知.额外模型解析中, true);
-assert.equal(extra.关闭thinking, true);
+assert.equal(extra.关闭thinking, false);
 assert.equal(extra.随机头部, false);
 assert.equal(extra.应答格式, '聊天消息');
 assert.equal(extra.请求方式, '依次请求，失败后重试');

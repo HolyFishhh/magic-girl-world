@@ -546,12 +546,19 @@ export class PersistentMvuRepairHost {
     const generated = await generator({
       generation_id: generationId,
       user_input: prompt,
-      should_stream: false,
+      should_stream: true,
       should_silence: true,
       max_chat_history: 0,
       json_schema: initialRepairJsonSchema(),
     });
     assertCurrent();
+    const rawOutput = typeof generated === 'string' ? generated : JSON.stringify(generated, null, 2);
+    this.options.onStructuredProgress?.({
+      phase: 'applying',
+      generationId,
+      detail: '初始内容已返回，正在转换并校验可执行规则',
+      rawOutput,
+    });
     const parsed = parseDirectRepairResult(generated);
     if (!isRecord(parsed.battle)) {
       throw new ExtraModelCandidateRejectedError('结构化修复结果缺少完整 battle 对象');
@@ -560,12 +567,6 @@ export class PersistentMvuRepairHost {
     candidateVariables.stat_data.battle = clone(parsed.battle);
     normalizeMvuVariablesBattleInPlace(candidateVariables);
     validateInitialContent(candidateVariables);
-    this.options.onStructuredProgress?.({
-      phase: 'applying',
-      generationId,
-      detail: '初始内容已生成，正在创建可游玩的爬塔存档',
-      rawOutput: typeof generated === 'string' ? generated : JSON.stringify(generated),
-    });
     const replacement = serializeBattleUpdateBlock(candidateVariables.stat_data.battle);
     const repairedMessage = replaceInitialUpdateBlock(originalMessage, replacement);
     let wroteVariables = false;
@@ -680,7 +681,7 @@ export class PersistentMvuRepairHost {
       const generated = await generator({
         generation_id: `${generationId}-attempt-${attempt + 1}`,
         user_input: retryInstruction ? `${basePrompt}\n${retryInstruction}` : basePrompt,
-        should_stream: false,
+        should_stream: true,
         should_silence: true,
         max_chat_history: 0,
         json_schema: battleSettlementJsonSchema(),

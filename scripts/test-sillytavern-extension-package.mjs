@@ -11,7 +11,7 @@ const worker = await fs.readFile(path.join(output, 'design-worker.js'), 'utf8');
 const css = await fs.readFile(path.join(output, manifest.css), 'utf8');
 
 assert.equal(manifest.minimum_client_version, '1.18.0');
-assert.equal(manifest.version, '0.2.0', 'manifest must match the tower coordinator capability version');
+assert.equal(manifest.version, '0.2.1', 'manifest must match the tower coordinator capability version');
 assert.deepEqual(manifest.dependencies, ['third-party/JS-Slash-Runner']);
 assert.equal(manifest.hooks.activate, 'activate');
 assert.ok(script.length > 10000, 'gameplay scoring core must be bundled into the standalone extension');

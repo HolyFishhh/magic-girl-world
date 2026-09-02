@@ -2,9 +2,9 @@ import { RUN_NODE_KINDS, isBattleRunNode, validateRunState, type RunNodeKind, ty
 import {
   assessInitialPlayerContent,
   formatPlayerContentReadiness,
-  formatPlayerContentRepairPrompt,
 } from '../game-core/playerContentReadiness';
 import { createContentPackFromMvuBattle } from '../runtime/contentPackAdapter';
+import { normalizeMvuVariablesBattleInPlace } from '../runtime/mvuBattleContentNormalizer';
 import { deriveRunSeed, ensureRunStateInStat } from '../runtime/runStateAdapter';
 import { compactCardForUpgrade } from '../game-core/runPrompt';
 import { migratePersistentRunDeck } from '../game-core/cardProgression';
@@ -452,7 +452,6 @@ export class DesignAssistantController {
   private readonly persistentMvuRepairHost: PersistentMvuRepairHost;
   private readonly automaticSettlementAttempts = new Set<string>();
   private settlementRecoveryWatchGeneration = 0;
-  private readonly automaticInitialContentAttempts = new Map<string, number>();
   private initialContentRecoveryWatchGeneration = 0;
   private readonly reasoningFinalRecoveryHost = new ReasoningFinalRecoveryHost();
   private reasoningRecoveryWatchGeneration = 0;
@@ -590,7 +589,6 @@ export class DesignAssistantController {
     this.persistentMvuRepairHost.clear();
     this.automaticSettlementAttempts.clear();
     this.settlementRecoveryWatchGeneration += 1;
-    this.automaticInitialContentAttempts.clear();
     this.initialContentRecoveryWatchGeneration += 1;
     this.reasoningFinalRecoveryHost.clear();
     this.reasoningRecoveryWatchGeneration += 1;
@@ -625,7 +623,7 @@ export class DesignAssistantController {
   getCapabilities() {
     return {
       spec: 'mwg.design-assistant/v1' as const,
-      version: '0.2.0' as const,
+      version: '0.2.1' as const,
       towerGeneration: true as const,
       towerCoordinator: true as const,
       towerArchive: true as const,
@@ -721,12 +719,10 @@ export class DesignAssistantController {
   };
 
   /**
-   * The first narrative response may already contain an incomplete
-   * UpdateVariable block.  In that case the message iframe is not a reliable
-   * owner for the repair: MVU can rebuild it while the second request is still
-   * settling.  The persistent extension therefore owns the one-time tower
-   * gate, repairs an empty/invalid player kit, and creates the map only after
-   * the repaired snapshot is durable.
+   * The first MVU response owns initialization. The persistent extension only
+   * canonicalizes mechanically equivalent field spellings and opens the map
+   * after that single response is valid; it never starts a second automatic
+   * initialization request.
    */
   private scheduleInitialTowerContentRecovery(reason: string): void {
     if (!this.active) return;
@@ -768,9 +764,10 @@ export class DesignAssistantController {
           const lock = isRecord(stat?.game_mode_lock) ? stat.game_mode_lock : null;
           if (lock?.schemaVersion !== 1 || lock.mode !== 'tower' || stat?.run != null) return;
 
-          const readiness = assessInitialTowerContent(root);
+          const draft = clone(root);
+          normalizeMvuVariablesBattleInPlace(draft);
+          const readiness = assessInitialTowerContent(draft);
           if (readiness?.ok) {
-            const draft = clone(root);
             ensureRunStateInStat(draft.stat_data, deriveRunSeed(draft.stat_data));
             await this.replaceLatestMvuData(draft, chatId, messageId);
             this.scheduleTowerChatActivityTouch(draft);
@@ -789,32 +786,14 @@ export class DesignAssistantController {
             await new Promise<void>(resolve => globalThis.setTimeout(resolve, 250));
             continue;
           }
-          const attemptKey = `${chatId}:${messageId}`;
-          const attempts = this.automaticInitialContentAttempts.get(attemptKey) || 0;
-          if (attempts >= 2) return;
-          this.automaticInitialContentAttempts.set(attemptKey, attempts + 1);
-          const repair = this.requestMvuExtraRepair({
-            spec: 'mwg.mvu-repair-request/v1',
-            scope: 'initial-content',
-            prompt: formatPlayerContentRepairPrompt(readiness),
+          this.setStatus(
+            'error',
+            `首轮变量没有生成可用初始牌组：${formatPlayerContentReadiness(readiness, 4)}`,
+          );
+          this.debug(`initial tower content gate rejected the first MVU result (${reason})`, {
+            readiness: formatPlayerContentReadiness(readiness, 8),
           });
-          if (!repair) return;
-          try {
-            await repair;
-          } catch (error) {
-            this.debug(`automatic initial tower content repair failed (${reason})`, {
-              attempt: attempts + 1,
-              readiness: formatPlayerContentReadiness(readiness, 8),
-              error,
-            });
-            if (attempts + 1 >= 2) return;
-            await new Promise<void>(resolve => globalThis.setTimeout(resolve, 250));
-            continue;
-          }
-          // setChatMessages can rebuild the visible iframe. The extension stays
-          // alive, so re-read the durable exact-message snapshot here and let
-          // this same loop initialize the map without waiting for a page event.
-          await new Promise<void>(resolve => globalThis.setTimeout(resolve, 100));
+          return;
         }
         this.debug(`initial tower content recovery timed out (${reason})`);
       })().catch(error => this.debug(`initial tower content recovery failed (${reason})`, error));
@@ -1539,7 +1518,9 @@ export class DesignAssistantController {
         return;
       }
       if (!snapshot) {
-        const initializationPrompt = this.engine.createInitializationPrompt(variables);
+        const initializationPrompt = this.isFirstAssistantFloor()
+          ? this.engine.createInitializationPrompt(variables)
+          : null;
         if (initializationPrompt && injectDesignContext(payload, initializationPrompt)) {
           this.latestSnapshot = null;
           this.recordInjection(state, source, chatScope.messageId);
@@ -1658,7 +1639,9 @@ export class DesignAssistantController {
     try {
       const state = this.getState();
       const snapshot = this.engine.createSnapshot(variables, state, settings);
-      const prompt = snapshot?.prompt || this.engine.createInitializationPrompt(variables);
+      const prompt = snapshot?.prompt || (this.isFirstAssistantFloor()
+        ? this.engine.createInitializationPrompt(variables)
+        : null);
       if (!prompt) return;
       const result = helper.injectPrompts([{
         id: MVU_LIFECYCLE_PROMPT_ID,
@@ -1908,7 +1891,6 @@ export class DesignAssistantController {
     this.clearMvuLifecyclePrompt('chat-changed');
     this.automaticSettlementAttempts.clear();
     this.settlementRecoveryWatchGeneration += 1;
-    this.automaticInitialContentAttempts.clear();
     this.initialContentRecoveryWatchGeneration += 1;
     const nextChatId = this.currentChatId();
     if (nextChatId) {
@@ -2159,6 +2141,18 @@ export class DesignAssistantController {
   private latestMessageId(): number | 'latest' {
     const chat = this.host.context()?.chat;
     return Array.isArray(chat) && chat.length > 0 ? chat.length - 1 : 'latest';
+  }
+
+  private isFirstAssistantFloor(): boolean {
+    const chat = this.host.context()?.chat;
+    if (!Array.isArray(chat) || chat.length === 0) return false;
+    const assistantFloors = chat.filter(message => (
+      message?.is_user === false
+      && message?.is_system !== true
+      && typeof message?.mes === 'string'
+      && message.mes.trim().length > 0
+    ));
+    return assistantFloors.length === 1 && assistantFloors[0] === chat.at(-1);
   }
 
   private towerCoordinatorScope(): TowerCoordinatorScope | null {

@@ -5,12 +5,15 @@ function isRecord(value: unknown): value is Record<string, any> {
 }
 
 /**
- * Keep the card's second-stage MVU request short and parseable.
+ * Keep the card's second-stage MVU request observable and large enough.
  *
  * MVU's `关闭thinking` option only reaches the request body for some custom
  * response-format paths. When it reuses SillyTavern's active connection in
  * chat-message mode, reasoning-capable providers can still inherit the main
- * story preset's thinking settings and spend the whole response on reasoning.
+ * story preset's thinking settings.  The card monitor now deliberately shows
+ * provider-returned reasoning, so preserve that channel instead of silently
+ * disabling it.  Hidden provider reasoning that never reaches SillyTavern is
+ * still unavailable by definition.
  * The controller calls this only after confirming both the active card and
  * MVU's extra-analysis lifecycle flag.
  */
@@ -18,23 +21,12 @@ export function applyMvuRequestPolicy(payload: unknown): boolean {
   if (!isRecord(payload)) return false;
 
   let changed = false;
-  if (payload.include_reasoning !== false) {
-    // SillyTavern derives provider-specific `thinking` from this outer flag.
-    // Mutating only a nested/provider body is not enough for DeepSeek and
-    // other reasoning-capable chat-completion backends.
-    payload.include_reasoning = false;
+  if (payload.include_reasoning !== true) {
+    payload.include_reasoning = true;
     changed = true;
   }
-  if (Object.prototype.hasOwnProperty.call(payload, 'thinking')) {
-    const thinking = payload.thinking;
-    if (!isRecord(thinking) || thinking.type !== 'disabled' || Object.keys(thinking).length !== 1) {
-      payload.thinking = { type: 'disabled' };
-      changed = true;
-    }
-  }
-
-  if (Object.prototype.hasOwnProperty.call(payload, 'reasoning_effort')) {
-    delete payload.reasoning_effort;
+  if (isRecord(payload.thinking) && payload.thinking.type === 'disabled') {
+    delete payload.thinking;
     changed = true;
   }
 

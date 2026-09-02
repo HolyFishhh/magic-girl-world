@@ -90,4 +90,21 @@ assert.deepEqual(nestedResourceTarget.player_lust_effect.effects[0], {
   to: 'self',
 });
 
-console.log('MVU battle normalization canonicalizes equivalent ids, formula wrappers, and status references.');
+const genericRuleEnvelope = normalizeMvuBattleContent({
+  statuses: [],
+  cards: [{
+    id: 'rule_strike', name: '规则斩击', type: '攻击', rarity: '普通',
+    effects: [
+      { source: 'card', operation: 'deal_damage', target: 'enemy', value: 7, trigger: 'on_play' },
+      { source: 'card', operation: 'gain_block', target: 'player', value: 4, trigger: 'immediate' },
+    ],
+  }],
+});
+assert.equal(genericRuleEnvelope.cards[0].type, 'Attack');
+assert.equal(genericRuleEnvelope.cards[0].rarity, 'Common');
+assert.deepEqual(genericRuleEnvelope.cards[0].effects, [
+  { damage: 7, to: 'opponent' },
+  { block: 4, to: 'self' },
+]);
+
+console.log('MVU battle normalization canonicalizes ids, formula wrappers, generic rule envelopes, and aliases.');

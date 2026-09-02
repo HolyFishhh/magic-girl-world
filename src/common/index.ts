@@ -103,11 +103,13 @@ let __DELTA__: any = null;
 let __PENDING_REWARD_SUMMARY: string | null = null;
 let __PENDING_RUN_SUMMARY: string | null = null;
 let __RUN_ERROR: string | null = null;
-let __TOWER_MAP_APP: TowerAppController | null = null;
+// Legacy bounded-repair bookkeeping remains for saved iframe compatibility;
+// automatic initialization is no longer scheduled after the first MVU pass.
 let __INITIAL_TOWER_REPAIR_TIMER: ReturnType<typeof setTimeout> | null = null;
 let __INITIAL_TOWER_EXTENSION_WAIT_ATTEMPTS = 0;
 const __INITIAL_TOWER_REPAIR_FALLBACK_ATTEMPTS = new Map<string, number>();
 const __INITIAL_TOWER_REPAIR_FALLBACK_ISSUES = new Map<string, Array<{ path: string; code: string }>>();
+let __TOWER_MAP_APP: TowerAppController | null = null;
 let __stopLatestMessageGuard: (() => void) | null = null;
 let __disposeTowerGenerationListener: (() => void) | null = null;
 let __towerGenerationRefreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1441,42 +1443,17 @@ function reportMvuValidationFailure(error: unknown): void {
 
 async function requestInitialContentRepair(
   readiness: PlayerContentReadiness,
-  options: { automatic?: boolean } = {},
 ): Promise<void> {
   if (__IS_SENDING_ACTION || readiness.ok) return;
-  let repairKey: string | null = null;
-  try {
-    if (selectedGameMode(__STAT__) === 'tower') repairKey = automaticInitialRepairKey();
-  } catch {
-    repairKey = null;
-  }
   let repaired = false;
   let finalError: unknown = null;
   setSendingState(true);
   setRunButtonsDisabled(true);
   try {
-    if (options.automatic && repairKey) {
-      const transactions = readAutomaticRepairAttempts(repairKey);
-      if (transactions < MAX_AUTOMATIC_INITIAL_TOWER_REPAIRS) {
-        // Count the owning transaction once. Candidate retries inside this live
-        // transaction use a separate local budget so another iframe lifecycle
-        // cannot consume the second model correction halfway through.
-        writeAutomaticRepairAttempts(repairKey, transactions + 1);
-      } else {
-        setRunButtonsDisabled(false);
-        return;
-      }
-    }
-
     const outcome = await runInitialContentRepairLoop(
-      options.automatic ? MAX_AUTOMATIC_INITIAL_TOWER_REPAIR_CANDIDATES : 1,
+      1,
       async () => {
-        const previousCandidateIssues = repairKey ? readAutomaticRepairCandidateIssues(repairKey) : [];
-        const combinedIssues = [...previousCandidateIssues, ...readiness.issues].filter(
-          (issue, index, issues) =>
-            issues.findIndex(entry => entry.path === issue.path && entry.code === issue.code) === index,
-        );
-        const prompt = formatPlayerContentRepairPrompt({ ...readiness, issues: combinedIssues });
+        const prompt = formatPlayerContentRepairPrompt(readiness);
         if (!prompt) throw new Error('没有可用的初始战斗内容修复要求');
         try {
           await retryCurrentMessageWithExtraModel(prompt, {
@@ -1488,25 +1465,15 @@ async function requestInitialContentRepair(
             validateVariables: variables => {
               const candidateReadiness = initialContentReadinessFromStat(variables?.stat_data);
               if (!candidateReadiness?.ok) {
-                if (repairKey && candidateReadiness) {
-                  writeAutomaticRepairCandidateIssues(repairKey, candidateReadiness.issues);
-                }
                 const remaining = candidateReadiness
                   ? formatPlayerContentReadiness(candidateReadiness, 4)
                   : '缺少 stat_data.battle';
                 throw new InitialContentCandidateRejectedError(`初始战斗内容仍未修复：${remaining}`);
               }
-              if (repairKey) clearAutomaticRepairCandidateIssues(repairKey);
             },
           });
         } catch (error) {
           if (!(error instanceof ExtraModelCandidateRejectedError)) throw error;
-          if (repairKey) {
-            writeAutomaticRepairCandidateIssues(repairKey, [
-              ...readiness.issues,
-              { path: 'UpdateVariable', code: 'MISSING_UPDATE_BLOCK' },
-            ]);
-          }
           throw new InitialContentCandidateRejectedError(error.message);
         }
       },
@@ -1536,7 +1503,7 @@ async function requestInitialContentRepair(
   // guard is released.  This starts the run immediately when the repair is
   // sufficient. Invalid candidates are retried in the same live transaction;
   // reloading here reconciles the final committed or rolled-back snapshot.
-  if (repaired || selectedGameMode(__STAT__) === 'tower') await loadGameData();
+  if (repaired) await loadGameData();
 }
 
 const MAX_AUTOMATIC_INITIAL_TOWER_REPAIRS = 2;
@@ -1716,7 +1683,7 @@ function scheduleAutomaticInitialTowerRepair(readiness: PlayerContentReadiness):
         if (!current || current.ok) return;
         const attempts = readAutomaticRepairAttempts(key);
         if (attempts >= MAX_AUTOMATIC_INITIAL_TOWER_REPAIRS) return;
-        await requestInitialContentRepair(current, { automatic: true });
+        await requestInitialContentRepair(current);
       } catch (error) {
         console.warn('[Tower] Failed to reconcile initial player content', error);
       }
@@ -1948,7 +1915,6 @@ function renderRunData(stat: any): void {
     // Reconcile even an apparently complete candidate.  MVU can rebuild this
     // iframe before a failed candidate transaction rolls back, and the new
     // document must verify the persisted snapshot before the map is created.
-    if (expeditionMode && readiness) scheduleAutomaticInitialTowerRepair(readiness);
     return;
   }
 
@@ -2145,7 +2111,7 @@ function towerExtensionReadiness(): { ready: boolean; message: string } {
   if (!supported || capabilities.towerGeneration !== true || capabilities.towerCoordinator !== true) {
     return {
       ready: false,
-      message: `设计辅助器版本过低（当前 ${capabilities.version || '未知'}，至少需要 0.2.0）。`,
+      message: `设计辅助器版本过低（当前 ${capabilities.version || '未知'}，至少需要 0.2.1）。`,
     };
   }
   return { ready: true, message: '' };

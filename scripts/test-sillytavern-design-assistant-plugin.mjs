@@ -349,7 +349,7 @@ context.characters = [scopedCharacter];
 const extraPayload = { prompt: [{ role: 'system', content: 'mvu' }, { role: 'user', content: 'update' }] };
 await events.emit('generate_after_data', extraPayload);
 assert.equal(hasDesignContext(extraPayload), true, 'MVU extra-model request must receive dynamic context');
-assert.equal(extraPayload.include_reasoning, false, 'MVU extra-model request must disable provider reasoning');
+assert.equal(extraPayload.include_reasoning, true, 'MVU extra-model request must preserve provider reasoning');
 assert.equal(context.chatMetadata[DESIGN_ASSISTANT_METADATA_KEY].lastInjectionAt, 123456);
 assert.equal(context.chatMetadata[DESIGN_ASSISTANT_METADATA_KEY].lastInjectionSource, 'official');
 assert.equal(context.chatMetadata[DESIGN_ASSISTANT_METADATA_KEY].lastInjectionMessageId, 'latest');
@@ -387,7 +387,7 @@ assert.equal(
   true,
   'the strict MVU request fingerprint must recover injection when the lifecycle flag is stale',
 );
-assert.equal(fingerprintOnlyPayload.include_reasoning, false);
+assert.equal(fingerprintOnlyPayload.include_reasoning, true);
 assert.equal(context.chatMetadata[DESIGN_ASSISTANT_METADATA_KEY].lastInjectionCount, 2);
 
 hostNow += 3000;
@@ -424,8 +424,8 @@ const policyOnlyPayload = {
   prompt: [{ role: 'user', content: 'mvu policy only' }],
 };
 await events.emit('generate_after_data', policyOnlyPayload);
-assert.equal(policyOnlyPayload.include_reasoning, false, 'card-scoped MVU policy must survive optional assistant disable');
-assert.equal('reasoning_effort' in policyOnlyPayload, false);
+assert.equal(policyOnlyPayload.include_reasoning, true, 'card-scoped MVU policy must survive optional assistant disable');
+assert.equal(policyOnlyPayload.reasoning_effort, 'high');
 assert.equal(policyOnlyPayload.max_tokens, 20000);
 assert.equal(hasDesignContext(policyOnlyPayload), false, 'disabled assistant must not inject design context');
 context.extensionSettings[DESIGN_ASSISTANT_EXTENSION_ID].enabled = true;

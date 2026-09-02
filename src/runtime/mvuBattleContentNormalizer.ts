@@ -39,6 +39,94 @@ const FORMULA_VALUE_KEYS = new Set([
 
 type FormulaActor = 'self' | 'opponent';
 
+const CONTENT_RARITY_ALIASES: Readonly<Record<string, string>> = {
+  common: 'Common', basic: 'Common', normal: 'Common', '普通': 'Common', '基础': 'Common',
+  uncommon: 'Uncommon', '罕见': 'Uncommon', '少见': 'Uncommon',
+  rare: 'Rare', '稀有': 'Rare', epic: 'Epic', '史诗': 'Epic',
+  legendary: 'Legendary', '传说': 'Legendary', corrupt: 'Corrupt', curse: 'Corrupt',
+  '腐化': 'Corrupt', '诅咒': 'Corrupt', boss: 'Boss', '首领': 'Boss', ens: 'ENS',
+};
+
+const CARD_TYPE_ALIASES: Readonly<Record<string, string>> = {
+  attack: 'Attack', '攻击': 'Attack', skill: 'Skill', '技能': 'Skill',
+  power: 'Power', ability: 'Power', '能力': 'Power', event: 'Event', '事件': 'Event',
+  curse: 'Curse', '诅咒': 'Curse',
+};
+
+const RULE_OPERATION_ALIASES: Readonly<Record<string, string>> = {
+  damage: 'damage', deal_damage: 'damage', attack: 'damage', '伤害': 'damage',
+  heal: 'heal', healing: 'heal', recover_hp: 'heal', '治疗': 'heal',
+  block: 'block', gain_block: 'block', defense: 'block', defence: 'block', '格挡': 'block', '防御': 'block',
+  energy: 'energy', gain_energy: 'energy', '能量': 'energy',
+  lust: 'lust', gain_lust: 'lust', '欲望': 'lust',
+  draw: 'draw', draw_card: 'draw', draw_cards: 'draw', '抽牌': 'draw',
+  apply_status: 'apply_status', add_status: 'apply_status', '施加状态': 'apply_status',
+  remove_status: 'remove_status', '移除状态': 'remove_status',
+  discard: 'discard', '弃牌': 'discard', exhaust: 'exhaust', '消耗': 'exhaust',
+  scry: 'scry', seek: 'seek',
+};
+
+function normalizeEnumAlias(value: unknown, aliases: Readonly<Record<string, string>>): unknown {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  return aliases[trimmed] || aliases[trimmed.toLowerCase()] || value;
+}
+
+function normalizeRuleTarget(value: unknown): 'self' | 'opponent' | undefined {
+  if (typeof value !== 'string') return undefined;
+  const target = value.trim().toLowerCase();
+  if (['self', 'player', 'owner', 'caster', 'user', '己方', '自身', '玩家'].includes(target)) return 'self';
+  if (['opponent', 'enemy', 'target', 'foe', '敌方', '敌人', '对手'].includes(target)) return 'opponent';
+  return undefined;
+}
+
+/** Canonicalize the generic rule envelope emitted by some schema models. */
+function normalizeRuleEffectEnvelope(value: unknown): unknown {
+  if (!isRecord(value) || typeof value.operation !== 'string') return value;
+  const operation = RULE_OPERATION_ALIASES[value.operation.trim()]
+    || RULE_OPERATION_ALIASES[value.operation.trim().toLowerCase()];
+  if (!operation) return value;
+  const allowed = new Set([
+    'source', 'operation', 'target', 'value', 'amount', 'trigger',
+    'status', 'status_id', 'stacks', 'hits', 'from', 'pick', 'count',
+  ]);
+  if (Object.keys(value).some(key => !allowed.has(key))) return value;
+
+  const payload = value.value ?? value.amount;
+  const result: Record<string, unknown> = {};
+  if (operation === 'apply_status' || operation === 'remove_status') {
+    const status = typeof value.status_id === 'string'
+      ? value.status_id
+      : typeof value.status === 'string'
+        ? value.status
+        : typeof payload === 'string'
+          ? payload
+          : isRecord(payload) && typeof payload.id === 'string'
+            ? payload.id
+            : '';
+    if (!status) return value;
+    result[operation] = status;
+    const stacks = value.stacks ?? (isRecord(payload) ? payload.stacks : undefined);
+    if (operation === 'apply_status' && stacks !== undefined) result.stacks = stacks;
+  } else {
+    if (payload === undefined) return value;
+    result[operation] = payload;
+  }
+
+  const target = normalizeRuleTarget(value.target);
+  if (value.target !== undefined && !target) return value;
+  if (target) result.to = target;
+  if (value.hits !== undefined) result.hits = value.hits;
+  if (value.from !== undefined) result.from = value.from;
+  if (value.pick !== undefined) result.pick = value.pick;
+  if (value.count !== undefined) result.count = value.count;
+  const trigger = typeof value.trigger === 'string' ? value.trigger.trim().toLowerCase() : '';
+  if (trigger && !['play', 'on_play', 'immediate', 'card_played', '打出时', '立即'].includes(trigger)) {
+    result.on = value.trigger;
+  }
+  return result;
+}
+
 const OPPONENT_DEFAULT_OPERATIONS = new Set([
   'damage', 'lust', 'execute', 'kill', 'apply_status', 'remove_status',
 ]);
@@ -81,6 +169,9 @@ function rewriteNode(
   if (Array.isArray(value)) return value.map(entry => rewriteNode(entry, aliases, '', inheritedActor));
   if (!isRecord(value)) return value;
 
+  const normalizedEnvelope = normalizeRuleEffectEnvelope(value);
+  if (normalizedEnvelope !== value) return rewriteNode(normalizedEnvelope, aliases, parentKey, inheritedActor);
+
   const actor = inferFormulaActor(value, inheritedActor);
 
   if (
@@ -100,6 +191,14 @@ function rewriteNode(
     }
     if ((key === 'apply_status' || key === 'remove_status') && typeof entry === 'string') {
       result[key] = aliases.get(entry) || entry;
+      continue;
+    }
+    if (key === 'rarity') {
+      result[key] = normalizeEnumAlias(entry, CONTENT_RARITY_ALIASES);
+      continue;
+    }
+    if (key === 'type') {
+      result[key] = normalizeEnumAlias(entry, CARD_TYPE_ALIASES);
       continue;
     }
     result[key] = rewriteNode(entry, aliases, key, actor);

@@ -20,16 +20,16 @@ const deepSeekPayload = {
   messages: [{ role: 'system', content: 'keep' }],
 };
 assert.equal(applyMvuRequestPolicy(deepSeekPayload), true);
-assert.equal(deepSeekPayload.include_reasoning, false);
-assert.equal(JSON.stringify(deepSeekPayload.thinking), JSON.stringify({ type: 'disabled' }));
-assert.equal('reasoning_effort' in deepSeekPayload, false);
+assert.equal(deepSeekPayload.include_reasoning, true);
+assert.equal(JSON.stringify(deepSeekPayload.thinking), JSON.stringify({ type: 'enabled' }));
+assert.equal(deepSeekPayload.reasoning_effort, 'high');
 assert.equal(deepSeekPayload.max_tokens, MVU_MAX_OUTPUT_TOKENS);
 assert.deepEqual(deepSeekPayload.messages, [{ role: 'system', content: 'keep' }]);
 assert.equal(applyMvuRequestPolicy(deepSeekPayload), false, 'policy must be idempotent');
 
 const ordinaryPayload = { model: 'ordinary-model', include_reasoning: false, max_tokens: 4096, messages: [] };
 assert.equal(applyMvuRequestPolicy(ordinaryPayload), true);
-assert.deepEqual(ordinaryPayload, { model: 'ordinary-model', include_reasoning: false, max_tokens: 20000, messages: [] });
+assert.deepEqual(ordinaryPayload, { model: 'ordinary-model', include_reasoning: true, max_tokens: 20000, messages: [] });
 assert.equal(applyMvuRequestPolicy(ordinaryPayload), false, 'expanded MVU output policy must be idempotent');
 assert.equal(applyMvuRequestPolicy(null), false);
 

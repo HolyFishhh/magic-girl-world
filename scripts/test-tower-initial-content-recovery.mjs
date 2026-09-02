@@ -51,14 +51,14 @@ let variables = {
     game_mode_lock: { schemaVersion: 1, mode: 'tower' },
     run: null,
     battle: {
-      core: { hp: 100, max_hp: 100, lust: 12, max_lust: 100 },
-      level: 1,
-      exp: 0,
-      cards: [],
-      statuses: [],
-      artifacts: [],
-      items: [],
-      player_lust_effect: null,
+      ...structuredClone(validBattle),
+      cards: [
+        {
+          id: 'summon_bite', name: '契兽撕咬', emoji: '🐺', type: '攻击', rarity: '普通', cost: 1, quantity: 5,
+          effects: [{ source: 'card', operation: 'damage', target: 'enemy', value: 7, trigger: 'on_play' }],
+        },
+        validBattle.cards[1],
+      ],
     },
   },
 };
@@ -138,16 +138,18 @@ try {
   while (!variables.stat_data.run && Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 20));
   }
-  assert.equal(generationCalls.length, 1);
-  assert.equal(generationCalls[0].json_schema?.name, 'mwg_initial_battle_repair');
+  assert.equal(generationCalls.length, 0, 'the extension must not start a separate initialization request');
   assert.equal(variables.stat_data.battle.cards.length, 2);
+  assert.equal(variables.stat_data.battle.cards[0].type, 'Attack');
+  assert.equal(variables.stat_data.battle.cards[0].rarity, 'Common');
+  assert.deepEqual(variables.stat_data.battle.cards[0].effects, [{ damage: 7, to: 'opponent' }]);
   assert.equal(variables.stat_data.run?.schemaVersion, 3);
   assert.equal(variables.stat_data.run?.routeMode, 'map');
-  assert.match(context.chat[2].mes, /_.set\('battle'/);
+  assert.doesNotMatch(context.chat[2].mes, /_.set\('battle'/);
 } finally {
   controller.deactivate();
   if (previousHelper === undefined) delete globalThis.TavernHelper;
   else globalThis.TavernHelper = previousHelper;
 }
 
-console.log('Persistent extension repairs a keyword-free empty tower deck and creates the map run.');
+console.log('Persistent extension canonicalizes the first MVU result and creates the map without a second initialization request.');

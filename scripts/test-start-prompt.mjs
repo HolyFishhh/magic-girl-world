@@ -126,7 +126,7 @@ assert.match(patcherSource, /buildMvuCardLoader/);
 assert.match(mvuLoaderSource, /破限方案='使用内置破限'/);
 assert.match(mvuLoaderSource, /其他预设名称=''/);
 assert.doesNotMatch(mvuLoaderSource, /getPreset|wrappedGetPreset|卡内变量预设/);
-assert.match(mvuLoaderSource, /关闭thinking=true/);
+assert.match(mvuLoaderSource, /关闭thinking=false/);
 assert.doesNotMatch(mvuLoaderSource, /MAGIC_GIRL_WORLD_GENERATE_RAW_MONITOR|g\.generateRaw=/);
 assert.match(mvuLoaderSource, /随机头部=false/);
 assert.match(mvuLoaderSource, /max_chat_history=2/);

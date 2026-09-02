@@ -442,7 +442,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
   };
 
   const installMvuMonitor = () => {
-    const requiredTowerExtensionVersion = '0.2.0';
+    const requiredTowerExtensionVersion = '0.2.1';
     const towerExtensionReleaseUrl = 'https://github.com/HolyFishhh/magic-girl-world/releases/latest';
     const compareSemanticVersions = (left: string, right: string): number => {
       const normalize = (value: string) => value.split(/[.-]/).map(part => Number.parseInt(part, 10) || 0);
@@ -554,7 +554,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
       const mvuSettings = host.SillyTavern?.extensionSettings?.mvu_settings;
       const extra = mvuSettings?.额外模型解析配置;
       if (!extra || typeof extra !== 'object') return;
-      extra.关闭thinking = true;
+      extra.关闭thinking = false;
       host.SillyTavern?.saveSettingsDebounced?.();
     };
 
@@ -688,7 +688,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
       setAllText('[data-mwg-mvu-raw]', liveOrRaw || '模型尚未返回完整内容');
       setAllText(
         '[data-mwg-mvu-reasoning]',
-        monitorState.reasoning || '本次请求没有返回可展示的分析内容；非流式或关闭 reasoning 时属于正常情况。',
+        monitorState.reasoning || '服务尚未返回可展示的分析内容；若模型或接口不提供 reasoning，前端无法还原隐藏思考。',
       );
       if (root) root.dataset.mvuHistory = monitorState.startedAt || liveOrRaw ? 'true' : 'false';
     };
@@ -887,7 +887,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
         loadingDetail.textContent =
           monitorState.phase === 'applying'
             ? '模型已经返回，正在校验并写入当前楼层。完成后会一次显示完整内容。'
-            : '剧情正文已经完成，额外模型正在整理变量。非流式请求期间不会逐字显示。';
+            : '剧情正文已经完成，额外模型正在整理变量；服务返回的正文会在下方实时更新。';
       }
       if (completeState) completeState.style.display = monitorState.phase === 'success' ? 'grid' : 'none';
       if (cardRepairForm) cardRepairForm.style.display = monitorState.cardRepairFormVisible ? 'grid' : 'none';
@@ -1091,7 +1091,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
     <details class="mwg-settings-group" data-mwg-component="tower-install" open>
       <summary>爬塔组件需要安装</summary>
       <div class="mwg-group-body">
-        <div class="mwg-design-status-card"><strong data-mwg-tower-extension>需要设计辅助器 0.2.0 或更高版本</strong><small data-mwg-tower-requirement>安装完整扩展包后刷新酒馆；剧情模式不受影响。</small></div>
+        <div class="mwg-design-status-card"><strong data-mwg-tower-extension>需要设计辅助器 0.2.1 或更高版本</strong><small data-mwg-tower-requirement>安装完整扩展包后刷新酒馆；剧情模式不受影响。</small></div>
         <button class="mwg-extension-download" type="button" data-action="install-tower-extension">快捷安装爬塔组件</button>
         <a class="mwg-extension-download" href="${towerExtensionReleaseUrl}" target="_blank" rel="noopener noreferrer">安装失败时打开手动下载页面</a>
       </div>
@@ -1349,7 +1349,16 @@ function summarizeMvuUpdate(result: unknown): string[] {
         render();
       },
       stream(text: unknown, generationId?: string) {
-        if (generationId && monitorState.generationId && generationId !== monitorState.generationId) return;
+        if (generationId && monitorState.generationId && generationId !== monitorState.generationId) {
+          if (monitorState.generationId.startsWith('mvu-extra-')) {
+            // MVU exposes its real generation id only after the lifecycle flag
+            // opened the monitor. Bind the first streamed request instead of
+            // discarding every token against our temporary id.
+            monitorState.generationId = generationId;
+          } else if (!generationId.startsWith(`${monitorState.generationId}-attempt-`)) {
+            return;
+          }
+        }
         monitorState.pendingOutput = typeof text === 'string' ? text : JSON.stringify(text, null, 2);
         queueStreamRender();
       },
@@ -1360,7 +1369,12 @@ function summarizeMvuUpdate(result: unknown): string[] {
         render();
       },
       complete(result: unknown, generationId?: string) {
-        if (generationId && monitorState.generationId && generationId !== monitorState.generationId) return;
+        if (
+          generationId
+          && monitorState.generationId
+          && generationId !== monitorState.generationId
+          && !generationId.startsWith(`${monitorState.generationId}-attempt-`)
+        ) return;
         if (monitorState.phase === 'idle') return;
         const updateOutput = extractUpdateOutput(result);
         const candidateHasUpdateBlock = /<UpdateVariable>[\s\S]*?<\/UpdateVariable>/i.test(updateOutput);

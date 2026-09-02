@@ -460,7 +460,7 @@ assert.equal(patchedCard.data.name, releaseConfig.characterName);
 assert.equal(patchedCard.data.character_version, releaseConfig.cardVersion);
 assert.equal(
   patchedCard.data.creator_notes,
-  '剧情模式可直接开始游玩；角色卡已内置世界书、MVU 变量框架与交互界面。爬塔模式需要另行安装 0.2.0 或更高版本的“魔法少女世界设计辅助器”扩展。',
+  '剧情模式可直接开始游玩；角色卡已内置世界书、MVU 变量框架与交互界面。爬塔模式需要另行安装 0.2.1 或更高版本的“魔法少女世界设计辅助器”扩展。',
   'patched card creator notes must describe the embedded current architecture',
 );
 assert.equal(
@@ -510,7 +510,7 @@ assert.ok(
     patchedMvuScripts[0].content.includes("e.模型来源='与插头相同'") &&
     patchedMvuScripts[0].content.includes("e.破限方案='使用内置破限'") &&
     patchedMvuScripts[0].content.includes("e.其他预设名称=''") &&
-    patchedMvuScripts[0].content.includes('e.关闭thinking=true') &&
+    patchedMvuScripts[0].content.includes('e.关闭thinking=false') &&
     patchedMvuScripts[0].content.includes('e.随机头部=false') &&
     patchedMvuScripts[0].content.includes("e.应答格式='聊天消息'") &&
     patchedMvuScripts[0].content.includes("e.请求方式='依次请求，失败后重试'") &&

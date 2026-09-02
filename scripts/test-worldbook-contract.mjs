@@ -284,9 +284,9 @@ for (const obsoletePath of [
 
 const battleGuide = sources.get('战斗内容生成要求');
 const firstMessageGuide = sources.get('首条消息变量更新');
-assert.match(firstMessageGuide, /不再把 `<CHARACTER_INIT_PENDING>` 当成必要条件/);
-assert.match(firstMessageGuide, /即使当前最新剧情回复漏掉该标记，也必须执行/);
-assert.match(firstMessageGuide, /不要因为历史消息曾含 `\[开始游戏\]`/);
+assert.match(firstMessageGuide, /初始化不依赖 `<CHARACTER_INIT_PENDING>`/);
+assert.match(firstMessageGuide, /第一条助手回复中只要 `battle\.cards` 没有任何真实卡牌对象/);
+assert.match(firstMessageGuide, /之后的空牌组只能由玩家明确提出的修复操作处理/);
 assert.match(firstMessageGuide, /`battle\.cards` 已是非空数组/);
 assert.match(firstMessageGuide, /即使最新回复错误地再次含有 `<CHARACTER_INIT_PENDING>`/);
 assert.match(firstMessageGuide, /绕过表单直接自由输入/);
@@ -561,11 +561,9 @@ assert.equal(mvuOverride.额外模型解析配置.世界书条目白名单正则
 assert.equal(Object.hasOwn(mvuOverride.额外模型解析配置, '兼容假流式'), false);
 assert.equal(Object.hasOwn(mvuOverride.额外模型解析配置, '模型来源'), false);
 assert.equal(entryConfig['首条消息变量更新'].extensions.scan_depth, 1);
-assert.deepEqual(entryConfig['首条消息变量更新'].keys, [
-  '<CHARACTER_INIT_PENDING>',
-  '〈CHARACTER_INIT_PENDING〉',
-  '＜CHARACTER_INIT_PENDING＞',
-]);
+assert.equal(entryConfig['首条消息变量更新'].constant, true);
+assert.equal(entryConfig['首条消息变量更新'].selective, false);
+assert.deepEqual(entryConfig['首条消息变量更新'].keys, []);
 assert.ok(entryConfig['战斗场景生成'].keys.includes('〈BATTLE_PENDING〉'));
 assert.ok(entryConfig['战斗场景生成'].keys.includes('＜BATTLE_PENDING＞'));
 assert.match(outputGuide, /直接输出自然、连贯的 Markdown 剧情正文/);
@@ -731,11 +729,11 @@ assert.doesNotMatch(updateGuide, /_\.set\('status\.time', T, T\);/);
 assert.match(updateGuide, /不得直接改等级/);
 assert.match(updateGuide, /`run` 及其路线、节点和事务状态只读/);
 assert.match(updateGuide, /保留现有 NPC、势力关系与未解决行动/);
-assert.match(updateGuide, /初始化后的永久战斗内容只在明确成长、奖励、商店、营火或修复事务中增量处理/);
-assert.match(updateGuide, /卡组非空且初始化门禁完整时忽略重复标记/);
-assert.match(updateGuide, /若卡牌已经存在但其他初始化必需项缺失，只按该条目补齐缺失项/);
+assert.match(updateGuide, /永久战斗内容只在明确成长、奖励、商店、营火或玩家主动修复事务中增量处理/);
+assert.match(updateGuide, /后续楼层即使卡组为空或重复出现标记，也禁止再次初始化/);
+assert.match(updateGuide, /若第一条回复时卡牌已经存在但其他初始化必需项缺失，只补齐缺失项/);
 assert.match(updateGuide, /标记不是必要条件/);
-assert.match(updateGuide, /`battle\.cards` 没有任何真实卡牌对象时，无论最新正文是否含 `<CHARACTER_INIT_PENDING>`/);
+assert.match(updateGuide, /初始化只发生在对话第一条助手回复对应的第二阶段请求/);
 assert.match(updateGuide, /`deckQuality` 会按不可主动使用、常规资源难以打出、低费用效率、偏离主构筑且低效/);
 assert.match(updateGuide, /即使漏了 `<BATTLE_PENDING>`/);
 assert.match(updateGuide, /合法敌人注册后由运行时打开战斗页/);
