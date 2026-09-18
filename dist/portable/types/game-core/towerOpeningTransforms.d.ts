@@ -1,0 +1,13 @@
+export declare const OPENING_TRANSFORM_FILTER_FIELDS: readonly ["ids", "names", "name_contains", "types"];
+export declare const OPENING_OUTCOME_FIELDS: readonly ["hp", "max_hp", "lust", "max_lust", "gold", "card_removals", "reward", "deck_transforms"];
+export interface OpeningDeckTransform {
+    filter: Partial<Record<(typeof OPENING_TRANSFORM_FILTER_FIELDS)[number], string[]>>;
+    replacement: Record<string, unknown>;
+}
+export declare function parseOpeningDeckTransforms(value: unknown): OpeningDeckTransform[];
+export declare function openingTransformMatches(card: Record<string, any>, filter: OpeningDeckTransform['filter']): boolean;
+/** All selections are frozen against the pre-gift deck; replacements never cascade. */
+export declare function applyOpeningDeckTransforms(cards: readonly Record<string, any>[], value: unknown, prepare: (replacement: Record<string, unknown>, cards: Record<string, any>[], source: string) => Record<string, unknown>): Record<string, any>[];
+export declare function createOpeningDeckTransformsSchema(card: Record<string, unknown>): Record<string, unknown>;
+export declare const OPENING_TRANSFORM_GUIDANCE = "\u9988\u8D60\u4E5F\u53EF\u4F7F\u7528 outcome.deck_transforms:[{filter:{names:[\"\u6253\u51FB\",\"\u9632\u5FA1\"]},replacement:\u5B8C\u6574\u5355\u5F20\u5361\u724C}] \u5C06\u5F53\u524D\u6301\u4E45\u724C\u7EC4\u4E2D\u6240\u6709\u5339\u914D\u526F\u672C\u9010\u5F20\u6C38\u4E45\u8F6C\u5316\u3002filter \u652F\u6301 ids\uFF08\u6A21\u677FID\uFF09\u3001names\uFF08\u7CBE\u786E\u5361\u540D\uFF09\u3001name_contains\uFF08\u5361\u540D\u5305\u542B\u6587\u5B57\uFF09\u3001types\uFF08Attack/Skill\u7B49\u7C7B\u578B\uFF09\uFF1B\u540C\u5B57\u6BB5\u4EFB\u4E00\u5339\u914D\uFF0C\u4E0D\u540C\u5B57\u6BB5\u540C\u65F6\u6EE1\u8DB3\u3002\u66FF\u6362\u724C\u5FC5\u987B\u5B8C\u6574\u9884\u751F\u6210\u4E14 quantity \u4E3A1\uFF0C\u4E0D\u4F7F\u7528 card_ref\uFF1B\u65B0\u72B6\u6001\u6309\u8BE5\u5019\u9009\u7684 statuses \u95ED\u5305\u63D0\u4F9B\u3002\u5404\u9879\u6309\u9886\u53D6\u524D\u724C\u7EC4\u7B5B\u9009\uFF0C\u4E0D\u8FDE\u9501\u8F6C\u5316\uFF0C\u4E0D\u80FD\u8BA9\u540C\u4E00\u5B9E\u4F8B\u547D\u4E2D\u591A\u9879\u3002\u6CA1\u6709\u5339\u914D\u724C\u65F6\u8F6C\u53160\u5F20\uFF0C\u4E0D\u8865\u53D1\uFF0C\u4E0D\u5F71\u54CD\u5C06\u6765\u83B7\u5F97\u7684\u724C\uFF1B\u6BCF\u5F20\u4FDD\u6301\u6301\u6709\u5B9E\u4F8B\u8EAB\u4EFD\uFF0C\u552F\u4E00\u6027\u51B2\u7A81\u6216\u89C4\u5219\u65E0\u6548\u65F6\u6574\u4F53\u5931\u8D25\u3002\u4E0D\u80FD\u628A\u53EA\u6709\u63CF\u8FF0\u3001\u5220\u9664\u989D\u5EA6\u6216\u672A\u6765\u5956\u52B1\u8BF4\u6210\u5DF2\u5B8C\u6210\u8F6C\u5316\u3002";
+export declare function describeOpeningDeckTransforms(value: unknown, cards?: readonly Record<string, any>[]): string[];

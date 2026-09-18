@@ -18,6 +18,7 @@ export interface CardIdentity {
 }
 
 export interface CardIdentityCarrier {
+  unique?: boolean;
   id?: string;
   originalId?: string;
   templateId?: string;
@@ -120,6 +121,7 @@ export function createCardCopyIdentity(
   source: CardIdentityCarrier,
   options: CardCopyIdentityOptions = {},
 ): CardIdentity & { id: string; originalId: string } {
+  if (source.unique === true) throw new Error('唯一卡牌不能复制');
   return ensureCardIdentity(
     {},
     {

@@ -49,14 +49,15 @@ assert.throws(() => reconcileNaturalLanguageCardRepair(original, original), /没
 
 let message = '玩家完成了一段剧情。';
 let variables = structuredClone(original);
-let chatVariables = structuredClone(original);
+let chatVariables = { preset: { mode: 'story' }, user_owned: { counter: 17 } };
 let emitted = '';
 let createdMessages = 0;
 Object.assign(globalThis, {
   getCurrentMessageId: () => 1,
   getLastMessageId: () => 1,
-  getChatMessages: () => [{ message }],
-  getVariables: options => structuredClone(options?.type === 'message' && options?.message_id === 0 ? original : variables),
+  getChatMessages: () => [{ message, swipe_id: 0 }],
+  getVariables: options => structuredClone(options?.type === 'chat'
+    ? chatVariables : options?.type === 'message' && options?.message_id === 0 ? original : variables),
   updateVariablesWith: updater => {
     variables = updater(structuredClone(variables));
   },
@@ -76,6 +77,7 @@ Object.assign(globalThis, {
     emitted = event;
     assert.match(message, /\[玩家自然语言卡牌修复\]/);
     assert.match(message, /用户要求="把星火改成两段攻击"/);
+    chatVariables.user_owned.counter = 18;
     variables = structuredClone(original);
     variables.stat_data.battle.cards[0] = { id: 'spark', name: '星火', effects: { damage: 4, hits: 2 } };
     variables.stat_data.battle.enemy.hp = 999;
@@ -91,7 +93,17 @@ assert.equal(emitted, 'mvu-extra-retry');
 assert.equal(createdMessages, 0, 'card repair must never create a new chat floor');
 assert.equal(variables.stat_data.battle.cards[0].effects.hits, 2);
 assert.equal(variables.stat_data.battle.enemy.hp, original.stat_data.battle.enemy.hp);
-assert.deepEqual(chatVariables, variables);
+assert.deepEqual(chatVariables, { preset: { mode: 'story' }, user_owned: { counter: 18 } });
 assert.doesNotMatch(message, /MWG_REPAIR_REQUEST|玩家自然语言卡牌修复/);
 
 console.log('Natural-language card repair stays on the MVU card scope and preserves all unrelated variables.');
+
+const {formatNaturalLanguageVariableRepairPrompt,reconcileNaturalLanguageVariableRepair,requestNaturalLanguageVariableRepair}=require(resolve('src/runtime/naturalLanguageCardRepair.ts'));
+assert.match(formatNaturalLanguageVariableRepairPrompt('修改buff和剧情'),/剧情模式/);
+const semantic=structuredClone(original);semantic.stat_data.status.time='次日';semantic.runtime_metadata='should not persist';
+const semResult=reconcileNaturalLanguageVariableRepair(original,semantic);assert.equal(semResult.stat_data.status.time,'次日');assert.equal(semResult.runtime_metadata,undefined);assert.throws(()=>reconcileNaturalLanguageVariableRepair(original,{stat_data:[]}),/有效/);
+variables=structuredClone(original);message='原始剧情';
+globalThis.eventEmit=async()=>{variables=structuredClone(original);variables.stat_data.status.time='次日';message+='\n<UpdateVariable><Analysis>修改剧情时间</Analysis>_.set("status.time","次日");</UpdateVariable>';};
+await assert.rejects(requestNaturalLanguageVariableRepair('将时间改为次日'), /需要持久化结构化修复端点/);
+assert.equal(variables.stat_data.status.time,'保持不变');assert.equal(createdMessages,0);assert.deepEqual(variables.stat_data.battle.cards,original.stat_data.battle.cards);
+console.log('PASS semantic variable edit refuses unattributable native MVU writes without a persistent endpoint');

@@ -1,0 +1,88 @@
+import assert from 'node:assert/strict';
+import {createRequire} from 'node:module';
+import fs from 'node:fs';
+import Ajv2020 from 'webpack/node_modules/ajv/dist/2020.js';
+const require=createRequire(import.meta.url);
+process.env.TS_NODE_COMPILER_OPTIONS=JSON.stringify({module:'CommonJS',moduleResolution:'node'});
+require('ts-node/register/transpile-only');
+const core=require('../src/game-core/index.ts');
+const {ReferenceBattleRuntimeHost}=require('../src/adapters/referenceBattleRuntimeHost.ts');
+const {convertMvuCards}=require('../src/fish/core/mvuBattleAdapter.ts');
+const {settleTavernBattleVariables}=require('../src/runtime/battleSettlementAdapter.ts');
+const {createContentPackFromMvuBattle}=require('../src/runtime/contentPackAdapter.ts');
+const {renderSummonPanel}=require('../src/shared/summonPresentation.ts');
+const {collectCardDisplayNames}=require('../src/game-core/cardDisplayNames.ts');
+const compile=(effects,creates)=>{const r=core.compileCompactEffectList(effects,{creates});assert.equal(r.ok,true,JSON.stringify(r));return r.value;};
+const ajv=new Ajv2020({strict:false});
+const compact=ajv.compile(require('../src/game-core/aiContentJsonSchema.ts').withAiContentDefinitions({$ref:'#/$defs/effectList'}));
+const portable=ajv.compile(JSON.parse(fs.readFileSync('schemas/mwg-effect-v1.schema.json')));
+const sword={id:'sword',name:'王剑',type:'Attack',rarity:'Rare',quantity:1,unique:true,cost:1,effects:{damage:6}};
+assert.equal(core.validateContentPackContract(core.createContentPack({cards:[sword]})).ok,true);
+assert.equal(core.validateContentPackContract(core.createContentPack({cards:[{...sword,quantity:2}]})).ok,false);
+assert.throws(()=>core.migratePersistentRunDeck([{...sword,quantity:2}]),/唯一/);
+assert.equal(core.validateRewardCandidateAgainstLibrary('cards',sword,{existing:[sword]}).ok,false);
+assert.equal(convertMvuCards([sword])[0].unique,true);
+
+const knife={id:'knife',name:'小刀',type:'Attack',rarity:'Common',cost:0,unique:false,effects:{damage:4}};
+const initial=core.createEmptyBattleState(); initial.player.hand=convertMvuCards([sword]);initial.player.deck=[...initial.player.hand];
+const host=new ReferenceBattleRuntimeHost(initial);let choices=0;
+const ports={chooseCards:async(candidates,request)=>{choices++;return candidates.slice(0,request.maximum).map(c=>c.id)},drawCards:async()=>{},onCardDiscarded:async()=>{},onCardExhausted:async()=>{}};
+let runtime=host.createCardEffectRuntime(ports);
+const execute=async(effects,creates)=>{
+  const program=compile(effects,creates);assert.equal(portable(JSON.parse(JSON.stringify(program))),true,JSON.stringify(portable.errors?.filter(e=>e.instancePath.includes('/card')||e.keyword==='additionalProperties')));
+  for(const node of program.steps)await runtime.execute({...node,type:node.op},{currentTurn:1,source:{kind:'card',id:'forge'}});
+  return program;
+};
+const forge={patch_card:'damage',id:'sword',from:'combat',pick:'all',add:3,scope:'permanent',match:'run_instance'};
+assert.equal(compact([forge]),true,JSON.stringify(compact.errors));
+await execute([forge]);await execute([forge]);
+assert.equal(host.getPlayer().hand[0].effectProgram.steps[0].amount,12,'repeated same-turn growth gets distinct patch IDs');
+assert.equal(choices,0,'exact ID with all is automatic');
+await execute([{copy:'all',from:'combat',id:'sword'}]);
+assert.equal(host.getPlayer().hand.length,1,'unique cards cannot be copied');
+const {quantity:_quantity,...swordTemplate}=sword;
+assert.equal(core.compileCompactEffectList([{add_card:'sword',count:2}],{creates:[swordTemplate]}).ok,false);
+await execute([{add_card:'sword',count:1}],[swordTemplate]);
+assert.equal(host.getPlayer().hand.length,1,'unique generation respects owned cards');
+
+const buffs=['damage','area','hits'].map(kind=>({patch_card:kind,name:'小刀',from:'combat',pick:'all',scope:'permanent',match:'filter',future_copies:true,...(kind==='damage'?{add:2}:kind==='hits'?{add:1}:{})}));
+assert.equal(compact(buffs),true,JSON.stringify(compact.errors));
+await execute(buffs);
+assert.equal(host.getGameState().cardPatchLedger.patches.length,3,'future rules register without an existing copy');
+await execute([{add_card:'knife',count:2}],[knife]);
+for(const card of host.getPlayer().hand.filter(c=>c.name==='小刀')){
+  assert.equal(card.effectProgram.steps.length,2);assert.equal(card.effectProgram.steps[0].amount,6);
+  assert.equal(card.effectProgram.steps[0].targetSelector.mode,'all');
+}
+assert.equal(host.getPlayer().hand.length,3,'nonunique templates keep multiple copies');
+const names=collectCardDisplayNames([sword]);
+const upgrade=compile({upgrade_card:'all',id:'sword',from:'combat',pick:'all',scope:'permanent',changes:[{kind:'numeric',stat:'damage',operator:'add',value:3}]});
+const description=core.effectProgramToDisplayTags(upgrade,{cardNames:names}).map(t=>t.text).join('\n');
+assert.match(description,/王剑.*伤害.*增加3/);assert.doesNotMatch(description,/升级.*级/);
+assert.match(core.describeCompactCard({type:'Skill',effects:forge},{cardNames:names}),/王剑/);
+assert.equal(compact([{...buffs[1],add:3}]),false,'area patch rejects numeric payload');
+
+const resources=[{id:'kept',name:'淫精',emoji:'◆',max:10,start:1,refresh:'retain',end_of_battle:'retain'},{id:'reset',name:'充能',emoji:'◆',max:10,start:2,refresh:'retain',end_of_battle:'reset'},{id:'legacy',name:'旧资源',emoji:'◆',max:10,start:0,refresh:'retain'}];
+assert.deepEqual(core.validateCombatResourceDefinitions(resources),[]);
+assert.ok(core.validateCombatResourceDefinitions([{...resources[0],end_of_battle:'invalid'}]).length);
+const current=core.normalizeCombatResourceStates(resources);for(const value of Object.values(current))value.current=7;
+const canonical={stat_data:{battle:{core:{hp:30,max_hp:30,lust:0,max_lust:100,resources},cards:[sword],items:[],artifacts:[],statuses:[],enemy:{name:''}}}};
+settleTavernBattleVariables(canonical,{result:'defeat',player:{currentHp:15,currentLust:0,resources:current},turns:2,cardPatches:host.getGameState().cardPatchLedger.patches});
+assert.deepEqual(canonical.stat_data.battle.core.resources.map(r=>r.current),[7,2,7],'battle end retention is independent of turn refresh');
+const pack=createContentPackFromMvuBattle(canonical.stat_data.battle);
+assert.equal(pack.playerCardPatches.length,3);
+const restoredState=core.createEmptyBattleState();restoredState.cardPatchLedger={patches:pack.playerCardPatches,nextSequence:4};
+const restored=new ReferenceBattleRuntimeHost(JSON.parse(JSON.stringify(restoredState)));runtime=restored.createCardEffectRuntime(ports);
+await execute([{ensure_card:'knife',minimum:1}],[knife]);
+assert.equal(restored.getPlayer().hand[0].effectProgram.steps.length,2,'next encounter and ensured copies inherit');
+assert.equal(restored.getPlayer().hand[0].effectProgram.steps[0].amount,6);
+
+const summonHtml=renderSummonPanel({id:'pet',name:'使魔',tags:['lewd','tentacle'],displayResourceNames:{kept:'使魔蓄力'},displaySummonerResourceNames:{kept:'淫精'},abilities:[{id:'pulse',name:'脉冲',trigger:'turn_start',effectProgram:compile([{lust:3,to:'opponent'},{summoner_effects:[{resource:{id:'kept',amount:1}}]}])}]});
+assert.doesNotMatch(summonHtml,/lewd|tentacle|点kept/);assert.match(summonHtml,/淫精/);
+const summonRuleRows = summonHtml.match(/<div>[^<]*回合开始时[^<]*<\/div>/g) || [];
+assert.equal(summonRuleRows.length, 2, 'each triggered effect has its own row, independent of its effect icon');
+assert.match(summonRuleRows[0], /3点欲望/);
+assert.match(summonRuleRows[1], /1点淫精/);
+const templateHtml=renderSummonPanel({name:'使魔',displayResourceNames:{kept:'淫精'},resources:{kept:{name:'使魔蓄力',current:0,max:10}},abilities:[{name:'脉冲',trigger:{on:'turn_start',effects:[{resource:{id:'kept',amount:1}},{summoner_effects:[{resource:{id:'kept',amount:2}}]}]}}]});
+assert.match(templateHtml,/1点使魔蓄力/);assert.match(templateHtml,/2点淫精/);assert.doesNotMatch(templateHtml,/\[object Object\]/);
+console.log('v426: unique ownership/copy/generation, exact ID, repeated growth, future group damage/hits/area, persistence, resource policy and summon display passed.');

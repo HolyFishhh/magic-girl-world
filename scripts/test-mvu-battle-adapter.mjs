@@ -16,6 +16,16 @@ assert.equal(new Set(cards.map(card => card.id)).size, 3);
 assert.equal(cards[0].originalId, 'strike');
 assert.equal(cards[0].effectProgram.steps[0].op, 'damage');
 
+const {createInitialDraftJsonSchema}=require(resolve('src/game-core/initialDraftSchema.ts'));
+const {resolveStartingHand}=require(resolve('src/game-core/cardRules.ts'));
+const {describeCardTraits}=require(resolve('src/game-core/cardLifecycle.ts'));
+assert.equal(createInitialDraftJsonSchema().value.$defs.mwgRewardCard.anyOf[0].properties.innate.type,'boolean');
+const innate=adapter.convertMvuCards([{id:'engine',name:'开场引擎',type:'Skill',rarity:'Common',cost:1,quantity:1,innate:true,effects:{block:4}}]);
+assert.equal(innate[0].innate,true);
+const restoredInnate=JSON.parse(JSON.stringify(innate));
+assert.equal(resolveStartingHand(restoredInnate,0,x=>[...x]).hand[0].id,innate[0].id);
+assert.match(JSON.stringify(describeCardTraits(restoredInnate[0])),/固有/);
+
 assert.equal(adapter.convertMvuCards([{ id: 'old', name: '旧牌', effect: 'OP.hp - 8' }]).length, 0);
 assert.equal(adapter.convertMvuAbilities([{ id: 'old', effect: 'turn_end(ME.hp + 1)' }]).length, 0);
 
@@ -49,6 +59,11 @@ assert.equal(enemy.intent.type, 'attack');
 assert.equal(enemy.actions[0].effectProgram.steps[0].op, 'damage');
 assert.equal(enemy.abilities[0].effectProgram.steps[0].op, 'gain_block');
 assert.equal(enemy.lustEffect.effectProgram.steps[0].op, 'damage');
+const enemyWithoutDesire = adapter.convertMvuEnemy({
+  name: '纯物理傀儡', emoji: '🪨', max_hp: 20, hp: 20, max_lust: 100, lust: 0,
+  actions: [{ name: '撞击', effects: { damage: 5 } }],
+});
+assert.equal(enemyWithoutDesire.lustEffect, undefined, 'missing lust_effect must stay absent instead of receiving a default weak effect');
 assert.equal(enemy.stance.id, 'guard_mode');
 assert.equal(enemy.stance.enterEffects[0].op, 'gain_block');
 assert.equal(enemy.orbs.slots, 2);

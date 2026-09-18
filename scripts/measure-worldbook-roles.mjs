@@ -1,3 +1,4 @@
+import { estimateWorldbookScenario } from './lib/worldbook-measurement.mjs';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
@@ -16,54 +17,18 @@ for (const [name, file] of Object.entries(manifest)) {
   rows.push({ name, role, tokens: encode(content).length, characters: content.length });
 }
 
-const total = role => rows.filter(row => row.role === role).reduce((sum, row) => sum + row.tokens, 0);
-const updateBase = rows
-  .filter(row => row.role === 'update' && entryConfig[row.name]?.constant === true)
-  .reduce((sum, row) => sum + row.tokens, 0);
-const byName = new Map(rows.map(row => [row.name, row.tokens]));
 
+const scenarios = {
+  update_base: [],
+  update_first_turn: ['首条消息变量更新', '战斗内容生成要求', '变量数据结构', '流派体系与设计方法'],
+  update_battle_registration: ['战斗内容生成要求', '战斗场景生成', '变量数据结构', '流派体系与设计方法'],
+  update_battle_settlement: ['战斗内容生成要求', '变量数据结构', '战斗结算生成', '流派体系与设计方法'],
+  update_content_growth: ['战斗内容生成要求', '变量数据结构', '流派体系与设计方法'],
+  update_battle_scene_repair: ['战斗内容生成要求', '战斗场景生成', '变量数据结构', '战斗场景修复', '流派体系与设计方法'],
+};
+console.log('Source estimates using o200k_base, NOT selected-provider token counts or live Tavern activation. Macros are unexpanded; entry names are deduplicated.');
 console.table(rows);
-console.table([
-  { scenario: 'plot_all', tokens: total('plot') },
-  { scenario: 'update_base', tokens: updateBase },
-  {
-    scenario: 'update_first_turn',
-    tokens:
-      updateBase +
-      (byName.get('首条消息变量更新') || 0) +
-      (byName.get('战斗内容生成要求') || 0) +
-      (byName.get('变量数据结构') || 0),
-  },
-  {
-    scenario: 'update_battle_registration',
-    tokens:
-      updateBase +
-      (byName.get('战斗内容生成要求') || 0) +
-      (byName.get('战斗场景生成') || 0) +
-      (byName.get('变量数据结构') || 0),
-  },
-  {
-    scenario: 'update_battle_settlement',
-    tokens:
-      updateBase +
-      (byName.get('战斗内容生成要求') || 0) +
-      (byName.get('变量数据结构') || 0) +
-      (byName.get('战斗结算生成') || 0),
-  },
-  {
-    scenario: 'update_content_growth',
-    tokens:
-      updateBase +
-      (byName.get('战斗内容生成要求') || 0) +
-      (byName.get('变量数据结构') || 0),
-  },
-  {
-    scenario: 'update_battle_scene_repair',
-    tokens:
-      updateBase +
-      (byName.get('战斗内容生成要求') || 0) +
-      (byName.get('战斗场景生成') || 0) +
-      (byName.get('变量数据结构') || 0) +
-      (byName.get('战斗场景修复') || 0),
-  },
-]);
+console.table(Object.entries(scenarios).map(([scenario,names]) => {
+  const selected=estimateWorldbookScenario(rows,entryConfig,names);
+  return {scenario,tokens:selected.reduce((sum,row)=>sum+row.tokens,0),entries:selected.length};
+}));

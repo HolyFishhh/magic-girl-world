@@ -1,7 +1,14 @@
+import { isEmptyProtectionEffect, normalizeDamageProtectionRule } from './damageProtection';
+import { validateEnemyActionReferences } from './enemyActionReferences';
+import { validPersistentGrowthTarget } from './persistentGrowth';
+import { validateCardLifecycle } from './cardLifecycle';
 import {
   ABILITY_TRIGGER_SET,
+  EVENT_FILTERABLE_TRIGGER_SET,
   REGISTERABLE_EFFECT_TRIGGER_SET,
-  type RegisterableEffectTrigger,
+  RUNTIME_REGISTERED_EFFECT_TRIGGER_SET,
+  type AbilityTrigger,
+  type RuntimeRegisteredEffectTrigger,
 } from './battleTriggers';
 import { roundBattleValue } from './battleMath';
 import type { CardOrigin } from './cardIdentity';
@@ -23,7 +30,7 @@ import {
   type HistoryScope,
 } from './battleEventJournal';
 import type { CardAttachmentKind, CardAttachmentRemovalEvent } from './cardAttachment';
-import { validateCardCost, type CardCost } from './combatResource';
+import { validateCardCost, validateCombatResourceDefinitions, type CardCost } from './combatResource';
 import type { SummonOverflowPolicy, SummonSelector, SummonUnitDefinition } from './summonUnit';
 
 export const EFFECT_PROGRAM_SPEC = 'mwg.effect/v1' as const;
@@ -36,7 +43,7 @@ export type CardType = 'Attack' | 'Skill' | 'Power' | 'Event' | 'Curse';
 export type CardRarity = 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary' | 'Corrupt';
 export type RecoverCardZone = 'draw' | 'discard' | 'exhaust';
 export type EffectCardPileZone = 'hand' | 'drawPile' | 'discardPile' | 'exhaustPile';
-export type ModifierStat = 'damage' | 'damage_taken' | 'lust' | 'lust_taken' | 'heal' | 'block' | 'summon_capacity';
+export type ModifierStat = 'damage' | 'damage_taken' | 'lust' | 'lust_taken' | 'heal' | 'block' | 'summon_capacity' | 'draw_per_turn';
 export type EffectModifierOperator = 'add' | 'subtract' | 'multiply' | 'divide' | 'set';
 export type CardValueStat = 'damage' | 'block' | 'lust' | 'stacks';
 export type CardValueOperator = 'add' | 'subtract' | 'multiply' | 'divide';
@@ -52,7 +59,7 @@ export type CardPlayRuleKind =
   | 'allow_card_play'
   | 'limit_card_play'
   | 'card_destination';
-export type EffectTrigger = RegisterableEffectTrigger;
+export type EffectTrigger = RuntimeRegisteredEffectTrigger;
 export type EffectSchedulePhase = 'turn_start' | 'before_draw' | 'after_draw' | 'turn_end';
 
 export interface CardSelector {
@@ -65,6 +72,7 @@ export interface CardSelector {
 export interface CardSelectorFilter {
   /** Exact visible card name. Distinct from template and instance identity. */
   name?: string;
+  nameContains?: string;
   types?: CardType[];
   rarities?: CardRarity[];
   cost?: CardCost;
@@ -76,6 +84,10 @@ export interface CardSelectorFilter {
   combatInstanceId?: string;
   origin?: CardOrigin;
   upgraded?: boolean;
+  /** Require every listed intrinsic card keyword. */
+  keywords?: CardKeyword[];
+  /** Reject cards carrying any listed intrinsic card keyword. */
+  excludedKeywords?: CardKeyword[];
   /** Select lineage roots only; temporary copied combat instances are excluded. */
   rootOnly?: boolean;
 }
@@ -102,6 +114,8 @@ export type EffectCardPatch =
     })
   | (EffectCardPatchBase & { kind: 'keyword'; keyword: CardKeyword; enabled: boolean })
   | (EffectCardPatchBase & { kind: 'replay'; extra: NumericExpression })
+  | (EffectCardPatchBase & { kind: 'hits'; add: NumericExpression })
+  | (EffectCardPatchBase & { kind: 'area' })
   | (EffectCardPatchBase & { kind: 'x_value'; operator: CardCostOperator; value: NumericExpression })
   | (EffectCardPatchBase & {
       kind: 'dynamic_cost';
@@ -117,6 +131,8 @@ export type EffectCardUpgradeChange =
   | { kind: 'cost'; operator: CardCostOperator; value: NumericExpression }
   | { kind: 'keyword'; keyword: CardKeyword; enabled: boolean }
   | { kind: 'replay'; extra: NumericExpression }
+  | { kind: 'hits'; add: NumericExpression }
+  | { kind: 'area' }
   | { kind: 'x_value'; operator: CardCostOperator; value: NumericExpression }
   | {
       kind: 'dynamic_cost';
@@ -128,7 +144,7 @@ export type EffectCardUpgradeChange =
     };
 
 export type EffectCardAttachmentChange =
-  | EffectCardUpgradeChange
+  | Exclude<EffectCardUpgradeChange, { kind: 'hits' | 'area' }>
   | { kind: 'play_access'; mode: 'deny' | 'allow' }
   | {
       kind: 'discard_auto_play';
@@ -152,6 +168,8 @@ export interface EffectCardAttachmentDefinition {
 }
 
 export interface GeneratedCardDefinition {
+  unique?: boolean;
+  lifecycle?: import('./cardLifecycle').CardLifecycle;
   id: string;
   name: string;
   emoji: string;
@@ -164,6 +182,14 @@ export interface GeneratedCardDefinition {
   retain?: boolean;
   exhaust?: boolean;
   ethereal?: boolean;
+  requiresSummonTemplateId?: string;
+}
+
+/** A listener owned by the active stance, never a permanently registered ability. */
+export interface EffectStanceEvent {
+  trigger: AbilityTrigger;
+  eventQuery?: EventTriggerQuery;
+  effects: EffectNode[];
 }
 
 /** Mutually-exclusive combat mode carried by one combatant. */
@@ -175,6 +201,7 @@ export interface EffectStanceDefinition {
   enterEffects?: EffectNode[];
   exitEffects?: EffectNode[];
   passiveEffects?: EffectNode[];
+  events?: EffectStanceEvent[];
 }
 
 /** Ordered slot entity with an independent value and passive/evoke programs. */
@@ -208,24 +235,28 @@ export interface EffectEnemySpawnDefinition {
   name: string;
   emoji: string;
   max_hp: number;
-  hp?: number;
-  max_lust?: number;
-  lust?: number;
+  hp: number;
+  max_lust: number;
+  lust: number;
   block?: number;
   description?: string;
   actions: Array<Record<string, unknown>>;
   abilities?: Array<Record<string, unknown>>;
   status_effects?: Array<Record<string, unknown>>;
-  lust_effect: Record<string, unknown>;
+  lust_effect?: Record<string, unknown>;
   action_mode?: string;
   action_config?: Record<string, unknown>;
   action_priority?: number;
   speed?: number;
   tags?: string[];
-  resources?: Record<string, unknown>;
+  resources?: Array<Record<string, unknown>>;
   stance?: Record<string, unknown> | null;
   orb_slots?: number;
   orbs?: Array<Record<string, unknown>>;
+  escape_when?: string;
+  victory_on_defeat?: boolean;
+  /** Program-authored encounter loot. Spawned reinforcements deliberately discard it at runtime. */
+  defeat_reward?: Record<string, unknown>;
 }
 
 export type NumericExpression =
@@ -236,7 +267,8 @@ export type NumericExpression =
   | { op: 'clamp_min'; value: NumericExpression; minimum: number }
   | AggregateNumericExpression
   | { op: 'count_cards'; selector: CardSelector }
-  | { op: 'count_statuses'; target: EffectTarget }
+  | { op: 'discard_count' }
+  | { op: 'count_statuses'; target: EffectTarget; statusType?: 'buff' | 'debuff' | 'neutral' }
   | {
       op: 'history'; metric: EventHistoryMetric; scope?: HistoryScope; turn?: number;
       cardInstanceId?: string; teamActorIds?: string[]; filter?: EventCounterFilter;
@@ -244,12 +276,12 @@ export type NumericExpression =
   | { op: 'intent_value' };
 
 export type BinaryNumericExpression = {
-  [TOperator in 'add' | 'subtract' | 'multiply' | 'divide']: {
+  [TOperator in 'add' | 'subtract' | 'multiply' | 'divide' | 'modulo']: {
     op: TOperator;
     left: NumericExpression;
     right: NumericExpression;
   };
-}['add' | 'subtract' | 'multiply' | 'divide'];
+}['add' | 'subtract' | 'multiply' | 'divide' | 'modulo'];
 
 export type UnaryNumericExpression = {
   [TOperator in 'negate' | 'floor' | 'ceil' | 'abs']: { op: TOperator; value: NumericExpression };
@@ -264,7 +296,11 @@ export type ConditionExpression =
   | { op: 'all' | 'any'; conditions: ConditionExpression[] }
   | { op: 'not'; condition: ConditionExpression }
   | { op: 'last_card_type'; cardType: CardType }
-  | { op: 'intent_type'; intentType: string };
+  | { op: 'discarded_card_type'; cardType: CardType }
+  | { op: 'event_status_is'; statusId: string }
+  | { op: 'intent_type'; intentType: string }
+  | { op: 'event_damage_kind'; relation: 'eq' | 'neq'; damageKind: DamageKind }
+  | { op: 'stance_is'; target: EffectTarget; relation: 'eq' | 'neq'; stanceId: string | null };
 
 export interface ComparisonCondition {
   op: 'compare';
@@ -276,6 +312,8 @@ export interface ComparisonCondition {
 export type EffectNode =
   | {
       op: 'damage'; target: EffectTarget; targetSelector?: EnemyTargetSelector; amount: NumericExpression;
+      /** Compiler-only identity for the repeated nodes of one authored hits effect. */
+      hitGroup?: string;
       damageKind?: Exclude<DamageKind, 'execute'>; bypassBlock?: boolean; lifesteal?: NumericExpression;
     }
   | {
@@ -299,13 +337,20 @@ export type EffectNode =
       stat: 'hp' | 'lust' | 'energy' | 'block';
       value: NumericExpression;
     }
+  | { op: 'persistent_growth'; stat: 'max_hp' | 'max_lust' | 'damage' | 'lust'; summonTemplateId?: string; operator: 'add' | 'subtract' | 'set'; value: NumericExpression }
   | { op: 'apply_status'; target: EffectTarget; targetSelector?: EnemyTargetSelector; status: string; stacks: NumericExpression }
   | { op: 'remove_status'; target: EffectTarget; targetSelector?: EnemyTargetSelector; status: string }
   | { op: 'draw_cards'; amount: NumericExpression }
   | { op: 'scry_cards'; amount: NumericExpression }
   | { op: 'discard_cards'; selector: CardSelector; amount: NumericExpression }
   | { op: 'exhaust_cards'; selector: CardSelector; amount: NumericExpression }
-  | { op: 'recover_cards'; source: RecoverCardZone; pick: 'random' | 'choose' | 'all'; amount: NumericExpression }
+  | {
+      op: 'recover_cards';
+      source: RecoverCardZone;
+      pick: 'random' | 'choose' | 'all';
+      amount: NumericExpression;
+      filter?: CardSelectorFilter;
+    }
   | { op: 'reduce_card_cost'; selector: CardSelector; amount: NumericExpression }
   | {
       op: 'modify_card_value';
@@ -317,6 +362,8 @@ export type EffectNode =
   | { op: 'copy_cards'; selector: CardSelector }
   | { op: 'double_card_effect'; selector: CardSelector }
   | { op: 'auto_play_cards'; selector: CardSelector; free: boolean }
+  /** Request extra complete resolutions of the card whose immediate program is currently running. */
+  | { op: 'replay_current'; count: NumericExpression }
   | { op: 'set_card_destination'; destination: PlayedCardDestination }
   | {
       op: 'move_cards';
@@ -337,7 +384,7 @@ export type EffectNode =
       maxLevel?: number;
       changes: EffectCardUpgradeChange[];
     }
-  | { op: 'add_card'; zone: 'hand' | 'draw'; card: GeneratedCardDefinition; count: number }
+  | { op: 'add_card'; zone: 'hand' | 'draw' | 'discard'; card: GeneratedCardDefinition; count: number }
   | {
       op: 'ensure_card';
       zone: 'hand' | 'draw';
@@ -349,6 +396,9 @@ export type EffectNode =
       op: 'spawn_summon'; target: EffectTarget; summon: EffectSummonDefinition; count: NumericExpression;
       capacity?: number; overflow?: SummonOverflowPolicy;
     }
+  | { op: 'wait' }
+  | { op: 'say'; text: string }
+  | { op: 'enemy_intent'; actionId: string }
   | {
       op: 'spawn_enemy'; enemy: EffectEnemySpawnDefinition; count: NumericExpression;
       /** Maximum simultaneously living enemies after this effect resolves. */
@@ -368,7 +418,11 @@ export type EffectNode =
   | { op: 'set_summon_resource'; selector: SummonSelector; resource: string; value: NumericExpression }
   | { op: 'apply_summon_status'; selector: SummonSelector; status: string; stacks: NumericExpression }
   | { op: 'remove_summon_status'; selector: SummonSelector; status: string }
-  | { op: 'activate_summons'; selector: SummonSelector }
+  | {
+      op: 'activate_summons'; selector: SummonSelector; trigger?: 'defeated';
+      /** A one-off program executed by each selected summon as its actor. */
+      suppliedAction?: { id: string; name: string; emoji?: string; description?: string; fixed?: boolean; effectProgram: EffectProgram };
+    }
   | { op: 'dismiss_summons'; selector: SummonSelector; retainCorpse?: boolean }
   | {
       op: 'copy_summons'; selector: SummonSelector;
@@ -452,7 +506,7 @@ export type EffectNode =
       repeats?: number;
       effects: EffectNode[];
     }
-  | { op: 'choose_one'; choiceId: string; options: EffectChoiceOption[] }
+  | { op: 'choose_one'; choiceId: string; count?: number; options: EffectChoiceOption[] }
   | { op: 'if'; condition: ConditionExpression; then: EffectNode[]; else?: EffectNode[] }
   | { op: 'narrate'; text: string };
 
@@ -475,11 +529,19 @@ export interface CoreCombatantState {
   energy: number;
   maxEnergy: number;
   block: number;
+  /** Current stance identity; null (or an omitted legacy field) means no stance. */
+  stanceId?: string | null;
   handSize?: number;
   drawPileSize?: number;
   discardPileSize?: number;
   exhaustPileSize?: number;
+  /** Living summons on this combatant's side. */
+  summonCount?: number;
+  /** Other living non-summon combatants on this combatant's side. */
+  allyCount?: number;
   statusStacks?: Record<string, number>;
+  /** Runtime status kinds keyed by the same stable ids as statusStacks. */
+  statusTypes?: Record<string, 'buff' | 'debuff' | 'neutral'>;
   resources?: Record<string, number>;
   maxResources?: Record<string, number>;
   tags?: string[];
@@ -504,6 +566,8 @@ export interface CoreEffectState {
     lastHeal?: number;
     lastResourceSpent?: number;
     lastCardType?: string;
+    /** Runtime-owned membership for AI-facing `scope:"team"` history reads. */
+    teamActorIds?: readonly string[];
     /** Full structured history enables filtered counters and recent-event reads. */
     eventJournal?: BattleEventJournalState;
   };
@@ -525,16 +589,26 @@ export interface CoreCardView {
   origin?: CardOrigin;
   upgraded?: boolean;
   upgradeLevel?: number;
+  retain?: boolean;
+  exhaust?: boolean;
+  ethereal?: boolean;
+  innate?: boolean;
 }
 
 export interface EffectExecutionContext {
+  /** Immutable identity of the currently dispatched status ownership event. */
+  eventStatus?: Readonly<{ kind: 'status_applied' | 'status_removed'; id: string }>;
+  /** Latest completed discard command in this program invocation, not journal history. */
+  discardResult?: import('./cardEffectRuntime').DiscardCommandResult;
   spentEnergy: number;
   spentResources?: Readonly<Record<string, number>>;
   xValues?: Readonly<Record<string, number>>;
   xValue?: number;
   statusStacks?: number;
   orbValue?: number;
-  choiceSelections?: Readonly<Record<string, string>>;
+  choiceSelections?: Readonly<Record<string, string | readonly string[]>>;
+  /** Damage kind of the concrete battle event currently dispatching this program. */
+  eventDamageKind?: DamageKind;
 }
 
 export interface EffectValidationIssue {
@@ -563,12 +637,19 @@ export type CoreEffectEvent =
   | { type: 'set_resource'; target: EffectTarget; resource: string; value: number }
   | { type: 'gain_lust'; target: EffectTarget; amount: number }
   | { type: 'set_stat'; target: EffectTarget; stat: 'hp' | 'lust' | 'energy' | 'block'; value: number }
+  | { type: 'persistent_growth'; stat: 'max_hp' | 'max_lust' | 'damage' | 'lust'; summonTemplateId?: string; operator: 'add' | 'subtract' | 'set'; value: number }
   | { type: 'apply_status'; target: EffectTarget; status: string; stacks: number }
   | { type: 'remove_status'; target: EffectTarget; status: string }
   | { type: 'draw_cards'; amount: number }
   | { type: 'scry_cards'; amount: number }
   | { type: 'discard_cards' | 'exhaust_cards'; selector: CardSelector; amount: number }
-  | { type: 'recover_cards'; source: RecoverCardZone; pick: 'random' | 'choose' | 'all'; amount: number }
+  | {
+      type: 'recover_cards';
+      source: RecoverCardZone;
+      pick: 'random' | 'choose' | 'all';
+      amount: number;
+      filter?: CardSelectorFilter;
+    }
   | { type: 'reduce_card_cost'; selector: CardSelector; amount: number }
   | {
       type: 'modify_card_value';
@@ -579,6 +660,7 @@ export type CoreEffectEvent =
     }
   | { type: 'copy_cards' | 'double_card_effect'; selector: CardSelector }
   | { type: 'auto_play_cards'; selector: CardSelector; free: boolean }
+  | { type: 'replay_current'; count: number }
   | { type: 'set_card_destination'; destination: PlayedCardDestination }
   | {
       type: 'move_cards';
@@ -599,7 +681,7 @@ export type CoreEffectEvent =
       maxLevel?: number;
       changes: EffectCardUpgradeChange[];
     }
-  | { type: 'add_card'; zone: 'hand' | 'draw'; card: GeneratedCardDefinition; count: number }
+  | { type: 'add_card'; zone: 'hand' | 'draw' | 'discard'; card: GeneratedCardDefinition; count: number }
   | {
       type: 'ensure_card';
       zone: 'hand' | 'draw';
@@ -609,8 +691,11 @@ export type CoreEffectEvent =
     }
   | {
       type: 'spawn_summon'; target: EffectTarget; summon: EffectSummonDefinition; count: number;
-      capacity: number; overflow: SummonOverflowPolicy;
+      capacity?: number; overflow: SummonOverflowPolicy;
     }
+  | { type: 'wait' }
+  | { type: 'say'; text: string }
+  | { type: 'enemy_intent'; actionId: string }
   | { type: 'spawn_enemy'; enemy: EffectEnemySpawnDefinition; count: number; capacity: number }
   | { type: 'damage_summons' | 'heal_summons'; selector: SummonSelector; amount: number }
   | {
@@ -625,11 +710,14 @@ export type CoreEffectEvent =
   | { type: 'set_summon_resource'; selector: SummonSelector; resource: string; value: number }
   | { type: 'apply_summon_status'; selector: SummonSelector; status: string; stacks: number }
   | { type: 'remove_summon_status'; selector: SummonSelector; status: string }
-  | { type: 'activate_summons'; selector: SummonSelector }
+  | {
+      type: 'activate_summons'; selector: SummonSelector; trigger?: 'defeated';
+      suppliedAction?: { id: string; name: string; emoji?: string; description?: string; fixed?: boolean; effectProgram: EffectProgram };
+    }
   | { type: 'dismiss_summons'; selector: SummonSelector; retainCorpse: boolean }
   | {
       type: 'copy_summons'; selector: SummonSelector; targetOwner: 'same' | EffectTarget;
-      capacity: number; overflow: SummonOverflowPolicy;
+      capacity?: number; overflow: SummonOverflowPolicy;
     }
   | { type: 'summoner_effects'; effects: EffectNode[] }
   | {
@@ -694,7 +782,7 @@ export class EffectExecutionError extends Error {
 const MAX_AST_DEPTH = 32;
 const MAX_AST_NODES = 256;
 const TARGETS = new Set<EffectTarget>(['self', 'opponent']);
-const BINARY_NUMBER_OPS = new Set(['add', 'subtract', 'multiply', 'divide']);
+const BINARY_NUMBER_OPS = new Set(['add', 'subtract', 'multiply', 'divide', 'modulo']);
 const UNARY_NUMBER_OPS = new Set(['negate', 'floor', 'ceil', 'abs']);
 const RELATIONS = new Set(['eq', 'neq', 'gt', 'gte', 'lt', 'lte']);
 const EFFECT_OPS = new Set([
@@ -708,6 +796,7 @@ const EFFECT_OPS = new Set([
   'set_resource',
   'gain_lust',
   'set_stat',
+  'persistent_growth',
   'apply_status',
   'remove_status',
   'draw_cards',
@@ -720,6 +809,7 @@ const EFFECT_OPS = new Set([
   'copy_cards',
   'double_card_effect',
   'auto_play_cards',
+  'replay_current',
   'set_card_destination',
   'move_cards',
   'remove_cards',
@@ -730,7 +820,7 @@ const EFFECT_OPS = new Set([
   'add_card',
   'ensure_card',
   'spawn_summon',
-  'spawn_enemy',
+  'spawn_enemy', 'wait', 'say', 'enemy_intent',
   'damage_summons',
   'heal_summons',
   'modify_summons',
@@ -767,7 +857,7 @@ const CARD_PATCH_SCOPES = new Set<CardPatchScope>(['resolution', 'turn', 'until_
 const CARD_PATCH_MATCHES = new Set<CardPatchMatch>(['instance', 'run_instance', 'template', 'filter']);
 const CARD_COST_OPERATORS = new Set<CardCostOperator>(['add', 'subtract', 'multiply', 'divide', 'set', 'min', 'max']);
 const CARD_KEYWORDS = new Set<CardKeyword>(['retain', 'exhaust', 'ethereal', 'innate']);
-const MODIFIER_STATS = new Set<ModifierStat>(['damage', 'damage_taken', 'lust', 'lust_taken', 'heal', 'block', 'summon_capacity']);
+const MODIFIER_STATS = new Set<ModifierStat>(['damage', 'damage_taken', 'lust', 'lust_taken', 'heal', 'block', 'summon_capacity', 'draw_per_turn']);
 const MODIFIER_OPERATORS = new Set<EffectModifierOperator>(['add', 'subtract', 'multiply', 'divide', 'set']);
 const CARD_VALUE_STATS = new Set<CardValueStat>(['damage', 'block', 'lust', 'stacks']);
 const CARD_VALUE_OPERATORS = new Set<CardValueOperator>(['add', 'subtract', 'multiply', 'divide']);
@@ -864,14 +954,14 @@ function validateEventQuery(
   if (value.filter !== undefined) validateEventFilter(value.filter, `${path}.filter`, issues);
   if (options.metric && !HISTORY_METRICS.includes(value.metric as never))
     addIssue(issues, `${path}.metric`, 'INVALID_HISTORY_METRIC', `unsupported history metric: ${String(value.metric)}`);
-  if (options.ordinal && value.ordinal !== undefined && !['first', 'nth', 'every_n'].includes(String(value.ordinal)))
+  if (options.ordinal && value.ordinal !== undefined && !['first', 'first_n', 'nth', 'every_n'].includes(String(value.ordinal)))
     addIssue(issues, `${path}.ordinal`, 'INVALID_EVENT_ORDINAL', `unsupported event ordinal: ${String(value.ordinal)}`);
   if (options.ordinal) {
-    const needsN = value.ordinal === 'nth' || value.ordinal === 'every_n';
+    const needsN = value.ordinal === 'first_n' || value.ordinal === 'nth' || value.ordinal === 'every_n';
     if (needsN && (!Number.isInteger(value.n) || Number(value.n) < 1))
-      addIssue(issues, `${path}.n`, 'INVALID_EVENT_ORDINAL', 'nth/every_n require a positive integer n');
+      addIssue(issues, `${path}.n`, 'INVALID_EVENT_ORDINAL', 'first_n/nth/every_n require a positive integer n');
     if (!needsN && value.n !== undefined)
-      addIssue(issues, `${path}.n`, 'INVALID_EVENT_ORDINAL', 'n is only valid with nth/every_n');
+      addIssue(issues, `${path}.n`, 'INVALID_EVENT_ORDINAL', 'n is only valid with first_n/nth/every_n');
   }
 }
 
@@ -928,15 +1018,21 @@ function validateNumericExpression(
     else value.values.forEach((entry, index) => validateNumericExpression(entry, `${path}.values[${index}]`, issues, depth + 1, counter));
     return;
   }
+  if (value.op === 'discard_count') {
+    rejectUnknownKeys(value, ['op'], path, issues);
+    return;
+  }
   if (value.op === 'count_cards') {
     rejectUnknownKeys(value, ['op', 'selector'], path, issues);
     validateCardSelector(value.selector, `${path}.selector`, issues);
     return;
   }
   if (value.op === 'count_statuses') {
-    rejectUnknownKeys(value, ['op', 'target'], path, issues);
+    rejectUnknownKeys(value, ['op', 'target', 'statusType'], path, issues);
     if (!TARGETS.has(value.target as EffectTarget))
       addIssue(issues, `${path}.target`, 'INVALID_TARGET', `不支持的目标: ${String(value.target)}`);
+    if (value.statusType !== undefined && !['buff', 'debuff', 'neutral'].includes(String(value.statusType)))
+      addIssue(issues, `${path}.statusType`, 'INVALID_STATUS_TYPE', `不支持的状态类型: ${String(value.statusType)}`);
     return;
   }
   if (value.op === 'history') {
@@ -985,7 +1081,13 @@ function validateCondition(
     validateCondition(value.condition, `${path}.condition`, issues, depth + 1, counter);
     return;
   }
-  if (value.op === 'last_card_type') {
+  if (value.op === 'event_status_is') {
+    rejectUnknownKeys(value, ['op', 'statusId'], path, issues);
+    if (typeof value.statusId !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(value.statusId))
+      addIssue(issues, `${path}.statusId`, 'INVALID_STATUS', '事件状态筛选需要稳定状态 ID');
+    return;
+  }
+  if (value.op === 'last_card_type' || value.op === 'discarded_card_type') {
     rejectUnknownKeys(value, ['op', 'cardType'], path, issues);
     if (!CARD_TYPES.has(value.cardType as CardType))
       addIssue(issues, `${path}.cardType`, 'INVALID_CARD_TYPE', `不支持的卡牌类型: ${String(value.cardType)}`);
@@ -995,6 +1097,24 @@ function validateCondition(
     rejectUnknownKeys(value, ['op', 'intentType'], path, issues);
     if (typeof value.intentType !== 'string' || !value.intentType.trim())
       addIssue(issues, `${path}.intentType`, 'INVALID_INTENT_TYPE', '敌方意图类型必须是非空字符串');
+    return;
+  }
+  if (value.op === 'stance_is') {
+    rejectUnknownKeys(value, ['op', 'target', 'relation', 'stanceId'], path, issues);
+    if (!TARGETS.has(value.target as EffectTarget))
+      addIssue(issues, `${path}.target`, 'INVALID_TARGET', `不支持的目标: ${String(value.target)}`);
+    if (value.relation !== 'eq' && value.relation !== 'neq')
+      addIssue(issues, `${path}.relation`, 'UNKNOWN_RELATION', '姿态身份只支持相等或不相等比较');
+    if (value.stanceId !== null && (typeof value.stanceId !== 'string' || !STATUS_ID_PATTERN.test(value.stanceId)))
+      addIssue(issues, `${path}.stanceId`, 'INVALID_STANCE_ID', '姿态身份必须是稳定 ID，或表示无姿态的 null');
+    return;
+  }
+  if (value.op === 'event_damage_kind') {
+    rejectUnknownKeys(value, ['op', 'relation', 'damageKind'], path, issues);
+    if (value.relation !== 'eq' && value.relation !== 'neq')
+      addIssue(issues, `${path}.relation`, 'UNKNOWN_RELATION', '事件伤害类型只支持相等或不相等比较');
+    if (!DAMAGE_KINDS.includes(value.damageKind as never))
+      addIssue(issues, `${path}.damageKind`, 'INVALID_DAMAGE_KIND', `不支持的事件伤害类型: ${String(value.damageKind)}`);
     return;
   }
   addIssue(issues, `${path}.op`, 'UNKNOWN_CONDITION_OPERATOR', `不支持的条件运算: ${value.op}`);
@@ -1043,11 +1163,13 @@ function validateCardSelectorFilter(value: unknown, path: string, issues: Effect
   if (!isRecord(value)) return addIssue(issues, path, 'INVALID_CARD_FILTER', '卡牌过滤器必须是对象');
   rejectUnknownKeys(
     value,
-    ['name', 'types', 'rarities', 'cost', 'minCost', 'maxCost', 'tags', 'templateId', 'runInstanceId', 'combatInstanceId', 'origin', 'upgraded', 'rootOnly'],
+    ['name', 'nameContains', 'types', 'rarities', 'cost', 'minCost', 'maxCost', 'tags', 'templateId', 'runInstanceId', 'combatInstanceId', 'origin', 'upgraded', 'keywords', 'excludedKeywords', 'rootOnly'],
     path,
     issues,
   );
   if (value.types !== undefined) validateStringList(value.types, `${path}.types`, CARD_TYPES, issues);
+  if (value.nameContains !== undefined && (typeof value.nameContains !== 'string' || !value.nameContains.trim()))
+    addIssue(issues, `${path}.nameContains`, 'INVALID_CARD_FILTER', '名称包含过滤值必须是非空字符串');
   if (value.name !== undefined && (typeof value.name !== 'string' || !value.name.trim()))
     addIssue(issues, `${path}.name`, 'INVALID_CARD_FILTER', '同名卡过滤值必须是非空字符串');
   if (value.rarities !== undefined) validateStringList(value.rarities, `${path}.rarities`, CARD_RARITIES, issues);
@@ -1070,6 +1192,17 @@ function validateCardSelectorFilter(value: unknown, path: string, issues: Effect
     addIssue(issues, `${path}.origin`, 'INVALID_CARD_FILTER', `不支持的卡牌来源: ${String(value.origin)}`);
   if (value.upgraded !== undefined && typeof value.upgraded !== 'boolean')
     addIssue(issues, `${path}.upgraded`, 'INVALID_CARD_FILTER', '升级过滤必须是布尔值');
+  if (value.keywords !== undefined) validateStringList(value.keywords, `${path}.keywords`, CARD_KEYWORDS, issues);
+  if (value.excludedKeywords !== undefined)
+    validateStringList(value.excludedKeywords, `${path}.excludedKeywords`, CARD_KEYWORDS, issues);
+  const excludedKeywords = value.excludedKeywords;
+  if (
+    Array.isArray(value.keywords) &&
+    Array.isArray(excludedKeywords) &&
+    value.keywords.some(keyword => excludedKeywords.includes(keyword))
+  ) {
+    addIssue(issues, path, 'CONFLICTING_CARD_FILTER', '同一卡牌关键词不能同时要求存在与不存在');
+  }
   if (value.rootOnly !== undefined && typeof value.rootOnly !== 'boolean')
     addIssue(issues, `${path}.rootOnly`, 'INVALID_CARD_FILTER', '根实例过滤必须是布尔值');
 }
@@ -1117,6 +1250,12 @@ function validateEffectCardPatch(
   } else if (value.kind === 'replay') {
     rejectUnknownKeys(value, [...common, 'extra'], path, issues);
     validateNumericExpression(value.extra, `${path}.extra`, issues, depth + 1, counter);
+  } else if (value.kind === 'area') {
+    rejectUnknownKeys(value, common, path, issues);
+  } else if (value.kind === 'hits') {
+    rejectUnknownKeys(value, [...common, 'add'], path, issues);
+    if (!Number.isInteger(value.add) || (value.add as number) < 1 || (value.add as number) > 19)
+      addIssue(issues, `${path}.add`, 'INVALID_HITS_GROWTH', '命中成长 add 必须是 1 到 19 的正整数');
   } else if (value.kind === 'x_value') {
     rejectUnknownKeys(value, [...common, 'operator', 'value'], path, issues);
     if (!CARD_COST_OPERATORS.has(value.operator as CardCostOperator))
@@ -1133,10 +1272,10 @@ function validateEffectCardPatch(
     validateNumericExpression(value.value, `${path}.value`, issues, depth + 1, counter);
     if (value.operator === 'divide' && value.value === 0)
       addIssue(issues, `${path}.value`, 'DIVISION_BY_ZERO', '动态费用补丁不能除以 0');
-    if (value.minimum !== undefined && (typeof value.minimum !== 'number' || !Number.isFinite(value.minimum)))
-      addIssue(issues, `${path}.minimum`, 'INVALID_DYNAMIC_COST_BOUND', '动态费用下限必须是有限数值');
-    if (value.maximum !== undefined && (typeof value.maximum !== 'number' || !Number.isFinite(value.maximum)))
-      addIssue(issues, `${path}.maximum`, 'INVALID_DYNAMIC_COST_BOUND', '动态费用上限必须是有限数值');
+    if (value.minimum !== undefined && (typeof value.minimum !== 'number' || !Number.isFinite(value.minimum) || value.minimum < 0))
+      addIssue(issues, `${path}.minimum`, 'INVALID_DYNAMIC_COST_BOUND', '动态费用下限必须是非负有限数值');
+    if (value.maximum !== undefined && (typeof value.maximum !== 'number' || !Number.isFinite(value.maximum) || value.maximum < 0))
+      addIssue(issues, `${path}.maximum`, 'INVALID_DYNAMIC_COST_BOUND', '动态费用上限必须是非负有限数值');
     if (typeof value.minimum === 'number' && typeof value.maximum === 'number' && value.minimum > value.maximum)
       addIssue(issues, path, 'INVALID_DYNAMIC_COST_BOUND', '动态费用下限不能大于上限');
   } else {
@@ -1158,17 +1297,18 @@ function validateEffectCardUpgradeChange(
   else if (value.kind === 'cost' || value.kind === 'x_value') rejectUnknownKeys(value, ['kind', 'operator', 'value'], path, issues);
   else if (value.kind === 'keyword') rejectUnknownKeys(value, ['kind', 'keyword', 'enabled'], path, issues);
   else if (value.kind === 'replay') rejectUnknownKeys(value, ['kind', 'extra'], path, issues);
+  else if (value.kind === 'area') rejectUnknownKeys(value, ['kind'], path, issues);
+  else if (value.kind === 'hits') rejectUnknownKeys(value, ['kind', 'add'], path, issues);
   else if (value.kind === 'dynamic_cost') rejectUnknownKeys(value, ['kind', 'timing', 'operator', 'value', 'minimum', 'maximum'], path, issues);
   else rejectUnknownKeys(value, ['kind'], path, issues);
   validateEffectCardPatch(common, path, issues, depth, counter);
 }
 
-const CARD_MOVE_REASONS = new Set<CardMoveReason>([
-  'player_choice', 'random_effect', 'effect', 'turn_cleanup', 'scry', 'recover', 'exhaust',
-  'generate', 'copy', 'transform', 'auto_play', 'other',
-]);
 const CARD_ATTACHMENT_REMOVALS = new Set<CardAttachmentRemovalEvent>([
-  'played', 'discarded', 'turn_end', 'combat_end', 'run_end', 'manual',
+  'resolution_end', 'played', 'discarded', 'turn_end', 'combat_end', 'run_end', 'manual',
+]);
+const CARD_DISCARD_TRIGGER_REASONS = new Set<CardMoveReason>([
+  'player_choice', 'random_effect', 'effect',
 ]);
 
 function validateEffectCardAttachment(
@@ -1205,9 +1345,9 @@ function validateEffectCardAttachment(
     if (value.removeOn !== 'discarded')
       addIssue(issues, `${path}.discardReasons`, 'INVALID_CARD_ATTACHMENT_REMOVAL', 'discardReasons 只用于 discarded 移除时机');
     if (!Array.isArray(value.discardReasons) || value.discardReasons.length < 1 ||
-      value.discardReasons.some(reason => !CARD_MOVE_REASONS.has(reason as CardMoveReason)) ||
+      value.discardReasons.some(reason => !CARD_DISCARD_TRIGGER_REASONS.has(reason as CardMoveReason)) ||
       new Set(value.discardReasons).size !== value.discardReasons.length)
-      addIssue(issues, `${path}.discardReasons`, 'INVALID_DISCARD_REASON', 'discardReasons 必须是非空且不重复的合法原因数组');
+      addIssue(issues, `${path}.discardReasons`, 'INVALID_DISCARD_REASON', 'discardReasons 只能使用真实手牌弃牌原因 player_choice、random_effect 或 effect');
   }
   if (!Array.isArray(value.changes) || value.changes.length < 1 || value.changes.length > 32) {
     addIssue(issues, `${path}.changes`, 'INVALID_CARD_ATTACHMENT', '附着包必须包含 1 到 32 项变化');
@@ -1225,9 +1365,9 @@ function validateEffectCardAttachment(
     if (change.kind === 'discard_auto_play') {
       rejectUnknownKeys(change, ['kind', 'reasons', 'failureDestination', 'onlyPlayerTurn'], changePath, issues);
       if (!Array.isArray(change.reasons) || change.reasons.length < 1 ||
-        change.reasons.some(reason => !CARD_MOVE_REASONS.has(reason as CardMoveReason)) ||
+        change.reasons.some(reason => !CARD_DISCARD_TRIGGER_REASONS.has(reason as CardMoveReason)) ||
         new Set(change.reasons).size !== change.reasons.length)
-        addIssue(issues, `${changePath}.reasons`, 'INVALID_DISCARD_REASON', '弃牌自动打出需要合法且不重复的原因数组');
+        addIssue(issues, `${changePath}.reasons`, 'INVALID_DISCARD_REASON', '弃牌自动打出只能使用真实手牌弃牌原因 player_choice、random_effect 或 effect');
       if (!['discard', 'exhaust', 'draw_top', 'draw_bottom', 'hand', 'remove'].includes(String(change.failureDestination)))
         addIssue(issues, `${changePath}.failureDestination`, 'INVALID_CARD_DESTINATION', '自动打出失败去向无效');
       if (typeof change.onlyPlayerTurn !== 'boolean')
@@ -1240,6 +1380,8 @@ function validateEffectCardAttachment(
 
 function validateGeneratedCard(value: unknown, path: string, issues: EffectValidationIssue[]): void {
   if (!isRecord(value)) return addIssue(issues, path, 'INVALID_GENERATED_CARD', '生成卡牌必须是对象');
+  const lifecycleIssue = validateCardLifecycle(value.lifecycle);
+  if (lifecycleIssue) addIssue(issues, `${path}.lifecycle`, 'INVALID_CARD_LIFECYCLE', lifecycleIssue);
   rejectUnknownKeys(
     value,
     [
@@ -1252,9 +1394,12 @@ function validateGeneratedCard(value: unknown, path: string, issues: EffectValid
       'description',
       'program',
       'discardProgram',
+      'lifecycle',
       'retain',
       'exhaust',
       'ethereal',
+      'unique',
+      'requiresSummonTemplateId',
     ],
     path,
     issues,
@@ -1263,6 +1408,8 @@ function validateGeneratedCard(value: unknown, path: string, issues: EffectValid
     addIssue(issues, `${path}.id`, 'INVALID_CARD_ID', `生成卡牌 ID 无效: ${String(value.id)}`);
   if (typeof value.name !== 'string' || !value.name.trim())
     addIssue(issues, `${path}.name`, 'INVALID_CARD_NAME', '生成卡牌名称不能为空');
+  if (value.requiresSummonTemplateId !== undefined && (typeof value.requiresSummonTemplateId !== 'string' || !STATUS_ID_PATTERN.test(value.requiresSummonTemplateId)))
+    addIssue(issues, `${path}.requiresSummonTemplateId`, 'INVALID_SUMMON_ID', '指定召唤模板 ID 无效');
   if (typeof value.emoji !== 'string') addIssue(issues, `${path}.emoji`, 'INVALID_CARD_EMOJI', 'emoji 必须是字符串');
   if (!['Attack', 'Skill', 'Power', 'Event', 'Curse'].includes(String(value.type)))
     addIssue(issues, `${path}.type`, 'INVALID_CARD_TYPE', `不支持的卡牌类型: ${String(value.type)}`);
@@ -1276,15 +1423,23 @@ function validateGeneratedCard(value: unknown, path: string, issues: EffectValid
   }
   if (typeof value.description !== 'string')
     addIssue(issues, `${path}.description`, 'INVALID_CARD_DESCRIPTION', 'description 必须是字符串');
-  for (const flag of ['retain', 'exhaust', 'ethereal'] as const) {
+  for (const flag of ['unique', 'retain', 'exhaust', 'ethereal'] as const) {
     if (value[flag] !== undefined && typeof value[flag] !== 'boolean')
       addIssue(issues, `${path}.${flag}`, 'INVALID_CARD_FLAG', `${flag} 必须是布尔值`);
   }
-  const program = validateEffectProgram(value.program);
-  if (!program.ok) {
-    program.issues.forEach(issue =>
-      addIssue(issues, `${path}.program${issue.path === '$' ? '' : issue.path.slice(1)}`, issue.code, issue.message),
-    );
+  const inertCurseProgram = value.type === 'Curse'
+    && isRecord(value.program)
+    && value.program.spec === EFFECT_PROGRAM_SPEC
+    && Array.isArray(value.program.steps)
+    && value.program.steps.length === 0
+    && Object.keys(value.program).every(key => key === 'spec' || key === 'steps');
+  if (!inertCurseProgram) {
+    const program = validateEffectProgram(value.program);
+    if (!program.ok) {
+      program.issues.forEach(issue =>
+        addIssue(issues, `${path}.program${issue.path === '$' ? '' : issue.path.slice(1)}`, issue.code, issue.message),
+      );
+    }
   }
   if (value.discardProgram !== undefined) {
     const discardProgram = validateEffectProgram(value.discardProgram);
@@ -1311,10 +1466,10 @@ function validateEnemyTargetSelector(value: unknown, path: string, issues: Effec
   rejectUnknownKeys(
     value,
     mode === 'by_id'
-      ? ['mode', 'id']
+      ? ['mode', 'id', 'team']
       : randomMode
-        ? ['mode', 'count', 'allowRepeat', 'retarget']
-        : ['mode'],
+        ? ['mode', 'count', 'allowRepeat', 'retarget', 'team']
+        : ['mode', 'team'],
     path,
     issues,
   );
@@ -1326,6 +1481,8 @@ function validateEnemyTargetSelector(value: unknown, path: string, issues: Effec
     addIssue(issues, `${path}.allowRepeat`, 'INVALID_TARGET_SELECTOR', 'allowRepeat 必须是布尔值');
   if (value.retarget !== undefined && value.retarget !== 'locked' && value.retarget !== 'each_hit')
     addIssue(issues, `${path}.retarget`, 'INVALID_TARGET_SELECTOR', 'retarget 只能是 locked 或 each_hit');
+  if (value.team !== undefined && value.team !== 'self' && value.team !== 'opponent' && value.team !== 'enemies')
+    addIssue(issues, `${path}.team`, 'INVALID_TARGET_SELECTOR', 'team 只能是 self、opponent 或 enemies');
 }
 
 function validateTargetSelectorForNode(value: Record<string, any>, path: string, issues: EffectValidationIssue[]): void {
@@ -1361,7 +1518,7 @@ function validateStanceDefinition(
   counter: { value: number },
 ): void {
   if (!isRecord(value)) return addIssue(issues, path, 'INVALID_STANCE', '姿态必须是对象或 null');
-  rejectUnknownKeys(value, ['id', 'name', 'emoji', 'description', 'enterEffects', 'exitEffects', 'passiveEffects'], path, issues);
+  rejectUnknownKeys(value, ['id', 'name', 'emoji', 'description', 'enterEffects', 'exitEffects', 'passiveEffects', 'events'], path, issues);
   if (typeof value.id !== 'string' || !STATUS_ID_PATTERN.test(value.id))
     addIssue(issues, `${path}.id`, 'INVALID_STANCE_ID', '姿态必须使用稳定英文 ID');
   if (typeof value.name !== 'string' || !value.name.trim())
@@ -1373,6 +1530,21 @@ function validateStanceDefinition(
   for (const field of ['enterEffects', 'exitEffects', 'passiveEffects'] as const) {
     if (value[field] !== undefined)
       validateNestedEffectList(value[field], `${path}.${field}`, issues, depth, counter);
+  }
+  if (value.events !== undefined) {
+    if (!Array.isArray(value.events) || value.events.length < 1 || value.events.length > 16)
+      addIssue(issues, `${path}.events`, 'INVALID_STANCE_EVENTS', '姿态事件必须是1..16项的数组');
+    else value.events.forEach((event, index) => {
+      const eventPath = `${path}.events[${index}]`;
+      if (!isRecord(event)) return addIssue(issues, eventPath, 'INVALID_STANCE_EVENT', '姿态事件必须是对象');
+      rejectUnknownKeys(event, ['trigger', 'eventQuery', 'effects'], eventPath, issues);
+      if (typeof event.trigger !== 'string' || !ABILITY_TRIGGER_SET.has(event.trigger) || event.trigger === 'passive')
+        addIssue(issues, `${eventPath}.trigger`, 'INVALID_TRIGGER', '姿态事件必须使用非passive公开触发器');
+      if (event.eventQuery !== undefined) validateEventQuery(event.eventQuery, `${eventPath}.eventQuery`, issues, { ordinal: true });
+      validateNestedEffectList(event.effects, `${eventPath}.effects`, issues, depth + 1, counter);
+      if (Array.isArray(event.effects) && !event.effects.length)
+        addIssue(issues, `${eventPath}.effects`, 'EMPTY_STANCE_EVENT', '姿态事件不能没有效果');
+    });
   }
   if (Array.isArray(value.passiveEffects)) {
     const isContinuous = (node: unknown): boolean => {
@@ -1401,16 +1573,16 @@ function validateOrbDefinition(
   depth: number,
   counter: { value: number },
 ): void {
-  if (!isRecord(value)) return addIssue(issues, path, 'INVALID_ORB', 'Orb 必须是对象');
+  if (!isRecord(value)) return addIssue(issues, path, 'INVALID_ORB', '姿态必须是对象');
   rejectUnknownKeys(value, ['id', 'name', 'emoji', 'description', 'value', 'passiveEffects', 'evokeEffects'], path, issues);
   if (typeof value.id !== 'string' || !STATUS_ID_PATTERN.test(value.id))
-    addIssue(issues, `${path}.id`, 'INVALID_ORB_ID', 'Orb 必须使用稳定英文 ID');
+    addIssue(issues, `${path}.id`, 'INVALID_ORB_ID', '姿态必须使用稳定英文 ID');
   if (typeof value.name !== 'string' || !value.name.trim())
-    addIssue(issues, `${path}.name`, 'INVALID_ORB_NAME', 'Orb 名称不能为空');
+    addIssue(issues, `${path}.name`, 'INVALID_ORB_NAME', '姿态名称不能为空');
   if (value.emoji !== undefined && typeof value.emoji !== 'string')
-    addIssue(issues, `${path}.emoji`, 'INVALID_ORB_EMOJI', 'Orb 图标必须是文本');
+    addIssue(issues, `${path}.emoji`, 'INVALID_ORB_EMOJI', '姿态图标必须是文本');
   if (value.description !== undefined && typeof value.description !== 'string')
-    addIssue(issues, `${path}.description`, 'INVALID_ORB_DESCRIPTION', 'Orb 说明必须是文本');
+    addIssue(issues, `${path}.description`, 'INVALID_ORB_DESCRIPTION', '姿态说明必须是文本');
   validateNumericExpression(value.value, `${path}.value`, issues, depth + 1, counter);
   for (const field of ['passiveEffects', 'evokeEffects'] as const) {
     if (value[field] !== undefined)
@@ -1419,16 +1591,32 @@ function validateOrbDefinition(
 }
 
 function validateOrbSelector(value: unknown, path: string, issues: EffectValidationIssue[]): void {
-  if (!isRecord(value)) return addIssue(issues, path, 'INVALID_ORB_SELECTOR', 'Orb 选择器必须是对象');
+  if (!isRecord(value)) return addIssue(issues, path, 'INVALID_ORB_SELECTOR', '姿态选择器必须是对象');
   rejectUnknownKeys(value, ['pick', 'count', 'id'], path, issues);
   if (!['first', 'last', 'all'].includes(String(value.pick)))
-    addIssue(issues, `${path}.pick`, 'INVALID_ORB_PICK', 'Orb 选择方式必须是 first、last 或 all');
+    addIssue(issues, `${path}.pick`, 'INVALID_ORB_PICK', '姿态选择方式必须是 first、last 或 all');
   if (value.count !== undefined && (!Number.isInteger(value.count) || Number(value.count) < 1 || Number(value.count) > 100))
-    addIssue(issues, `${path}.count`, 'INVALID_ORB_COUNT', 'Orb 数量必须是 1 到 100 的整数');
+    addIssue(issues, `${path}.count`, 'INVALID_ORB_COUNT', '姿态数量必须是 1 到 100 的整数');
   if (value.pick === 'all' && value.count !== undefined)
-    addIssue(issues, `${path}.count`, 'INVALID_ORB_COUNT', '选择全部 Orb 时不能提供 count');
+    addIssue(issues, `${path}.count`, 'INVALID_ORB_COUNT', '选择全部姿态时不能提供 count');
   if (value.id !== undefined && (typeof value.id !== 'string' || !STATUS_ID_PATTERN.test(value.id)))
-    addIssue(issues, `${path}.id`, 'INVALID_ORB_ID', 'Orb 过滤 ID 必须是稳定英文 ID');
+    addIssue(issues, `${path}.id`, 'INVALID_ORB_ID', '姿态过滤 ID 必须是稳定英文 ID');
+}
+
+function validateNestedProgram(
+  value: unknown,
+  path: string,
+  issues: EffectValidationIssue[],
+  depth: number,
+  counter: { value: number },
+): void {
+  if (!isRecord(value)) return addIssue(issues, path, 'INVALID_PROGRAM', '嵌套效果程序必须是对象');
+  rejectUnknownKeys(value, ['spec', 'steps'], path, issues);
+  if (value.spec !== EFFECT_PROGRAM_SPEC)
+    addIssue(issues, `${path}.spec`, 'UNSUPPORTED_SPEC', `spec 必须是 ${EFFECT_PROGRAM_SPEC}`);
+  if (!Array.isArray(value.steps) || value.steps.length === 0)
+    addIssue(issues, `${path}.steps`, 'EMPTY_PROGRAM', 'steps 至少需要一个效果');
+  else validateNestedEffectList(value.steps, `${path}.steps`, issues, depth + 1, counter);
 }
 
 function validateSummonSelector(value: unknown, path: string, issues: EffectValidationIssue[]): void {
@@ -1436,7 +1624,7 @@ function validateSummonSelector(value: unknown, path: string, issues: EffectVali
   rejectUnknownKeys(value, ['owner', 'pick', 'count', 'id', 'templateId', 'tags', 'slot', 'includeUntargetable'], path, issues);
   if (!['self', 'opponent', 'any'].includes(String(value.owner)))
     addIssue(issues, `${path}.owner`, 'INVALID_SUMMON_OWNER', '召唤单位 owner 必须是 self、opponent 或 any');
-  if (!['left', 'right', 'choose', 'first', 'last', 'random', 'random_n', 'all', 'lowest_hp', 'highest_hp', 'by_id'].includes(String(value.pick)))
+  if (!['left', 'right', 'choose', 'first', 'last', 'random', 'random_n', 'all', 'lowest_hp', 'highest_hp', 'by_id', 'source'].includes(String(value.pick)))
     addIssue(issues, `${path}.pick`, 'INVALID_SUMMON_PICK', '召唤单位选择方式无效');
   if (value.count !== undefined && (!Number.isSafeInteger(value.count) || Number(value.count) < 1))
     addIssue(issues, `${path}.count`, 'INVALID_SUMMON_COUNT', '召唤单位选择数量必须是正安全整数');
@@ -1468,7 +1656,7 @@ function validateSummonDefinition(
   rejectUnknownKeys(value, [
     'id', 'name', 'emoji', 'description', 'hasHp', 'maxHp', 'block', 'tags', 'resources', 'modifiers',
     'actionProgram', 'actions', 'abilities', 'actionsPerActivation', 'actionPriority', 'speed', 'intercept', 'slot',
-    'onExisting', 'onDefeated', 'retainCorpse', 'capabilities',
+    'onExisting', 'onExistingProgram', 'onDefeated', 'retainCorpse', 'capabilities',
   ], path, issues);
   if (typeof value.id !== 'string' || !STATUS_ID_PATTERN.test(value.id))
     addIssue(issues, `${path}.id`, 'INVALID_SUMMON_ID', '召唤单位必须使用稳定英文 ID');
@@ -1530,6 +1718,7 @@ function validateSummonDefinition(
     if (!isRecord(value.resources) || Object.keys(value.resources).length > 16)
       addIssue(issues, `${path}.resources`, 'INVALID_SUMMON_RESOURCES', '召唤单位资源必须是至多 16 项的对象');
     else for (const [id, raw] of Object.entries(value.resources)) {
+      if (isRecord(raw)) rejectUnknownKeys(raw, ['id', 'name', 'emoji', 'current', 'max', 'refresh'], `${path}.resources.${id}`, issues);
       if (!STATUS_ID_PATTERN.test(id) || id === 'energy' || !isRecord(raw) || raw.id !== id ||
           typeof raw.name !== 'string' || !raw.name.trim() || typeof raw.emoji !== 'string' || !raw.emoji.trim() ||
           !Number.isInteger(raw.current) || Number(raw.current) < 0 || !Number.isInteger(raw.max) || Number(raw.max) < 1 ||
@@ -1540,9 +1729,11 @@ function validateSummonDefinition(
   if (value.modifiers !== undefined && (!isRecord(value.modifiers) || Object.values(value.modifiers).some(entry => typeof entry !== 'number' || !Number.isFinite(entry))))
     addIssue(issues, `${path}.modifiers`, 'INVALID_SUMMON_MODIFIER', '召唤单位修饰符必须是有限数字对象');
   if (value.actionProgram !== undefined) {
-    if (!isRecord(value.actionProgram) || value.actionProgram.spec !== EFFECT_PROGRAM_SPEC)
-      addIssue(issues, `${path}.actionProgram`, 'INVALID_SUMMON_ACTION', '召唤行动必须使用当前效果规范');
-    else validateNestedEffectList(value.actionProgram.steps, `${path}.actionProgram.steps`, issues, depth + 1, counter);
+    validateNestedProgram(value.actionProgram, `${path}.actionProgram`, issues, depth + 1, counter);
+  }
+  if (value.onExistingProgram !== undefined) {
+    validateNestedProgram(value.onExistingProgram, `${path}.onExistingProgram`, issues, depth + 1, counter);
+    if (!value.slot || value.onExisting === 'replace') addIssue(issues, path, 'INVALID_SUMMON_POLICY', '重复召唤效果需要唯一槽位且不能同时替换单位');
   }
   if (value.actions !== undefined) {
     if (!Array.isArray(value.actions) || value.actions.length > 20)
@@ -1550,22 +1741,21 @@ function validateSummonDefinition(
     else value.actions.forEach((action, index) => {
       const actionPath = `${path}.actions[${index}]`;
       if (!isRecord(action)) return addIssue(issues, actionPath, 'INVALID_SUMMON_ACTION', '召唤行动必须是对象');
-      rejectUnknownKeys(action, ['id', 'name', 'emoji', 'description', 'weight', 'fixed', 'effectProgram'], actionPath, issues);
+      rejectUnknownKeys(action, ['id', 'name', 'emoji', 'description', 'dialogue', 'weight', 'fixed', 'effectProgram'], actionPath, issues);
       if (typeof action.id !== 'string' || !STATUS_ID_PATTERN.test(action.id))
         addIssue(issues, `${actionPath}.id`, 'INVALID_SUMMON_ACTION', '召唤行动必须使用稳定英文 ID');
       if (typeof action.name !== 'string' || !action.name.trim())
         addIssue(issues, `${actionPath}.name`, 'INVALID_SUMMON_ACTION', '召唤行动名称不能为空');
       if (action.emoji !== undefined && (typeof action.emoji !== 'string' || !action.emoji.trim()))
         addIssue(issues, `${actionPath}.emoji`, 'INVALID_SUMMON_ACTION', '召唤行动 emoji 必须是文本');
+      if (action.dialogue !== undefined && (typeof action.dialogue !== 'string' || !action.dialogue.trim())) addIssue(issues, `${actionPath}.dialogue`, 'INVALID_DIALOGUE', '台词必须是非空文本');
       if (action.description !== undefined && typeof action.description !== 'string')
         addIssue(issues, `${actionPath}.description`, 'INVALID_SUMMON_ACTION', '召唤行动描述必须是文本');
       if (action.weight !== undefined && (typeof action.weight !== 'number' || !Number.isFinite(action.weight) || action.weight <= 0))
         addIssue(issues, `${actionPath}.weight`, 'INVALID_SUMMON_ACTION', '召唤行动权重必须是正数');
       if (action.fixed !== undefined && typeof action.fixed !== 'boolean')
         addIssue(issues, `${actionPath}.fixed`, 'INVALID_SUMMON_ACTION', '召唤行动 fixed 必须是布尔值');
-      if (!isRecord(action.effectProgram) || action.effectProgram.spec !== EFFECT_PROGRAM_SPEC)
-        addIssue(issues, `${actionPath}.effectProgram`, 'INVALID_SUMMON_ACTION', '召唤行动必须使用当前效果规范');
-      else validateNestedEffectList(action.effectProgram.steps, `${actionPath}.effectProgram.steps`, issues, depth + 1, counter);
+      validateNestedProgram(action.effectProgram, `${actionPath}.effectProgram`, issues, depth + 1, counter);
     });
   }
   if (value.abilities !== undefined) {
@@ -1577,15 +1767,19 @@ function validateSummonDefinition(
       rejectUnknownKeys(ability, ['id', 'name', 'emoji', 'description', 'trigger', 'eventQuery', 'fixed', 'effectProgram'], abilityPath, issues);
       if (typeof ability.id !== 'string' || !STATUS_ID_PATTERN.test(ability.id))
         addIssue(issues, `${abilityPath}.id`, 'INVALID_SUMMON_ABILITY', '召唤能力必须使用稳定英文 ID');
+      if (ability.name !== undefined && (typeof ability.name !== 'string' || !ability.name.trim()))
+        addIssue(issues, `${abilityPath}.name`, 'INVALID_SUMMON_ABILITY', '召唤能力名称必须是非空文本');
+      if (ability.emoji !== undefined && (typeof ability.emoji !== 'string' || !ability.emoji.trim()))
+        addIssue(issues, `${abilityPath}.emoji`, 'INVALID_SUMMON_ABILITY', '召唤能力 emoji 必须是非空文本');
+      if (ability.description !== undefined && typeof ability.description !== 'string')
+        addIssue(issues, `${abilityPath}.description`, 'INVALID_SUMMON_ABILITY', '召唤能力描述必须是文本');
       if (typeof ability.trigger !== 'string' || !ABILITY_TRIGGER_SET.has(ability.trigger))
         addIssue(issues, `${abilityPath}.trigger`, 'INVALID_TRIGGER', '召唤能力触发时机无效');
       if (ability.eventQuery !== undefined)
         validateEventQuery(ability.eventQuery, `${abilityPath}.eventQuery`, issues, { ordinal: true });
       if (ability.fixed !== undefined && typeof ability.fixed !== 'boolean')
         addIssue(issues, `${abilityPath}.fixed`, 'INVALID_SUMMON_ABILITY', '召唤能力 fixed 必须是布尔值');
-      if (!isRecord(ability.effectProgram) || ability.effectProgram.spec !== EFFECT_PROGRAM_SPEC)
-        addIssue(issues, `${abilityPath}.effectProgram`, 'INVALID_SUMMON_ABILITY', '召唤能力必须使用当前效果规范');
-      else validateNestedEffectList(ability.effectProgram.steps, `${abilityPath}.effectProgram.steps`, issues, depth + 1, counter);
+      validateNestedProgram(ability.effectProgram, `${abilityPath}.effectProgram`, issues, depth + 1, counter);
     });
   }
 }
@@ -1600,7 +1794,10 @@ function validateEnemySpawnDefinition(
     'id', 'name', 'emoji', 'description', 'max_hp', 'hp', 'max_lust', 'lust', 'block',
     'actions', 'abilities', 'status_effects', 'lust_effect', 'action_mode', 'action_config',
     'action_priority', 'speed', 'tags', 'resources', 'stance', 'orb_slots', 'orbs',
+    'escape_when', 'defeat_reward', 'victory_on_defeat',
   ], path, issues);
+  issues.push(...validateEnemyActionReferences(value, path));
+  if (value.victory_on_defeat !== undefined && typeof value.victory_on_defeat !== 'boolean') addIssue(issues, `${path}.victory_on_defeat`, 'INVALID_VICTORY_TARGET', 'victory_on_defeat must be boolean');
   if (typeof value.id !== 'string' || !STATUS_ID_PATTERN.test(value.id))
     addIssue(issues, `${path}.id`, 'INVALID_ENEMY_ID', '生成敌人必须使用稳定英文 ID');
   if (typeof value.name !== 'string' || !value.name.trim())
@@ -1611,35 +1808,149 @@ function validateEnemySpawnDefinition(
     addIssue(issues, `${path}.description`, 'INVALID_ENEMY_DESCRIPTION', '生成敌人说明必须是文本');
   if (typeof value.max_hp !== 'number' || !Number.isFinite(value.max_hp) || value.max_hp <= 0)
     addIssue(issues, `${path}.max_hp`, 'INVALID_ENEMY_HP', '生成敌人最大生命必须为正数');
-  for (const field of ['hp', 'max_lust', 'lust', 'block'] as const) {
-    if (value[field] !== undefined && (
-      typeof value[field] !== 'number' || !Number.isFinite(value[field]) || Number(value[field]) < 0
-    )) addIssue(issues, `${path}.${field}`, 'INVALID_ENEMY_STAT', `${field} 必须是非负有限数值`);
+  for (const field of ['hp', 'max_lust', 'lust'] as const) {
+    if (typeof value[field] !== 'number' || !Number.isFinite(value[field]) || Number(value[field]) < 0)
+      addIssue(issues, `${path}.${field}`, 'INVALID_ENEMY_STAT', `${field} 必须是非负有限数值`);
   }
+  if (typeof value.max_lust === 'number' && value.max_lust <= 0)
+    addIssue(issues, `${path}.max_lust`, 'INVALID_ENEMY_STAT', 'max_lust 必须是正数');
+  if (value.block !== undefined && (
+    typeof value.block !== 'number' || !Number.isFinite(value.block) || value.block < 0
+  )) addIssue(issues, `${path}.block`, 'INVALID_ENEMY_STAT', 'block 必须是非负有限数值');
+
+  const validateCompactCarrier = (input: unknown, carrierPath: string): void => {
+    const entries = Array.isArray(input) ? input : [input];
+    if (entries.length < 1 || entries.length > 256 || entries.some(entry => !isRecord(entry) || Object.keys(entry).length < 1))
+      addIssue(issues, carrierPath, 'INVALID_COMPACT_EFFECT', '紧凑效果必须是非空对象或非空对象数组');
+  };
   if (!Array.isArray(value.actions) || value.actions.length < 1 || value.actions.length > 24) {
     addIssue(issues, `${path}.actions`, 'INVALID_ENEMY_ACTIONS', '生成敌人必须包含 1 到 24 个行动');
   } else {
     value.actions.forEach((action, index) => {
       const actionPath = `${path}.actions[${index}]`;
       if (!isRecord(action)) return addIssue(issues, actionPath, 'INVALID_ENEMY_ACTION', '敌人行动必须是对象');
+      rejectUnknownKeys(action, ['id', 'name', 'emoji', 'description', 'dialogue', 'weight', 'effects', 'when', 'creates'], actionPath, issues);
+      if (action.id !== undefined && (typeof action.id !== 'string' || !STATUS_ID_PATTERN.test(action.id)))
+        addIssue(issues, `${actionPath}.id`, 'INVALID_ENEMY_ACTION', '敌人行动 ID 必须是稳定英文 ID');
       if (typeof action.name !== 'string' || !action.name.trim())
         addIssue(issues, `${actionPath}.name`, 'INVALID_ENEMY_ACTION', '敌人行动名称不能为空');
+      if (action.emoji !== undefined && typeof action.emoji !== 'string')
+        addIssue(issues, `${actionPath}.emoji`, 'INVALID_ENEMY_ACTION', '敌人行动 emoji 必须是文本');
+      if (action.dialogue !== undefined && (typeof action.dialogue !== 'string' || !action.dialogue.trim())) addIssue(issues, `${actionPath}.dialogue`, 'INVALID_DIALOGUE', '台词必须是非空文本');
+      if (action.description !== undefined && typeof action.description !== 'string')
+        addIssue(issues, `${actionPath}.description`, 'INVALID_ENEMY_ACTION', '敌人行动描述必须是文本');
       if (action.weight !== undefined && (
         typeof action.weight !== 'number' || !Number.isFinite(action.weight) || action.weight <= 0
       )) addIssue(issues, `${actionPath}.weight`, 'INVALID_ENEMY_ACTION', '敌人行动权重必须为正数');
-      if (action.effects === undefined)
-        addIssue(issues, `${actionPath}.effects`, 'INVALID_ENEMY_ACTION', '敌人行动必须提供效果');
+      validateCompactCarrier(action.effects, `${actionPath}.effects`);
+      if (action.when !== undefined && (typeof action.when !== 'string' || !action.when.trim()))
+        addIssue(issues, `${actionPath}.when`, 'INVALID_ENEMY_ACTION', '敌人行动条件必须是非空公式文本');
+      if (action.creates !== undefined && (!Array.isArray(action.creates) || action.creates.length > 32 || action.creates.some(entry => !isRecord(entry))))
+        addIssue(issues, `${actionPath}.creates`, 'INVALID_ENEMY_ACTION', '敌人行动临时牌模板必须是至多 32 项的对象数组');
     });
   }
   if (value.abilities !== undefined && (!Array.isArray(value.abilities) || value.abilities.length > 24)) {
     addIssue(issues, `${path}.abilities`, 'INVALID_ENEMY_ABILITIES', '敌方被动必须是至多 24 项的数组');
+  } else if (Array.isArray(value.abilities)) {
+    value.abilities.forEach((ability, index) => {
+      const abilityPath = `${path}.abilities[${index}]`;
+      if (!isRecord(ability)) return addIssue(issues, abilityPath, 'INVALID_ENEMY_ABILITY', '敌方能力必须是对象');
+      rejectUnknownKeys(ability, ['id', 'name', 'emoji', 'description', 'source', 'trigger', 'effects', 'creates', 'protection'], abilityPath, issues);
+      if (typeof ability.id !== 'string' || !STATUS_ID_PATTERN.test(ability.id))
+        addIssue(issues, `${abilityPath}.id`, 'INVALID_ENEMY_ABILITY', '敌方能力 ID 必须是稳定英文 ID');
+      for (const field of ['name', 'emoji', 'description', 'source'] as const) {
+        if (ability[field] !== undefined && typeof ability[field] !== 'string')
+          addIssue(issues, `${abilityPath}.${field}`, 'INVALID_ENEMY_ABILITY', `${field} 必须是文本`);
+      }
+      const protection = normalizeDamageProtectionRule(ability.protection);
+      if (ability.protection !== undefined && !protection) addIssue(issues, `${abilityPath}.protection`, 'INVALID_PROTECTION', '保护规则无效');
+      if (isRecord(ability.trigger)) {
+        const structuredTrigger = ability.trigger;
+        const triggerPath = `${abilityPath}.trigger`;
+        const triggerFilterFields = [
+          'scope', 'ordinal', 'n', 'event', 'phase', 'reason', 'source_kind', 'source_id',
+          'damage_type', 'card_type', 'template_id', 'card_instance_id', 'actor_id', 'target_id',
+        ];
+        rejectUnknownKeys(structuredTrigger, ['on', 'effects', ...triggerFilterFields], triggerPath, issues);
+        if (typeof structuredTrigger.on !== 'string' || !ABILITY_TRIGGER_SET.has(structuredTrigger.on))
+          addIssue(issues, `${triggerPath}.on`, 'INVALID_TRIGGER', '敌方能力触发时机无效');
+        if (triggerFilterFields.some(field => structuredTrigger[field] !== undefined) &&
+            !EVENT_FILTERABLE_TRIGGER_SET.has(String(structuredTrigger.on)))
+          addIssue(issues, triggerPath, 'UNSUPPORTED_TRIGGER_FILTER', '该触发时机不提供事件过滤上下文');
+        if (structuredTrigger.scope !== undefined && !HISTORY_SCOPES.includes(structuredTrigger.scope as never))
+          addIssue(issues, `${triggerPath}.scope`, 'INVALID_HISTORY_SCOPE', '触发器事件范围无效');
+        if (structuredTrigger.ordinal !== undefined && !['first', 'first_n', 'nth', 'every_n'].includes(String(structuredTrigger.ordinal)))
+          addIssue(issues, `${triggerPath}.ordinal`, 'INVALID_EVENT_ORDINAL', '触发顺序必须是 first、first_n、nth 或 every_n');
+        const needsN = structuredTrigger.ordinal === 'first_n' || structuredTrigger.ordinal === 'nth' || structuredTrigger.ordinal === 'every_n';
+        if (needsN && (!Number.isSafeInteger(structuredTrigger.n) || Number(structuredTrigger.n) < 1))
+          addIssue(issues, `${triggerPath}.n`, 'INVALID_EVENT_ORDINAL', 'nth/every_n 需要正安全整数 n');
+        if (!needsN && structuredTrigger.n !== undefined)
+          addIssue(issues, `${triggerPath}.n`, 'INVALID_EVENT_ORDINAL', 'n 只能与 nth/every_n 一起使用');
+        if (structuredTrigger.event !== undefined && !BATTLE_EVENT_KINDS.includes(structuredTrigger.event as never))
+          addIssue(issues, `${triggerPath}.event`, 'INVALID_EVENT_KIND', '触发事件类型无效');
+        if (structuredTrigger.phase !== undefined && !BATTLE_EVENT_PHASES.includes(structuredTrigger.phase as never))
+          addIssue(issues, `${triggerPath}.phase`, 'INVALID_EVENT_PHASE', '触发事件阶段无效');
+        if (structuredTrigger.source_kind !== undefined && !EVENT_SOURCE_KINDS.includes(structuredTrigger.source_kind as never))
+          addIssue(issues, `${triggerPath}.source_kind`, 'INVALID_EVENT_SOURCE', '触发事件来源类型无效');
+        if (structuredTrigger.damage_type !== undefined && !DAMAGE_KINDS.includes(structuredTrigger.damage_type as never))
+          addIssue(issues, `${triggerPath}.damage_type`, 'INVALID_DAMAGE_KIND', '触发伤害类型无效');
+        for (const field of ['reason', 'source_id', 'card_type', 'template_id', 'card_instance_id', 'actor_id', 'target_id']) {
+          const entry = structuredTrigger[field];
+          if (entry !== undefined && (typeof entry !== 'string' || !entry.trim()))
+            addIssue(issues, `${triggerPath}.${field}`, 'INVALID_EVENT_FILTER', `${field} 必须是非空文本`);
+        }
+        if (!(protection && structuredTrigger.on === 'passive' && isEmptyProtectionEffect(structuredTrigger.effects))) validateCompactCarrier(structuredTrigger.effects, `${triggerPath}.effects`);
+        if (ability.effects !== undefined)
+          addIssue(issues, `${abilityPath}.effects`, 'INVALID_ENEMY_ABILITY', '结构化触发能力不能再提供同级 effects');
+      } else {
+        if (typeof ability.trigger !== 'string' || !ABILITY_TRIGGER_SET.has(ability.trigger))
+          addIssue(issues, `${abilityPath}.trigger`, 'INVALID_TRIGGER', '敌方能力触发时机无效');
+        validateCompactCarrier(ability.effects, `${abilityPath}.effects`);
+      }
+      if (ability.creates !== undefined && (!Array.isArray(ability.creates) || ability.creates.length > 32 || ability.creates.some(entry => !isRecord(entry))))
+        addIssue(issues, `${abilityPath}.creates`, 'INVALID_ENEMY_ABILITY', '敌方能力临时牌模板必须是至多 32 项的对象数组');
+    });
   }
-  if (!isRecord(value.lust_effect) || typeof value.lust_effect.name !== 'string' || !value.lust_effect.name.trim())
-    addIssue(issues, `${path}.lust_effect`, 'INVALID_ENEMY_LUST_EFFECT', '生成敌人必须提供具名欲望效果');
-  else if (value.lust_effect.effects === undefined)
-    addIssue(issues, `${path}.lust_effect.effects`, 'INVALID_ENEMY_LUST_EFFECT', '欲望效果不能为空');
+  if (value.lust_effect !== undefined) {
+    if (!isRecord(value.lust_effect) || typeof value.lust_effect.name !== 'string' || !value.lust_effect.name.trim()) {
+      addIssue(issues, `${path}.lust_effect`, 'INVALID_ENEMY_LUST_EFFECT', '敌方欲望效果若提供，必须是具名非空效果对象');
+    } else {
+      rejectUnknownKeys(value.lust_effect, ['name', 'emoji', 'description', 'effects', 'when', 'creates'], `${path}.lust_effect`, issues);
+      for (const field of ['emoji', 'description'] as const) {
+        if (value.lust_effect[field] !== undefined && typeof value.lust_effect[field] !== 'string')
+          addIssue(issues, `${path}.lust_effect.${field}`, 'INVALID_ENEMY_LUST_EFFECT', `${field} 必须是文本`);
+      }
+      validateCompactCarrier(value.lust_effect.effects, `${path}.lust_effect.effects`);
+    }
+  }
+  if (value.status_effects !== undefined) {
+    if (!Array.isArray(value.status_effects) || value.status_effects.length > 64)
+      addIssue(issues, `${path}.status_effects`, 'INVALID_ENEMY_STATUSES', '敌方当前状态必须是至多 64 项的数组');
+    else value.status_effects.forEach((status, index) => {
+      const statusPath = `${path}.status_effects[${index}]`;
+      if (!isRecord(status)) return addIssue(issues, statusPath, 'INVALID_ACTIVE_STATUS', '敌方当前状态必须是对象');
+      rejectUnknownKeys(status, ['id', 'stacks'], statusPath, issues);
+      if (typeof status.id !== 'string' || !STATUS_ID_PATTERN.test(status.id))
+        addIssue(issues, `${statusPath}.id`, 'INVALID_STATUS_ID', '当前状态 ID 必须是稳定英文 ID');
+      if (!Number.isInteger(status.stacks) || Number(status.stacks) < 1 || Number(status.stacks) > 999)
+        addIssue(issues, `${statusPath}.stacks`, 'INVALID_STATUS_STACKS', '当前状态层数必须是 1 到 999 的整数');
+    });
+  }
+  if (value.action_mode !== undefined && !['random', 'probability', 'sequence', 'sequence_then_probability'].includes(String(value.action_mode)))
+    addIssue(issues, `${path}.action_mode`, 'INVALID_ENEMY_ACTION_MODE', '行动模式无效');
   if (value.action_config !== undefined && !isRecord(value.action_config))
     addIssue(issues, `${path}.action_config`, 'INVALID_ENEMY_ACTION_CONFIG', '行动配置必须是对象');
+  else if (isRecord(value.action_config)) {
+    rejectUnknownKeys(value.action_config, ['probability', 'sequence'], `${path}.action_config`, issues);
+    if (value.action_config.probability !== undefined && (
+      !isRecord(value.action_config.probability) || Object.keys(value.action_config.probability).length > 24 ||
+      Object.values(value.action_config.probability).some(weight => typeof weight !== 'number' || !Number.isFinite(weight) || weight <= 0)
+    )) addIssue(issues, `${path}.action_config.probability`, 'INVALID_ENEMY_ACTION_CONFIG', '行动概率必须是至多 24 项的正数映射');
+    if (value.action_config.sequence !== undefined && (
+      !Array.isArray(value.action_config.sequence) || value.action_config.sequence.length < 1 ||
+      value.action_config.sequence.length > 100 || value.action_config.sequence.some(name => typeof name !== 'string' || !name.trim())
+    )) addIssue(issues, `${path}.action_config.sequence`, 'INVALID_ENEMY_ACTION_CONFIG', '行动顺序必须是 1 到 100 项的名称数组');
+  }
   for (const field of ['action_priority', 'speed'] as const) {
     if (value[field] !== undefined && (!Number.isInteger(value[field]) || Math.abs(Number(value[field])) > 999))
       addIssue(issues, `${path}.${field}`, 'INVALID_ENEMY_ORDER', `${field} 必须是 -999 到 999 的整数`);
@@ -1649,6 +1960,50 @@ function validateEnemySpawnDefinition(
     value.tags.some(tag => typeof tag !== 'string' || !STATUS_ID_PATTERN.test(tag)) ||
     new Set(value.tags).size !== value.tags.length
   )) addIssue(issues, `${path}.tags`, 'INVALID_ENEMY_TAGS', '敌人标签必须是唯一稳定英文 ID 数组');
+  validateCombatResourceDefinitions(value.resources, `${path}.resources`).forEach(issue =>
+    addIssue(issues, issue.path, issue.code, issue.message));
+  if (value.stance !== undefined && value.stance !== null) {
+    const stancePath = `${path}.stance`;
+    if (!isRecord(value.stance)) addIssue(issues, stancePath, 'INVALID_STANCE', '敌方初始姿态必须是对象或 null');
+    else {
+      rejectUnknownKeys(value.stance, ['id', 'name', 'emoji', 'description', 'enter', 'exit', 'passive'], stancePath, issues);
+      if (typeof value.stance.id !== 'string' || !STATUS_ID_PATTERN.test(value.stance.id))
+        addIssue(issues, `${stancePath}.id`, 'INVALID_STANCE_ID', '敌方初始姿态 ID 必须是稳定英文 ID');
+      if (typeof value.stance.name !== 'string' || !value.stance.name.trim())
+        addIssue(issues, `${stancePath}.name`, 'INVALID_STANCE_NAME', '敌方初始姿态名称不能为空');
+      for (const field of ['emoji', 'description'] as const) {
+        if (value.stance[field] !== undefined && typeof value.stance[field] !== 'string')
+          addIssue(issues, `${stancePath}.${field}`, 'INVALID_STANCE', `${field} 必须是文本`);
+      }
+      for (const field of ['enter', 'exit', 'passive'] as const) {
+        if (value.stance[field] !== undefined) validateCompactCarrier(value.stance[field], `${stancePath}.${field}`);
+      }
+    }
+  }
+  if (value.orb_slots !== undefined && (!Number.isInteger(value.orb_slots) || Number(value.orb_slots) < 0 || Number(value.orb_slots) > 20))
+    addIssue(issues, `${path}.orb_slots`, 'INVALID_ORB_SLOTS', '敌方姿态槽必须是 0 到 20 的整数');
+  if (value.orbs !== undefined) {
+    if (!Array.isArray(value.orbs) || value.orbs.length > 20)
+      addIssue(issues, `${path}.orbs`, 'INVALID_ORBS', '敌方初始姿态必须是至多 20 项的数组');
+    else value.orbs.forEach((orb, index) => {
+      const orbPath = `${path}.orbs[${index}]`;
+      if (!isRecord(orb)) return addIssue(issues, orbPath, 'INVALID_ORB', '敌方初始姿态必须是对象');
+      rejectUnknownKeys(orb, ['id', 'name', 'emoji', 'description', 'value', 'passive', 'evoke'], orbPath, issues);
+      if (typeof orb.id !== 'string' || !STATUS_ID_PATTERN.test(orb.id))
+        addIssue(issues, `${orbPath}.id`, 'INVALID_ORB_ID', '敌方初始姿态 ID 必须是稳定英文 ID');
+      if (typeof orb.name !== 'string' || !orb.name.trim())
+        addIssue(issues, `${orbPath}.name`, 'INVALID_ORB_NAME', '敌方初始姿态名称不能为空');
+      if (typeof orb.value !== 'number' || !Number.isFinite(orb.value) || orb.value < 0)
+        addIssue(issues, `${orbPath}.value`, 'INVALID_ORB_VALUE', '敌方初始姿态数值必须是非负有限数');
+      for (const field of ['emoji', 'description'] as const) {
+        if (orb[field] !== undefined && typeof orb[field] !== 'string')
+          addIssue(issues, `${orbPath}.${field}`, 'INVALID_ORB', `${field} 必须是文本`);
+      }
+      for (const field of ['passive', 'evoke'] as const) {
+        if (orb[field] !== undefined) validateCompactCarrier(orb[field], `${orbPath}.${field}`);
+      }
+    });
+  }
 }
 
 function validateEffectNode(
@@ -1694,6 +2049,13 @@ function validateEffectNode(
     if (!['hp', 'lust', 'energy', 'block'].includes(String(value.stat)))
       addIssue(issues, `${path}.stat`, 'INVALID_STAT', `不支持的属性: ${String(value.stat)}`);
     validateNumericExpression(value.value, `${path}.value`, issues, depth + 1, counter);
+  } else if (value.op === 'persistent_growth') {
+    rejectUnknownKeys(value, ['op', 'stat', 'summonTemplateId', 'operator', 'value'], path, issues);
+    if (!validPersistentGrowthTarget(value.stat, value.summonTemplateId))
+      addIssue(issues, `${path}.stat`, 'INVALID_PERSISTENT_GROWTH_STAT', '角色成长支持 max_hp/max_lust；召唤模板支持 max_hp/damage/lust');
+    if (!['add', 'subtract', 'set'].includes(String(value.operator)))
+      addIssue(issues, `${path}.operator`, 'INVALID_PERSISTENT_GROWTH_OPERATOR', '永久成长只支持 add/subtract/set');
+    validateNumericExpression(value.value, `${path}.value`, issues, depth + 1, counter);
   } else if (value.op === 'gain_resource' || value.op === 'set_resource') {
     const amountField = value.op === 'gain_resource' ? 'amount' : 'value';
     rejectUnknownKeys(value, ['op', 'target', 'targetSelector', 'resource', amountField], path, issues);
@@ -1730,12 +2092,13 @@ function validateEffectNode(
     validateCardSelector(value.selector, `${path}.selector`, issues);
     validateNumericExpression(value.amount, `${path}.amount`, issues, depth + 1, counter);
   } else if (value.op === 'recover_cards') {
-    rejectUnknownKeys(value, ['op', 'source', 'pick', 'amount'], path, issues);
+    rejectUnknownKeys(value, ['op', 'source', 'pick', 'amount', 'filter'], path, issues);
     if (value.source !== 'draw' && value.source !== 'discard' && value.source !== 'exhaust')
       addIssue(issues, `${path}.source`, 'INVALID_CARD_ZONE', '移入手牌的来源只能是 draw、discard 或 exhaust');
     if (value.pick !== 'random' && value.pick !== 'choose' && value.pick !== 'all')
       addIssue(issues, `${path}.pick`, 'INVALID_CARD_PICK', '取回选择只能是 random、choose 或 all');
     validateNumericExpression(value.amount, `${path}.amount`, issues, depth + 1, counter);
+    if (value.filter !== undefined) validateCardSelectorFilter(value.filter, `${path}.filter`, issues);
   } else if (value.op === 'reduce_card_cost') {
     rejectUnknownKeys(value, ['op', 'selector', 'amount'], path, issues);
     validateCardSelector(value.selector, `${path}.selector`, issues);
@@ -1758,6 +2121,9 @@ function validateEffectNode(
     validateCardSelector(value.selector, `${path}.selector`, issues);
     if (value.free !== true && value.free !== false)
       addIssue(issues, `${path}.free`, 'INVALID_AUTO_PLAY_COST', '自动打出必须明确是否免费');
+  } else if (value.op === 'replay_current') {
+    rejectUnknownKeys(value, ['op', 'count'], path, issues);
+    validateNumericExpression(value.count, `${path}.count`, issues, depth + 1, counter);
   } else if (value.op === 'set_card_destination') {
     rejectUnknownKeys(value, ['op', 'destination'], path, issues);
     if (!['discard', 'exhaust', 'draw_top', 'draw_bottom', 'hand', 'remove'].includes(String(value.destination)))
@@ -1803,8 +2169,8 @@ function validateEffectNode(
       validateEffectCardUpgradeChange(change, `${path}.changes[${index}]`, issues, depth + 1, counter));
   } else if (value.op === 'add_card') {
     rejectUnknownKeys(value, ['op', 'zone', 'card', 'count'], path, issues);
-    if (value.zone !== 'hand' && value.zone !== 'draw')
-      addIssue(issues, `${path}.zone`, 'INVALID_CARD_ZONE', '生成卡牌只能加入 hand 或 draw');
+    if (value.zone !== 'hand' && value.zone !== 'draw' && value.zone !== 'discard')
+      addIssue(issues, `${path}.zone`, 'INVALID_CARD_ZONE', '生成卡牌只能加入 hand、draw 或 discard');
     if (!Number.isInteger(value.count) || (value.count as number) < 1 || (value.count as number) > 100)
       addIssue(issues, `${path}.count`, 'INVALID_CARD_COUNT', '生成数量必须是 1 到 100 的整数');
     validateGeneratedCard(value.card, `${path}.card`, issues);
@@ -1827,12 +2193,20 @@ function validateEffectNode(
       addIssue(issues, `${path}.capacity`, 'INVALID_SUMMON_CAPACITY', '召唤容量必须是正安全整数');
     if (value.overflow !== undefined && !['reject', 'replace_oldest', 'replace_lowest_hp'].includes(String(value.overflow)))
       addIssue(issues, `${path}.overflow`, 'INVALID_SUMMON_OVERFLOW', '召唤溢出策略无效');
+  } else if (value.op === 'wait') {
+    rejectUnknownKeys(value, ['op'], path, issues);
+  } else if (value.op === 'say' || value.op === 'enemy_intent') {
+    const key = value.op === 'say' ? 'text' : 'actionId';
+    rejectUnknownKeys(value, ['op', key], path, issues);
+    if (typeof value[key] !== 'string' || !String(value[key]).trim() ||
+      (key === 'actionId' && !STATUS_ID_PATTERN.test(String(value[key]))))
+      addIssue(issues, `${path}.${key}`, 'INVALID_BEHAVIOR', '台词必须是非空文本，意图必须引用行动ID');
   } else if (value.op === 'spawn_enemy') {
     rejectUnknownKeys(value, ['op', 'enemy', 'count', 'capacity'], path, issues);
     validateEnemySpawnDefinition(value.enemy, `${path}.enemy`, issues);
     validateNumericExpression(value.count, `${path}.count`, issues, depth + 1, counter);
-    if (value.capacity !== undefined && (!Number.isInteger(value.capacity) || Number(value.capacity) < 1 || Number(value.capacity) > 12))
-      addIssue(issues, `${path}.capacity`, 'INVALID_ENEMY_CAPACITY', '敌人同时存活上限必须是 1 到 12 的整数');
+    if (value.capacity !== undefined && (!Number.isSafeInteger(value.capacity) || Number(value.capacity) < 1))
+      addIssue(issues, `${path}.capacity`, 'INVALID_ENEMY_CAPACITY', '敌人同时存活上限必须是正安全整数');
   } else if (value.op === 'damage_summons' || value.op === 'heal_summons') {
     rejectUnknownKeys(value, ['op', 'selector', 'amount'], path, issues);
     validateSummonSelector(value.selector, `${path}.selector`, issues);
@@ -1872,8 +2246,16 @@ function validateEffectNode(
     if (typeof value.status !== 'string' || (!STATUS_ID_PATTERN.test(value.status) && value.status !== 'all'))
       addIssue(issues, `${path}.status`, 'INVALID_STATUS_ID', '召唤单位状态必须是稳定 ID 或 all');
   } else if (value.op === 'activate_summons') {
-    rejectUnknownKeys(value, ['op', 'selector'], path, issues);
+    rejectUnknownKeys(value, ['op', 'selector', 'trigger', 'suppliedAction'], path, issues);
+    if (value.trigger !== undefined && value.trigger !== 'defeated') addIssue(issues, path, 'INVALID_TRIGGER', 'activate_summons trigger must be defeated');
+    if (value.trigger && value.suppliedAction) addIssue(issues, path, 'INVALID_TRIGGER', 'suppliedAction cannot combine with defeated trigger');
     validateSummonSelector(value.selector, `${path}.selector`, issues);
+    if (value.suppliedAction !== undefined) {
+      const action = value.suppliedAction;
+      if (!action || typeof action !== 'object' || !STATUS_ID_PATTERN.test(String((action as any).id)) || !String((action as any).name || '').trim() ||
+        (action as any).effectProgram?.spec !== EFFECT_PROGRAM_SPEC || !Array.isArray((action as any).effectProgram.steps) || !(action as any).effectProgram.steps.length)
+        addIssue(issues, `${path}.suppliedAction`, 'INVALID_SUMMON_ACTION', 'supplied summon action requires id, name, and nonempty effect program');
+    }
   } else if (value.op === 'dismiss_summons') {
     rejectUnknownKeys(value, ['op', 'selector', 'retainCorpse'], path, issues);
     validateSummonSelector(value.selector, `${path}.selector`, issues);
@@ -1992,7 +2374,7 @@ function validateEffectNode(
     validateTargetSelectorForNode(value, path, issues);
     validateOrbSelector(value.selector, `${path}.selector`, issues);
     if (!CARD_VALUE_OPERATORS.has(value.operator as CardValueOperator))
-      addIssue(issues, `${path}.operator`, 'INVALID_ORB_VALUE_OPERATOR', `不支持的 Orb 数值运算: ${String(value.operator)}`);
+      addIssue(issues, `${path}.operator`, 'INVALID_ORB_VALUE_OPERATOR', `不支持的姿态数值运算: ${String(value.operator)}`);
     validateNumericExpression(value.value, `${path}.value`, issues, depth + 1, counter);
   } else if (value.op === 'grant_extra_turn') {
     rejectUnknownKeys(value, ['op', 'target', 'amount'], path, issues);
@@ -2007,7 +2389,7 @@ function validateEffectNode(
     rejectUnknownKeys(value, ['op', 'target', 'trigger', 'eventQuery', 'effects'], path, issues);
     if (!TARGETS.has(value.target as EffectTarget))
       addIssue(issues, `${path}.target`, 'INVALID_TARGET', `不支持的目标: ${String(value.target)}`);
-    if (!REGISTERABLE_EFFECT_TRIGGER_SET.has(value.trigger as string))
+    if (!RUNTIME_REGISTERED_EFFECT_TRIGGER_SET.has(value.trigger as string))
       addIssue(issues, `${path}.trigger`, 'INVALID_TRIGGER', `不支持的触发器: ${String(value.trigger)}`);
     if (value.eventQuery !== undefined)
       validateEventQuery(value.eventQuery, `${path}.eventQuery`, issues, { ordinal: true });
@@ -2055,12 +2437,15 @@ function validateEffectNode(
       });
     }
   } else if (value.op === 'choose_one') {
-    rejectUnknownKeys(value, ['op', 'choiceId', 'options'], path, issues);
+    rejectUnknownKeys(value, ['op', 'choiceId', 'count', 'options'], path, issues);
     if (typeof value.choiceId !== 'string' || !STATUS_ID_PATTERN.test(value.choiceId))
       addIssue(issues, `${path}.choiceId`, 'INVALID_CHOICE_ID', '选择分支需要稳定英文 ID');
-    if (!Array.isArray(value.options) || value.options.length < 2 || value.options.length > 8) {
-      addIssue(issues, `${path}.options`, 'INVALID_CHOICE_OPTIONS', '选择分支必须提供 2 到 8 个选项');
+    if (!Array.isArray(value.options) || value.options.length < 1) {
+      addIssue(issues, `${path}.options`, 'INVALID_CHOICE_OPTIONS', '选择分支至少需要一个选项');
     } else {
+      const count = value.count === undefined ? 1 : value.count;
+      if (typeof count !== 'number' || !Number.isInteger(count) || count < 1 || count > value.options.length)
+        addIssue(issues, `${path}.count`, 'INVALID_CHOICE_COUNT', '选择数量必须是 1 到选项数量之间的整数');
       const ids = new Set<string>();
       value.options.forEach((option, optionIndex) => {
         const optionPath = `${path}.options[${optionIndex}]`;
@@ -2109,11 +2494,13 @@ function validateEffectNode(
     if (value.triggerFatal !== undefined && typeof value.triggerFatal !== 'boolean')
       addIssue(issues, `${path}.triggerFatal`, 'INVALID_FATAL_FLAG', 'triggerFatal 必须是布尔值');
   } else if (value.op === 'damage') {
-    rejectUnknownKeys(value, ['op', 'target', 'targetSelector', 'amount', 'damageKind', 'bypassBlock', 'lifesteal'], path, issues);
+    rejectUnknownKeys(value, ['op', 'target', 'targetSelector', 'amount', 'damageKind', 'bypassBlock', 'lifesteal', 'hitGroup'], path, issues);
     if (!TARGETS.has(value.target as EffectTarget))
       addIssue(issues, `${path}.target`, 'INVALID_TARGET', `不支持的目标: ${String(value.target)}`);
     validateTargetSelectorForNode(value, path, issues);
     validateNumericExpression(value.amount, `${path}.amount`, issues, depth + 1, counter);
+    if (value.hitGroup !== undefined && (typeof value.hitGroup !== 'string' || value.hitGroup.trim().length === 0))
+      addIssue(issues, `${path}.hitGroup`, 'INVALID_HIT_GROUP', '命中组标识必须是非空字符串');
     if (value.damageKind !== undefined && !['attack', 'effect', 'hp_loss', 'retaliation', 'damage_over_time'].includes(String(value.damageKind)))
       addIssue(issues, `${path}.damageKind`, 'INVALID_DAMAGE_KIND', `不支持的伤害类型: ${String(value.damageKind)}`);
     if (value.bypassBlock !== undefined && typeof value.bypassBlock !== 'boolean')
@@ -2145,7 +2532,7 @@ export function isSupportedVariablePath(path: string): boolean {
   if (/^context\.(spent_resource|x_resource)\.[a-zA-Z_][a-zA-Z0-9_]*$/.test(path)) return true;
   if (/^(self|opponent)\.resource\.[a-zA-Z_][a-zA-Z0-9_]*\.(current|max)$/.test(path)) return true;
   if (/^(self|opponent)\.(hp|max_hp|lust|max_lust|energy|max_energy|block)$/.test(path)) return true;
-  if (/^self\.(hand_size|draw_pile_size|discard_pile_size|exhaust_pile_size)$/.test(path)) return true;
+  if (/^(self|opponent)\.(hand_size|draw_pile_size|discard_pile_size|exhaust_pile_size|summon_count|ally_count)$/.test(path)) return true;
   return /^(self|opponent)\.status\.[a-zA-Z0-9_]+\.stacks$/.test(path);
 }
 
@@ -2178,8 +2565,14 @@ function readCombatantVariable(entity: CoreCombatantState, field: string, path: 
     draw_pile_size: entity.drawPileSize,
     discard_pile_size: entity.discardPileSize,
     exhaust_pile_size: entity.exhaustPileSize,
+    summon_count: entity.summonCount,
+    ally_count: entity.allyCount,
   };
   const value = fields[field];
+  if (
+    value === undefined &&
+    ['hand_size', 'draw_pile_size', 'discard_pile_size', 'exhaust_pile_size', 'summon_count', 'ally_count'].includes(field)
+  ) return 0;
   if (typeof value !== 'number' || !Number.isFinite(value))
     throw new EffectExecutionError('MISSING_VARIABLE', path, `变量没有有限数值: ${path}`);
   return value;
@@ -2215,6 +2608,7 @@ export function resolveNumericVariable(path: string, state: CoreEffectState, con
 function coreCardMatchesFilter(card: CoreCardView, filter?: CardSelectorFilter): boolean {
   if (!filter) return true;
   if (filter.name !== undefined && card.name !== filter.name) return false;
+  if (filter.nameContains !== undefined && !card.name?.includes(filter.nameContains)) return false;
   if (filter.types && (!card.type || !filter.types.includes(card.type))) return false;
   if (filter.rarities && (!card.rarity || !filter.rarities.includes(card.rarity))) return false;
   if (filter.cost !== undefined) {
@@ -2233,6 +2627,8 @@ function coreCardMatchesFilter(card: CoreCardView, filter?: CardSelectorFilter):
   if (filter.combatInstanceId && (card.combatInstanceId || card.id) !== filter.combatInstanceId) return false;
   if (filter.origin && card.origin !== filter.origin) return false;
   if (filter.rootOnly === true && card.origin === 'copied') return false;
+  if (filter.keywords?.some(keyword => card[keyword] !== true)) return false;
+  if (filter.excludedKeywords?.some(keyword => card[keyword] === true)) return false;
   const upgraded = card.upgraded === true || (card.upgradeLevel || 0) > 0;
   return filter.upgraded === undefined || filter.upgraded === upgraded;
 }
@@ -2264,6 +2660,11 @@ export function evaluateNumericExpression(
     const values = expression.values.map((entry, index) => evaluateNumericExpression(entry, state, context, `${path}.values[${index}]`));
     return expression.op === 'min' ? Math.min(...values) : Math.max(...values);
   }
+  if (expression.op === 'discard_count') {
+    const result = context.discardResult;
+    if (result?.status === 'pending') throw new EffectExecutionError('DISCARD_RESULT_HOST_REQUIRED', path, '宿主没有提供已完成的弃牌结果');
+    return result?.status === 'committed' ? result.cards.length : 0;
+  }
   if (expression.op === 'count_cards') {
     const zones = state.cardZones;
     if (!zones) throw new EffectExecutionError('MISSING_VARIABLE', path, '卡牌集合未提供');
@@ -2276,7 +2677,10 @@ export function evaluateNumericExpression(
     return cards.filter(card => coreCardMatchesFilter(card, expression.selector.filter)).length;
   }
   if (expression.op === 'count_statuses') {
-    return Object.values(state[expression.target].statusStacks || {}).filter(stacks => stacks > 0).length;
+    const entity = state[expression.target];
+    return Object.entries(entity.statusStacks || {}).filter(([id, stacks]) =>
+      stacks > 0 && (expression.statusType === undefined || entity.statusTypes?.[id] === expression.statusType),
+    ).length;
   }
   if (expression.op === 'history') {
     const history = state.history;
@@ -2287,7 +2691,11 @@ export function evaluateNumericExpression(
         ...(expression.scope === 'turn' && expression.turn === undefined ? { turn: state.currentTurn } : {}),
         ...(expression.turn !== undefined ? { turn: expression.turn } : {}),
         ...(expression.cardInstanceId ? { cardInstanceId: expression.cardInstanceId } : {}),
-        ...(expression.teamActorIds ? { teamActorIds: expression.teamActorIds } : {}),
+        ...(expression.teamActorIds
+          ? { teamActorIds: expression.teamActorIds }
+          : expression.scope === 'team' && history.teamActorIds
+            ? { teamActorIds: history.teamActorIds }
+            : {}),
         ...(expression.filter ? { filter: expression.filter } : {}),
       });
     }
@@ -2320,6 +2728,10 @@ export function evaluateNumericExpression(
       if (right === 0) throw new EffectExecutionError('DIVISION_BY_ZERO', path, '不能除以 0');
       result = left / right;
       break;
+    case 'modulo':
+      if (right === 0) throw new EffectExecutionError('DIVISION_BY_ZERO', path, '不能对 0 取余');
+      result = left % right;
+      break;
   }
   if (!Number.isFinite(result)) throw new EffectExecutionError('NON_FINITE_RESULT', path, '表达式结果必须是有限值');
   return result;
@@ -2340,7 +2752,25 @@ export function evaluateConditionExpression(
     return condition.op === 'all' ? values.every(Boolean) : values.some(Boolean);
   }
   if (condition.op === 'last_card_type') return state.history?.lastCardType === condition.cardType;
+  if (condition.op === 'event_status_is') return (context.eventStatus?.kind === 'status_applied'
+    || context.eventStatus?.kind === 'status_removed') && context.eventStatus.id === condition.statusId;
+  if (condition.op === 'discarded_card_type') {
+    const result = context.discardResult;
+    if (result?.status === 'pending')
+      throw new EffectExecutionError('DISCARD_RESULT_HOST_REQUIRED', path, '宿主没有提供已完成的弃牌结果');
+    return result?.status === 'committed' && result.cards.length === 1
+      && result.cards[0].source === 'hand' && result.cards[0].type === condition.cardType;
+  }
   if (condition.op === 'intent_type') return state.enemyIntentType === condition.intentType;
+  if (condition.op === 'stance_is') {
+    const currentId = state[condition.target].stanceId ?? null;
+    return condition.relation === 'eq' ? currentId === condition.stanceId : currentId !== condition.stanceId;
+  }
+  if (condition.op === 'event_damage_kind') {
+    return condition.relation === 'eq'
+      ? context.eventDamageKind === condition.damageKind
+      : context.eventDamageKind !== condition.damageKind;
+  }
   if (!isComparisonCondition(condition)) {
     throw new EffectExecutionError('UNKNOWN_CONDITION_OPERATOR', path, `不支持的条件运算: ${condition.op}`);
   }
@@ -2406,16 +2836,32 @@ function executeNode(
     return;
   }
   if (node.op === 'choose_one') {
-    const selectedId = context.choiceSelections?.[node.choiceId];
-    if (!selectedId) throw new EffectExecutionError('CHOICE_REQUIRED', path, `需要选择: ${node.choiceId}`);
-    const selected = node.options.find(option => option.id === selectedId);
-    if (!selected) throw new EffectExecutionError('INVALID_CHOICE', path, `无效选项: ${selectedId}`);
-    events.push({ type: 'choice_selected', choiceId: node.choiceId, optionId: selected.id, label: selected.label });
-    selected.effects.forEach((effect, index) => executeNode(effect, state, context, events, `${path}.options.${selected.id}[${index}]`));
+    const selection = context.choiceSelections?.[node.choiceId];
+    const selectedIds = typeof selection === 'string' ? [selection] : selection;
+    const count = node.count ?? 1;
+    if (!selectedIds || selectedIds.length !== count || new Set(selectedIds).size !== selectedIds.length)
+      throw new EffectExecutionError('CHOICE_REQUIRED', path, `需要选择 ${count} 项: ${node.choiceId}`);
+    const selectedById = new Map(node.options.map(option => [option.id, option]));
+    if (selectedIds.some(id => !selectedById.has(id)))
+      throw new EffectExecutionError('INVALID_CHOICE', path, `无效选项: ${selectedIds.join(', ')}`);
+    node.options.filter(option => selectedIds.includes(option.id)).forEach(selected => {
+      events.push({ type: 'choice_selected', choiceId: node.choiceId, optionId: selected.id, label: selected.label });
+      selected.effects.forEach((effect, index) => executeNode(effect, state, context, events, `${path}.options.${selected.id}[${index}]`));
+    });
     return;
   }
   if (node.op === 'narrate') {
     events.push({ type: 'narration', text: node.text });
+    return;
+  }
+  if (node.op === 'persistent_growth') {
+    events.push({
+      type: 'persistent_growth',
+      ...(node.summonTemplateId ? { summonTemplateId: node.summonTemplateId } : {}),
+      stat: node.stat,
+      operator: node.operator,
+      value: evaluateAmount(node.value, state, context, `${path}.value`, false, true),
+    });
     return;
   }
   if (node.op === 'schedule_effect') {
@@ -2438,6 +2884,13 @@ function executeNode(
     events.push({ type: 'scry_cards', amount: evaluateAmount(node.amount, state, context, `${path}.amount`, true) });
     return;
   }
+  if (node.op === 'replay_current') {
+    events.push({
+      type: 'replay_current',
+      count: Math.min(20, evaluateAmount(node.count, state, context, `${path}.count`, true)),
+    });
+    return;
+  }
   if (node.op === 'discard_cards' || node.op === 'exhaust_cards') {
     events.push({
       type: node.op,
@@ -2452,6 +2905,7 @@ function executeNode(
       source: node.source,
       pick: node.pick,
       amount: evaluateAmount(node.amount, state, context, `${path}.amount`, true),
+      ...(node.filter ? { filter: clone(node.filter) } : {}),
     });
     return;
   }
@@ -2505,7 +2959,7 @@ function executeNode(
     if (patch.kind === 'numeric' || patch.kind === 'cost' || patch.kind === 'x_value') {
       patch.value = roundBattleValue(evaluateNumericExpression(patch.value, state, context, `${path}.patch.value`));
     } else if (patch.kind === 'replay') {
-      patch.extra = Math.max(1, Math.floor(evaluateNumericExpression(patch.extra, state, context, `${path}.patch.extra`)));
+      patch.extra = Math.min(20, Math.max(1, Math.floor(evaluateNumericExpression(patch.extra, state, context, `${path}.patch.extra`))));
     }
     events.push({ type: 'apply_card_patch', selector: clone(node.selector), patch });
     return;
@@ -2516,7 +2970,7 @@ function executeNode(
       if (change.kind === 'numeric' || change.kind === 'cost' || change.kind === 'x_value') {
         change.value = roundBattleValue(evaluateNumericExpression(change.value, state, context, `${path}.attachment.changes[${index}].value`));
       } else if (change.kind === 'replay') {
-        change.extra = Math.max(1, Math.floor(evaluateNumericExpression(change.extra, state, context, `${path}.attachment.changes[${index}].extra`)));
+        change.extra = Math.min(20, Math.max(1, Math.floor(evaluateNumericExpression(change.extra, state, context, `${path}.attachment.changes[${index}].extra`))));
       }
     });
     events.push({ type: 'apply_card_attachment', selector: clone(node.selector), attachment });
@@ -2528,7 +2982,7 @@ function executeNode(
       if (change.kind === 'numeric' || change.kind === 'cost' || change.kind === 'x_value') {
         change.value = roundBattleValue(evaluateNumericExpression(change.value, state, context, `${path}.changes[${index}].value`));
       } else if (change.kind === 'replay') {
-        change.extra = Math.max(1, Math.floor(evaluateNumericExpression(change.extra, state, context, `${path}.changes[${index}].extra`)));
+        change.extra = Math.min(20, Math.max(1, Math.floor(evaluateNumericExpression(change.extra, state, context, `${path}.changes[${index}].extra`))));
       }
     });
     events.push({
@@ -2566,7 +3020,7 @@ function executeNode(
         : Math.max(0, Math.floor(evaluateNumericExpression(node.limit, state, context, `${path}.limit`)));
     const extra =
       node.rule === 'replay' && node.extra !== undefined
-        ? Math.max(1, Math.floor(evaluateNumericExpression(node.extra, state, context, `${path}.extra`)))
+        ? Math.min(20, Math.max(1, Math.floor(evaluateNumericExpression(node.extra, state, context, `${path}.extra`))))
         : 0;
     events.push({
       type: 'card_play_rule', target: node.target, rule: node.rule,
@@ -2631,15 +3085,20 @@ function executeNode(
     events.push({
       type: 'spawn_summon', target: node.target, summon: clone(node.summon),
       count: evaluateAmount(node.count, state, context, `${path}.count`, true),
-      capacity: node.capacity ?? 3, overflow: node.overflow ?? 'replace_oldest',
+      capacity: node.capacity, overflow: node.overflow ?? 'replace_oldest',
     });
+    return;
+  }
+  if (node.op === 'wait' || node.op === 'say' || node.op === 'enemy_intent') {
+    const { op, ...payload } = node;
+    events.push({ type: op, ...payload } as CoreEffectEvent);
     return;
   }
   if (node.op === 'spawn_enemy') {
     events.push({
       type: 'spawn_enemy', enemy: clone(node.enemy),
       count: evaluateAmount(node.count, state, context, `${path}.count`, true),
-      capacity: node.capacity ?? 8,
+      capacity: node.capacity ?? Number.MAX_SAFE_INTEGER,
     });
     return;
   }
@@ -2685,7 +3144,7 @@ function executeNode(
     return;
   }
   if (node.op === 'activate_summons') {
-    events.push({ type: 'activate_summons', selector: clone(node.selector) });
+    events.push({ type: 'activate_summons', selector: clone(node.selector), ...(node.trigger ? { trigger: node.trigger } : {}), ...(node.suppliedAction ? { suppliedAction: clone(node.suppliedAction) } : {}) });
     return;
   }
   if (node.op === 'dismiss_summons') {
@@ -2695,7 +3154,7 @@ function executeNode(
   if (node.op === 'copy_summons') {
     events.push({
       type: 'copy_summons', selector: clone(node.selector), targetOwner: node.targetOwner ?? 'same',
-      capacity: node.capacity ?? 3, overflow: node.overflow ?? 'replace_oldest',
+      capacity: node.capacity, overflow: node.overflow ?? 'replace_oldest',
     });
     return;
   }

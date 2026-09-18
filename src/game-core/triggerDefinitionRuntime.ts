@@ -28,7 +28,7 @@ export function resolveAbilityTriggerPlan(
   if (!trigger || trigger === 'passive') return null;
 
   return normalizeAbilityTrigger(ability.trigger || '') === trigger &&
-    matchesEventTriggerQuery(context as BattleTriggerEventContext, ability.eventQuery)
+    matchesEventTriggerQuery(context as BattleTriggerEventContext, ability.eventQuery, trigger)
     ? { source: ability, trigger, program: ability.effectProgram }
     : null;
 }
@@ -42,8 +42,8 @@ export function resolveRelicTriggerPlan(
   const trigger = normalizeAbilityTrigger(requestedTrigger);
   if (!trigger || trigger === 'passive') return null;
 
-  return normalizeAbilityTrigger(relic.trigger || '') === trigger &&
-    matchesEventTriggerQuery(context as BattleTriggerEventContext, relic.eventQuery)
+  return relic.effectProgram && normalizeAbilityTrigger(relic.trigger || '') === trigger &&
+    matchesEventTriggerQuery(context as BattleTriggerEventContext, relic.eventQuery, trigger)
     ? { source: relic, trigger, program: relic.effectProgram }
     : null;
 }

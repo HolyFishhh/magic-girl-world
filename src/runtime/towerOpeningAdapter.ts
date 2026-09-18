@@ -14,6 +14,7 @@ export interface TowerOpeningRequest {
   requestId: string;
   revision: number;
   seed: number;
+  act: number;
 }
 
 export interface TowerOpeningClaimResult extends TowerRunMutationResult {
@@ -45,14 +46,15 @@ function requestFor(run: RunState): TowerOpeningRequest {
     requestId: run.opening.requestId,
     revision: run.opening.basedOnRevision,
     seed: run.seed,
+    act: run.act,
   };
 }
 
 export function queueTowerOpeningInStat(statValue: unknown): TowerOpeningClaimResult {
   const stat = requireRecord(statValue);
   const previous = readTowerRunState(stat);
-  if (previous.floor !== 0 || previous.phase !== 'awaiting_choice') {
-    throw new Error('tower opening is only available before the first route choice');
+  if (previous.floor !== 0 || previous.phase !== 'awaiting_choice' || previous.currentNode) {
+    throw new Error('tower opening is only available at an act boundary');
   }
   const mutation = queueTowerOpening(previous.opening, previous.seed, previous.stateRevision);
   const replaced = replaceOpening(stat, previous, mutation.opening);

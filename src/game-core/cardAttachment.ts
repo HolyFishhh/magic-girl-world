@@ -1,6 +1,7 @@
 import type { CardMoveReason, BattleEventSource } from './battleEventJournal';
 import {
   appendCardPatch,
+  clearCardPatches,
   materializeCardPatches,
   type CardCostOperator,
   type CardKeyword,
@@ -14,6 +15,7 @@ import type { PlayedCardDestination } from './cardRules';
 
 export type CardAttachmentKind = 'enchantment' | 'affliction';
 export type CardAttachmentRemovalEvent =
+  | 'resolution_end'
   | 'played'
   | 'discarded'
   | 'turn_end'
@@ -88,7 +90,7 @@ export interface CardWithAttachments extends PatchableCard {
 }
 
 const DEFAULT_REMOVAL: Readonly<Record<CardPatchScope, CardAttachmentRemovalEvent>> = {
-  resolution: 'played',
+  resolution: 'resolution_end',
   turn: 'turn_end',
   until_played: 'played',
   combat: 'combat_end',
@@ -96,19 +98,15 @@ const DEFAULT_REMOVAL: Readonly<Record<CardPatchScope, CardAttachmentRemovalEven
   permanent: 'manual',
 };
 
-const VALID_DISCARD_REASONS = new Set<CardMoveReason>([
+/**
+ * Reasons that actually enter the gameplay discard lifecycle. Other
+ * CardMoveReason values remain useful journal metadata, but can never fire a
+ * discard program, discard attachment removal, or discard auto-play rule.
+ */
+export const CARD_DISCARD_TRIGGER_REASONS: ReadonlySet<CardMoveReason> = new Set<CardMoveReason>([
   'player_choice',
   'random_effect',
   'effect',
-  'turn_cleanup',
-  'scry',
-  'recover',
-  'exhaust',
-  'generate',
-  'copy',
-  'transform',
-  'auto_play',
-  'other',
 ]);
 
 function nonEmpty(value: unknown, label: string): string {
@@ -145,7 +143,7 @@ function validateChange(change: CardAttachmentChange, index: number): void {
   } else if (change.kind === 'discard_auto_play') {
     if (change.reasons.length < 1 || new Set(change.reasons).size !== change.reasons.length)
       throw new Error(`${label} requires unique discard reasons`);
-    if (change.reasons.some(reason => !VALID_DISCARD_REASONS.has(reason)))
+    if (change.reasons.some(reason => !CARD_DISCARD_TRIGGER_REASONS.has(reason)))
       throw new Error(`${label} contains an invalid discard reason`);
     if (!['discard', 'exhaust', 'draw_top', 'draw_bottom', 'hand', 'remove'].includes(change.failureDestination))
       throw new Error(`${label} has an invalid failure destination`);
@@ -170,7 +168,7 @@ export function validateCardAttachmentDraft(draft: CardAttachmentDraft): void {
     if (removeOn !== 'discarded') throw new Error('discardReasons require removeOn discarded');
     if (draft.discardReasons.length < 1 || new Set(draft.discardReasons).size !== draft.discardReasons.length)
       throw new Error('attachment discardReasons must be unique and non-empty');
-    if (draft.discardReasons.some(reason => !VALID_DISCARD_REASONS.has(reason)))
+    if (draft.discardReasons.some(reason => !CARD_DISCARD_TRIGGER_REASONS.has(reason)))
       throw new Error('attachment contains an invalid discard removal reason');
   }
 }
@@ -272,6 +270,15 @@ export function advanceCardAttachments<TCard extends CardWithAttachments>(
   return next;
 }
 
+/**
+ * Close the temporary lifetime shared by direct card patches and named
+ * attachment bundles. This is used both for cards still in a pile and for a
+ * played card that is temporarily detached while its effects resolve.
+ */
+export function finalizeCardResolution<TCard extends CardWithAttachments>(card: TCard): TCard {
+  return clearCardPatches(advanceCardAttachments(card, 'resolution_end'), 'resolution_end');
+}
+
 export function inheritedCardAttachments(
   card: CardWithAttachments,
   policy: CardPatchInheritancePolicy,
@@ -315,12 +322,6 @@ export interface CardDiscardLifecycleResolution {
   autoPlay: DiscardAutoPlayResolution | null;
 }
 
-const TRUE_HAND_DISCARD_REASONS = new Set<CardMoveReason>([
-  'player_choice',
-  'random_effect',
-  'effect',
-]);
-
 /** Resolve one deterministic auto-play request without treating cleanup, scry, or ordinary moves as a discard. */
 export function resolveDiscardAutoPlay(
   card: Pick<CardWithAttachments, 'attachments'>,
@@ -350,7 +351,7 @@ export function resolveCardDiscardLifecycle(
   source: 'hand' | 'drawPile' | 'discardPile' | 'exhaustPile',
   phase: string,
 ): CardDiscardLifecycleResolution {
-  const triggersDiscardLifecycle = source === 'hand' && TRUE_HAND_DISCARD_REASONS.has(reason);
+  const triggersDiscardLifecycle = source === 'hand' && CARD_DISCARD_TRIGGER_REASONS.has(reason);
   return {
     triggersDiscardLifecycle,
     autoPlay: triggersDiscardLifecycle ? resolveDiscardAutoPlay(card, reason, phase) : null,
@@ -359,6 +360,7 @@ export function resolveCardDiscardLifecycle(
 
 export function describeCardAttachmentRemaining(attachment: CardAttachment): string {
   const labels: Record<CardAttachmentRemovalEvent, string> = {
+    resolution_end: '本次效果结算',
     played: '打出后移除',
     discarded: '符合弃牌原因后移除',
     turn_end: '回合结束移除',

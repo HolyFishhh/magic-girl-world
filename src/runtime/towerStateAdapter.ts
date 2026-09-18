@@ -10,21 +10,22 @@ import {
   type TowerNodeContentStore,
 } from '../game-core/towerContentState';
 import { readGameMode } from '../game-core/towerMode';
-import { enterRunNode, validateRunState, type RunNodeKind, type RunState } from '../game-core/runState';
-import type { RunMapNode } from '../game-core/runMap';
+import { enterRunNode, getOpeningTreasureNode, validateRunState, type RunNodeKind, type RunState } from '../game-core/runState';
+import { runMapContentKind, type RunMapNode } from '../game-core/runMap';
 
 export interface TowerLookaheadNode {
   nodeId: string;
   kind: RunNodeKind;
   act: number;
   floor: number;
-  depth: 1 | 2 | 3;
+  depth: number;
   contentSeed: number;
   rewardSeed: number;
   difficultyMultiplier: number;
 }
 
 export interface TowerGenerationRequest {
+  shopMemoryCards?: Record<string, any>[];
   nodeId: string;
   requestId: string;
   revision: number;
@@ -124,6 +125,10 @@ function currentActNodes(run: RunState): RunMapNode[] {
 function lookaheadRoots(run: RunState, adjacency: Readonly<Record<string, readonly string[]>>): string[] {
   if (run.phase === 'won' || run.phase === 'lost') return [];
   if (run.phase === 'in_node' && run.currentNode) return [...(adjacency[run.currentNode.id] || [])];
+  const openingRoom = run.opening.phase === 'ready' && run.opening.content ? getOpeningTreasureNode(run) : null;
+  // The gift transaction owns this room. Prepare its first playable tier,
+  // leaving choices, reachability and the unchosen gift completely untouched.
+  if (openingRoom) return [...(adjacency[openingRoom.id] || [])];
   return run.choices.map(choice => choice.id);
 }
 
@@ -181,7 +186,7 @@ export function collectTowerLookahead(
       if (!node || node.act !== run.act) continue;
       result.push({
         nodeId: node.id,
-        kind: node.kind,
+        kind: runMapContentKind(node),
         act: node.act,
         floor: node.floor,
         depth: depth as 1 | 2 | 3,
@@ -201,6 +206,52 @@ export function collectTowerLookahead(
   return result;
 }
 
+/**
+ * Prepare complete reachable map layers until a combat-bearing layer is reached.
+ * A battle on any branch blocks expansion of every branch beyond that layer: the
+ * player can still choose every node already in the frontier, but must not have
+ * content generated for a deeper room before that combat choice is resolved.
+ */
+export function collectTowerPreparationWindow(run: RunState): TowerLookaheadNode[] {
+  if (run.routeMode !== 'map' || !run.map) throw new Error('tower map is unavailable');
+  const adjacency = buildTowerAdjacency(run);
+  const nodes = new Map(run.map.nodes.map(node => [node.id, node]));
+  const act = run.map.acts.find(entry => entry.act === run.act);
+  if (!act) throw new Error(`tower map act is unavailable: ${run.act}`);
+
+  const found: TowerLookaheadNode[] = [];
+  const visited = new Set<string>();
+  let frontier = [...new Set(lookaheadRoots(run, adjacency))];
+  let depth = 1;
+  while (frontier.length > 0) {
+    const layer: Array<{ node: RunMapNode; kind: RunNodeKind }> = [];
+    for (const nodeId of frontier) {
+      if (visited.has(nodeId)) continue;
+      visited.add(nodeId);
+      const node = nodes.get(nodeId);
+      if (!node || node.act !== run.act) continue;
+      layer.push({ node, kind: runMapContentKind(node) });
+    }
+    if (layer.length === 0) break;
+
+    found.push(...layer.map(({ node, kind }) => ({
+      nodeId: node.id,
+      kind,
+      act: node.act,
+      floor: node.floor,
+      depth,
+      contentSeed: node.contentSeed,
+      rewardSeed: node.rewardSeed,
+      difficultyMultiplier: act.difficultyMultiplier,
+    })));
+    if (layer.some(({ kind }) => kind === 'battle' || kind === 'elite' || kind === 'boss')) break;
+
+    frontier = [...new Set(layer.flatMap(({ node }) => adjacency[node.id] || []))];
+    depth += 1;
+  }
+  return found.sort((a, b) => a.depth - b.depth || a.nodeId.localeCompare(b.nodeId));
+}
+
 function requestFromEnvelope(run: RunState, envelope: TowerNodeContentEnvelope): TowerGenerationRequest {
   if (!envelope.requestId) throw new Error('tower content request id is unavailable');
   const node = run.map!.nodes.find(entry => entry.id === envelope.nodeId);
@@ -211,7 +262,7 @@ function requestFromEnvelope(run: RunState, envelope: TowerNodeContentEnvelope):
     nodeId: node.id,
     requestId: envelope.requestId,
     revision: envelope.basedOnRevision,
-    kind: node.kind,
+    kind: runMapContentKind(node),
     act: node.act,
     floor: node.floor,
     contentSeed: node.contentSeed,
@@ -320,7 +371,8 @@ export function enterTowerRunNodeInStat(statValue: unknown, choiceId: string): T
   };
 }
 
-/** Queue a stable window of at most three nearest nodes and retire oversized legacy queues atomically. */
+/** Keep at most three requests pending, extending non-combat routes to their
+ * first battle. Explicit limits retain the narrower legacy window. */
 export function queueTowerLookaheadInStat(
   statValue: unknown,
   maxDepth: 1 | 2 | 3 = 3,
@@ -328,19 +380,23 @@ export function queueTowerLookaheadInStat(
 ): TowerQueueResult {
   const stat = requireStat(statValue);
   const previous = readTowerRunState(stat);
-  const lookahead = collectTowerLookahead(previous, maxDepth, options.maxNodes ?? 3);
+  const lookahead = maxDepth === 3 && options.maxNodes === undefined
+    ? collectTowerPreparationWindow(previous)
+    : collectTowerLookahead(previous, maxDepth, options.maxNodes ?? 3);
   const reconciled = abandonUnreachableCurrentAct(previous);
   const windowIds = new Set(lookahead.map(target => target.nodeId));
   const expired = expireQueuedOutsideWindow(previous, reconciled.store, windowIds);
   let store = expired.store;
   const queued: TowerGenerationRequest[] = [];
+  let pending = lookahead.filter(target => ['queued', 'generating'].includes(store[target.nodeId]?.phase)).length;
   for (const target of lookahead) {
+    if (pending >= (options.maxNodes ?? 3)) break;
     const current = store[target.nodeId];
     if (!current || current.phase === 'queued' || current.phase === 'generating') continue;
     if (current.phase === 'failed' && options.retryFailed === false) continue;
     const mutation = queueTowerNodeContent(store, target.nodeId, previous.stateRevision);
     store = mutation.store;
-    if (mutation.changed) queued.push(requestFromEnvelope(previous, mutation.envelope));
+    if (mutation.changed) { queued.push(requestFromEnvelope(previous, mutation.envelope)); pending += 1; }
   }
   return {
     ...replaceRun(stat, previous, store),
@@ -444,7 +500,7 @@ export function claimQueuedTowerGenerationsInStat(
   if (!Number.isInteger(limit) || limit < 0) throw new Error('tower generation claim limit is invalid');
   const stat = requireStat(statValue);
   const previous = readTowerRunState(stat);
-  const lookaheadWindow = new Set(collectTowerLookahead(previous, 3, 3).map(node => node.nodeId));
+  const lookaheadWindow = new Set(collectTowerPreparationWindow(previous).map(node => node.nodeId));
   let store = previous.nodeContent;
   const claimed: TowerNodeContentEnvelope[] = [];
   for (const node of previous.map!.nodes) {

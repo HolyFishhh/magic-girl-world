@@ -25,6 +25,8 @@ export type CardUpgradeChange =
   | Pick<Extract<CardPatch, { kind: 'cost' }>, 'kind' | 'operator' | 'value'>
   | Pick<Extract<CardPatch, { kind: 'keyword' }>, 'kind' | 'keyword' | 'enabled'>
   | Pick<Extract<CardPatch, { kind: 'replay' }>, 'kind' | 'extra'>
+  | Pick<Extract<CardPatch, { kind: 'hits' }>, 'kind' | 'add'>
+  | { kind: 'area' }
   | Pick<Extract<CardPatch, { kind: 'x_value' }>, 'kind' | 'operator' | 'value'>
   | Pick<Extract<CardPatch, { kind: 'dynamic_cost' }>, 'kind' | 'timing' | 'operator' | 'value' | 'minimum' | 'maximum'>;
 
@@ -209,16 +211,26 @@ export function migratePersistentRunDeck<TCard extends PersistentCardCarrier>(
   const used = new Set<string>();
   const cards: Array<PersistentRunCard<TCard>> = [];
 
+  // Reserve all authored identities before allocating legacy quantity copies.
+  // Otherwise an early quantity can allocate an ID owned by a later record.
+  for (const card of cardsValue) {
+    if (!card || typeof card !== 'object' || Array.isArray(card)) throw new Error('persistent run card must be an object');
+    for (const id of explicitRunIds(card)) {
+      if (used.has(id)) throw new Error(`duplicate run card identity: ${id}`);
+      used.add(id);
+    }
+  }
+
   for (const card of cardsValue) {
     if (!card || typeof card !== 'object' || Array.isArray(card)) throw new Error('persistent run card must be an object');
     const templateId = cardTemplateId(card);
     const quantity = cardQuantity(card);
+    if ((card.unique === true && (quantity !== 1 || cards.some(existing => existing.templateId === templateId)))
+      || cards.some(existing => existing.templateId === templateId && existing.unique === true)) {
+      throw new Error(`唯一卡牌“${card.name || templateId}”不能重复持有`);
+    }
     const explicit = explicitRunIds(card);
     if (explicit.length > quantity) throw new Error(`persistent card ${templateId} has more identities than copies`);
-    for (const runInstanceId of explicit) {
-      if (used.has(runInstanceId)) throw new Error(`duplicate run card identity: ${runInstanceId}`);
-      used.add(runInstanceId);
-    }
     for (let index = 0; index < quantity; index += 1) {
       const runInstanceId = explicit[index] || allocateRuntimeId(`${templateId}__run`, used);
       used.add(runInstanceId);
@@ -260,6 +272,7 @@ export function applyPersistentDeckMutation<TCard extends PersistentCardCarrier>
   }
 
   if (mutation.kind === 'duplicate') {
+    if (source.unique === true) throw new Error(`唯一卡牌“${source.name || source.id}”不能复制`);
     const existing = new Set(cards.map(card => card.runInstanceId));
     const createdRunInstanceId = allocateRuntimeId(`${source.templateId}__run`, existing);
     const duplicate = persistentCopy(
@@ -286,6 +299,8 @@ export function applyPersistentDeckMutation<TCard extends PersistentCardCarrier>
   const replacement = structuredClone(mutation.replacement) as TCard;
   if (cardQuantity(replacement) !== 1) throw new Error('persistent card transform replacement quantity must be 1');
   const templateId = cardTemplateId(replacement);
+  if (cards.some((card, cardIndex) => cardIndex !== index && card.templateId === templateId
+    && (card.unique === true || replacement.unique === true))) throw new Error('不能变为已持有的唯一卡牌');
   const transformed = persistentCopy(
     {
       ...replacement,

@@ -1,0 +1,34 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {createTavernApi,getChat} from './lib/tavern-api.mjs';
+const read=label=>JSON.parse(readFileSync(`tmp/play82-${label}.json`,'utf8'));
+const before=read('before-next-v162'),start=read('next-battle-v162'),card=read('reward-card-played-v162'),used=read('item-used-v162'),reloaded=read('item-reloaded-v162');
+for(const snapshot of [start,card,used,reloaded])assert.equal(snapshot.chatId,before.chatId);
+const state=s=>s.root.__magic_girl_world.battle_session.state;
+assert.equal(state(start).currentTurn,1);
+assert.equal(state(start).player.currentHp,24);
+assert.equal(state(start).player.deck.length,16);
+assert.deepEqual(state(start).player.statusEffects,[],'previous battle temporary statuses clear');
+assert.ok(!state(start).player.deck.some(c=>c.origin==='generated'));
+assert.equal(state(card).player.energy,3,'zero-cost reward card');
+assert.equal(state(card).player.statusEffects.find(s=>s.id==='ink_stained').stacks,1);
+assert.equal(state(card).player.hand.length,state(start).player.hand.length+1,'played one, drew one, generated one');
+assert.ok(state(card).player.hand.some(c=>c.id==='ink_scribble__1'&&c.origin==='generated'));
+assert.equal(state(card).player.block,0,'previous battle listener does not survive');
+assert.equal(state(used).enemy.currentHp,state(card).enemy.currentHp-8);
+assert.equal(state(used).player.items.find(i=>i.id==='bookmark_knife').count,0);
+assert.deepEqual(state(reloaded),state(used),'entire ongoing battle state survives reload exactly');
+// This was NOT a quiescent whole-root reload: narrative completion and an
+// interrupted future-node prefetch are explicitly retained as separate evidence.
+assert.equal(used.root.stat_data.run_node.narrative_phase,'generating');
+assert.equal(reloaded.root.stat_data.run_node.narrative_phase,'ready');
+assert.equal(reloaded.root.stat_data.run_node.narrative_source,'preset');
+const node='act-1-floor-5-col-0';
+assert.equal(used.root.stat_data.run.nodeContent[node].phase,'generating');
+assert.equal(reloaded.root.stat_data.run.nodeContent[node].phase,'failed');
+assert.equal(reloaded.root.stat_data.run.nodeContent[node].error,'页面刷新中断了后台生成，可安全重试');
+const saved=await getChat(await createTavernApi('http://127.0.0.1:8012/'),'魔法少女世界 0.6.6.png',reloaded.chatId);
+assert.deepEqual(saved[1].variables[reloaded.swipeId],reloaded.root);
+assert.equal(saved[1].mes,reloaded.message);
+assert.deepEqual(saved[0].chat_metadata,reloaded.metadata);
+console.log('PASS next-battle reward dependencies, temporary-state isolation, item use and battle-state reload/disk; future-node prefetch interrupted (FAIL), no whole-root unchanged claim.');

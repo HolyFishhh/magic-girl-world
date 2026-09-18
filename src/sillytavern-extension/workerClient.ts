@@ -32,6 +32,7 @@ export class DesignWorkerClient {
   private readonly pending = new Map<number, PendingRequest>();
   private sequence = 0;
   private workerFailed = false;
+  private snapshotTimedOut = false;
 
   constructor(private readonly fallback: DesignAssistantEngine) {
     try {
@@ -93,12 +94,15 @@ export class DesignWorkerClient {
     state: unknown,
     settings: DesignAssistantSettings,
   ): Promise<MvuDesignSnapshot | null> {
+    if (this.snapshotTimedOut) return null;
     if (this.threaded) {
       try {
         const reply = await this.request('snapshot', variables, state, settings);
         return reply.snapshot || null;
       } catch (error) {
         this.disableWorker(error instanceof Error ? error : new Error(String(error)));
+        // Retrying the same expensive simulation synchronously would freeze the UI.
+        if (error instanceof Error && error.message.includes('Worker 超时')) { this.snapshotTimedOut = true; return null; }
       }
     }
     return this.fallback.createSnapshot(variables, state, settings);

@@ -6,7 +6,7 @@ process.env.TS_NODE_COMPILER_OPTIONS = JSON.stringify({ module: 'CommonJS', modu
 require('ts-node/register/transpile-only');
 require('tsconfig-paths/register');
 const score = require('../src/game-core/towerRunScore.ts');
-const { createRunState, enterRunNode } = require('../src/game-core/runState.ts');
+const { createRunState, enterRunNode, completeRunNode } = require('../src/game-core/runState.ts');
 const { settleBattleRunInStat } = require('../src/runtime/runStateAdapter.ts');
 
 let run = score.createTowerRunScore();
@@ -61,7 +61,11 @@ tampered.averageDifficultyPercent = 1;
 assert.equal(score.validateTowerRunScore(tampered), false);
 
 const towerStat = { run: createRunState({ seed: 77 }) };
+// Every act now begins at its single reward room. Advance through that room
+// before selecting the first actual combat whose settlement owns a score.
 towerStat.run = enterRunNode(towerStat.run, towerStat.run.choices[0].id);
+towerStat.run = completeRunNode(towerStat.run, { outcome: 'cleared' });
+towerStat.run = enterRunNode(towerStat.run, towerStat.run.choices.find(choice => choice.kind === 'battle').id);
 const activeNodeId = towerStat.run.currentNode.id;
 settleBattleRunInStat(towerStat, 'victory', activeNodeId, {
   playerDeckScore: 140,

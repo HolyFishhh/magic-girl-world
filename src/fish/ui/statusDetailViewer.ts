@@ -210,7 +210,8 @@ export class StatusDetailViewer {
       </div>
     `);
 
-    $('body').append(modal);
+    const host = $('#battle-scene');
+    (host.length ? host : $('body')).append(modal);
 
     // 添加动画效果
     modal.css({ opacity: 0 }).animate({ opacity: 1 }, 300);

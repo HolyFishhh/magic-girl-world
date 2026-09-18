@@ -9,6 +9,10 @@ import { type EffectModifierOperator, type EffectProgram, type EffectTarget, typ
 export type ContentMetric = 'attack' | 'defense' | 'sustain' | 'draw' | 'energy';
 /** One-time desire overflow is useful, but less frequent than a normal hand effect. */
 export declare const CONTENT_DESIRE_EFFECT_WEIGHT = 0.5;
+/** A cap reset makes an overflow materially less frequent than a normal action. */
+export declare const CONTENT_DESIRE_EXECUTE_WEIGHT = 0.25;
+/** A status applied by an overflow is only credited for its first observable tick. */
+export declare const CONTENT_DESIRE_STATUS_TICK_WEIGHT = 0.5;
 export interface ContentAnalysis {
     metrics: Record<ContentMetric, number>;
     dynamicMetrics: Set<ContentMetric>;
@@ -20,6 +24,19 @@ export interface ContentAnalysis {
     lust: number;
     damageKnown: boolean;
 }
+/**
+ * Damage which an overflow can actually execute.  This deliberately excludes
+ * prose, self-targeted damage and open-ended status engines.  `executeValue`
+ * is a capped threshold, not a claim that an execute will always succeed.
+ */
+export interface DesireOverflowPayload {
+    damage: number;
+    statusDamage: number;
+    executeValue: number;
+    attackValue: number;
+    uncertain: boolean;
+}
+export declare function desireOverflowActivationRate(lustPerTurn: number, maxLust: number): number;
 /** Shared positive-or-dynamic metric predicate for budgets and diagnostics. */
 export declare function hasContentMetric(analysis: Pick<ContentAnalysis, 'metrics' | 'dynamicMetrics'>, metric: ContentMetric): boolean;
 export interface ContentModifier {
@@ -34,6 +51,8 @@ export interface ContentAnalysisOptions {
     statusStacks?: Readonly<Record<string, number>>;
     selfStatusStacks?: Readonly<Record<string, number>>;
     opponentStatusStacks?: Readonly<Record<string, number>>;
+    selfStatusTypes?: Readonly<Record<string, 'buff' | 'debuff' | 'neutral'>>;
+    opponentStatusTypes?: Readonly<Record<string, 'buff' | 'debuff' | 'neutral'>>;
     currentStatusStacks?: number;
     spentEnergy?: number;
     /** Exact payment context for composite and custom-resource costs. */
@@ -52,6 +71,8 @@ export interface ContentAnalysisOptions {
     selfMaxResources?: Readonly<Record<string, number>>;
     opponentResources?: Readonly<Record<string, number>>;
     opponentMaxResources?: Readonly<Record<string, number>>;
+    selfSummonCount?: number;
+    opponentSummonCount?: number;
     currentTurn?: number;
     cardsPlayedThisTurn?: number;
     attacksPlayedThisTurn?: number;
@@ -69,6 +90,12 @@ export interface ContentScenarioRange {
 export declare function analyzeEffectProgram(program: EffectProgram, options?: ContentAnalysisOptions, directWeight?: number): ContentAnalysis | null;
 /** Analyze one shallow definition with a bounded mechanics/state cache. */
 export declare function analyzeContentDefinition(value: unknown, options?: ContentAnalysisOptions): ContentAnalysis;
+/**
+ * Analyze an overflow's executable payoff without treating authoring prose or
+ * ordinary desire pressure as damage.  When it applies a registered status we
+ * count only one conservative tick; unbounded later ticks remain uncertain.
+ */
+export declare function analyzeDesireOverflowPayload(value: unknown, options?: ContentAnalysisOptions, statuses?: readonly unknown[]): DesireOverflowPayload;
 export declare function clearContentAnalysisCache(): void;
 export interface ContentAnalysisScenario {
     weight: number;

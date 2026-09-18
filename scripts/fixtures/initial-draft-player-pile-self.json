@@ -1,0 +1,393 @@
+{
+  "player": {
+    "status": {
+      "time": "落星历2437年风芽月14日 17时45分",
+      "location": "碎翼灯塔码头·铁栅门前",
+      "profession": {
+        "name": "星灯契约师",
+        "ability": "以掌心八面星灯与星灵缔结契约，将辉光化为可行动的小型守卫"
+      }
+    },
+    "core": {
+      "emoji": "🌙",
+      "hp": 58,
+      "max_hp": 58,
+      "lust": 5,
+      "max_lust": 40,
+      "energy": 3,
+      "max_energy": 3
+    },
+    "cards": [
+      {
+        "id": "start_summon_guard",
+        "name": "唤起灯芯守卫",
+        "emoji": "🛡️",
+        "type": "Skill",
+        "rarity": "Common",
+        "cost": 1,
+        "description": "召唤1名灯芯守卫。获得1点光辉。",
+        "effects": [
+          {
+            "spawn_summon": {
+              "id": "lantern_warden",
+              "name": "灯芯守卫",
+              "emoji": "🕯️",
+              "max_hp": 14,
+              "actions": [
+                {
+                  "id": "warden_strike",
+                  "name": "灯焰拍击",
+                  "effects": [
+                    {
+                      "damage": 4
+                    }
+                  ]
+                },
+                {
+                  "id": "warden_guard",
+                  "name": "庇护灯晕",
+                  "effects": [
+                    {
+                      "block": 4,
+                      "to": "self"
+                    }
+                  ]
+                }
+              ],
+              "actions_per_activation": 1,
+              "tags": [
+                "star_light_guard"
+              ]
+            }
+          },
+          {
+            "resource": {
+              "id": "radiance",
+              "amount": 1
+            },
+            "to": "self"
+          }
+        ]
+      },
+      {
+        "id": "strike",
+        "name": "灯芯打击",
+        "emoji": "✨",
+        "type": "Attack",
+        "rarity": "Common",
+        "cost": 1,
+        "description": "造成6点伤害。",
+        "effects": [
+          {
+            "damage": 6
+          }
+        ]
+      },
+      {
+        "id": "strike",
+        "name": "灯芯打击",
+        "emoji": "✨",
+        "type": "Attack",
+        "rarity": "Common",
+        "cost": 1,
+        "description": "造成6点伤害。",
+        "effects": [
+          {
+            "damage": 6
+          }
+        ],
+        "quantity": 2
+      },
+      {
+        "id": "mote_gather",
+        "name": "碎光巡行",
+        "emoji": "🌫️",
+        "type": "Skill",
+        "rarity": "Common",
+        "cost": 0,
+        "description": "获得1点光辉。抽1张牌。",
+        "effects": [
+          {
+            "resource": {
+              "id": "radiance",
+              "amount": 1
+            },
+            "to": "self"
+          },
+          {
+            "draw": 1
+          }
+        ]
+      },
+      {
+        "id": "mote_gather",
+        "name": "碎光巡行",
+        "emoji": "🌫️",
+        "type": "Skill",
+        "rarity": "Common",
+        "cost": 0,
+        "description": "获得1点光辉。抽1张牌。",
+        "effects": [
+          {
+            "resource": {
+              "id": "radiance",
+              "amount": 1
+            },
+            "to": "self"
+          },
+          {
+            "draw": 1
+          }
+        ],
+        "quantity": 2
+      },
+      {
+        "id": "guard_bulwark",
+        "name": "守灯壁垒",
+        "emoji": "🏰",
+        "type": "Skill",
+        "rarity": "Common",
+        "cost": 1,
+        "description": "获得7点格挡。获得1点光辉。",
+        "effects": [
+          {
+            "block": 7,
+            "to": "self"
+          },
+          {
+            "resource": {
+              "id": "radiance",
+              "amount": 1
+            },
+            "to": "self"
+          }
+        ]
+      },
+      {
+        "id": "flare_command",
+        "name": "耀令",
+        "emoji": "🔥",
+        "type": "Skill",
+        "rarity": "Uncommon",
+        "cost": 1,
+        "description": "所有灯芯守卫立即发动1次行动。",
+        "effects": [
+          {
+            "activate_summon": {
+              "selector": {
+                "template_id": "lantern_warden",
+                "owner": "self",
+                "pick": "all"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "flare_command",
+        "name": "耀令",
+        "emoji": "🔥",
+        "type": "Skill",
+        "rarity": "Uncommon",
+        "cost": 1,
+        "description": "所有灯芯守卫立即发动1次行动。",
+        "effects": [
+          {
+            "activate_summon": {
+              "selector": {
+                "template_id": "lantern_warden",
+                "owner": "self",
+                "pick": "all"
+              }
+            }
+          }
+        ],
+        "quantity": 2
+      },
+      {
+        "id": "radiant_blast",
+        "name": "绽芒炮",
+        "emoji": "💥",
+        "type": "Skill",
+        "rarity": "Uncommon",
+        "cost": {
+          "energy": 1,
+          "radiance": 6
+        },
+        "description": "对敌人造成13点伤害。若所有灯芯守卫生命值均不低于3，则改为造成17点伤害。",
+        "effects": [
+          {
+            "damage": "self.has_summon && self.status.radiant_glow.stacks > 0 ? 17 : 13"
+          }
+        ]
+      }
+    ],
+    "artifacts": [
+      {
+        "id": "echo_lantern",
+        "name": "回响灯灯罩",
+        "rarity": "Rare",
+        "emoji": "🏮",
+        "description": "每回合获得1点光辉。",
+        "trigger": {
+          "on": "turn_start",
+          "effects": {
+            "resource": {
+              "id": "radiance",
+              "amount": 1
+            },
+            "to": "self"
+          }
+        }
+      }
+    ],
+    "player_abilities": [],
+    "player_status_effects": [],
+    "player_lust_effect": {
+      "name": "灯焰灼身",
+      "emoji": "🌡️",
+      "description": "你的力量奔涌而出：获得2点光辉并抽1张牌。",
+      "effects": [
+        {
+          "resource": {
+            "id": "radiance",
+            "amount": 2
+          },
+          "to": "self"
+        },
+        {
+          "draw": 1,
+          "to": "self"
+        }
+      ]
+    },
+    "level": 1,
+    "exp": 0
+  },
+  "opening": {
+    "title": "碎翼灯塔·启程馈赠",
+    "narrative": "两团光芒在铁门前彼此映照，门柱上悬着的求救灯忽地一颤——那些明灭的节律渐渐汇成细碎的光谱，沿着门框上的旧刻痕徐徐流动。\n\n阿郁微微后退半步，任你与那盏灯对话。旧铜钥在他指间摆了摆，没有催促。\n\n光谱缓慢地梳理成三道稳定的纹路，悬停在你们面前：",
+    "choices": [
+      {
+        "id": "choice_urgent_flare",
+        "label": "接过燃尽余火的信标",
+        "description": "让契约偏向破开黑暗的尖火。",
+        "outcome": {
+          "reward": {
+            "cards": [
+              {
+                "id": "phantom_blade",
+                "name": "追忆锋刃",
+                "emoji": "🗡️",
+                "type": "Attack",
+                "rarity": "Uncommon",
+                "cost": 1,
+                "description": "造成9点伤害。若所有灯芯守卫生命值均不低于3，则额外造成4点伤害。",
+                "effects": [
+                  {
+                    "damage": "self.status.radiant_glow.stacks > 0 ? 13 : 9"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "choice_steady_beam",
+        "label": "托住平稳不熄的圆光",
+        "description": "让契约偏向护住同伴的圆光。",
+        "outcome": {
+          "reward": {
+            "cards": [
+              {
+                "id": "bond_light",
+                "name": "共明契约",
+                "emoji": "🤝",
+                "type": "Power",
+                "rarity": "Uncommon",
+                "cost": 1,
+                "description": "获得4层光耀。",
+                "effects": [
+                  {
+                    "apply_status": "radiant_glow",
+                    "stacks": 4,
+                    "to": "self"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "choice_echo_resonance",
+        "label": "让两盏灯同时振荡共鸣",
+        "description": "让契约偏向星灯本身的节律。",
+        "outcome": {
+          "reward": {
+            "cards": [
+              {
+                "id": "rhythm_attune",
+                "name": "节律调谐",
+                "emoji": "🎵",
+                "type": "Skill",
+                "rarity": "Uncommon",
+                "cost": 1,
+                "description": "获得1点光辉。抽2张牌。",
+                "effects": [
+                  {
+                    "resource": {
+                      "id": "radiance",
+                      "amount": 1
+                    },
+                    "to": "self"
+                  },
+                  {
+                    "draw": 2
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "registry": {
+    "statuses": [
+      {
+        "id": "radiant_glow",
+        "name": "光耀",
+        "emoji": "✨",
+        "type": "buff",
+        "description": "获得相当于层数的额外光辉。每回合开始减少1层。所有灯芯守卫获得层数×2最多9点格挡。",
+        "stacks_change": -1,
+        "triggers": {
+          "hold": {
+            "modify": "block",
+            "multiply": 1
+          },
+          "turn_start": {
+            "resource": {
+              "id": "radiance",
+              "amount": "stacks"
+            },
+            "to": "self"
+          }
+        }
+      }
+    ],
+    "resources": [
+      {
+        "id": "radiance",
+        "name": "光辉",
+        "emoji": "🌟",
+        "start": 0,
+        "max": 12,
+        "refresh": "retain"
+      }
+    ],
+    "templates": []
+  }
+}

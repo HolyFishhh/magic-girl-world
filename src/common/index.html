@@ -6,6 +6,7 @@
     <title>魔法少女世界状态栏</title>
   </head>
   <body>
+    <section id="common-loading-status" role="status" aria-live="polite" style="padding:24px;color:#edf2fb;background:#131d30;border-radius:12px">正在加载当前页面…</section>
     <main class="rpg-container mwg-statusbar" aria-label="魔法少女世界状态栏">
       <header class="statusbar-header">
         <div class="statusbar-title">
@@ -21,40 +22,66 @@
           <span class="summary-item"><small>职业</small><b id="status-job-name">未知</b></span>
           <span class="summary-item"><small>等级</small><b id="battle-level">LV 1</b></span>
           <span class="summary-item"><small>经验</small><b id="battle-exp">0/100</b></span>
+
         </div>
       </header>
 
-      <section class="section run-section" id="run-section" style="display: none" aria-label="远征路线">
+      <div id="status-mechanics-help"></div>
+      <section class="section run-section" id="run-section" style="display: none" aria-label="冒险路线">
         <section id="tower-start-panel" class="tower-start-panel" style="display: none" aria-label="爬塔开局设置">
           <header class="tower-start-header">
             <span aria-hidden="true">🗺️</span>
             <div>
               <small>单层连续游玩</small>
-              <strong>建立本次远征</strong>
+              <strong>建立本次冒险</strong>
               <p>填写你关心的内容，其余交给 AI。开始后会在当前页面依次出现引导剧情、馈赠、地图与后续节点。</p>
             </div>
           </header>
+          <div class="tower-preset-controls">
+            <label>开局预设 <select id="tower-preset-select" aria-label="已保存的开局预设"></select></label>
+            <button id="tower-preset-load" type="button">载入</button>
+            <button id="tower-preset-delete" type="button">删除预设</button>
+          </div>
+          <div id="tower-archetype-picker"></div>
+          <div class="tower-start-difficulty" role="group" aria-label="爬塔难度">
+            <label for="tower-start-difficulty"><span>本局难度</span>
+              <select id="tower-start-difficulty" aria-label="爬塔本局难度">
+                <option value="10">10% 剧情体验</option>
+                <option value="50">50% 轻松</option>
+                <option value="80">80% 标准</option>
+                <option value="100">100% 困难</option>
+                <option value="110">110% 高压</option>
+              </select>
+            </label>
+            <small>与设置悬浮球中的“剧情战斗强度”共用同一设置。</small>
+          </div>
           <div class="tower-start-grid">
             <label><span>角色名</span><input id="tower-start-name" type="text" placeholder="留空则使用当前玩家名" /></label>
             <label><span>身份或职业</span><input id="tower-start-profession" type="text" placeholder="例如流浪法师、见习修士" /></label>
             <label class="tower-start-wide"><span>角色形象与主体</span><textarea id="tower-start-description" rows="2" placeholder="外观、性格、能力来源等"></textarea></label>
             <label class="tower-start-wide"><span>世界与故事方向</span><textarea id="tower-start-world" rows="2" placeholder="世界观、进入高塔的原因、希望保留的剧情设定"></textarea></label>
             <label><span>开场时机</span><textarea id="tower-start-opening" rows="2" placeholder="留空由 AI 安排"></textarea></label>
-            <label><span>卡组要求</span><textarea id="tower-start-card" rows="2" placeholder="例如召唤流、弃牌循环，也可以只描述玩法体验"></textarea></label>
+            <label class="tower-start-wide"><span>卡组要求</span><textarea id="tower-start-card" rows="5" placeholder="可在上方选择流派，或自由描述玩法与补充要求"></textarea></label>
             <label class="tower-start-wide"><span>本局额外要求</span><textarea id="tower-start-requirements" rows="2" placeholder="敌人、事件、叙事或主题偏好；难度在设置悬浮球中调整"></textarea></label>
           </div>
           <div class="tower-start-extension" id="tower-start-extension" role="status">
             <span id="tower-start-extension-text">正在检查爬塔组件…</span>
             <button id="tower-start-extension-button" type="button" style="display: none">安装或更新组件</button>
           </div>
+          <div class="tower-preset-controls tower-preset-save-row">
+            <input id="tower-preset-name" aria-label="预设名称" placeholder="预设名称（留空使用角色名，同名保存会覆盖）" maxlength="80" />
+            <button id="tower-preset-save" type="button">保存当前预设</button>
+            <small id="tower-preset-status" role="status">输入自动保存在此浏览器；保存预设后可随时载入。</small>
+          </div>
           <div class="tower-start-actions">
             <span id="tower-start-status" role="status">地图将在玩家与馈赠生成完成后由程序建立。</span>
             <button id="tower-start-button" type="button">开始爬塔</button>
+            <button id="tower-start-cancel" type="button" hidden>取消本次生成</button>
           </div>
         </section>
         <div class="run-heading">
           <div>
-            <small>远征</small>
+            <small>冒险</small>
             <strong id="run-current">准备中</strong>
           </div>
           <div class="run-metrics" aria-live="polite">
@@ -71,35 +98,31 @@
               <strong id="tower-player-profession">未知职业</strong>
               <span id="tower-player-ability">等待初始化能力</span>
             </div>
+
           </div>
+          <section class="tower-player-relics" aria-label="遗物">
+            <small>遗物 <b id="tower-player-artifact-count">0</b></small>
+            <div id="tower-player-artifacts" class="tower-player-resource-grid"></div>
+          </section>
           <div class="tower-player-metrics" aria-live="polite">
             <span><small>生命</small><b id="tower-player-hp">0/0</b></span>
             <span><small>欲望</small><b id="tower-player-lust">0/0</b></span>
-            <span><small>等级</small><b id="tower-player-level">LV 1</b></span>
-            <span><small>经验</small><b id="tower-player-exp">0</b></span>
             <span><small>基础能量</small><b id="tower-player-energy">3</b></span>
             <span><small>牌组</small><b id="tower-player-deck-count">0</b></span>
-            <span><small>删卡</small><b id="tower-player-removals">0</b></span>
+            <span><small>待处理删卡</small><b id="tower-player-removals">0</b><button id="tower-player-resolve-removals" type="button" hidden>选择删卡</button></span>
             <span><small>道具槽</small><b id="tower-player-item-slots">0/3</b></span>
           </div>
+            <div class="tower-player-inline-support">
+              <section><h4>战斗道具</h4><p class="tower-support-caption">持有的消耗道具</p><div id="tower-player-items" class="tower-player-resource-grid" aria-label="持有道具"></div></section>
+              <section><h4>我方欲望效果</h4><p class="tower-support-caption">敌方欲望满时触发</p><div id="tower-player-lust-effects" class="tower-player-resource-grid"></div></section>
+              <section><h4>能力与当前状态</h4><p class="tower-support-caption">当前生效的能力与状态</p><div id="tower-player-effects" class="tower-player-resource-grid" aria-label="能力与状态"></div></section>
+              <section><h4>卡组状态说明</h4><p class="tower-support-caption">由卡牌施加后生效</p><div id="tower-player-status-library" class="tower-player-resource-grid"></div></section>
+              <section><h4>资源</h4><p class="tower-support-caption">当前角色的自定义资源</p><div id="tower-player-resources" class="tower-player-resource-grid"></div></section>
+            </div>
           <section class="tower-player-deck-section" aria-label="完整卡组">
             <header><div><small>当前构筑</small><strong>我的卡组</strong></div><span>卡片会随同层进度即时更新</span></header>
             <div id="tower-player-deck" class="tower-player-card-grid"></div>
           </section>
-          <div class="tower-player-details">
-            <details>
-              <summary>遗物 <b id="tower-player-artifact-count">0</b></summary>
-              <div id="tower-player-artifacts" class="tower-player-resource-grid"></div>
-            </details>
-            <details>
-              <summary>道具 <b id="tower-player-item-count">0</b></summary>
-              <div id="tower-player-items" class="tower-player-resource-grid"></div>
-            </details>
-            <details>
-              <summary>战斗能力</summary>
-              <div id="tower-player-effects" class="tower-player-resource-grid"></div>
-            </details>
-          </div>
         </section>
         <div
           id="tower-node-panel-root"
@@ -110,6 +133,7 @@
         <div id="tower-map-root" class="tower-map-common-host" style="display: none" aria-label="爬塔路线地图"></div>
         <div class="run-actions" id="run-actions"></div>
         <div class="run-error" id="run-error" role="alert" style="display: none"></div>
+        <p class="tower-ui-message-hint" role="note">不要直接用酒馆的发送消息，请用 UI 内的发送消息。</p>
       </section>
 
       <section class="section action-section" aria-label="本轮行动">
@@ -144,9 +168,6 @@
               </section>
             </div>
             <div class="reward-actions">
-              <button class="btn btn-secondary" id="reroll-reward-btn" type="button" style="display: none">
-                重投候选
-              </button>
               <button class="btn btn-primary" id="confirm-btn" type="button" disabled>确认领取</button>
             </div>
           </div>

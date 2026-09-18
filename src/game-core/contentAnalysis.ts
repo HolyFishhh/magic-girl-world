@@ -32,6 +32,10 @@ export type ContentMetric = 'attack' | 'defense' | 'sustain' | 'draw' | 'energy'
 
 /** One-time desire overflow is useful, but less frequent than a normal hand effect. */
 export const CONTENT_DESIRE_EFFECT_WEIGHT = 0.5;
+/** A cap reset makes an overflow materially less frequent than a normal action. */
+export const CONTENT_DESIRE_EXECUTE_WEIGHT = 0.25;
+/** A status applied by an overflow is only credited for its first observable tick. */
+export const CONTENT_DESIRE_STATUS_TICK_WEIGHT = 0.5;
 
 export interface ContentAnalysis {
   metrics: Record<ContentMetric, number>;
@@ -43,6 +47,24 @@ export interface ContentAnalysis {
   /** Raw outgoing desire amount, kept separate so lust modifiers are not applied to HP damage. */
   lust: number;
   damageKnown: boolean;
+}
+
+/**
+ * Damage which an overflow can actually execute.  This deliberately excludes
+ * prose, self-targeted damage and open-ended status engines.  `executeValue`
+ * is a capped threshold, not a claim that an execute will always succeed.
+ */
+export interface DesireOverflowPayload {
+  damage: number;
+  statusDamage: number;
+  executeValue: number;
+  attackValue: number;
+  uncertain: boolean;
+}
+
+export function desireOverflowActivationRate(lustPerTurn: number, maxLust: number): number {
+  const cap = Number.isFinite(maxLust) && maxLust > 0 ? maxLust : 100;
+  return Math.min(1, Math.max(0, Number.isFinite(lustPerTurn) ? lustPerTurn : 0) / cap);
 }
 
 /** Shared positive-or-dynamic metric predicate for budgets and diagnostics. */
@@ -66,6 +88,8 @@ export interface ContentAnalysisOptions {
   statusStacks?: Readonly<Record<string, number>>;
   selfStatusStacks?: Readonly<Record<string, number>>;
   opponentStatusStacks?: Readonly<Record<string, number>>;
+  selfStatusTypes?: Readonly<Record<string, 'buff' | 'debuff' | 'neutral'>>;
+  opponentStatusTypes?: Readonly<Record<string, 'buff' | 'debuff' | 'neutral'>>;
   currentStatusStacks?: number;
   spentEnergy?: number;
   /** Exact payment context for composite and custom-resource costs. */
@@ -84,6 +108,8 @@ export interface ContentAnalysisOptions {
   selfMaxResources?: Readonly<Record<string, number>>;
   opponentResources?: Readonly<Record<string, number>>;
   opponentMaxResources?: Readonly<Record<string, number>>;
+  selfSummonCount?: number;
+  opponentSummonCount?: number;
   currentTurn?: number;
   cardsPlayedThisTurn?: number;
   attacksPlayedThisTurn?: number;
@@ -146,6 +172,7 @@ const TRIGGER_WEIGHTS: Readonly<Record<string, number>> = {
   tick: 1,
   remove: 0.25,
   hold: 1,
+  threshold_execute: 0.5,
   passive: 1,
 };
 
@@ -179,7 +206,10 @@ function representativeState(options: ContentAnalysisOptions): CoreEffectState {
       drawPileSize: 5,
       discardPileSize: 0,
       exhaustPileSize: 0,
+      summonCount: clampStateNumber(options.selfSummonCount, 1, 0, 100),
+      allyCount: 0,
       statusStacks: { ...sharedStatusStacks, ...(options.selfStatusStacks || {}) },
+      statusTypes: { ...(options.selfStatusTypes || {}) },
       resources: { ...(options.selfResources || {}) },
       maxResources: { ...(options.selfMaxResources || options.selfResources || {}) },
     },
@@ -191,7 +221,10 @@ function representativeState(options: ContentAnalysisOptions): CoreEffectState {
       energy: 3,
       maxEnergy: 3,
       block: 0,
+      summonCount: clampStateNumber(options.opponentSummonCount, 1, 0, 100),
+      allyCount: 0,
       statusStacks: { ...sharedStatusStacks, ...(options.opponentStatusStacks || {}) },
+      statusTypes: { ...(options.opponentStatusTypes || {}) },
       resources: { ...(options.opponentResources || {}) },
       maxResources: { ...(options.opponentMaxResources || options.opponentResources || {}) },
     },
@@ -292,30 +325,37 @@ export function analyzeEffectProgram(
   });
   if (!result.ok) return null;
   const analysis = emptyAnalysis();
+  const requestedReplays = Math.min(
+    20,
+    result.events
+      .filter((event): event is Extract<CoreEffectEvent, { type: 'replay_current' }> => event.type === 'replay_current')
+      .reduce((sum, event) => sum + event.count, 0),
+  );
+  const resolutionWeight = directWeight * (1 + requestedReplays);
   const consume = (event: CoreEffectEvent): void => {
     if (event.type === 'damage' && event.target === 'opponent') {
-      analysis.metrics.attack += event.requested * directWeight;
-      analysis.damage += event.requested * directWeight;
+      analysis.metrics.attack += event.requested * resolutionWeight;
+      analysis.damage += event.requested * resolutionWeight;
     } else if (event.type === 'heal' && event.target === 'self') {
-      analysis.metrics.sustain += event.requested * directWeight;
+      analysis.metrics.sustain += event.requested * resolutionWeight;
     } else if (event.type === 'gain_block' && event.target === 'self') {
-      analysis.metrics.defense += event.amount * directWeight;
+      analysis.metrics.defense += event.amount * resolutionWeight;
     } else if (event.type === 'gain_energy' && event.target === 'self') {
-      analysis.metrics.energy += event.amount * directWeight;
+      analysis.metrics.energy += event.amount * resolutionWeight;
     } else if (event.type === 'gain_resource' && event.target === 'self') {
-      analysis.metrics.energy += event.amount * directWeight;
+      analysis.metrics.energy += event.amount * resolutionWeight;
       analysis.tags.push(`资源:${event.resource}`);
     } else if (event.type === 'gain_lust' && event.target === 'opponent') {
-      analysis.metrics.attack += event.amount * CONTENT_DESIRE_EFFECT_WEIGHT * directWeight;
-      analysis.lust += event.amount * directWeight;
+      analysis.metrics.attack += event.amount * CONTENT_DESIRE_EFFECT_WEIGHT * resolutionWeight;
+      analysis.lust += event.amount * resolutionWeight;
     } else if (event.type === 'draw_cards') {
-      analysis.metrics.draw += event.amount * directWeight;
+      analysis.metrics.draw += event.amount * resolutionWeight;
     } else if (event.type === 'scry_cards') {
-      analysis.metrics.draw += event.amount * 0.25 * directWeight;
+      analysis.metrics.draw += event.amount * 0.25 * resolutionWeight;
     } else if (event.type === 'recover_cards') {
-      analysis.metrics.draw += event.amount * (event.source === 'draw' ? 0.75 : 0.5) * directWeight;
+      analysis.metrics.draw += event.amount * (event.source === 'draw' ? 0.75 : 0.5) * resolutionWeight;
     } else if (event.type === 'reduce_card_cost') {
-      analysis.metrics.energy += event.amount * Math.max(1, event.selector.count ?? 1) * directWeight;
+      analysis.metrics.energy += event.amount * Math.max(1, event.selector.count ?? 1) * resolutionWeight;
     } else if (event.type === 'modify') {
       analysis.modifiers.push({
         target: event.target,
@@ -329,7 +369,7 @@ export function analyzeEffectProgram(
     } else if (event.type === 'add_card' || event.type === 'ensure_card') {
       const nested = analyzeEffectProgram(event.card.program, options);
       const instances = event.type === 'add_card' ? event.count : event.minimum;
-      if (nested) mergeAnalysis(analysis, nested, Math.max(1, instances) * 0.35 * directWeight);
+      if (nested) mergeAnalysis(analysis, nested, Math.max(1, instances) * 0.35 * resolutionWeight);
     }
   };
   result.events.forEach(consume);
@@ -574,6 +614,102 @@ export function analyzeContentDefinition(value: unknown, options: ContentAnalysi
     contentAnalysisCache.delete(contentAnalysisCache.keys().next().value as string);
   }
   return result;
+}
+
+function overflowExecuteValue(
+  effects: unknown,
+  options: ContentAnalysisOptions,
+  rootWhenPresent = false,
+): { value: number; uncertain: boolean } {
+  const entries = normalizeCompactEffectEntries(effects) || [];
+  const opponentMaxHp = finiteStateNumber(options.opponentMaxHp, 100, 1);
+  let value = 0;
+  let uncertain = false;
+  for (const entry of entries) {
+    if (!isRecord(entry) || entry.to === 'self') continue;
+    // The live condition can be changed by preceding effects.  Do not assign a
+    // speculative execute/kill payout before that condition is observable.
+    if (rootWhenPresent || entry.when !== undefined) {
+      uncertain = true;
+      continue;
+    }
+    if (entry.kill === true) {
+      // Kill is executable, but its success depends on the live target.
+      value += opponentMaxHp;
+      continue;
+    }
+    if (entry.execute === undefined) continue;
+    const threshold = numericLiteral(entry.execute);
+    if (threshold === null) {
+      uncertain = true;
+      continue;
+    }
+    const thresholdHp = entry.threshold_mode === 'hp_percent'
+      ? opponentMaxHp * threshold / 100
+      : threshold;
+    value += Math.min(opponentMaxHp, Math.max(0, thresholdHp));
+  }
+  return { value, uncertain };
+}
+
+function orientOverflowStatusTick(tick: unknown): unknown {
+  const entries = normalizeCompactEffectEntries(tick);
+  if (!entries) return tick;
+  // Status effects use the holder as `self`; analysis is from the overflow
+  // owner, so translate the holder's outgoing tick back to opponent.
+  return entries.map(entry => {
+    if (!isRecord(entry)) return entry;
+    if (entry.to === 'opponent') return { ...entry, to: 'self' };
+    return { ...entry, to: 'opponent' };
+  });
+}
+
+/**
+ * Analyze an overflow's executable payoff without treating authoring prose or
+ * ordinary desire pressure as damage.  When it applies a registered status we
+ * count only one conservative tick; unbounded later ticks remain uncertain.
+ */
+export function analyzeDesireOverflowPayload(
+  value: unknown,
+  options: ContentAnalysisOptions = {},
+  statuses: readonly unknown[] = [],
+): DesireOverflowPayload {
+  if (!isRecord(value)) return { damage: 0, statusDamage: 0, executeValue: 0, attackValue: 0, uncertain: false };
+  const direct = analyzeContentDefinition(value, options);
+  const execute = overflowExecuteValue(value.effects, options, value.when !== undefined);
+  let statusDamage = 0;
+  let uncertain = !direct.damageKnown || execute.uncertain;
+  if (value.when !== undefined) uncertain = true;
+  for (const entry of normalizeCompactEffectEntries(value.effects) || []) {
+    if (!isRecord(entry) || typeof entry.apply_status !== 'string' || entry.to === 'self') continue;
+    if (value.when !== undefined || entry.when !== undefined) {
+      uncertain = true;
+      continue;
+    }
+    const status = statuses.find(
+      (candidate): candidate is Record<string, any> => isRecord(candidate) && candidate.id === entry.apply_status,
+    );
+    if (!status || !isRecord(status.triggers)) {
+      uncertain = true;
+      continue;
+    }
+    const tick = status.triggers.tick;
+    if (tick === undefined) continue;
+    const tickAnalysis = analyzeContentDefinition({ effects: orientOverflowStatusTick(tick) }, options);
+    if (!tickAnalysis.damageKnown) uncertain = true;
+    // Tick damage is runtime-supported, but its duration is authored elsewhere;
+    // value exactly one discounted tick rather than inventing a duration.
+    statusDamage += Math.max(0, tickAnalysis.damage) * CONTENT_DESIRE_STATUS_TICK_WEIGHT;
+  }
+  const damage = Math.max(0, direct.damage);
+  const executeValue = Math.max(0, execute.value) * CONTENT_DESIRE_EXECUTE_WEIGHT;
+  return {
+    damage,
+    statusDamage,
+    executeValue,
+    attackValue: damage + statusDamage + executeValue,
+    uncertain,
+  };
 }
 
 export function clearContentAnalysisCache(): void {

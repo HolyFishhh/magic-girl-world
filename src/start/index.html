@@ -203,7 +203,7 @@
             <h3 id="card-fields-title"><span class="section-icon">🃏</span> 卡牌体系</h3>
             <span class="section-note">只选择玩法方向，卡牌表现会自动适配世界与角色</span>
           </div>
-          <div class="preset-grid" aria-label="卡牌体系预设">
+          <div class="preset-grid" aria-label="卡牌体系预设" data-mode-only="story">
             <button
               class="preset-card selected"
               type="button"
@@ -301,13 +301,13 @@
               <strong>风险收益</strong><span>接受副作用与不确定性，换取更高的上限。</span>
             </button>
           </div>
+          <div id="start-archetype-picker"></div>
           <label class="input-group large-input">
             <span>卡牌体系补充 <em>可自由改写</em></span>
             <textarea
               data-config-field="card"
               data-default-preset="card"
               rows="5"
-              maxlength="900"
               placeholder="想玩的主题、流派、战斗节奏、希望保留或避免的机制……不用写公式。"
             ></textarea>
           </label>

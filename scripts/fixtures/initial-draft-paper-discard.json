@@ -1,0 +1,243 @@
+{
+  "player": {
+    "status": {
+      "time": "收获月二十日·星期六·清晨",
+      "location": "纸塔第三层·维修间",
+      "profession": {
+        "name": "纸偶修复师",
+        "ability": "主动弃牌会触发『裁边纸印』折出临时纸边；从弃牌堆回收纸边再打出，形成纸刃循环。"
+      }
+    },
+    "core": {
+      "emoji": "🔧",
+      "hp": 70,
+      "max_hp": 70,
+      "lust": 0,
+      "max_lust": 20,
+      "energy": 3,
+      "max_energy": 3,
+      "block": 0
+    },
+    "cards": [
+      {
+        "id": "paper_cutter",
+        "name": "折纸小刀",
+        "emoji": "🔪",
+        "type": "Attack",
+        "rarity": "Common",
+        "cost": 1,
+        "description": "造成 6 点伤害。",
+        "effects": {
+          "damage": 6
+        },
+        "quantity": 4
+      },
+      {
+        "id": "fold_shield",
+        "name": "纸盾折页",
+        "emoji": "🛡️",
+        "type": "Skill",
+        "rarity": "Common",
+        "cost": 1,
+        "description": "获得 5 点格挡。",
+        "effects": {
+          "block": 5
+        },
+        "quantity": 4
+      },
+      {
+        "id": "edge_offload",
+        "name": "废边甩出",
+        "emoji": "🎴",
+        "type": "Skill",
+        "rarity": "Common",
+        "cost": 0,
+        "description": "抽取 1 张牌，然后随机弃置 1 张手牌。主动弃牌会触发『裁边纸印』。",
+        "effects": [
+          {
+            "draw": 1
+          },
+          {
+            "discard": 1,
+            "from": "hand",
+            "pick": "random"
+          }
+        ],
+        "quantity": 2
+      },
+      {
+        "id": "scrap_reclaim",
+        "name": "纸边回捡",
+        "emoji": "♻️",
+        "type": "Skill",
+        "rarity": "Common",
+        "cost": 0,
+        "description": "从弃牌堆随机回收 1 张牌到手牌。",
+        "effects": {
+          "recover": 1,
+          "from": "discard",
+          "pick": "random"
+        },
+        "quantity": 2
+      }
+    ],
+    "artifacts": [
+      {
+        "id": "paper_bobbin_kit",
+        "name": "旧纸芯工具箱",
+        "rarity": "Rare",
+        "emoji": "🧰",
+        "description": "每场战斗开始时获得 1 层『裁边纸印』，并将 1 张临时『纸边』加入手牌。『裁边纸印』会在你主动弃牌时再折出 1 张『纸边』。",
+        "trigger": {
+          "on": "battle_start",
+          "effects": [
+            {
+              "apply_status": "trimming_stamp",
+              "stacks": 1,
+              "to": "self"
+            },
+            {
+              "add_card": "edge_scrap",
+              "to": "hand",
+              "count": 1
+            }
+          ]
+        }
+      }
+    ],
+    "items": [
+      {
+        "id": "spare_scrap",
+        "name": "备用纸料包",
+        "emoji": "🎁",
+        "count": 2,
+        "description": "恢复 6 点生命。",
+        "effects": {
+          "heal": 6
+        }
+      }
+    ],
+    "level": 1,
+    "exp": 0
+  },
+  "opening": {
+    "title": "维修间里的旧匣",
+    "narrative": "老人打开膝上的旧匣，露出三样被纸痕包裹的物件。他抬起淡青色的纸眼帘，慢慢说：“报时偶人卡在折痕里，选一件合手的吧。修好了钟声，我才能打开通往上一层的路。”窗外传来零落的咔嗒声，像是齿轮还在挣扎。",
+    "choices": [
+      {
+        "id": "take_repair_blade",
+        "label": "取走旧折刃",
+        "description": "一张边缘被磨得发亮的旧纸刃，能切开缠死的纸记忆。",
+        "outcome": {
+          "reward": {
+            "cards": [
+              {
+                "id": "repair_blade",
+                "name": "旧役折刃",
+                "emoji": "🗡️",
+                "type": "Attack",
+                "rarity": "Common",
+                "cost": 1,
+                "description": "造成 8 点伤害。",
+                "effects": {
+                  "damage": 8
+                },
+                "quantity": 1
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "take_memory_thread",
+        "label": "取走记忆棉线",
+        "description": "一缕能缠住旧折痕的线，帮你从弃纸里把有用的纸页找回来。",
+        "outcome": {
+          "reward": {
+            "cards": [
+              {
+                "id": "memory_thread",
+                "name": "记忆棉线",
+                "emoji": "🧵",
+                "type": "Skill",
+                "rarity": "Common",
+                "cost": 0,
+                "description": "恢复 3 点生命，然后从弃牌堆随机回收 1 张牌到手牌。",
+                "effects": [
+                  {
+                    "heal": 3
+                  },
+                  {
+                    "recover": 1,
+                    "from": "discard",
+                    "pick": "random"
+                  }
+                ],
+                "quantity": 1
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "take_repair_tape",
+        "label": "取走修补纸胶带",
+        "description": "一卷能粘住裂口的纸胶带，适合随身应急。",
+        "outcome": {
+          "reward": {
+            "items": [
+              {
+                "id": "repair_tape",
+                "name": "修补纸胶带",
+                "emoji": "🩹",
+                "count": 2,
+                "description": "恢复 8 点生命。",
+                "effects": {
+                  "heal": 8
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "spec": "mwg.initial-draft/v1",
+  "registry": {
+    "statuses": [
+      {
+        "id": "trimming_stamp",
+        "name": "裁边纸印",
+        "emoji": "✂️",
+        "description": "每当你主动弃掉手牌时，折出 1 张临时『纸边』加入手牌。",
+        "type": "buff",
+        "stacks_change": "keep",
+        "triggers": {
+          "on_discard": {
+            "add_card": "edge_scrap",
+            "to": "hand",
+            "count": 1
+          }
+        }
+      }
+    ],
+    "resources": [],
+    "templates": [
+      {
+        "id": "edge_scrap",
+        "name": "纸边",
+        "emoji": "✂️",
+        "type": "Attack",
+        "rarity": "Common",
+        "cost": 0,
+        "description": "造成 3 点伤害。若此牌被弃掉，获得 3 点格挡。",
+        "effects": {
+          "damage": 3
+        },
+        "discard_effects": {
+          "block": 3
+        }
+      }
+    ]
+  }
+}

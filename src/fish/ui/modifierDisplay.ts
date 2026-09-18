@@ -57,7 +57,8 @@ export class ModifierDisplay {
     `;
 
     // 按钮改为由页面模板提供，仅附加面板
-    $('body').append(panelHTML);
+    const host = $('#battle-scene');
+    (host.length ? host : $('body')).append(panelHTML);
   }
 
   /**

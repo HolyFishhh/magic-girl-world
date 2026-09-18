@@ -103,5 +103,82 @@ assert.ok(complex.mechanicAxes.includes('X费用'));
 assert.ok(complex.dimensions.scaling > 0);
 assert.ok(complex.coverage < 1, 'complex unsupported mechanics must lower confidence instead of pretending exactness');
 
-console.log('Deck/enemy scores, difficulty budgets, current-resource separation, and cache invariants passed.');
+function playerOverflowPack(effect, statuses = []) {
+  return core.createContentPack({
+    statuses,
+    cards: [{ id: 'pressure', name: '催欲', type: 'Skill', cost: 0, quantity: 5, effects: { lust: 25 } }],
+    playerDesireEffect: effect,
+  });
+}
 
+const weakPlayerOverflow = core.scoreDeckPower({
+  pack: playerOverflowPack({ name: '轻击', effects: { damage: 2 } }), maxHp: 80,
+});
+const strongPlayerOverflow = core.scoreDeckPower({
+  pack: playerOverflowPack({ name: '灼烧处决', effects: [{ damage: 12, damage_kind: 'damage_over_time' }, { execute: 40 }] }), maxHp: 80,
+});
+assert.ok(strongPlayerOverflow.budget.attack > weakPlayerOverflow.budget.attack,
+  'player overflow score must value executable damage-over-time and execute payoff at its cap frequency');
+const statusPlayerOverflow = core.scoreDeckPower({
+  pack: playerOverflowPack(
+    { name: '烙印', effects: { apply_status: 'overflow_burn' } },
+    [{ id: 'overflow_burn', type: 'debuff', triggers: { tick: { damage: 10, damage_kind: 'damage_over_time' } } }],
+  ), maxHp: 80,
+});
+assert.ok(statusPlayerOverflow.budget.attack > weakPlayerOverflow.budget.attack,
+  'a registered overflow-applied DoT status contributes one conservative tick');
+const dynamicPlayerOverflow = core.scoreDeckPower({
+  pack: playerOverflowPack({ name: '未知倍率', effects: { damage: 'opponent.hp * 0.2' } }), maxHp: 80,
+});
+assert.ok(dynamicPlayerOverflow.coverage < weakPlayerOverflow.coverage,
+  'dynamic overflow payload lowers confidence instead of being treated as a fixed payout');
+
+function enemyOverflowPack(effect) {
+  return core.createContentPack({
+    enemy: {
+      id: 'temptress', name: '试炼者', hp: 60, max_hp: 60, lust: 0, max_lust: 100,
+      actions: [{ id: 'press', name: '压迫', effects: { lust: 100 } }],
+      lust_effect: effect,
+    },
+  });
+}
+const weakEnemyOverflow = core.scoreEnemyPower(enemyOverflowPack({ name: '轻击', effects: { damage: 2 } }));
+const strongEnemyOverflow = core.scoreEnemyPower(enemyOverflowPack({ name: '终焉', effects: [{ damage: 12, damage_kind: 'damage_over_time' }, { execute: 40 }] }));
+const selfDamageEnemyOverflow = core.scoreEnemyPower(enemyOverflowPack({ name: '自残', effects: { damage: 99, to: 'self' } }));
+const negativeEnemyOverflow = core.scoreEnemyPower(enemyOverflowPack({ name: '负值', effects: { damage: -99 } }));
+const gatedKillEnemyOverflow = core.scoreEnemyPower(enemyOverflowPack({ name: '未满足处决', effects: { kill: true, when: '0 == 1' } }));
+assert.ok(weakEnemyOverflow && strongEnemyOverflow && selfDamageEnemyOverflow && negativeEnemyOverflow && gatedKillEnemyOverflow);
+assert.ok(strongEnemyOverflow.expectedOverflowDamagePerTurn > weakEnemyOverflow.expectedOverflowDamagePerTurn,
+  'enemy overflow payload uses the owner effect when its desire pressure reaches the cap');
+assert.equal(selfDamageEnemyOverflow.expectedOverflowDamagePerTurn, 0,
+  'self-targeted overflow damage is not enemy pressure');
+assert.equal(negativeEnemyOverflow.expectedOverflowDamagePerTurn, 0,
+  'negative overflow damage is not enemy pressure');
+assert.equal(gatedKillEnemyOverflow.expectedOverflowDamagePerTurn, 0,
+  'a condition-gated kill has no speculative overflow payout');
+const enemyStatusOverflow = core.createContentPack({
+  statuses: [{ id: 'enemy_burn', type: 'debuff', triggers: { tick: { damage: 11, damage_kind: 'damage_over_time' } } }],
+  enemy: {
+    id: 'status_temptress', name: '状态试炼者', hp: 60, max_hp: 60, lust: 0, max_lust: 100,
+    actions: [{ id: 'press', name: '压迫', effects: { lust: 100 } }],
+    lust_effect: { name: '烙印', effects: { apply_status: 'enemy_burn' } },
+  },
+});
+const enemyStatusScore = core.scoreEnemyPower(enemyStatusOverflow);
+assert.ok(enemyStatusScore && enemyStatusScore.expectedOverflowDamagePerTurn > 0,
+  'enemy score cache includes status definitions used by overflow payloads');
+const lowOwnerCapEnemy = core.createContentPack({
+  enemy: {
+    id: 'low_owner_cap', name: '低上限敌人', hp: 60, max_hp: 60, lust: 0, max_lust: 25,
+    actions: [{ id: 'press', name: '压迫', effects: { lust: 25 } }],
+    lust_effect: { name: '轻击', effects: { damage: 8 } },
+  },
+});
+const lowOwnerCapScore = core.scoreEnemyPower(lowOwnerCapEnemy);
+assert.equal(lowOwnerCapScore?.expectedOverflowDamagePerTurn, 2,
+  'enemy overflow frequency uses the player target cap, not the enemy owner cap');
+const actualLowTargetCapScore = core.scoreEnemyPower(lowOwnerCapEnemy, { maxLust: 25 });
+assert.equal(actualLowTargetCapScore?.expectedOverflowDamagePerTurn, 8,
+  'an explicit player target cap is part of the enemy-score cache context');
+
+console.log('Deck/enemy scores, difficulty budgets, current-resource separation, and cache invariants passed.');

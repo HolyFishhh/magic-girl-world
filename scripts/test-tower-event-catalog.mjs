@@ -1,0 +1,31 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {createRequire} from 'node:module';
+const require=createRequire(import.meta.url);
+process.env.TS_NODE_COMPILER_OPTIONS=JSON.stringify({module:'CommonJS',moduleResolution:'node'});
+require('ts-node/register/transpile-only');
+const core=require('../src/game-core/index.ts');
+const inventory=JSON.parse(readFileSync('docs/research/2026-09-15-spire-events.sources.json','utf8')).eventInventory;
+const names=new Set(inventory.map(entry=>entry.name));
+for (const mechanic of core.TOWER_EVENT_MECHANICS) {
+  for (const name of mechanic.sources) assert.ok(names.has(name),`missing research source: ${name}`);
+}
+const available=core.availableTowerEventMechanics();
+assert.ok(available.some(entry=>entry.id==='vitality-growth'),'existing max_hp outcomes remain available');
+assert.ok(available.some(entry=>entry.id==='deck-surgery'),'actual transactional removal enables this form');
+const credit=core.planTowerEventOutcome({card_removals:1});
+assert.equal(credit.cardRemovalDelta,1);
+assert.ok(!('removedCards' in credit));
+const text=core.towerEventGenerationGuidance();
+assert.match(text,/只授予之后使用的删牌额度/);
+assert.match(text,/当场删牌用 deck_actions/);
+assert.ok(!core.availableTowerEventMechanics([]).length,'missing capabilities suppress suggestions');
+assert.equal(text,core.towerEventGenerationGuidance(),'guidance does not consume randomness or mutate catalog');
+const outcome=core.planTowerEventOutcome({hp:5,max_hp:3,gold:-10,lust:2,resources:{moon:1},gain_cards:[]});
+assert.equal(outcome.maxHpDelta,3);
+assert.equal(outcome.resourceDeltas.moon,1);
+assert.equal(core.planTowerEventOutcome({max_lust:3}).maxLustDelta,3);
+assert.ok(available.some(entry=>entry.id==='repeat-stages'));
+assert.ok(available.some(entry=>entry.id==='random-card-bargain'));
+assert.ok(!available.some(entry=>entry.id==='battle-challenge'),'unsupported battle return is not advertised');
+console.log('PASS event guidance matches executable scalar/resource outcomes, removal-credit semantics and maintained research sources.');

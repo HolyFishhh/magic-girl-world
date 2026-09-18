@@ -8,6 +8,8 @@ require('ts-node/register/transpile-only');
 const core = require(resolve('src/game-core/index.ts'));
 const { ReferenceBattleRuntimeHost } = require(resolve('src/adapters/referenceBattleRuntimeHost.ts'));
 const { normalizeEnemyAction } = require(resolve('src/fish/core/battleContentAdapter.ts'));
+const { TavernEffectCommandHost } = require(resolve('src/fish/core/effectCommandHost.ts'));
+const { CardSystem } = require(resolve('src/fish/combat/cardSystem.ts'));
 
 const emptyProgram = { spec: 'mwg.effect/v1', steps: [{ op: 'gain_block', target: 'self', amount: 1 }] };
 const card = (id, cost = 1, type = 'Skill') => ({
@@ -131,6 +133,26 @@ await runtime.execute({
   },
 });
 assert.equal(host.getPlayer().hand.find(entry => entry.originalId === 'discard_a').retain, true);
+
+const discardedCallbackCount = discarded.length;
+await runtime.execute({
+  type: 'add_card',
+  zone: 'discard',
+  count: 2,
+  card: {
+    id: 'direct_burden',
+    name: '直接负担',
+    emoji: '🕸️',
+    type: 'Curse',
+    rarity: 'Corrupt',
+    description: '直接生成至弃牌堆。',
+    program: { spec: 'mwg.effect/v1', steps: [] },
+  },
+});
+assert.equal(host.getPlayer().discardPile.filter(entry => entry.originalId === 'direct_burden').length, 2);
+assert.equal(discarded.length, discardedCallbackCount, 'generating into discard is not a hand-discard event');
+assert.equal(events.at(-1).type, 'card_added');
+assert.equal(events.at(-1).zone, 'discard');
 
 // Value transforms use the same zone selectors as other card operations. They
 // rewrite executable card programs while preserving hit count, targets, and
@@ -263,6 +285,102 @@ assert.equal(upgradedRuntimeCard.upgradeLevel, 1);
 assert.equal(upgradedRuntimeCard.retain, true);
 assert.equal(valueEvents.at(-1).type, 'card_upgraded');
 
+// Multiple choose-based value upgrades in one effect program share one target.
+// The offered card must be eligible for every requested stat, and a cancelled
+// shared choice must not open a second prompt for the later upgrade.
+const sharedState = core.createEmptyBattleState();
+sharedState.random = core.createBattleRandomState(126);
+const sharedCard = (id, steps) => ({ ...card(id), effectProgram: { spec: 'mwg.effect/v1', steps } });
+sharedState.player.hand = [
+  sharedCard('damage_only__1', [{ op: 'damage', target: 'opponent', amount: 3 }]),
+  sharedCard('block_only__1', [{ op: 'gain_block', target: 'self', amount: 3 }]),
+  sharedCard('both_values__1', [
+    { op: 'damage', target: 'opponent', amount: 3 },
+    { op: 'gain_block', target: 'self', amount: 3 },
+  ]),
+];
+const sharedHost = new ReferenceBattleRuntimeHost(sharedState);
+let sharedPromptCount = 0;
+const sharedRuntime = sharedHost.createCardEffectRuntime({
+  drawCards: async () => undefined,
+  chooseCards: async candidates => {
+    sharedPromptCount += 1;
+    assert.deepEqual(candidates.map(entry => entry.id), ['damage_only__1', 'both_values__1', 'block_only__1']);
+    return ['both_values__1'];
+  },
+  onCardDiscarded: async () => undefined,
+  onCardExhausted: async () => undefined,
+});
+const sharedCardChoice = {
+  requirements: [
+    { selector: { zone: 'hand', pick: 'choose', count: 1 }, stats: ['damage'] },
+    { selector: { zone: 'hand', pick: 'choose', count: 1 }, stats: ['block'] },
+  ],
+};
+await sharedRuntime.execute({
+  type: 'modify_card_value', selector: { zone: 'hand', pick: 'choose', count: 1 }, stat: 'damage', operator: 'add', value: 2,
+}, { sharedCardChoice });
+await sharedRuntime.execute({
+  type: 'modify_card_value', selector: { zone: 'hand', pick: 'choose', count: 1 }, stat: 'block', operator: 'add', value: 4,
+}, { sharedCardChoice });
+assert.equal(sharedPromptCount, 1);
+assert.deepEqual(sharedHost.getPlayer().hand[2].effectProgram.steps.map(step => step.amount), [5, 7]);
+
+const cancelledChoice = { requirements: sharedCardChoice.requirements };
+sharedRuntime.ports.chooseCards = async () => { sharedPromptCount += 1; return null; };
+const promptsBeforeCancellation = sharedPromptCount;
+await sharedRuntime.execute({
+  type: 'modify_card_value', selector: { zone: 'hand', pick: 'choose', count: 1 }, stat: 'damage', operator: 'add', value: 1,
+}, { sharedCardChoice: cancelledChoice });
+await sharedRuntime.execute({
+  type: 'modify_card_value', selector: { zone: 'hand', pick: 'choose', count: 1 }, stat: 'block', operator: 'add', value: 1,
+}, { sharedCardChoice: cancelledChoice });
+assert.equal(sharedPromptCount, promptsBeforeCancellation + 1, 'cancelled shared card choice is reused without another prompt');
+
+// Exercise the production command-host route with mixed value/upgrade nodes.
+// The host must pass one shared cell through to CardEffectRuntime, even where
+// the authored selectors requested different counts.
+sharedRuntime.ports.chooseCards = async candidates => {
+  sharedPromptCount += 1;
+  assert.deepEqual(candidates.map(entry => entry.id), ['damage_only__1', 'both_values__1', 'block_only__1']);
+  return ['both_values__1'];
+};
+const routedSharedHost = new TavernEffectCommandHost({
+  readState: () => ({
+    self: { hp: 10, maxHp: 10, lust: 0, maxLust: 100, energy: 3, maxEnergy: 3, block: 0 },
+    opponent: { hp: 10, maxHp: 10, lust: 0, maxLust: 100, energy: 0, maxEnergy: 0, block: 0 },
+  }),
+  isTerminal: () => false,
+  executeCardCommand: (command, context) => sharedRuntime.execute(command, context),
+  presentCommand: () => undefined,
+  executeBattleCommand: async () => undefined,
+  executeSpecialCommand: async () => undefined,
+  executeSummonCommand: async () => undefined,
+  executeEnemyCommand: async () => undefined,
+  executeSummonerProgram: async () => undefined,
+  forEachEnemyTarget: async () => undefined,
+  applyStatus: async () => undefined,
+  removeStatuses: async () => undefined,
+  registerAbility: async () => undefined,
+  scheduleEffect: async () => undefined,
+  setCardDestination: async () => undefined,
+  narrate: async () => undefined,
+  chooseEffectOption: async () => null,
+});
+const promptsBeforeRoutedUpgrade = sharedPromptCount;
+await routedSharedHost.executeProgram({
+  spec: 'mwg.effect/v1',
+  steps: [
+    { op: 'modify_card_value', selector: { zone: 'hand', pick: 'choose', count: 3 }, stat: 'damage', operator: 'add', value: 1 },
+    {
+      op: 'upgrade_cards', selector: { zone: 'hand', pick: 'choose', count: 2 }, scope: 'combat', levels: 1,
+      changes: [{ kind: 'numeric', stat: 'block', operator: 'add', value: 2 }],
+    },
+  ],
+}, true);
+assert.equal(sharedPromptCount, promptsBeforeRoutedUpgrade + 1);
+assert.deepEqual(sharedHost.getPlayer().hand[2].effectProgram.steps.map(step => step.amount), [6, 9]);
+
 const handBeforeCopy = host.getPlayer().hand.length;
 await runtime.execute({ type: 'copy_cards', selector: { zone: 'hand', pick: 'left' } });
 assert.equal(host.getPlayer().hand.length, handBeforeCopy + 1);
@@ -337,6 +455,37 @@ assert.equal(host.getPlayer().drawPile.length, beforeEnemyInsertion + 2);
 assert.equal(insertedByEnemy.length, 2);
 assert.ok(insertedByEnemy.every(entry => entry.type === 'Curse'));
 
+// Repeat the same action through the production Tavern command router and the
+// CardSystem delegation boundary. Enemy-owned add_card still always mutates the
+// player's combat zones; source perspective must not redirect it to an enemy.
+const tavernState = core.createEmptyBattleState();
+tavernState.phase = 'enemy_turn';
+const tavernStore = new core.BattleStateStore(tavernState);
+const tavernCardSystem = Object.create(CardSystem.prototype);
+tavernCardSystem.cardEffectRuntime = new core.CardEffectRuntime(tavernStore, {
+  drawCards: async () => {},
+  chooseCards: async () => null,
+  onCardDiscarded: async () => {},
+  onCardExhausted: async () => {},
+});
+const tavernCommandHost = new TavernEffectCommandHost({
+  readState: sourceIsPlayer => ({
+    self: sourceIsPlayer
+      ? { hp: 10, maxHp: 10, lust: 0, maxLust: 100, energy: 3, maxEnergy: 3, block: 0 }
+      : { hp: 10, maxHp: 10, lust: 0, maxLust: 100, energy: 0, maxEnergy: 0, block: 0 },
+    opponent: sourceIsPlayer
+      ? { hp: 10, maxHp: 10, lust: 0, maxLust: 100, energy: 0, maxEnergy: 0, block: 0 }
+      : { hp: 10, maxHp: 10, lust: 0, maxLust: 100, energy: 3, maxEnergy: 3, block: 0 },
+  }),
+  isTerminal: () => false,
+  executeCardCommand: command => tavernCardSystem.executeCardEffectCommand(command),
+  presentCommand: () => {},
+});
+await tavernCommandHost.executeProgram(enemyInsertion.effectProgram, false);
+const tavernInserted = tavernStore.getPlayer().drawPile.filter(entry => entry.originalId === 'enemy_curse');
+assert.equal(tavernInserted.length, 2);
+assert.ok(tavernInserted.every(entry => entry.type === 'Curse' && entry.origin === 'generated'));
+
 const rollbackState = host.getGameState();
 const rollbackHost = new ReferenceBattleRuntimeHost(rollbackState);
 const rollbackRuntime = rollbackHost.createCardEffectRuntime({
@@ -369,4 +518,35 @@ await assert.rejects(
 );
 assert.deepEqual(invalidHost.getGameState(), invalidState, 'an invalid host response cannot mutate card zones');
 
-console.log('Portable CardEffectRuntime executes every modern card command with host-owned UI and lifecycle ports.');
+// Result snapshots are captured before reentrant lifecycle callbacks, not from
+// potentially mutated card references after callbacks finish.
+const resultState = core.createEmptyBattleState();
+resultState.player.hand = [card('outer',1,'Attack'),card('inner',1,'Skill')];
+const resultHost = new ReferenceBattleRuntimeHost(resultState);
+const outerCell = {value:null}, innerCell = {value:null};
+let cancelResultChoice = false;
+const resultRuntime = resultHost.createCardEffectRuntime({
+  drawCards: async () => {},
+  chooseCards: async candidates => cancelResultChoice ? null : [candidates[0].id],
+  onCardExhausted: async () => {},
+  onCardDiscarded: async entry => {
+    if(entry.id !== 'outer') return;
+    assert.equal(outerCell.value.cards[0].type,'Attack');
+    entry.type = 'Curse';
+    await resultRuntime.execute({type:'discard_cards',selector:{zone:'hand',pick:'choose'},amount:1},{discardResult:innerCell});
+  },
+});
+const discardOne = {type:'discard_cards',selector:{zone:'hand',pick:'choose'},amount:1};
+await resultRuntime.execute(discardOne,{discardResult:outerCell});
+assert.deepEqual(outerCell.value,{status:'committed',cards:[{id:'outer',type:'Attack',source:'hand'}]});
+assert.deepEqual(innerCell.value,{status:'committed',cards:[{id:'inner',type:'Skill',source:'hand'}]});
+assert.ok(Object.isFrozen(outerCell.value) && Object.isFrozen(outerCell.value.cards) && Object.isFrozen(outerCell.value.cards[0]));
+await resultRuntime.execute(discardOne,{discardResult:outerCell});
+assert.deepEqual(outerCell.value.cards,[],'empty hand must clear earlier successful result');
+await resultRuntime.execute({type:'recover_cards',source:'discard',pick:'top',amount:1});
+cancelResultChoice = true;
+await resultRuntime.execute(discardOne,{discardResult:innerCell});
+assert.deepEqual(innerCell.value,{status:'cancelled',cards:[]});
+assert.equal(resultHost.getPlayer().hand.length,1,'cancelled selection does not move a card');
+
+console.log('Portable CardEffectRuntime executes modern commands; immutable command-local discard snapshots survive nested listeners and card mutation, clear on empty/cancel.');

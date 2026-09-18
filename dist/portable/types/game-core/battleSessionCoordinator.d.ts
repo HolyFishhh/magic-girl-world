@@ -3,6 +3,10 @@ import type { PlayedCardDestination } from './cardRules';
 import type { CardResourcePayment } from './combatResource';
 import { type BattleStartFlowResult, type BattleStartFlowStep, type BattleTurnFlowResult, type BattleTurnFlowStep } from './battleTurnFlow';
 export type BattleSessionAction = 'battle_start' | 'play_card' | 'use_item' | 'end_turn';
+/** Existing card patches and persistent rules can each contribute up to 20 extra resolutions. */
+export declare const MAX_CARD_RESOLUTIONS_PER_PLAY = 41;
+/** A replayed resolution may execute replay_current again, but it can never grow its own loop. */
+export declare function extendCardResolutionLimit(currentLimit: number, requestedReplays: unknown, replayIndex: number): number;
 type MaybePromise<T> = T | Promise<T>;
 /** One shared gate prevents overlapping UI, API, or host actions from mutating a battle session. */
 export declare class BattleSessionActionGate {
@@ -64,7 +68,8 @@ export interface BattleSessionCardPlayPorts<TCard extends CardPlayCard, TToken> 
     applyCardPlayCommit(committed: CommittedCardPlay<TCard>): MaybePromise<void>;
     beginCardTransit(card: TCard): MaybePromise<void>;
     endCardTransit(card: TCard): MaybePromise<void>;
-    executeCardEffect(card: TCard, payment: CardResourcePayment, repeatIndex: number): MaybePromise<void>;
+    /** Return extra complete resolutions requested by the current card program. */
+    executeCardEffect(card: TCard, payment: CardResourcePayment, repeatIndex: number): MaybePromise<void | number>;
     movePlayedCard(card: TCard, destination: PlayedCardDestination): MaybePromise<void>;
     resolvePlayedCardDestination?(card: TCard, defaultDestination: PlayedCardDestination): PlayedCardDestination;
     triggerPostCardPlay(card: TCard): MaybePromise<void>;

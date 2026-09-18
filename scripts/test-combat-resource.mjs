@@ -36,7 +36,7 @@ const states = core.normalizeCombatResourceStates([
 assert.deepEqual(core.resourcePoolFromCombatant(3, states), { energy: 3, stars: 2, charge: 1 });
 assert.equal(core.refreshCombatResourceStates(states).stars.current, 2);
 assert.equal(core.refreshCombatResourceStates(states).charge.current, 3);
-assert.equal(core.describeCardCost({ energy: 1, stars: 'all' }, states), '1💎能量 + X⭐星能');
+assert.equal(core.describeCardCost({ energy: 1, stars: 'all' }, states), '1⚡能量 + X⭐星能');
 assert.equal(core.estimateCardCostWeight({ energy: 1, stars: 'all' }, pool), 3);
 assert.equal(core.estimateCardCostWeight({ stars: 'all' }, {}, 4), 4);
 

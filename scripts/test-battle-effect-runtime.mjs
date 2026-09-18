@@ -80,7 +80,7 @@ const damage = await runtime.execute(
   { type: 'damage', target: 'opponent', amount: 10 },
   { source: 'player' },
 );
-assert.deepEqual(damage, { applied: true, target: 'enemy', pendingDeath: false, blocked: 5, hpLost: 19 });
+assert.deepEqual(damage, { applied: true, target: 'enemy', pendingDeath: false, blocked: 5, modified: 24, hpLost: 19 });
 assert.equal(store.getEnemy().block, 0);
 assert.equal(
   store.getEnemy().currentHp,
@@ -143,7 +143,7 @@ const interceptedAttack = await interceptRuntime.execute(
   { type: 'damage', target: 'opponent', amount: 11, damageKind: 'attack' },
   { source: 'enemy', damageKind: 'attack' },
 );
-assert.equal(interceptedAttack.blocked, 3, 'protected combatant block resolves before summon interception');
+assert.equal(interceptedAttack.blocked, 3, 'protected combatant block absorbs only summon overkill');
 assert.equal(interceptedAttack.hpLost, 2, 'summon overkill returns to the protected combatant');
 assert.equal(interceptStore.getPlayer().currentHp, 38);
 assert.equal(interceptStore.getSummons('player').length, 0);
@@ -308,3 +308,51 @@ assert.deepEqual(
 );
 
 console.log('Portable battle effects preserve modifiers, block ordering, triggers, clamping, overflow, and death marks.');
+
+// Incoming vulnerability belongs to the original target, while mitigation and
+// block belong only to the actual recipient. Exercise save/restore too.
+for (const restore of [false, true]) {
+  let guarded = fixture();
+  guarded.updatePlayer({ currentHp: 40, block: 9 });
+  const protector = guarded.spawnSummons('player', {
+    id: 'mitigating_guard', name: '减伤守卫', emoji: 'G', maxHp: 30,
+    modifiers: { damage_taken_modifier: -2 },
+  }, 1).spawned[0];
+  if (restore) guarded = new BattleStateStore(JSON.parse(JSON.stringify(guarded.getGameState())));
+  const guardedRuntime = new BattleEffectRuntime(guarded, {
+    readModifierSources: (target, modifier) => target === 'player' && modifier === 'damage_taken_modifier'
+      ? [{ operation: { operator: '*', value: 1.5 } }, { operation: { operator: '+', value: -7 } }] : [],
+    dispatchTriggers: async () => {}, handleLustOverflow: async () => {},
+    interceptDamage: async request => guarded.interceptDamageWithSummons(request.target, request.amount,
+      (unit, incoming) => incoming + (unit.modifiers?.damage_taken_modifier || 0)),
+  });
+  await guardedRuntime.execute({ type: 'damage', target: 'opponent', amount: 10, damageKind: 'attack' },
+    { source: 'enemy', damageKind: 'attack' });
+  assert.equal(guarded.getSummonById(protector.instanceId).currentHp, 22, 'only the summon recipient mitigation applies; player vulnerability and reduction do not transfer');
+  assert.equal(guarded.getPlayer().currentHp, 40);
+  assert.equal(guarded.getPlayer().block, 9, 'owner block is untouched by intercepted damage');
+}
+
+// A vulnerable fragile summon can increase spillover: net intercepted damage
+// is not a reliable indication that a hit happened and state must be saved.
+const vulnerableStore = fixture();
+vulnerableStore.updatePlayer({ currentHp: 40, block: 0 });
+const fragile = vulnerableStore.spawnSummons('player', {
+  id: 'fragile_guard', name: '脆弱守卫', emoji: 'G', maxHp: 1,
+}, 1).spawned[0];
+const vulnerableEvents = [];
+const vulnerableRuntime = new BattleEffectRuntime(vulnerableStore, {
+  readModifierSources: () => [], dispatchTriggers: async () => {}, handleLustOverflow: async () => {},
+  interceptDamage: async request => vulnerableStore.interceptDamageWithSummons(request.target, request.amount,
+    (_unit, incoming) => incoming * 2),
+  present: event => vulnerableEvents.push(event),
+});
+await vulnerableRuntime.execute({ type: 'damage', target: 'opponent', amount: 10, damageKind: 'attack' },
+  { source: 'enemy', damageKind: 'attack' });
+assert.equal(vulnerableStore.getSummonById(fragile.instanceId).currentHp, 0, 'amplified interception still commits summon death');
+assert.equal(vulnerableStore.getSummons('player').length, 0);
+assert.equal(vulnerableStore.getPlayer().currentHp, 21, 'post-mitigation overkill reaches owner');
+assert.equal(vulnerableEvents.filter(event => event.type === 'summon_intercepted').length, 1);
+const vulnerableRestored = new BattleStateStore(JSON.parse(JSON.stringify(vulnerableStore.getGameState())));
+assert.equal(vulnerableRestored.getSummons('player').length, 0);
+assert.equal(vulnerableRestored.getPlayer().currentHp, 21);

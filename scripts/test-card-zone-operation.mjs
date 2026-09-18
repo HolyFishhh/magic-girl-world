@@ -65,7 +65,10 @@ const richZones = {
     { id: 'middle', type: 'Attack', rarity: 'Uncommon', cost: 2, templateId: 'attack', origin: 'generated' },
     { id: 'top', type: 'Power', rarity: 'Rare', cost: 3, templateId: 'power', origin: 'deck' },
   ],
-  discardPile: [],
+  discardPile: [
+    { id: 'discard-attack', type: 'Attack', rarity: 'Uncommon', cost: 1, origin: 'deck' },
+    { id: 'discard-skill', type: 'Skill', rarity: 'Common', cost: 1, origin: 'deck' },
+  ],
   exhaustPile: [{ id: 'exhausted', type: 'Curse', rarity: 'Corrupt', cost: 0, origin: 'generated' }],
 };
 const drawTop = operation.planCardZoneOperation(richZones, {
@@ -94,5 +97,15 @@ const explicitExhaust = operation.planCardZoneOperation(richZones, {
 });
 assert.deepEqual(explicitExhaust.candidateCardIds, ['exhausted']);
 assert.deepEqual(explicitExhaust.selection.cardIds, ['exhausted']);
+const filteredRecovery = operation.planCardZoneOperation(richZones, {
+  type: 'recover_cards',
+  source: 'discard',
+  pick: 'choose',
+  amount: 1,
+  filter: { types: ['Attack'], rarities: ['Uncommon'] },
+});
+assert.equal(filteredRecovery.ok, true);
+assert.deepEqual(filteredRecovery.candidateCardIds, ['discard-attack']);
+assert.deepEqual(filteredRecovery.selection, { kind: 'interactive', minimum: 1, maximum: 1 });
 
 console.log('Portable card-zone plans validate candidates, hand limits, ordering, stale hosts, and atomic commits.');

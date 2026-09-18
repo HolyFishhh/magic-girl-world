@@ -1,5 +1,5 @@
 import { roundBattleValue } from './battleMath';
-import type { CardValueOperator, EffectNode, EffectOrbSelector } from './effectDsl';
+import type { CardValueOperator, EffectNode, EffectOrbSelector, EffectStanceEvent } from './effectDsl';
 
 export interface ActiveStance {
   id: string;
@@ -9,6 +9,9 @@ export interface ActiveStance {
   enterEffects?: EffectNode[];
   exitEffects?: EffectNode[];
   passiveEffects?: EffectNode[];
+  events?: EffectStanceEvent[];
+  /** Program-owned activation identity. AI authors neither this nor a counter. */
+  activationId?: number;
   enteredTurn: number;
   source?: { kind: string; id: string; name?: string };
 }
@@ -67,7 +70,7 @@ export function resizeOrbContainer(
   };
 }
 
-/** Channel to the right; a full container evicts the oldest (left-most) Orb. */
+/** Channel to the right; a full stance slot evicts the oldest (left-most) stance. */
 export function channelOrb(
   container: OrbContainer | undefined,
   orb: OrbInstance,
@@ -105,7 +108,7 @@ function applyOperator(current: number, operator: CardValueOperator, operand: nu
   if (operator === 'add') return current + operand;
   if (operator === 'subtract') return current - operand;
   if (operator === 'multiply') return current * operand;
-  if (operand === 0) throw new Error('Orb value cannot be divided by zero');
+  if (operand === 0) throw new Error('姿态数值不能除以零');
   return current / operand;
 }
 

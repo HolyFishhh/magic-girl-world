@@ -31,6 +31,8 @@ export interface EnemyPowerScore {
     currentHp: number;
     expectedDamagePerTurn: number;
     expectedLustPerTurn: number;
+    /** Expected executable damage from cap-triggered enemy overflow effects. */
+    expectedOverflowDamagePerTurn: number;
     expectedBlockPerTurn: number;
     peakDamage: number;
     actions: EnemyActionPressure[];
@@ -38,6 +40,11 @@ export interface EnemyPowerScore {
     coverage: number;
     reasons: string[];
 }
+/** Optional opponent caps for context-sensitive overflow payload estimates. */
+export interface EnemyPowerScoreTarget {
+    maxHp?: number;
+    maxLust?: number;
+}
 /** Score authored enemy strength without mutating or repairing the generated definition. */
-export declare function scoreEnemyPower(pack: ContentPack): EnemyPowerScore | null;
+export declare function scoreEnemyPower(pack: ContentPack, target?: EnemyPowerScoreTarget): EnemyPowerScore | null;
 export declare function clearEnemyPowerScoreCache(): void;

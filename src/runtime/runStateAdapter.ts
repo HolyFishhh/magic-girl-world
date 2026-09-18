@@ -1,8 +1,11 @@
 import {
+  archiveBattleJournalInRun,
   completeRunNode,
+  createRunEventHistory,
   createRunState,
   enterRunNode,
   isBattleRunNode,
+  readRunEventHistory,
   settleEventOutcome,
   spendRunGold,
   validateRunState,
@@ -12,10 +15,14 @@ import {
   type RunNodeOutcome,
   type RunState,
   type BattleEndResult,
+  type BattleEventJournalState,
+  type RunEventHistoryState,
 } from '../game-core';
 import { flattenMvuArray } from './mvuArrays';
 
 export type BattleRunResult = BattleEndResult;
+
+export const RUN_EVENT_HISTORY_KEY = 'run_event_history';
 
 export interface RunMutationResult {
   previous: RunState;
@@ -69,6 +76,32 @@ function requireRecord(value: unknown, message: string): Record<string, any> {
   return value as Record<string, any>;
 }
 
+/** Read the program-owned cross-battle history without trusting arbitrary MVU objects. */
+export function readRunEventHistoryInStat(statValue: unknown): RunEventHistoryState {
+  if (!statValue || typeof statValue !== 'object' || Array.isArray(statValue)) return createRunEventHistory();
+  return readRunEventHistory((statValue as Record<string, unknown>)[RUN_EVENT_HISTORY_KEY])
+    || createRunEventHistory();
+}
+
+/** Archive one completed encounter idempotently inside the same settlement transaction. */
+export function archiveBattleEventJournalInStat(
+  statValue: unknown,
+  encounterId: string,
+  journal: BattleEventJournalState,
+): RunEventHistoryState {
+  const stat = requireRecord(statValue, 'stat_data is unavailable');
+  const history = archiveBattleJournalInRun(readRunEventHistoryInStat(stat), encounterId, journal);
+  stat[RUN_EVENT_HISTORY_KEY] = history;
+  return history;
+}
+
+export function resetRunEventHistoryInStat(statValue: unknown): RunEventHistoryState {
+  const stat = requireRecord(statValue, 'stat_data is unavailable');
+  const history = createRunEventHistory();
+  stat[RUN_EVENT_HISTORY_KEY] = history;
+  return history;
+}
+
 export function readRunState(statValue: unknown): RunState | null {
   if (!statValue || typeof statValue !== 'object' || Array.isArray(statValue)) return null;
   const parsed = validateRunState((statValue as Record<string, unknown>).run);
@@ -83,7 +116,12 @@ export function migrateRunProgramStateInStat(statValue: unknown): RunState | nul
   if (stat.run_upgrade_target === undefined) stat.run_upgrade_target = null;
   if (stat.run_transform === undefined) stat.run_transform = null;
   if (stat.run_transform_target === undefined) stat.run_transform_target = null;
-  if (stat.run_reward_reroll === undefined) stat.run_reward_reroll = null;
+  // Retire the AI reroll flow; an interrupted old request restores its original pool.
+  if (stat.run_reward_reroll && typeof stat.run_reward_reroll.original_reward === 'object'
+    && stat.run_reward_reroll.original_reward !== null && !Array.isArray(stat.run_reward_reroll.original_reward)) {
+    stat.reward = structuredClone(stat.run_reward_reroll.original_reward);
+  }
+  delete stat.run_reward_reroll;
   if (!Array.isArray(stat.run_rules)) stat.run_rules = [];
   if (!Array.isArray(stat.run_trigger_invocations)) stat.run_trigger_invocations = [];
   if (!stat.run_trigger_counters || typeof stat.run_trigger_counters !== 'object' || Array.isArray(stat.run_trigger_counters)) {
@@ -157,6 +195,7 @@ export function ensureRunStateInStat(statValue: unknown, seed: number): RunMutat
   if (previous) return { previous, run: previous };
   const run = createRunState({ seed });
   stat.run = run;
+  resetRunEventHistoryInStat(stat);
   stat.run_upgrade = null;
   stat.run_transform = null;
   stat.run_transform_target = null;
@@ -208,11 +247,13 @@ export function restartRunInStat(statValue: unknown): RunState {
   const seed = previous ? (previous.seed + 0x9e3779b9) >>> 0 : deriveRunSeed(stat);
   const run = createRunState({ seed });
   stat.run = run;
+  resetRunEventHistoryInStat(stat);
   stat.run_upgrade = null;
   stat.run_upgrade_target = null;
   stat.run_transform = null;
   stat.run_transform_target = null;
   stat.run_reward_reroll = null;
+  delete stat.run_event_reveal;
   stat.run_trigger_invocations = [];
   stat.run_trigger_counters = { total: 0, by_trigger: {}, by_source_kind: {}, by_source: {} };
   stat.run_transaction_revision = 0;
@@ -231,6 +272,7 @@ export function restartRunInStat(statValue: unknown): RunState {
     reward.artifact = [];
     reward.item = [];
     reward.limits = {};
+    delete reward.card_choice_groups;
     reward.disabled_categories = [];
     reward.pool_revision = 0;
     reward.reroll_count = 0;

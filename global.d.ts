@@ -42,8 +42,9 @@ declare function createChatMessages(
   },
 ): Promise<void>;
 declare function getChatMessages(messageId: number | string): Array<{ message?: string }>;
+declare function getChatMessages(messageId: number | string, options: { include_swipes: true }): Array<{ message?: string; swipe_id: number; swipes: string[] }>;
 declare function setChatMessages(
-  messages: Array<{ message_id: number; message?: string }>,
+  messages: Array<{ message_id: number; message?: string; swipe_id?: number }>,
   options?: { refresh?: 'none' | 'affected' | 'all' },
 ): Promise<void>;
 declare function getButtonEvent(name: string): string;

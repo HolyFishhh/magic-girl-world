@@ -25,6 +25,7 @@ export interface CardUpgradePatch {
 
 export interface CardUpgradeOptions {
   maxLevel?: number;
+  playerDesireEffect?: unknown;
   knownStatusIds?: Iterable<string>;
   statusDefinitions?: readonly unknown[];
   knownResourceIds?: Iterable<string>;
@@ -133,8 +134,9 @@ export function applyCardUpgrade(
 
   const validation = validateRewardCandidate('cards', next);
   if (!validation.ok) return { ok: false, message: validation.message };
-  if (options.knownStatusIds || options.statusDefinitions || options.knownResourceIds) {
+  if (options.playerDesireEffect || options.knownStatusIds || options.statusDefinitions || options.knownResourceIds) {
     const libraryValidation = validateRewardCandidateAgainstLibrary('cards', next, {
+      playerDesireEffect: options.playerDesireEffect,
       knownStatusIds: options.knownStatusIds,
       statusDefinitions: options.statusDefinitions,
       knownResourceIds: options.knownResourceIds,

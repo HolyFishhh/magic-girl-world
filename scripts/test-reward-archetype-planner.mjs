@@ -41,7 +41,8 @@ const reinforce = core.evaluateRewardCandidateArchetype({
     effects: { damage: '4 + opponent.status.echo_mark.stacks * 2' },
   },
 });
-assert.ok(reinforce.affinities.some(entry => entry.id === 'status-stack' || entry.id === 'status-detonation'));
+assert.ok(reinforce.affinities.some(entry => entry.id === 'status-scaling' || entry.id === 'status-conversion'),
+  'reading stacks is a status payoff, not applying or consuming stacks');
 assert.ok(Number.isFinite(reinforce.deckScoreDelta));
 assert.ok(reinforce.selectionValue >= 0 && reinforce.selectionValue <= 100);
 

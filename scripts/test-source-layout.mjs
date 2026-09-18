@@ -9,6 +9,7 @@ const allowedDirectories = [
   'game-core',
   'portable',
   'runtime',
+  'shared',
   'sillytavern-extension',
   'start',
   'tower',
@@ -23,4 +24,4 @@ assert.deepEqual(
   allowedDirectories,
   `Unexpected source trees must be integrated or removed: ${actualDirectories.join(', ')}`,
 );
-console.log('Source layout contains only the nine production, portable, extension, and tower ownership roots.');
+console.log('Source layout contains only the ten production, portable, shared, extension, and tower ownership roots.');

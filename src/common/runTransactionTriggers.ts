@@ -1,3 +1,4 @@
+import { readRewardCardGroups } from '../game-core/rewardCardGroups';
 import type {
   RunTransactionCounters,
   RunTransactionEvent,
@@ -88,6 +89,8 @@ interface ResolvedRunTrigger {
 const EVENT_TYPES = new Set<RunTransactionEventType>([
   'reward_claimed',
   'event_reward_claimed',
+  'event_step_settled',
+  'initial_artifacts_acquired',
   'reward_pool_changed',
   'shop_purchased',
   'shop_left',
@@ -521,7 +524,16 @@ function executeAction(stat: Record<string, any>, action: RunTriggerAction): { o
   if (!isRecord(reward.limits)) reward.limits = {};
   const before = Number(reward.limits[action.category] ?? 0);
   if (!Number.isInteger(before) || before < 0) throw new Error('run trigger reward limit is invalid');
-  reward.limits[action.category] = Math.max(0, before + action.amount);
+  if(action.category==='cards' && reward.card_choice_groups!=null){
+    const groups=readRewardCardGroups(reward,Array.isArray(reward.card)?reward.card.length:0);
+    let remaining=action.amount;
+    for(const group of remaining<0?[...groups].reverse():groups){
+      const change=remaining>0?Math.min(remaining,group.indices.length-group.pick):Math.max(remaining,-group.pick);
+      group.pick+=change;remaining-=change;
+    }
+    reward.card_choice_groups=groups;
+    reward.limits.cards=groups.reduce((sum,group)=>sum+group.pick,0);
+  }else reward.limits[action.category] = Math.max(0, before + action.amount);
   return { op: action.op, before, after: reward.limits[action.category] };
 }
 

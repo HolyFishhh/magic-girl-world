@@ -1,4 +1,4 @@
-import { type RegisterableEffectTrigger } from './battleTriggers';
+import { type AbilityTrigger, type RuntimeRegisteredEffectTrigger } from './battleTriggers';
 import type { CardOrigin } from './cardIdentity';
 import type { PlayedCardDestination } from './cardRules';
 import type { CardCostOperator, CardKeyword, CardPatchScope } from './cardPatch';
@@ -15,12 +15,12 @@ export type CardType = 'Attack' | 'Skill' | 'Power' | 'Event' | 'Curse';
 export type CardRarity = 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary' | 'Corrupt';
 export type RecoverCardZone = 'draw' | 'discard' | 'exhaust';
 export type EffectCardPileZone = 'hand' | 'drawPile' | 'discardPile' | 'exhaustPile';
-export type ModifierStat = 'damage' | 'damage_taken' | 'lust' | 'lust_taken' | 'heal' | 'block' | 'summon_capacity';
+export type ModifierStat = 'damage' | 'damage_taken' | 'lust' | 'lust_taken' | 'heal' | 'block' | 'summon_capacity' | 'draw_per_turn';
 export type EffectModifierOperator = 'add' | 'subtract' | 'multiply' | 'divide' | 'set';
 export type CardValueStat = 'damage' | 'block' | 'lust' | 'stacks';
 export type CardValueOperator = 'add' | 'subtract' | 'multiply' | 'divide';
 export type CardPlayRuleKind = 'replay' | 'free' | 'retain_hand' | 'retain_block' | 'limit_draw' | 'limit_block_gain' | 'limit_energy_gain' | 'deny_card_play' | 'allow_card_play' | 'limit_card_play' | 'card_destination';
-export type EffectTrigger = RegisterableEffectTrigger;
+export type EffectTrigger = RuntimeRegisteredEffectTrigger;
 export type EffectSchedulePhase = 'turn_start' | 'before_draw' | 'after_draw' | 'turn_end';
 export interface CardSelector {
     zone: CardZone;
@@ -31,6 +31,7 @@ export interface CardSelector {
 export interface CardSelectorFilter {
     /** Exact visible card name. Distinct from template and instance identity. */
     name?: string;
+    nameContains?: string;
     types?: CardType[];
     rarities?: CardRarity[];
     cost?: CardCost;
@@ -42,6 +43,10 @@ export interface CardSelectorFilter {
     combatInstanceId?: string;
     origin?: CardOrigin;
     upgraded?: boolean;
+    /** Require every listed intrinsic card keyword. */
+    keywords?: CardKeyword[];
+    /** Reject cards carrying any listed intrinsic card keyword. */
+    excludedKeywords?: CardKeyword[];
     /** Select lineage roots only; temporary copied combat instances are excluded. */
     rootOnly?: boolean;
 }
@@ -67,6 +72,11 @@ export type EffectCardPatch = (EffectCardPatchBase & {
 }) | (EffectCardPatchBase & {
     kind: 'replay';
     extra: NumericExpression;
+}) | (EffectCardPatchBase & {
+    kind: 'hits';
+    add: NumericExpression;
+}) | (EffectCardPatchBase & {
+    kind: 'area';
 }) | (EffectCardPatchBase & {
     kind: 'x_value';
     operator: CardCostOperator;
@@ -96,6 +106,11 @@ export type EffectCardUpgradeChange = {
     kind: 'replay';
     extra: NumericExpression;
 } | {
+    kind: 'hits';
+    add: NumericExpression;
+} | {
+    kind: 'area';
+} | {
     kind: 'x_value';
     operator: CardCostOperator;
     value: NumericExpression;
@@ -107,7 +122,9 @@ export type EffectCardUpgradeChange = {
     minimum?: number;
     maximum?: number;
 };
-export type EffectCardAttachmentChange = EffectCardUpgradeChange | {
+export type EffectCardAttachmentChange = Exclude<EffectCardUpgradeChange, {
+    kind: 'hits' | 'area';
+}> | {
     kind: 'play_access';
     mode: 'deny' | 'allow';
 } | {
@@ -130,6 +147,8 @@ export interface EffectCardAttachmentDefinition {
     changes: EffectCardAttachmentChange[];
 }
 export interface GeneratedCardDefinition {
+    unique?: boolean;
+    lifecycle?: import('./cardLifecycle').CardLifecycle;
     id: string;
     name: string;
     emoji: string;
@@ -142,6 +161,13 @@ export interface GeneratedCardDefinition {
     retain?: boolean;
     exhaust?: boolean;
     ethereal?: boolean;
+    requiresSummonTemplateId?: string;
+}
+/** A listener owned by the active stance, never a permanently registered ability. */
+export interface EffectStanceEvent {
+    trigger: AbilityTrigger;
+    eventQuery?: EventTriggerQuery;
+    effects: EffectNode[];
 }
 /** Mutually-exclusive combat mode carried by one combatant. */
 export interface EffectStanceDefinition {
@@ -152,6 +178,7 @@ export interface EffectStanceDefinition {
     enterEffects?: EffectNode[];
     exitEffects?: EffectNode[];
     passiveEffects?: EffectNode[];
+    events?: EffectStanceEvent[];
 }
 /** Ordered slot entity with an independent value and passive/evoke programs. */
 export interface EffectOrbDefinition {
@@ -181,24 +208,28 @@ export interface EffectEnemySpawnDefinition {
     name: string;
     emoji: string;
     max_hp: number;
-    hp?: number;
-    max_lust?: number;
-    lust?: number;
+    hp: number;
+    max_lust: number;
+    lust: number;
     block?: number;
     description?: string;
     actions: Array<Record<string, unknown>>;
     abilities?: Array<Record<string, unknown>>;
     status_effects?: Array<Record<string, unknown>>;
-    lust_effect: Record<string, unknown>;
+    lust_effect?: Record<string, unknown>;
     action_mode?: string;
     action_config?: Record<string, unknown>;
     action_priority?: number;
     speed?: number;
     tags?: string[];
-    resources?: Record<string, unknown>;
+    resources?: Array<Record<string, unknown>>;
     stance?: Record<string, unknown> | null;
     orb_slots?: number;
     orbs?: Array<Record<string, unknown>>;
+    escape_when?: string;
+    victory_on_defeat?: boolean;
+    /** Program-authored encounter loot. Spawned reinforcements deliberately discard it at runtime. */
+    defeat_reward?: Record<string, unknown>;
 }
 export type NumericExpression = number | {
     op: 'var';
@@ -211,8 +242,11 @@ export type NumericExpression = number | {
     op: 'count_cards';
     selector: CardSelector;
 } | {
+    op: 'discard_count';
+} | {
     op: 'count_statuses';
     target: EffectTarget;
+    statusType?: 'buff' | 'debuff' | 'neutral';
 } | {
     op: 'history';
     metric: EventHistoryMetric;
@@ -225,12 +259,12 @@ export type NumericExpression = number | {
     op: 'intent_value';
 };
 export type BinaryNumericExpression = {
-    [TOperator in 'add' | 'subtract' | 'multiply' | 'divide']: {
+    [TOperator in 'add' | 'subtract' | 'multiply' | 'divide' | 'modulo']: {
         op: TOperator;
         left: NumericExpression;
         right: NumericExpression;
     };
-}['add' | 'subtract' | 'multiply' | 'divide'];
+}['add' | 'subtract' | 'multiply' | 'divide' | 'modulo'];
 export type UnaryNumericExpression = {
     [TOperator in 'negate' | 'floor' | 'ceil' | 'abs']: {
         op: TOperator;
@@ -253,8 +287,23 @@ export type ConditionExpression = ComparisonCondition | {
     op: 'last_card_type';
     cardType: CardType;
 } | {
+    op: 'discarded_card_type';
+    cardType: CardType;
+} | {
+    op: 'event_status_is';
+    statusId: string;
+} | {
     op: 'intent_type';
     intentType: string;
+} | {
+    op: 'event_damage_kind';
+    relation: 'eq' | 'neq';
+    damageKind: DamageKind;
+} | {
+    op: 'stance_is';
+    target: EffectTarget;
+    relation: 'eq' | 'neq';
+    stanceId: string | null;
 };
 export interface ComparisonCondition {
     op: 'compare';
@@ -267,6 +316,8 @@ export type EffectNode = {
     target: EffectTarget;
     targetSelector?: EnemyTargetSelector;
     amount: NumericExpression;
+    /** Compiler-only identity for the repeated nodes of one authored hits effect. */
+    hitGroup?: string;
     damageKind?: Exclude<DamageKind, 'execute'>;
     bypassBlock?: boolean;
     lifesteal?: NumericExpression;
@@ -323,6 +374,12 @@ export type EffectNode = {
     stat: 'hp' | 'lust' | 'energy' | 'block';
     value: NumericExpression;
 } | {
+    op: 'persistent_growth';
+    stat: 'max_hp' | 'max_lust' | 'damage' | 'lust';
+    summonTemplateId?: string;
+    operator: 'add' | 'subtract' | 'set';
+    value: NumericExpression;
+} | {
     op: 'apply_status';
     target: EffectTarget;
     targetSelector?: EnemyTargetSelector;
@@ -352,6 +409,7 @@ export type EffectNode = {
     source: RecoverCardZone;
     pick: 'random' | 'choose' | 'all';
     amount: NumericExpression;
+    filter?: CardSelectorFilter;
 } | {
     op: 'reduce_card_cost';
     selector: CardSelector;
@@ -372,6 +430,11 @@ export type EffectNode = {
     op: 'auto_play_cards';
     selector: CardSelector;
     free: boolean;
+}
+/** Request extra complete resolutions of the card whose immediate program is currently running. */
+ | {
+    op: 'replay_current';
+    count: NumericExpression;
 } | {
     op: 'set_card_destination';
     destination: PlayedCardDestination;
@@ -406,7 +469,7 @@ export type EffectNode = {
     changes: EffectCardUpgradeChange[];
 } | {
     op: 'add_card';
-    zone: 'hand' | 'draw';
+    zone: 'hand' | 'draw' | 'discard';
     card: GeneratedCardDefinition;
     count: number;
 } | {
@@ -422,6 +485,14 @@ export type EffectNode = {
     count: NumericExpression;
     capacity?: number;
     overflow?: SummonOverflowPolicy;
+} | {
+    op: 'wait';
+} | {
+    op: 'say';
+    text: string;
+} | {
+    op: 'enemy_intent';
+    actionId: string;
 } | {
     op: 'spawn_enemy';
     enemy: EffectEnemySpawnDefinition;
@@ -470,6 +541,16 @@ export type EffectNode = {
 } | {
     op: 'activate_summons';
     selector: SummonSelector;
+    trigger?: 'defeated';
+    /** A one-off program executed by each selected summon as its actor. */
+    suppliedAction?: {
+        id: string;
+        name: string;
+        emoji?: string;
+        description?: string;
+        fixed?: boolean;
+        effectProgram: EffectProgram;
+    };
 } | {
     op: 'dismiss_summons';
     selector: SummonSelector;
@@ -558,6 +639,7 @@ export type EffectNode = {
 } | {
     op: 'choose_one';
     choiceId: string;
+    count?: number;
     options: EffectChoiceOption[];
 } | {
     op: 'if';
@@ -585,11 +667,19 @@ export interface CoreCombatantState {
     energy: number;
     maxEnergy: number;
     block: number;
+    /** Current stance identity; null (or an omitted legacy field) means no stance. */
+    stanceId?: string | null;
     handSize?: number;
     drawPileSize?: number;
     discardPileSize?: number;
     exhaustPileSize?: number;
+    /** Living summons on this combatant's side. */
+    summonCount?: number;
+    /** Other living non-summon combatants on this combatant's side. */
+    allyCount?: number;
     statusStacks?: Record<string, number>;
+    /** Runtime status kinds keyed by the same stable ids as statusStacks. */
+    statusTypes?: Record<string, 'buff' | 'debuff' | 'neutral'>;
     resources?: Record<string, number>;
     maxResources?: Record<string, number>;
     tags?: string[];
@@ -613,6 +703,8 @@ export interface CoreEffectState {
         lastHeal?: number;
         lastResourceSpent?: number;
         lastCardType?: string;
+        /** Runtime-owned membership for AI-facing `scope:"team"` history reads. */
+        teamActorIds?: readonly string[];
         /** Full structured history enables filtered counters and recent-event reads. */
         eventJournal?: BattleEventJournalState;
     };
@@ -633,15 +725,28 @@ export interface CoreCardView {
     origin?: CardOrigin;
     upgraded?: boolean;
     upgradeLevel?: number;
+    retain?: boolean;
+    exhaust?: boolean;
+    ethereal?: boolean;
+    innate?: boolean;
 }
 export interface EffectExecutionContext {
+    /** Immutable identity of the currently dispatched status ownership event. */
+    eventStatus?: Readonly<{
+        kind: 'status_applied' | 'status_removed';
+        id: string;
+    }>;
+    /** Latest completed discard command in this program invocation, not journal history. */
+    discardResult?: import('./cardEffectRuntime').DiscardCommandResult;
     spentEnergy: number;
     spentResources?: Readonly<Record<string, number>>;
     xValues?: Readonly<Record<string, number>>;
     xValue?: number;
     statusStacks?: number;
     orbValue?: number;
-    choiceSelections?: Readonly<Record<string, string>>;
+    choiceSelections?: Readonly<Record<string, string | readonly string[]>>;
+    /** Damage kind of the concrete battle event currently dispatching this program. */
+    eventDamageKind?: DamageKind;
 }
 export interface EffectValidationIssue {
     path: string;
@@ -707,6 +812,12 @@ export type CoreEffectEvent = {
     stat: 'hp' | 'lust' | 'energy' | 'block';
     value: number;
 } | {
+    type: 'persistent_growth';
+    stat: 'max_hp' | 'max_lust' | 'damage' | 'lust';
+    summonTemplateId?: string;
+    operator: 'add' | 'subtract' | 'set';
+    value: number;
+} | {
     type: 'apply_status';
     target: EffectTarget;
     status: string;
@@ -730,6 +841,7 @@ export type CoreEffectEvent = {
     source: RecoverCardZone;
     pick: 'random' | 'choose' | 'all';
     amount: number;
+    filter?: CardSelectorFilter;
 } | {
     type: 'reduce_card_cost';
     selector: CardSelector;
@@ -747,6 +859,9 @@ export type CoreEffectEvent = {
     type: 'auto_play_cards';
     selector: CardSelector;
     free: boolean;
+} | {
+    type: 'replay_current';
+    count: number;
 } | {
     type: 'set_card_destination';
     destination: PlayedCardDestination;
@@ -781,7 +896,7 @@ export type CoreEffectEvent = {
     changes: EffectCardUpgradeChange[];
 } | {
     type: 'add_card';
-    zone: 'hand' | 'draw';
+    zone: 'hand' | 'draw' | 'discard';
     card: GeneratedCardDefinition;
     count: number;
 } | {
@@ -795,8 +910,16 @@ export type CoreEffectEvent = {
     target: EffectTarget;
     summon: EffectSummonDefinition;
     count: number;
-    capacity: number;
+    capacity?: number;
     overflow: SummonOverflowPolicy;
+} | {
+    type: 'wait';
+} | {
+    type: 'say';
+    text: string;
+} | {
+    type: 'enemy_intent';
+    actionId: string;
 } | {
     type: 'spawn_enemy';
     enemy: EffectEnemySpawnDefinition;
@@ -840,6 +963,15 @@ export type CoreEffectEvent = {
 } | {
     type: 'activate_summons';
     selector: SummonSelector;
+    trigger?: 'defeated';
+    suppliedAction?: {
+        id: string;
+        name: string;
+        emoji?: string;
+        description?: string;
+        fixed?: boolean;
+        effectProgram: EffectProgram;
+    };
 } | {
     type: 'dismiss_summons';
     selector: SummonSelector;
@@ -848,7 +980,7 @@ export type CoreEffectEvent = {
     type: 'copy_summons';
     selector: SummonSelector;
     targetOwner: 'same' | EffectTarget;
-    capacity: number;
+    capacity?: number;
     overflow: SummonOverflowPolicy;
 } | {
     type: 'summoner_effects';

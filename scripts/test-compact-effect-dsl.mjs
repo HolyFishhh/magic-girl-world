@@ -12,9 +12,11 @@ const {
   compileCompactEffectList,
   executeEffectProgram,
   transformCardEffectProgram,
+  validateEffectProgramPolicy,
 } = require(
   resolve('src/game-core/index.ts'),
 );
+const { withAiContentDefinitions } = require(resolve('src/game-core/aiContentJsonSchema.ts'));
 
 const compactSchema = JSON.parse(await readFile(resolve('schemas/mwg-card-effects-v1.schema.json'), 'utf8'));
 const validateCompactSchema = new Ajv2020({ strict: false, allErrors: true }).compile(compactSchema);
@@ -29,6 +31,55 @@ const schemaHistoryEffect = {
   },
 };
 assert.equal(validateCompactSchema(schemaHistoryEffect), true, JSON.stringify(validateCompactSchema.errors));
+const schemaCurrentReplay = {
+  effects: [{ damage: 4 }, { replay_current: 1, when: 'cards_played_this_turn >= 2' }],
+};
+assert.equal(validateCompactSchema(schemaCurrentReplay), true, JSON.stringify(validateCompactSchema.errors));
+const schemaKeywordRecovery = {
+  effects: { recover: 1, from: 'discard', pick: 'choose', keyword: 'exhaust' },
+};
+assert.equal(validateCompactSchema(schemaKeywordRecovery), true, JSON.stringify(validateCompactSchema.errors));
+const currentReplayProgram = compileCompactEffectList(schemaCurrentReplay.effects);
+assert.equal(currentReplayProgram.ok, true, JSON.stringify(currentReplayProgram.issues));
+assert.deepEqual(currentReplayProgram.value.steps[1], {
+  op: 'if',
+  condition: {
+    op: 'compare', relation: 'gte',
+    left: { op: 'var', path: 'battle.cards_played_this_turn' },
+    right: 2,
+  },
+  then: [{ op: 'replay_current', count: 1 }],
+});
+const currentReplayExecution = executeEffectProgram(
+  currentReplayProgram.value,
+  {
+    self: { hp: 20, maxHp: 20, lust: 0, maxLust: 100, energy: 3, maxEnergy: 3, block: 0 },
+    opponent: { hp: 20, maxHp: 20, lust: 0, maxLust: 100, energy: 3, maxEnergy: 3, block: 0 },
+    currentTurn: 1,
+    cardsPlayedThisTurn: 2,
+    attacksPlayedThisTurn: 1,
+    skillsPlayedThisTurn: 1,
+  },
+  { spentEnergy: 1 },
+);
+assert.equal(currentReplayExecution.ok, true);
+assert.deepEqual(
+  currentReplayExecution.events.map(event => event.type),
+  ['damage', 'replay_current'],
+  'portable execution preserves current-card Replay as an explicit request instead of replacing it with damage',
+);
+const invalidCurrentReplay = compileCompactEffectList({ replay_current: 0 });
+assert.equal(invalidCurrentReplay.ok, false);
+assert.ok(invalidCurrentReplay.issues.some(issue => issue.code === 'INVALID_CURRENT_REPLAY_COUNT'));
+const conditionalCurrentReplay = compileCompactEffectList({
+  replay_current: 'skills_played_this_turn > 0 ? 1 : 0',
+  when: 'skills_played_this_turn > 0',
+});
+assert.equal(conditionalCurrentReplay.ok, false);
+assert.ok(
+  conditionalCurrentReplay.issues.some(issue => issue.code === 'UNSUPPORTED_CURRENT_REPLAY_FORMULA'),
+  'a redundant ternary replay count must produce a repairable validation issue instead of an empty issue list',
+);
 const schemaFilteredTrigger = {
   trigger: {
     on: 'deal_damage', effects: { block: 1 }, scope: 'combat', ordinal: 'every_n', n: 2,
@@ -39,10 +90,11 @@ assert.equal(validateCompactSchema(schemaFilteredTrigger), true, JSON.stringify(
 const spawnedEnemyInput = {
   effects: {
     spawn_enemy: {
-      id: 'split_form', name: '分裂体', emoji: '🧩', max_hp: 9, count: 2, capacity: 6,
+      id: 'split_form', name: '分裂体', emoji: '🧩', max_hp: 9, hp: 9,
+      max_lust: 100, lust: 0, count: 2, capacity: 6,
       actions: [{ name: '扑击', weight: 1, effects: { damage: 2 } }],
       abilities: [
-        { id: 'first_guard', name: '初次防护', trigger: { on: 'take_damage', ordinal: 'first', scope: 'turn', effects: { block: 3 } } },
+        { id: 'first_guard', name: '初次防护', trigger: { on: 'take_damage', ordinal: 'first', scope: 'turn', event: 'damage_resolved', effects: { block: 3 } } },
         { id: 'last_echo', name: '消亡回响', trigger: 'defeated', effects: { lust: 2 } },
       ],
       status_effects: [],
@@ -55,6 +107,58 @@ assert.equal(validateCompactSchema(spawnedEnemyInput), true, JSON.stringify(vali
 const spawnedEnemy = compileCompactEffectList(spawnedEnemyInput.effects);
 assert.equal(spawnedEnemy.ok, true, JSON.stringify(spawnedEnemy.issues));
 assert.equal(spawnedEnemy.value.steps[0].op, 'spawn_enemy');
+
+const spawnedEnemyWithoutDesire = {
+  effects: {
+    spawn_enemy: {
+      ...structuredClone(spawnedEnemyInput.effects.spawn_enemy),
+    },
+  },
+};
+delete spawnedEnemyWithoutDesire.effects.spawn_enemy.lust_effect;
+assert.equal(
+  validateCompactSchema(spawnedEnemyWithoutDesire),
+  true,
+  `a spawned enemy without a desire system may omit lust_effect: ${JSON.stringify(validateCompactSchema.errors)}`,
+);
+assert.equal(
+  compileCompactEffectList(spawnedEnemyWithoutDesire.effects).ok,
+  true,
+  'optional spawned-enemy lust_effect must compile without inventing a fallback effect',
+);
+for (const lustEffect of [{}, { name: '空壳', effects: [] }, null]) {
+  assert.equal(
+    compileCompactEffectList({
+      spawn_enemy: { ...spawnedEnemyInput.effects.spawn_enemy, lust_effect: lustEffect },
+    }).ok,
+    false,
+    'an explicitly supplied enemy lust_effect remains a strict non-empty contract',
+  );
+}
+
+const spawnedEnemyWithIllegalActionRule = compileCompactEffectList({
+  spawn_enemy: {
+    ...spawnedEnemyInput.effects.spawn_enemy,
+    actions: [{ name: '错误常驻行动', effects: { modify: 'damage', add: 2 } }],
+  },
+});
+assert.equal(spawnedEnemyWithIllegalActionRule.ok, false);
+assert.ok(
+  spawnedEnemyWithIllegalActionRule.issues.some(issue => issue.code === 'MODIFIER_NOT_ALLOWED'),
+  'spawned enemy actions must pass the same one-shot program policy as initial enemy actions',
+);
+
+const spawnedEnemyWithIllegalSummonerContext = compileCompactEffectList({
+  spawn_enemy: {
+    ...spawnedEnemyInput.effects.spawn_enemy,
+    actions: [{ name: '错误召唤者目标', effects: { summoner_effects: { block: 2 } } }],
+  },
+});
+assert.equal(spawnedEnemyWithIllegalSummonerContext.ok, false);
+assert.ok(
+  spawnedEnemyWithIllegalSummonerContext.issues.some(issue => issue.code === 'SUMMONER_EFFECTS_NOT_ALLOWED'),
+  'spawned enemy actions cannot use a summon-only owner context',
+);
 assert.equal(spawnedEnemy.value.steps[0].count, 2);
 assert.equal(spawnedEnemy.value.steps[0].enemy.abilities.length, 2);
 assert.equal(executeEffectProgram(spawnedEnemy.value, {
@@ -91,7 +195,7 @@ const repeatedPresentation = compileCompactEffectList([
 ]);
 assert.equal(repeatedPresentation.ok, true, JSON.stringify(repeatedPresentation.issues));
 assert.deepEqual(repeatedPresentation.value.steps, [
-  { op: 'damage', target: 'opponent', amount: 6 },
+  { op: 'damage', target: 'opponent', amount: 6, hitGroup: '$[0]:damage' },
   { op: 'gain_block', target: 'self', amount: 4 },
 ]);
 
@@ -119,6 +223,174 @@ assert.equal(ternary.ok, true);
 assert.equal(executeEffectProgram(ternary.value, state, { spentEnergy: 0 }).state.self.block, 1);
 assert.equal(executeEffectProgram(ternary.value, state, { spentEnergy: 2 }).state.self.block, 2);
 
+const safeMathFunctions = compileCompactEffectList([
+  { damage: 'floor(self.resource.charge.current / 5)' },
+  { block: 'ceil(self.hp / 6)' },
+  { heal: 'abs(self.hp - 18)' },
+  { energy: 'min(3, max(1, spent_energy))' },
+]);
+assert.equal(safeMathFunctions.ok, true, JSON.stringify(safeMathFunctions.issues));
+assert.deepEqual(safeMathFunctions.value.steps.map(step => step.op), ['damage', 'gain_block', 'heal', 'gain_energy']);
+const safeMathResult = executeEffectProgram(safeMathFunctions.value, {
+  ...state,
+  self: { ...state.self, hp: 17, maxEnergy: 10, resources: { charge: 14 }, maxResources: { charge: 20 } },
+}, { spentEnergy: 4 });
+assert.equal(safeMathResult.state.opponent.hp, 28);
+assert.equal(safeMathResult.state.self.block, 3);
+assert.equal(safeMathResult.state.self.hp, 18);
+assert.equal(safeMathResult.state.self.energy, 6);
+
+for (const invalidMathFunction of [
+  { damage: 'round(self.hp / 2)' },
+  { damage: 'Math.floor(self.hp / 2)' },
+  { damage: 'floor(self.hp, 2)' },
+  { damage: 'min()' },
+]) {
+  const result = compileCompactEffectList(invalidMathFunction);
+  assert.equal(result.ok, false, `unsupported math function shape must fail: ${JSON.stringify(invalidMathFunction)}`);
+}
+
+const everyThirdCard = compileCompactEffectList({ block: 5, when: 'cards_played_this_turn % 3 == 0' });
+assert.equal(everyThirdCard.ok, true, JSON.stringify(everyThirdCard.issues));
+assert.equal(executeEffectProgram(everyThirdCard.value, {
+  ...state,
+  cardsPlayedThisTurn: 3,
+}, { spentEnergy: 0 }).state.self.block, 5, 'modulo conditions must support every-N play patterns');
+assert.equal(executeEffectProgram(everyThirdCard.value, {
+  ...state,
+  cardsPlayedThisTurn: 2,
+}, { spentEnergy: 0 }).state.self.block, 0);
+
+const actorPrefixedBattleCounter = compileCompactEffectList({
+  damage: 'opponent.cards_played_this_turn >= 2 ? 9 : 4',
+});
+assert.equal(actorPrefixedBattleCounter.ok, true, JSON.stringify(actorPrefixedBattleCounter.issues));
+assert.equal(executeEffectProgram(actorPrefixedBattleCounter.value, {
+  ...state,
+  cardsPlayedThisTurn: 2,
+}, { spentEnergy: 0 }).state.opponent.hp, 21);
+
+const statusKindCondition = compileCompactEffectList({ damage: 'opponent.has_debuff ? 24 : 18' });
+assert.equal(statusKindCondition.ok, true, JSON.stringify(statusKindCondition.issues));
+const opponentWithDebuff = {
+  ...state,
+  opponent: {
+    ...state.opponent,
+    statusStacks: { exposed: 2, blessing: 1 },
+    statusTypes: { exposed: 'debuff', blessing: 'buff' },
+  },
+};
+assert.equal(
+  executeEffectProgram(statusKindCondition.value, opponentWithDebuff, { spentEnergy: 0 }).state.opponent.hp,
+  6,
+  'has_debuff must be a real status-kind predicate instead of a narrative-only marker',
+);
+const statusKindCount = compileCompactEffectList({ damage: 'opponent.debuff_count * 3' });
+assert.equal(statusKindCount.ok, true, JSON.stringify(statusKindCount.issues));
+assert.equal(executeEffectProgram(statusKindCount.value, opponentWithDebuff, { spentEnergy: 0 }).state.opponent.hp, 27);
+
+const summonPresenceBlock = compileCompactEffectList({ block: 'self.has_summon ? 8 : 6' });
+assert.equal(summonPresenceBlock.ok, true, JSON.stringify(summonPresenceBlock.issues));
+assert.equal(executeEffectProgram(summonPresenceBlock.value, {
+  ...state,
+  self: { ...state.self, summonCount: 0 },
+}, { spentEnergy: 0 }).state.self.block, 6);
+assert.equal(executeEffectProgram(summonPresenceBlock.value, {
+  ...state,
+  self: { ...state.self, summonCount: 1 },
+}, { spentEnergy: 0 }).state.self.block, 8, 'has_summon is backed by the live summon count');
+
+const summonCountDamage = compileCompactEffectList({ damage: 'self.summon_count * 2' });
+assert.equal(summonCountDamage.ok, true, JSON.stringify(summonCountDamage.issues));
+assert.equal(executeEffectProgram(summonCountDamage.value, {
+  ...state,
+  self: { ...state.self, summonCount: 3 },
+}, { spentEnergy: 0 }).state.opponent.hp, 24);
+
+const opponentSummonCondition = compileCompactEffectList({ damage: 5, when: 'opponent.has_summon' });
+assert.equal(opponentSummonCondition.ok, true, JSON.stringify(opponentSummonCondition.issues));
+const inventedBooleanMember = compileCompactEffectList({ damage: 5, when: 'self.is_counting_down' });
+assert.equal(inventedBooleanMember.ok, false);
+assert.ok(inventedBooleanMember.issues.some(issue => issue.code === 'UNKNOWN_VARIABLE' && /self\.is_counting_down/.test(issue.message)));
+assert.equal(executeEffectProgram(opponentSummonCondition.value, {
+  ...state,
+  opponent: { ...state.opponent, summonCount: 1 },
+}, { spentEnergy: 0 }).state.opponent.hp, 25);
+const allyPresenceBlock = compileCompactEffectList({ block: 'self.has_ally ? 8 : 3' });
+assert.equal(allyPresenceBlock.ok, true, JSON.stringify(allyPresenceBlock.issues));
+assert.equal(executeEffectProgram(allyPresenceBlock.value, {
+  ...state,
+  self: { ...state.self, allyCount: 0 },
+}, { spentEnergy: 0 }).state.self.block, 3);
+assert.equal(executeEffectProgram(allyPresenceBlock.value, {
+  ...state,
+  self: { ...state.self, allyCount: 2 },
+}, { spentEnergy: 0 }).state.self.block, 8, 'has_ally is backed by the live non-summon ally count');
+
+const allyCountDamage = compileCompactEffectList({ damage: 'opponent.ally_count * 2' });
+assert.equal(allyCountDamage.ok, true, JSON.stringify(allyCountDamage.issues));
+assert.equal(executeEffectProgram(allyCountDamage.value, {
+  ...state,
+  opponent: { ...state.opponent, allyCount: 3 },
+}, { spentEnergy: 0 }).state.opponent.hp, 24);
+
+const opponentAllyCondition = compileCompactEffectList({ damage: 5, when: 'opponent.has_ally' });
+assert.equal(opponentAllyCondition.ok, true, JSON.stringify(opponentAllyCondition.issues));
+assert.equal(executeEffectProgram(opponentAllyCondition.value, {
+  ...state,
+  opponent: { ...state.opponent, allyCount: 1 },
+}, { spentEnergy: 0 }).state.opponent.hp, 25);
+
+const attackDamageEventCondition = compileCompactEffectList({
+  block: 5,
+  when: "event.damage_type == 'attack'",
+});
+assert.equal(attackDamageEventCondition.ok, true, JSON.stringify(attackDamageEventCondition.issues));
+assert.deepEqual(attackDamageEventCondition.value.steps[0].condition, {
+  op: 'event_damage_kind', relation: 'eq', damageKind: 'attack',
+});
+assert.equal(executeEffectProgram(attackDamageEventCondition.value, state, {
+  spentEnergy: 0, eventDamageKind: 'attack',
+}).state.self.block, 5, 'a matching concrete damage event enables the guarded effect');
+assert.equal(executeEffectProgram(attackDamageEventCondition.value, state, {
+  spentEnergy: 0, eventDamageKind: 'effect',
+}).state.self.block, 0, 'a different damage event does not enable the guarded effect');
+for (const compatibleAuthoring of [
+  "self.damage_type == 'attack'",
+  "opponent.damage_type == 'attack'",
+  "'attack' == event.damage_type",
+]) {
+  const compatible = compileCompactEffectList({ block: 1, when: compatibleAuthoring });
+  assert.equal(compatible.ok, true, `${compatibleAuthoring}: ${JSON.stringify(compatible.issues)}`);
+  assert.equal(compatible.value.steps[0].condition.op, 'event_damage_kind');
+}
+const invalidDamageEventCondition = compileCompactEffectList({
+  block: 1,
+  when: "event.damage_type == 'magic'",
+});
+assert.equal(invalidDamageEventCondition.ok, false);
+assert.ok(invalidDamageEventCondition.issues.some(issue => issue.code === 'INVALID_DAMAGE_KIND'));
+const verboseBooleanCondition = compileCompactEffectList({
+  damage: 5,
+  when: 'self.has_summon == false && opponent.has_summon != true && self.alive == true',
+});
+assert.equal(verboseBooleanCondition.ok, true, JSON.stringify(verboseBooleanCondition.issues));
+assert.equal(executeEffectProgram(verboseBooleanCondition.value, {
+  ...state,
+  self: { ...state.self, hp: 10, summonCount: 0 },
+  opponent: { ...state.opponent, summonCount: 0 },
+}, { spentEnergy: 0 }).state.opponent.hp, 25, 'boolean literals and alive must compile to exact predicates');
+assert.equal(executeEffectProgram(verboseBooleanCondition.value, {
+  ...state,
+  self: { ...state.self, hp: 0, summonCount: 0 },
+  opponent: { ...state.opponent, summonCount: 0 },
+}, { spentEnergy: 0 }).state.opponent.hp, 30, 'alive is false at zero hp');
+for (const unsupportedSummonVariable of ['summon_count', 'ally_count', 'enemy_summon_count', 'slot_count']) {
+  const invalid = compileCompactEffectList({ damage: `${unsupportedSummonVariable} * 2` });
+  assert.equal(invalid.ok, false, `bare or invented summon variable must stay unsupported: ${unsupportedSummonVariable}`);
+  assert.ok(invalid.issues.some(issue => issue.code === 'UNKNOWN_VARIABLE'));
+}
+
 const targetOverride = compileCompactEffectList([
   { damage: 2, to: 'self' },
   { heal: 1, to: 'opponent' },
@@ -134,7 +406,7 @@ assert.equal(combinedCondition.ok, true);
 
 const singletonObject = compileCompactEffectList({ damage: 4 });
 assert.equal(singletonObject.ok, true, 'a single shallow effect does not need an array wrapper');
-assert.deepEqual(singletonObject.value.steps, [{ op: 'damage', target: 'opponent', amount: 4 }]);
+assert.deepEqual(singletonObject.value.steps, [{ op: 'damage', target: 'opponent', amount: 4, hitGroup: '$:damage' }]);
 const invalidSingletonObject = compileCompactEffectList({ damage: 'unknown * 2' });
 assert.equal(invalidSingletonObject.ok, false);
 assert.equal(invalidSingletonObject.issues[0].path, '$.damage.left');
@@ -160,8 +432,8 @@ const multiHit = compileCompactEffectList({ damage: 3, hits: 3 });
 assert.equal(multiHit.ok, true);
 assert.deepEqual(
   multiHit.value.steps,
-  Array.from({ length: 3 }, () => ({ op: 'damage', target: 'opponent', amount: 3 })),
-  'hits lowers to repeated ordinary damage nodes instead of a new host-specific operation',
+  Array.from({ length: 3 }, () => ({ op: 'damage', target: 'opponent', amount: 3, hitGroup: '$:damage' })),
+  'hits lowers to repeated ordinary damage nodes with private group metadata for card-only progression',
 );
 
 const typedDamage = compileCompactEffectList({
@@ -178,6 +450,7 @@ assert.deepEqual(typedDamage.value.steps, [{
   amount: 8,
   damageKind: 'hp_loss',
   lifesteal: 0.5,
+  hitGroup: '$:damage',
 }]);
 
 const compactExecute = compileCompactEffectList([
@@ -244,6 +517,15 @@ const pileState = structuredClone(state);
 pileState.self.exhaustPileSize = 3;
 assert.equal(executeEffectProgram(exhaustPileFormula.value, pileState, { spentEnergy: 0 }).state.self.block, 6);
 
+const opponentHandFormula = compileCompactEffectList({ damage: 'opponent.hand_size >= 5 ? 11 : 7' });
+assert.equal(opponentHandFormula.ok, true, JSON.stringify(opponentHandFormula.issues));
+const enemySourceState = structuredClone(state);
+enemySourceState.opponent.handSize = 5;
+assert.equal(executeEffectProgram(opponentHandFormula.value, enemySourceState, { spentEnergy: 0 }).state.opponent.hp, 19);
+const entityWithoutCards = structuredClone(state);
+delete entityWithoutCards.opponent.handSize;
+assert.equal(executeEffectProgram(opponentHandFormula.value, entityWithoutCards, { spentEnergy: 0 }).state.opponent.hp, 23);
+
 const turnCountersFormula = compileCompactEffectList({
   damage: 'turn_number + attacks_played_this_turn * 2 + skills_played_this_turn',
 });
@@ -274,11 +556,10 @@ assert.deepEqual(
 );
 
 const commonWithScry = compileCompactEffectList({ scry: 2, block: 4 });
-assert.equal(commonWithScry.ok, true, JSON.stringify(commonWithScry.issues));
-assert.deepEqual(
-  commonWithScry.value.steps.map(step => step.op),
-  ['gain_block', 'scry_cards'],
-  'one auxiliary card-zone effect is split after the common bundle in a deterministic order',
+assert.equal(
+  commonWithScry.ok,
+  false,
+  'card-zone operations must use separate array entries instead of relying on an undocumented bundle shape',
 );
 
 const ambiguousCardZoneBundle = compileCompactEffectList({ scry: 2, discard: 1, block: 4 });
@@ -325,6 +606,9 @@ const conflictingNestedStatus = compileCompactEffectList({
   stacks: 3,
 });
 assert.equal(conflictingNestedStatus.ok, false, 'conflicting nested status fields must remain invalid');
+const partialStatusRemoval = compileCompactEffectList({ remove_status: 'drenched', stacks: -1 });
+assert.equal(partialStatusRemoval.ok, false, 'remove_status cannot consume only part of a status stack');
+assert.match(partialStatusRemoval.issues[0].message, /stacks|不允许字段/);
 
 const modifiers = compileCompactEffectList([
   { modify: 'damage', add: 2 },
@@ -347,7 +631,7 @@ const cardOperations = compileCompactEffectList([
   { exhaust: 'all', from: 'discard' },
   { recover: 1, from: 'discard', pick: 'choose' },
   { reduce_cost: 1, pick: 'choose', count: 2 },
-  { copy: 2, from: 'draw', pick: 'random' },
+  { copy: 2, from: 'draw', pick: 'random', to: 'hand' },
   { double: 1, pick: 'choose' },
 ]);
 assert.equal(cardOperations.ok, true);
@@ -362,6 +646,8 @@ assert.deepEqual(cardOperations.value.steps, [
   { op: 'copy_cards', selector: { zone: 'draw', pick: 'random', count: 2 } },
   { op: 'double_card_effect', selector: { zone: 'hand', pick: 'choose', count: 1 } },
 ]);
+assert.equal(validateCompactSchema({ effects: { copy: 1, from: 'draw', pick: 'top', to: 'hand' } }), true);
+assert.equal(validateCompactSchema({ effects: { copy: 1, from: 'draw', pick: 'top', to: 'deck' } }), false);
 const cardOperationResult = executeEffectProgram(cardOperations.value, state, { spentEnergy: 0 });
 assert.equal(cardOperationResult.ok, true);
 assert.deepEqual(
@@ -369,15 +655,30 @@ assert.deepEqual(
   ['recover_cards', 'draw_cards', 'scry_cards', 'discard_cards', 'exhaust_cards', 'recover_cards', 'reduce_card_cost', 'copy_cards', 'double_card_effect'],
 );
 
-const redundantSelfTargets = compileCompactEffectList([
-  { draw: 2, to: 'self' },
-  { scry: 1, targets: ['self'] },
-]);
-assert.equal(redundantSelfTargets.ok, true, JSON.stringify(redundantSelfTargets.issues));
-assert.deepEqual(redundantSelfTargets.value.steps, [
-  { op: 'draw_cards', amount: 2 },
-  { op: 'scry_cards', amount: 1 },
-]);
+const filteredRecoveryInput = {
+  effects: { recover: 1, from: 'discard', pick: 'choose', card_type: 'Attack', rarity: ['Common', 'Uncommon'] },
+};
+assert.equal(validateCompactSchema(filteredRecoveryInput), true, JSON.stringify(validateCompactSchema.errors));
+const filteredRecovery = compileCompactEffectList(filteredRecoveryInput.effects);
+assert.equal(filteredRecovery.ok, true, JSON.stringify(filteredRecovery.issues));
+assert.deepEqual(filteredRecovery.value.steps, [{
+  op: 'recover_cards',
+  source: 'discard',
+  pick: 'choose',
+  amount: 1,
+  filter: { types: ['Attack'], rarities: ['Common', 'Uncommon'] },
+}]);
+
+assert.equal(
+  compileCompactEffectList({ draw: 2, to: 'self' }).ok,
+  false,
+  'an unsupported target must not be silently removed from a card-flow operation',
+);
+assert.equal(
+  compileCompactEffectList({ scry: 1, targets: ['self'] }).ok,
+  false,
+  'an unsupported collection selector must not be silently removed from a card-flow operation',
+);
 assert.equal(
   compileCompactEffectList({ draw: 1, to: 'opponent' }).ok,
   false,
@@ -527,11 +828,55 @@ const generatedCard = compileCompactEffectList([{ add_card: 'spark', to: 'hand',
 assert.equal(generatedCard.ok, true);
 assert.equal(generatedCard.value.steps[0].op, 'add_card');
 assert.equal(generatedCard.value.steps[0].card.id, 'spark');
-assert.deepEqual(generatedCard.value.steps[0].card.program.steps, [{ op: 'damage', target: 'opponent', amount: 3 }]);
+assert.deepEqual(generatedCard.value.steps[0].card.program.steps, [{ op: 'damage', target: 'opponent', amount: 3, hitGroup: '$[0]:damage' }]);
 const generatedResult = executeEffectProgram(generatedCard.value, state, { spentEnergy: 0 });
 assert.equal(generatedResult.ok, true);
 assert.equal(generatedResult.events[0].type, 'add_card');
 assert.equal(generatedResult.events[0].count, 2);
+
+const generatedDiscardInput = {
+  effects: [{ add_card: 'discarded_burden', to: 'discard', count: 2 }],
+  creates: [{
+    id: 'discarded_burden', name: '沉积负担', type: 'Curse', rarity: 'Corrupt',
+    description: '生成后直接沉入弃牌堆。',
+  }],
+};
+assert.equal(validateCompactSchema(generatedDiscardInput), true, JSON.stringify(validateCompactSchema.errors));
+const generatedDiscard = compileCompactEffectList(generatedDiscardInput.effects, {
+  creates: generatedDiscardInput.creates,
+});
+assert.equal(generatedDiscard.ok, true, JSON.stringify(generatedDiscard.issues));
+assert.equal(generatedDiscard.value.steps[0].zone, 'discard');
+const generatedDiscardResult = executeEffectProgram(generatedDiscard.value, state, { spentEnergy: 0 });
+assert.equal(generatedDiscardResult.ok, true);
+assert.equal(generatedDiscardResult.events[0].zone, 'discard');
+
+const generatedInertCurseInput = {
+  effects: { add_card: 'sealed_token', to: 'hand' },
+  creates: [{
+    id: 'sealed_token', name: '封印碎片', type: 'Curse', rarity: 'Corrupt',
+    description: '无法被打出，只会占据手牌位置。',
+  }],
+};
+assert.equal(validateCompactSchema(generatedInertCurseInput), true, JSON.stringify(validateCompactSchema.errors));
+const generatedInertCurse = compileCompactEffectList(generatedInertCurseInput.effects, {
+  creates: generatedInertCurseInput.creates,
+});
+assert.equal(generatedInertCurse.ok, true, JSON.stringify(generatedInertCurse.issues));
+assert.deepEqual(generatedInertCurse.value.steps[0].card.program.steps, []);
+const generatedInvalidCurse = compileCompactEffectList({ add_card: 'false_story_curse' }, {
+  creates: [{
+    id: 'false_story_curse', name: '伪叙事诅咒', type: 'Curse', rarity: 'Corrupt',
+    effects: { narrate: '非法叙事占位。' },
+  }],
+});
+assert.equal(generatedInvalidCurse.ok, true, 'the syntax compiler only builds a portable program');
+const generatedInvalidCursePolicy = validateEffectProgramPolicy(generatedInvalidCurse.value, {
+  triggerPolicy: 'forbid',
+  modifierPolicy: 'forbid',
+});
+assert.equal(generatedInvalidCursePolicy.ok, false, 'the consuming card boundary enforces effect policy');
+assert.ok(generatedInvalidCursePolicy.issues.some(issue => issue.code === 'NARRATE_NOT_ALLOWED'));
 
 const generatedInnate = compileCompactEffectList([{ add_card: 'late_innate' }], {
   creates: [{ id: 'late_innate', name: '迟到固有', effects: [{ block: 1 }], innate: true }],
@@ -542,10 +887,322 @@ assert.equal(
   true,
 );
 
+const generatedPower = compileCompactEffectList([{ add_card: 'generated_power' }], {
+  creates: [{
+    id: 'generated_power', name: '临时能力', type: 'Power', rarity: 'Uncommon', cost: 1,
+    trigger: { on: 'turn_start', effects: { block: 3 } },
+  }],
+});
+assert.equal(generatedPower.ok, true, JSON.stringify(generatedPower.issues));
+assert.equal(generatedPower.value.steps[0].card.program.steps[0].op, 'register_trigger');
+assert.equal(generatedPower.value.steps[0].card.program.steps[0].trigger, 'turn_start');
+assert.equal(validateCompactSchema({
+  effects: { add_card: 'generated_power' },
+  creates: [{
+    id: 'generated_power', name: '临时能力', type: 'Power', rarity: 'Uncommon', cost: 1,
+    trigger: { on: 'turn_start', effects: { block: 3 } },
+  }],
+}), true, JSON.stringify(validateCompactSchema.errors));
+const generatedPassivePowerInput = {
+  effects: { add_card: 'generated_echo' },
+  creates: [{
+    id: 'generated_echo', name: '回响形态', type: 'Power', rarity: 'Rare', cost: 2,
+    trigger: { on: 'passive', effects: { card_rule: 'replay', limit: 1, extra: 1 } },
+  }],
+};
+assert.equal(validateCompactSchema(generatedPassivePowerInput), true, JSON.stringify(validateCompactSchema.errors));
+const validateAiPassivePower = new Ajv2020({ strict: false, allErrors: true }).compile(withAiContentDefinitions({
+  type: 'object',
+  additionalProperties: false,
+  required: ['card'],
+  properties: { card: { $ref: '#/$defs/mwgCard' } },
+}));
+assert.equal(
+  validateAiPassivePower({
+    card: {
+      id: 'legacy_inline', name: '旧式内联触发', type: 'Power', rarity: 'Rare', cost: 1, quantity: 1,
+      effects: { block: 2, on: 'turn_start' },
+    },
+  }),
+  false,
+  'AI-facing schemas must expose only root structured triggers, never effects-item on',
+);
+assert.equal(validateAiPassivePower({
+  card: {
+    id: 'sealed_reward', name: '封印残片', type: 'Curse', rarity: 'Corrupt', quantity: 1,
+    description: '无法被打出，只会占据手牌位置。',
+  },
+}), true, JSON.stringify(validateAiPassivePower.errors));
+assert.equal(
+  validateAiPassivePower({
+    card: {
+      id: 'legacy_nested', name: '旧式临时能力', type: 'Skill', rarity: 'Rare', cost: 1, quantity: 1,
+      effects: { add_card: 'legacy_power' },
+      creates: [{
+        id: 'legacy_power', name: '旧式能力', type: 'Power', rarity: 'Uncommon', cost: 1,
+        trigger: 'turn_start', effects: { block: 2 },
+      }],
+    },
+  }),
+  false,
+  'nested generated cards must use the same structured trigger contract',
+);
+assert.equal(
+  validateAiPassivePower({ card: { ...generatedPassivePowerInput.creates[0], quantity: 1 } }),
+  true,
+  JSON.stringify(validateAiPassivePower.errors),
+);
+assert.equal(validateAiPassivePower({
+  card: {
+    id: 'illegal_attack_trigger', name: '错误攻击触发', type: 'Attack', rarity: 'Common', cost: 1, quantity: 1,
+    trigger: { on: 'turn_start', effects: { damage: 3 } },
+  },
+}), false, 'top-level non-Power cards cannot pass a trigger that runtime policy rejects');
+assert.equal(validateAiPassivePower({
+  card: {
+    id: 'illegal_action_modifier', name: '错误即时修饰', type: 'Skill', rarity: 'Common', cost: 1, quantity: 1,
+    effects: { modify: 'damage', add: 2 },
+  },
+}), false, 'ordinary effects cannot contain passive-only modifiers');
+assert.equal(validateAiPassivePower({
+  card: {
+    id: 'illegal_action_rule', name: '错误即时规则', type: 'Skill', rarity: 'Common', cost: 1, quantity: 1,
+    effects: { card_rule: 'free', limit: 1 },
+  },
+}), false, 'ordinary effects cannot contain passive-only card rules');
+assert.equal(validateAiPassivePower({
+  card: {
+    id: 'returning_strike', name: '回手斩', type: 'Attack', rarity: 'Uncommon', cost: 1, quantity: 1,
+    effects: [{ damage: 4 }, { card_destination: 'hand' }],
+  },
+}), true, JSON.stringify(validateAiPassivePower.errors));
+assert.equal(validateAiPassivePower({
+  card: {
+    id: 'invalid_trigger_destination', name: '错误回手能力', type: 'Power', rarity: 'Rare', cost: 1, quantity: 1,
+    trigger: { on: 'turn_start', effects: { card_destination: 'hand' } },
+  },
+}), false, 'a later card trigger has no currently resolving card to redirect');
+assert.equal(validateAiPassivePower({
+  card: {
+    id: 'invalid_discard_destination', name: '错误弃牌去向', type: 'Skill', rarity: 'Common', cost: 1, quantity: 1,
+    effects: { block: 2 }, discard_effects: { card_destination: 'hand' },
+  },
+}), false, 'discard effects cannot redirect a card that already entered the discard lifecycle');
+assert.equal(validateAiPassivePower({
+  card: {
+    id: 'illegal_story_attack', name: '错误叙事攻击', type: 'Attack', rarity: 'Common', cost: 1, quantity: 1,
+    effects: { narrate: '这不应由普通攻击执行。' },
+  },
+}), false, 'narrate is reserved for Event cards in AI-facing schemas');
+assert.equal(validateAiPassivePower({
+  card: {
+    id: 'story_event', name: '剧情抉择', type: 'Event', rarity: 'Common', cost: 0, quantity: 1,
+    effects: { narrate: '局势因此改变。' },
+  },
+}), true, JSON.stringify(validateAiPassivePower.errors));
+assert.equal(validateAiPassivePower({
+  card: {
+    id: 'illegal_damage_event', name: '错误事件', type: 'Event', rarity: 'Common', cost: 0, quantity: 1,
+    effects: { damage: 3 },
+  },
+}), false, 'Event cards must expose the same single-narrate policy as the runtime');
+assert.equal(validateAiPassivePower({
+  card: {
+    id: 'status_power', name: '状态能力', type: 'Power', rarity: 'Uncommon', cost: 1, quantity: 1,
+    effects: { apply_status: 'focus', stacks: 1, to: 'self' },
+  },
+}), true, JSON.stringify(validateAiPassivePower.errors));
+assert.equal(validateAiPassivePower({
+  card: {
+    id: 'illegal_triggerless_power', name: '错误能力', type: 'Power', rarity: 'Uncommon', cost: 1, quantity: 1,
+    effects: { damage: 5 },
+  },
+}), false, 'a triggerless Power may only apply a registered status');
+const validateAiResource = new Ajv2020({ strict: false, allErrors: true }).compile(withAiContentDefinitions({
+  type: 'object',
+  additionalProperties: false,
+  required: ['resource'],
+  properties: { resource: { $ref: '#/$defs/mwgCombatResource' } },
+}));
+assert.equal(validateAiResource({
+  resource: { id: 'stars', name: '星辉', emoji: '⭐', max: 5, refresh: 'retain' },
+}), false, 'generated resources must provide start or current instead of silently becoming zero');
+assert.equal(validateAiResource({
+  resource: { id: 'stars', name: '星辉', emoji: '⭐', start: 2, max: 5, refresh: 'retain' },
+}), true, JSON.stringify(validateAiResource.errors));
+const validateAiEffects = new Ajv2020({ strict: false, allErrors: true }).compile(withAiContentDefinitions({
+  type: 'object',
+  additionalProperties: false,
+  required: ['effects'],
+  properties: { effects: { $ref: '#/$defs/effectList' } },
+}));
+assert.equal(validateAiEffects({
+  effects: { summoner_effects: { block: 2 } },
+}), false, 'ordinary root effects cannot claim a summon-only owner context');
+assert.equal(validateAiEffects({
+  effects: { card_destination: 'hand' },
+}), false, 'items, actions, statuses and other ordinary programs cannot redirect an absent current card');
+assert.equal(validateAiEffects({
+  effects: {
+    spawn_summon: {
+      id: 'linked_guard', name: '连携守卫', emoji: '🛡️', max_hp: 5,
+      actions: [{
+        id: 'cover', name: '掩护',
+        effects: { summoner_effects: [{ block: 2 }, { energy: 1 }] },
+      }],
+    },
+  },
+}), true, JSON.stringify(validateAiEffects.errors));
+const structuredSpawnEnemy = {
+  effects: {
+    spawn_enemy: {
+      id: 'split_form', name: '分裂体', emoji: '🧩', max_hp: 9, hp: 9, max_lust: 100, lust: 0,
+      actions: [{ id: 'bite', name: '扑击', effects: { damage: 2 } }],
+      abilities: [{ id: 'guard_once', name: '初次防护', trigger: { on: 'take_damage', effects: { block: 3 } } }],
+      status_effects: [],
+      lust_effect: { name: '失控', effects: { damage: 1 } },
+      action_mode: 'random', action_config: {},
+    },
+  },
+};
+assert.equal(validateAiEffects(structuredSpawnEnemy), true, JSON.stringify(validateAiEffects.errors));
+const structuredSpawnEnemyWithoutDesire = structuredClone(structuredSpawnEnemy);
+delete structuredSpawnEnemyWithoutDesire.effects.spawn_enemy.lust_effect;
+assert.equal(
+  validateAiEffects(structuredSpawnEnemyWithoutDesire),
+  true,
+  `AI schema allows omission for a non-desire spawned enemy: ${JSON.stringify(validateAiEffects.errors)}`,
+);
+const emptyAiSpawnDesire = structuredClone(structuredSpawnEnemy);
+emptyAiSpawnDesire.effects.spawn_enemy.lust_effect = { name: '空壳', effects: [] };
+assert.equal(validateAiEffects(emptyAiSpawnDesire), false, 'AI schema still rejects an explicit empty lust_effect shell');
+const incompleteAiSpawnEnemy = structuredClone(structuredSpawnEnemy);
+delete incompleteAiSpawnEnemy.effects.spawn_enemy.hp;
+assert.equal(
+  validateAiEffects(incompleteAiSpawnEnemy),
+  false,
+  'new AI output must provide the complete spawned-enemy state required by battle preflight',
+);
+assert.equal(validateAiEffects({
+  effects: {
+    spawn_enemy: {
+      ...structuredSpawnEnemy.effects.spawn_enemy,
+      abilities: [{ id: 'legacy_guard', name: '旧式防护', trigger: 'take_damage', effects: { block: 3 } }],
+    },
+  },
+}), false, 'spawned enemy abilities must not reopen the legacy string-trigger grammar');
+assert.equal(validateAiEffects({
+  effects: {
+    spawn_summon: {
+      id: 'legacy_summon', name: '旧式召唤', emoji: '🧿', max_hp: 5,
+      action: { damage: 1 },
+      abilities: [{ id: 'legacy_echo', name: '旧式回响', trigger: 'turn_start', effects: { block: 1 } }],
+    },
+  },
+}), false, 'summon abilities must use the same structured trigger grammar as root abilities');
+assert.equal(validateAiEffects({
+  effects: {
+    spawn_enemy: {
+      ...structuredSpawnEnemy.effects.spawn_enemy,
+      actions: [{ id: 'illegal_passive_action', name: '错误行动', effects: { modify: 'damage', add: 2 } }],
+    },
+  },
+}), false, 'nested enemy actions must obey the immediate-effect policy before runtime validation');
+assert.equal(validateAiPassivePower({
+  card: {
+    ...generatedPassivePowerInput.creates[0], quantity: 1,
+    trigger: {
+      ...generatedPassivePowerInput.creates[0].trigger,
+      scope: 'turn', ordinal: 'first',
+    },
+  },
+}), false, 'passive Power cannot carry event filters that the runtime would ignore');
+assert.equal(validateAiPassivePower({
+  card: {
+    id: 'plain_turn_start', name: '回合准备', type: 'Power', rarity: 'Uncommon', cost: 1, quantity: 1,
+    trigger: { on: 'turn_start', effects: { block: 2 } },
+  },
+}), true, JSON.stringify(validateAiPassivePower.errors));
+assert.equal(validateAiPassivePower({
+  card: {
+    id: 'filtered_turn_start', name: '首回合准备', type: 'Power', rarity: 'Uncommon', cost: 1, quantity: 1,
+    trigger: {
+      on: 'turn_start', effects: { block: 2 }, scope: 'combat', ordinal: 'first', event: 'turn_started',
+    },
+  },
+}), true, JSON.stringify(validateAiPassivePower.errors));
+assert.equal(validateAiPassivePower({
+  card: {
+    id: 'wrong_turn_start_event', name: '错误回合事件', type: 'Power', rarity: 'Uncommon', cost: 1, quantity: 1,
+    trigger: {
+      on: 'turn_start', effects: { block: 2 }, scope: 'combat', ordinal: 'first', event: 'card_drawn',
+    },
+  },
+}), false, 'turn lifecycle filters must count their persisted turn event');
+assert.equal(validateAiPassivePower({
+  card: {
+    id: 'filtered_status_gain', name: '首次增益响应', type: 'Power', rarity: 'Uncommon', cost: 1, quantity: 1,
+    trigger: {
+      on: 'gain_buff', effects: { block: 2 }, scope: 'combat', ordinal: 'first', event: 'status_applied',
+    },
+  },
+}), true, JSON.stringify(validateAiPassivePower.errors));
+assert.equal(validateAiPassivePower({
+  card: {
+    id: 'filtered_damage_echo', name: '受击回响', type: 'Power', rarity: 'Rare', cost: 2, quantity: 1,
+    trigger: {
+      on: 'deal_damage', effects: { block: 2 }, scope: 'combat', ordinal: 'every_n', n: 2,
+      event: 'damage_resolved', phase: 'resolve', source_kind: 'card', damage_type: 'attack',
+    },
+  },
+}), true, JSON.stringify(validateAiPassivePower.errors));
+assert.equal(validateAiPassivePower({
+  card: {
+    id: 'missing_event_filter', name: '缺失事件', type: 'Power', rarity: 'Rare', cost: 2, quantity: 1,
+    trigger: { on: 'deal_damage', effects: { block: 2 }, scope: 'combat', ordinal: 'first' },
+  },
+}), true, 'the real journal event is a deterministic technical field derived from on');
+assert.equal(validateAiPassivePower({
+  card: {
+    id: 'wrong_event_filter', name: '错误事件', type: 'Power', rarity: 'Rare', cost: 2, quantity: 1,
+    trigger: {
+      on: 'deal_damage', effects: { block: 2 }, scope: 'combat', ordinal: 'first', event: 'card_drawn',
+    },
+  },
+}), false, 'a trigger cannot count an event kind that its runtime dispatcher never emits');
+assert.equal(validateAiPassivePower({
+  card: {
+    id: 'shuffle_guard', name: '重洗防护', type: 'Power', rarity: 'Rare', cost: 2, quantity: 1,
+    trigger: {
+      on: 'on_shuffle', effects: { block: 2 }, scope: 'combat', ordinal: 'every_n', n: 2,
+      event: 'draw_pile_shuffled',
+    },
+  },
+}), true, JSON.stringify(validateAiPassivePower.errors));
+const generatedPassivePower = compileCompactEffectList(generatedPassivePowerInput.effects, {
+  creates: generatedPassivePowerInput.creates,
+});
+assert.equal(generatedPassivePower.ok, true, JSON.stringify(generatedPassivePower.issues));
+assert.equal(generatedPassivePower.value.steps[0].card.program.steps[0].op, 'register_trigger');
+assert.equal(generatedPassivePower.value.steps[0].card.program.steps[0].trigger, 'passive');
+assert.equal(generatedPassivePower.value.steps[0].card.program.steps[0].effects[0].op, 'card_play_rule');
+assert.equal(validateCompactSchema({
+  effects: { add_card: 'bad_trigger_card' },
+  creates: [{
+    id: 'bad_trigger_card', name: '错误触发牌', type: 'Attack', rarity: 'Common', cost: 1,
+    trigger: { on: 'turn_start', effects: { damage: 3 } },
+  }],
+}), false, 'generated non-Power cards cannot expose a trigger that their compiler rejects');
+
 assert.equal(
   compileCompactEffectList([{ add_card: 'missing' }], { creates: [] }).issues[0].code,
   'UNKNOWN_CARD_TEMPLATE',
 );
+const twoDecimalEffect = compileCompactEffectList([
+  { damage: 1.25 },
+  { block: 'self.hp * 0.25' },
+]);
+assert.equal(twoDecimalEffect.ok, true, JSON.stringify(twoDecimalEffect.issues));
 const cyclicTemplates = [
   { id: 'card_a', name: 'A', effects: [{ add_card: 'card_b' }] },
   { id: 'card_b', name: 'B', effects: [{ add_card: 'card_a' }] },
@@ -561,8 +1218,8 @@ for (const [effects, code] of [
   [[{ damage: 'unknown * 4' }], 'UNKNOWN_VARIABLE'],
   [[{ damage: 'size([1])' }], 'UNSUPPORTED_FORMULA'],
   [[{ damage: 'self.foo + 1' }], 'UNKNOWN_VARIABLE'],
-  [[{ damage: 1.25 }], 'TOO_MANY_DECIMALS'],
-  [[{ damage: 'self.hp * 0.25' }], 'TOO_MANY_DECIMALS'],
+  [[{ damage: 1.234 }], 'TOO_MANY_DECIMALS'],
+  [[{ damage: 'self.hp * 0.255' }], 'TOO_MANY_DECIMALS'],
   [[{ damage: 1, extra: true }], 'UNKNOWN_FIELD'],
   [[{ damage: 1, to: 'everyone' }], 'INVALID_TARGET'],
   [[{ apply_status: 'bad-id' }], 'INVALID_STATUS_ID'],
@@ -572,6 +1229,7 @@ for (const [effects, code] of [
   [[{ modify_card: 'hits', add: 1 }], 'INVALID_CARD_VALUE_STAT'],
   [[{ modify_card: 'damage', add: 1, multiply: 2 }], 'INVALID_CARD_VALUE_OPERATOR'],
   [[{ modify_card: 'damage', divide: 0 }], 'DIVISION_BY_ZERO'],
+  [[{ copy: 1, from: 'draw', pick: 'top', to: 'deck' }], 'INVALID_CARD_DESTINATION'],
   [[{ card_rule: 'free', limit: 1, extra: 1 }], 'UNEXPECTED_CARD_REPLAY_COUNT'],
   [[{ card_rule: 'replay' }], 'MISSING_CARD_RULE_LIMIT'],
   [[{ modify: 'speed', add: 1 }], 'INVALID_MODIFIER'],
@@ -619,7 +1277,7 @@ assert.deepEqual(compactSchema.$defs.amountEffect.properties.hits, { type: 'inte
 assert.deepEqual(compactSchema.$defs.amountEffect.properties.damage_type.enum, [
   'attack', 'effect', 'hp_loss', 'retaliation', 'damage_over_time',
 ]);
-assert.deepEqual(compactSchema.$defs.formula.oneOf[0], { type: 'number', multipleOf: 0.1 });
+assert.deepEqual(compactSchema.$defs.formula.oneOf[0], { type: 'number', multipleOf: 0.01 });
 for (const definition of ['stanceEffect', 'channelOrbEffect', 'evokeOrbEffect', 'orbSlotsEffect', 'modifyOrbEffect', 'extraTurnEffect', 'endTurnEffect']) {
   assert.ok(compactSchema.$defs[definition], `compact schema must expose ${definition}`);
 }
@@ -757,14 +1415,21 @@ assert.equal(historyConditions.value.steps[2].condition.left.op, 'count_cards');
 assert.equal(historyConditions.value.steps[3].condition.right, 1);
 const choiceEffect = compileCompactEffectList({
   choose: 'combat_route',
+  count: 2,
   options: [
     { id: 'guard', label: '稳守', effects: [{ block: 8 }, { draw: 1 }] },
     { id: 'strike', label: '强攻', effects: [{ damage: 11 }] },
+    { id: 'focus', label: '聚焦', effects: [{ energy: 1 }] },
   ],
 });
 assert.equal(choiceEffect.ok, true, JSON.stringify(choiceEffect.issues));
 assert.equal(choiceEffect.value.steps[0].op, 'choose_one');
+assert.equal(choiceEffect.value.steps[0].count, 2);
 assert.equal(choiceEffect.value.steps[0].options[0].effects.length, 2);
+assert.equal(compileCompactEffectList({ choose: 'invalid_count', count: 3, options: [
+  { id: 'guard', label: '稳守', effects: { block: 1 } },
+  { id: 'strike', label: '强攻', effects: { damage: 1 } },
+] }).ok, false, 'choice count cannot exceed the authored options');
 const upgradeEffect = compileCompactEffectList({
   upgrade_card: 1,
   from: 'hand',
@@ -810,6 +1475,31 @@ assert.equal(attachmentEffect.ok, true, JSON.stringify(attachmentEffect.issues))
 assert.equal(attachmentEffect.value.steps[0].op, 'apply_card_attachment');
 assert.equal(attachmentEffect.value.steps[0].attachment.changes.length, 3);
 assert.equal(attachmentEffect.value.steps[0].attachment.removeOn, 'discarded');
+const resolutionAttachment = compileCompactEffectList({
+  attach_card: {
+    id: 'brief_binding', kind: 'affliction', name: '瞬时附着', scope: 'resolution',
+    changes: [{ kind: 'cost', operator: 'add', value: 1 }],
+  },
+  from: 'hand', pick: 'left', count: 1,
+});
+assert.equal(resolutionAttachment.ok, true, JSON.stringify(resolutionAttachment.issues));
+assert.equal(
+  resolutionAttachment.value.steps[0].attachment.removeOn,
+  undefined,
+  'the runtime owns the resolution scope default and maps it to resolution_end',
+);
+for (const impossibleReason of ['turn_cleanup', 'scry', 'recover', 'exhaust', 'generate', 'copy', 'transform', 'auto_play']) {
+  const impossibleDiscardTrigger = compileCompactEffectList({
+    attach_card: {
+      id: `bad_${impossibleReason}`, kind: 'affliction', name: '不会触发的附着', scope: 'combat',
+      remove_on: 'discarded', discard_reasons: [impossibleReason],
+      changes: [{ kind: 'discard_auto_play', reasons: [impossibleReason] }],
+    },
+    from: 'hand', pick: 'left', count: 1,
+  });
+  assert.equal(impossibleDiscardTrigger.ok, false, `${impossibleReason} cannot be exposed as a discard trigger`);
+  assert.ok(impossibleDiscardTrigger.issues.some(issue => issue.code === 'INVALID_DISCARD_REASON'));
+}
 const badAttachment = compileCompactEffectList({
   attach_card: {
     id: 'bad_binding', kind: 'affliction', name: '错误附着', scope: 'combat',
@@ -831,6 +1521,19 @@ assert.deepEqual(resourceEffect.value.steps, [
   { op: 'set_resource', target: 'self', resource: 'stars', value: { op: 'var', path: 'self.resource.stars.max' } },
   { op: 'card_play_rule', target: 'self', rule: 'free', limit: 1, freeResources: ['energy'] },
 ]);
+const conditionalResourceEffect = compileCompactEffectList({
+  resource: { id: 'stars', amount: 'attacks_played_this_turn >= 1 ? 3 : 2' },
+});
+assert.equal(conditionalResourceEffect.ok, true, JSON.stringify(conditionalResourceEffect.issues));
+const conditionalResourceState = {
+  ...structuredClone(state),
+  self: { ...structuredClone(state.self), resources: { stars: 1 }, maxResources: { stars: 10 } },
+};
+assert.equal(
+  executeEffectProgram(conditionalResourceEffect.value, conditionalResourceState, { spentEnergy: 0 }).state.self.resources.stars,
+  4,
+  'resource formulas must execute the selected ternary branch instead of failing after schema acceptance',
+);
 assert.equal(
   compileCompactEffectList([{ resource: { id: 'energy', amount: 1 } }]).ok,
   false,
@@ -845,7 +1548,6 @@ const summonEffects = compileCompactEffectList([
       action_priority: 2, speed: 4, actions_per_activation: 1,
       intercept: { mode: 'unblocked_attack', priority: 3, max_per_turn: 1 },
       capabilities: { selectable: true, accepts_status: true, acts: true, intercepts: true },
-      action: [{ damage: 4 }],
       actions: [
         { id: 'guard_bash', name: '守卫冲撞', emoji: '💥', weight: 2, effects: { damage: 5 } },
         {
@@ -869,18 +1571,26 @@ const summonEffects = compileCompactEffectList([
   { apply_summon_status: { selector: { owner: 'self', pick: 'all' }, id: 'focus', stacks: 2 } },
   { remove_summon_status: { selector: { owner: 'self', pick: 'all' }, id: 'focus' } },
   { activate_summon: { selector: { owner: 'self', pick: 'all' } } },
+  { activate_summon: { selector: { owner: 'self', pick: 'by_id', id: 'guard__summon__1' }, action: {
+    id: 'ordered_strike', name: '号令斩击', effects: { damage: 7 },
+  } } },
   { dismiss_summon: { selector: { owner: 'self', pick: 'last' }, retain_corpse: true } },
   { copy_summon: { selector: { owner: 'self', pick: 'choose', count: 1 }, to: 'self' } },
 ], { statusNames: { focus: '专注' } });
+assert.equal(validateCompactSchema({ effects: [{ activate_summon: { selector: { owner: 'self', pick: 'by_id', id: 'guard__summon__1' }, action: {
+  id: 'ordered_strike', name: '号令斩击', effects: { damage: 7 },
+} } }] }), true, JSON.stringify(validateCompactSchema.errors));
 assert.equal(summonEffects.ok, true, JSON.stringify(summonEffects.issues));
 assert.deepEqual(summonEffects.value.steps.map(step => step.op), [
   'spawn_summon', 'damage_summons', 'heal_summons', 'modify_summons', 'modify_summon_effects',
   'gain_summon_resource', 'set_summon_resource', 'apply_summon_status',
-  'remove_summon_status', 'activate_summons', 'dismiss_summons', 'copy_summons',
+  'remove_summon_status', 'activate_summons', 'activate_summons', 'dismiss_summons', 'copy_summons',
 ]);
-assert.equal(summonEffects.value.steps[0].summon.actionProgram.steps[0].op, 'damage');
 assert.equal(summonEffects.value.steps[0].summon.actions.length, 2);
 assert.equal(summonEffects.value.steps[0].summon.actions[1].effectProgram.steps[0].op, 'summoner_effects');
+assert.deepEqual(summonEffects.value.steps[10].suppliedAction, {
+  id: 'ordered_strike', name: '号令斩击', effectProgram: { spec: 'mwg.effect/v1', steps: [{ op: 'damage', target: 'opponent', amount: 7, hitGroup: '$:damage' }] },
+}, 'a compact supplied summon action compiles into the portable runtime program');
 assert.deepEqual(
   summonEffects.value.steps[0].summon.actions[1].effectProgram.steps[0].effects.map(step => step.op),
   ['gain_block', 'gain_energy'],
@@ -890,9 +1600,60 @@ assert.equal(summonEffects.value.steps[0].summon.abilities[0].trigger, 'turn_sta
 assert.equal(summonEffects.value.steps[0].summon.intercept.maxPerTurn, 1);
 assert.equal(summonEffects.value.steps[0].summon.capabilities.acceptsStatus, true);
 assert.equal(summonEffects.value.steps[1].selector.pick, 'random_n');
-assert.equal(summonEffects.value.steps[10].retainCorpse, true);
-assert.equal(summonEffects.value.steps[11].selector.pick, 'choose');
-assert.equal(summonEffects.value.steps[11].targetOwner, 'self');
+assert.equal(summonEffects.value.steps[11].retainCorpse, true);
+assert.equal(summonEffects.value.steps[12].selector.pick, 'choose');
+assert.equal(summonEffects.value.steps[12].targetOwner, 'self');
+const legacySingleSummonAction = compileCompactEffectList({
+  spawn_summon: {
+    id: 'simple_guard', name: '简易守卫', emoji: '🛡️', max_hp: 6,
+    action: { block: 2 },
+  },
+});
+assert.equal(legacySingleSummonAction.ok, true, JSON.stringify(legacySingleSummonAction.issues));
+assert.equal(legacySingleSummonAction.value.steps[0].summon.actionProgram.steps[0].op, 'gain_block');
+const summonLocalCreates = compileCompactEffectList({
+  spawn_summon: {
+    id: 'hex_scribe', name: '咒文书记', emoji: '📜', has_hp: false,
+    actions: [{
+      id: 'write_hex', name: '写入咒文',
+      when: 'turn_number > 1',
+      creates: [{ id: 'summon_hex', name: '召唤咒文', type: 'Curse', effects: { narrate: '咒文缠住手牌。' } }],
+      effects: { add_card: 'summon_hex', to: 'hand' },
+    }],
+  },
+});
+assert.equal(summonLocalCreates.ok, true, JSON.stringify(summonLocalCreates.issues));
+assert.equal(summonLocalCreates.value.steps[0].summon.actions[0].effectProgram.steps[0].op, 'if');
+assert.equal(summonLocalCreates.value.steps[0].summon.actions[0].effectProgram.steps[0].then[0].op, 'add_card');
+assert.equal(compileCompactEffectList({
+  spawn_summon: {
+    id: 'ambiguous_guard', name: '矛盾守卫', emoji: '🌀', max_hp: 6,
+    action: { block: 2 }, actions: [{ id: 'hit', name: '攻击', effects: { damage: 2 } }],
+  },
+}).ok, false, 'single action and weighted actions cannot silently override each other');
+assert.equal(compileCompactEffectList({
+  spawn_summon: {
+    id: 'silent_guard', name: '无效守卫', emoji: '🫥', max_hp: 6,
+    modifiers: { unsupported_modifier: 2 }, action: { damage: 2 },
+  },
+}).ok, false, 'summon modifiers must be consumed by the runtime');
+assert.equal(compileCompactEffectList({
+  spawn_summon: {
+    id: 'passive_guard', name: '错误被动', emoji: '⛔', max_hp: 6,
+    action: { damage: 2 },
+    abilities: [{ id: 'dead_passive', trigger: { on: 'passive', effects: { modify: 'damage', add: 1 } } }],
+  },
+}).ok, false, 'summon passive abilities are not silently accepted when no runtime consumes them');
+const summonStartResource = compileCompactEffectList({
+  spawn_summon: {
+    id: 'charged_guard', name: '蓄能守卫', emoji: '🔋', max_hp: 6,
+    resources: { charge: { name: '充能', emoji: '⚡', start: 2, max: 5, refresh: 'retain' } },
+    action: { damage: 'self.resource.charge.current' },
+  },
+});
+assert.equal(summonStartResource.ok, true, JSON.stringify(summonStartResource.issues));
+assert.equal(summonStartResource.value.steps[0].summon.resources.charge.current, 2);
+assert.equal('start' in summonStartResource.value.steps[0].summon.resources.charge, false);
 const badSummonDivision = compileCompactEffectList({
   modify_summon: { selector: { owner: 'self', pick: 'all' }, stat: 'max_hp', divide: 0 },
 });

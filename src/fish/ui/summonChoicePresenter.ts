@@ -1,3 +1,4 @@
+import { isolatedPresenter } from '../core/isolatedBattlePresentation';
 import type { SummonUnit } from '../../game-core';
 import { roundBattleDisplayValue } from '../../game-core';
 import { escapeHtml, escapeHtmlAttribute } from '../shared/html';
@@ -7,6 +8,8 @@ export class TavernSummonChoicePresenter {
   private static instance: TavernSummonChoicePresenter;
 
   public static getInstance(): TavernSummonChoicePresenter {
+    const isolated = isolatedPresenter<TavernSummonChoicePresenter>('summon_choice');
+    if (isolated) return isolated;
     if (!TavernSummonChoicePresenter.instance) {
       TavernSummonChoicePresenter.instance = new TavernSummonChoicePresenter();
     }
@@ -75,8 +78,9 @@ export class TavernSummonChoicePresenter {
         if (selected.size === amount) finish([...selected]);
       });
       dialog.on('click', '.summon-choice-cancel, .modal-backdrop', () => finish(null));
-      $('body').append(dialog);
-      dialog.find<HTMLElement>('.summon-choice-option').first().trigger('focus');
+      const host = $('#battle-scene');
+      (host.length ? host : $('body')).append(dialog);
+      dialog.find<HTMLElement>('.summon-choice-option').first().get(0)?.focus({ preventScroll: true });
       refresh();
     });
   }

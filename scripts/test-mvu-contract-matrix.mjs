@@ -33,6 +33,10 @@ for (const group of contract.groups) {
   assert.ok(allowedLifecycles.has(group.lifecycle), `${group.id} has unknown lifecycle ${group.lifecycle}`);
   assert.ok(Array.isArray(group.writers) && group.writers.length > 0, `${group.id} must declare writers`);
   assert.ok(Array.isArray(group.ai_operations), `${group.id} must declare ai_operations`);
+  if (group.shape === 'optional-program-fields') {
+    assert.equal(group.owner, 'program');
+    assert.deepEqual(group.ai_operations, []);
+  }
   for (const operation of group.ai_operations) {
     assert.ok(allowedOperations.has(operation), `${group.id} has unknown AI operation ${operation}`);
   }
@@ -64,7 +68,7 @@ function visit(value, path = '') {
 visit(initial);
 
 assert.deepEqual(
-  [...declared.keys()].filter(path => !path.includes('[]')).sort(),
+  [...declared.keys()].filter(path => !path.includes('[]') && declared.get(path).shape !== 'optional-program-fields').sort(),
   [...initialized.keys()].sort(),
   'every initialized MUV leaf/extensible object must have exactly one contract entry',
 );

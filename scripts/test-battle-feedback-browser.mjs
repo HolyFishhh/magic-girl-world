@@ -1,0 +1,44 @@
+import fs from 'node:fs';
+import {spawn} from 'node:child_process';
+import {resolve} from 'node:path';
+import assert from 'node:assert/strict';
+import WebSocket from 'ws';
+const port=18165;
+const child=spawn('C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',['--headless=new','--disable-gpu','--no-first-run','--no-default-browser-check',`--remote-debugging-port=${port}`,`--user-data-dir=${resolve('tmp/battle-browser-profile-v465')}`,'about:blank'],{windowsHide:true,stdio:'ignore'});
+let ws;
+try {
+  let targets;
+  for(let i=0;i<100;i++){try{targets=await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();if(targets.length)break;}catch{}await new Promise(r=>setTimeout(r,100));}
+  assert.ok(targets?.length,'isolated browser must start');
+  ws=new WebSocket(targets.find(t=>t.type==='page').webSocketDebuggerUrl);await new Promise((r,j)=>{ws.once('open',r);ws.once('error',j)});
+  ws.on('message',raw=>{const m=JSON.parse(raw);if(m.method==='Runtime.exceptionThrown')console.error(JSON.stringify(m.params));});
+  let seq=0;const pending=new Map();ws.on('message',raw=>{const m=JSON.parse(raw);if(m.id){const p=pending.get(m.id);pending.delete(m.id);m.error?p?.reject(m.error):p?.resolve(m.result)}});
+  const call=(method,params={})=>new Promise((resolve,reject)=>{const id=++seq;pending.set(id,{resolve,reject});ws.send(JSON.stringify({id,method,params}))});
+  const evaluate=async expression=>{const r=await call('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value;};
+  await call('Page.enable');await call('Runtime.enable');
+  const evidence=[];
+  const pause=ms=>new Promise(r=>setTimeout(r,ms));
+  const navigate=async file=>{await call('Page.navigate',{url:'file:///'+resolve(file).replaceAll('\\','/')});await pause(2500);};
+
+
+  for(const width of [1000,540,390]) {
+    await call('Emulation.setDeviceMetricsOverride',{width,height:1050,deviceScaleFactor:1,mobile:false});
+    await navigate('tmp/ui-v465/index.html');
+    assert.match(await evaluate('abilityRules()'),/每回合首次/);
+    await evaluate("speak('第一位敌人的台词',{actor:'enemy',id:'first',name:'火焰'});speak('召唤物台词',{actor:'summon',id:'unit_0',name:'机器人'});");
+    await pause(300);
+    const speech=await evaluate("Array.from(document.querySelectorAll('.battle-speech-bubble')).map(e=>({text:e.textContent,tag:e.tagName,parent:e.parentElement.dataset.enemyId||e.parentElement.dataset.summonId,width:e.getBoundingClientRect().width}))");
+    assert.equal(speech.length,2);assert.ok(speech.every(e=>e.tag==='SPAN'));assert.deepEqual(speech.map(e=>e.parent).sort(),['first','unit_0']);
+    fs.writeFileSync('tmp/v465-speech-'+width+'.png',Buffer.from((await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true})).data,'base64'));
+    await evaluate("document.querySelector('.battle-speech-bubble').click()");assert.equal(await evaluate("document.querySelectorAll('.battle-speech-bubble').length"),1);
+    const death=await evaluate(`(()=>{const first=document.querySelector('[data-enemy-id="first"]');const second=document.querySelector('[data-enemy-id="second"]');const old=first.getBoundingClientRect(),before=second.getBoundingClientRect();fullAnim.showEnemyDeparture($(first));first.remove();const ghost=document.querySelector('.enemy-departure');const after=second.getBoundingClientRect(),g=ghost.getBoundingClientRect();return {old:old.toJSON(),ghost:g.toJSON(),parent:ghost.offsetParent?.id,delta:Math.hypot(g.x-old.x,g.y-old.y),otherDelta:Math.hypot(after.x-before.x,after.y-before.y)}})()`);
+    assert.ok(death.delta<3,JSON.stringify(death));assert.ok(death.otherDelta<1,JSON.stringify(death));
+    const queue=await evaluate('rapid()');assert.equal(queue.immediate,3);assert.equal(queue.held,3);assert.equal(queue.remaining,0);assert.deepEqual(queue.trace,['start0','end0','start1','end1','start2','end2']);
+    await pause(4000);assert.equal(await evaluate("document.querySelectorAll('.battle-speech-bubble').length"),0);
+    evidence.push({width,speech,death,queue});
+  }
+  await navigate('tmp/ui-v465/index.html');
+  const scroll=await evaluate(`(async()=>{const host=document.createElement('div');host.style.cssText='position:fixed;inset:10px;height:400px;width:300px;overflow:auto;background:white;z-index:9999';host.innerHTML='<div style="height:900px">历史</div><iframe style="height:150px;width:100%"></iframe><div style="height:500px">之后</div>';document.body.append(host);const frame=host.querySelector('iframe');host.scrollTop=820;const before=host.scrollTop;await new Promise(r=>setTimeout(r,1200));resizeFrame(frame,'1800px');await new Promise(r=>setTimeout(r,120));const after=host.scrollTop;host.scrollTop=920;resizeFrame(frame,'2200px');const manual=host.scrollTop;host.remove();return {before,after,manual};})()`);
+  assert.equal(scroll.after,scroll.before);assert.equal(scroll.manual,920);evidence.push({scroll});
+  fs.writeFileSync('tmp/v465-full-layout.json',JSON.stringify(evidence,null,2));console.log(JSON.stringify(evidence));
+} finally {ws?.close();child.kill();}

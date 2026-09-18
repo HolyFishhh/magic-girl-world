@@ -6,6 +6,8 @@ import type { SelectableCard } from './cardSelectorRuntime';
 import { type CardAttachment } from './cardAttachment';
 import { type CardResourcePayment, type CardCost, type CombatResourcePool } from './combatResource';
 export interface CardPlayCard extends CardRuleCard {
+    /** Card-level pre-payment gate: a matching living summon must be present. */
+    requiresSummonTemplateId?: string;
     doubleEffect?: boolean;
     replayCount?: number;
     attachments?: CardAttachment[];
@@ -13,6 +15,7 @@ export interface CardPlayCard extends CardRuleCard {
 export interface CardPlayState<TCard extends CardPlayCard> {
     phase: string;
     hasOpponent: boolean;
+    summonTemplateIds?: Iterable<string>;
     hand: readonly TCard[];
     energy: number;
     /** Custom/current resource amounts; energy is always read from the dedicated compatibility field. */
@@ -29,7 +32,7 @@ export interface CardPlayState<TCard extends CardPlayCard> {
     dynamicCostState?: CoreEffectState;
     dynamicCostContext?: EffectExecutionContext;
 }
-export type CardPlayFailureCode = 'NO_OPPONENT' | 'WRONG_PHASE' | 'CARD_NOT_FOUND' | 'CURSE_UNPLAYABLE' | 'STUNNED' | 'DOMINATED_ATTACK' | 'SILENCED_SKILL' | 'RULE_DENIED' | 'RULE_LIMIT_REACHED' | 'INSUFFICIENT_ENERGY' | 'INSUFFICIENT_RESOURCE';
+export type CardPlayFailureCode = 'NO_OPPONENT' | 'WRONG_PHASE' | 'CARD_NOT_FOUND' | 'CURSE_UNPLAYABLE' | 'STUNNED' | 'DOMINATED_ATTACK' | 'SILENCED_SKILL' | 'RULE_DENIED' | 'RULE_LIMIT_REACHED' | 'INSUFFICIENT_ENERGY' | 'INSUFFICIENT_RESOURCE' | 'REQUIRED_SUMMON_MISSING';
 export interface CardPlayFailure {
     ok: false;
     code: CardPlayFailureCode;

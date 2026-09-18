@@ -10,6 +10,12 @@ export interface TowerGenerationTaskKey {
   chatId: string;
   nodeId: string;
   requestId: string;
+  /**
+   * Stable identity of the current tower run. Node and request ids are
+   * deterministic and may repeat when a player restarts inside one chat, so
+   * they are not sufficient as a process-lifetime dedupe key by themselves.
+   */
+  runScope?: string;
 }
 
 export interface TowerGenerationAttemptContext {
@@ -37,6 +43,13 @@ export interface TowerGenerationQueueStatus extends TowerGenerationTaskKey {
   startedAt?: number;
   finishedAt?: number;
   error?: unknown;
+  /** Sanitized previous-attempt category, never a provider body or message. */
+  retryReason?: TowerGenerationRetryReason;
+}
+
+export interface TowerGenerationRetryReason {
+  kind: 'transport' | 'host' | 'timeout' | 'cancelled' | 'exception';
+  retryable: boolean;
 }
 
 export interface TowerGenerationQueueOptions {
@@ -79,6 +92,7 @@ interface QueueJob<T> {
   phase: TowerGenerationQueuePhase;
   startedAt?: number;
   finishedAt?: number;
+  retryReason?: TowerGenerationRetryReason;
 }
 
 const DEFAULT_MAX_ATTEMPTS = 2;
@@ -91,7 +105,9 @@ function requiredId(value: string, label: string): string {
 
 export function towerGenerationTaskKey(key: TowerGenerationTaskKey): string {
   // Length prefixes avoid collisions even if caller-provided IDs contain a separator.
-  return [key.chatId, key.nodeId, key.requestId]
+  const values = [key.chatId, key.nodeId, key.requestId];
+  if (typeof key.runScope === 'string' && key.runScope.trim()) values.push(key.runScope.trim());
+  return values
     .map(value => `${value.length}:${value}`)
     .join('|');
 }
@@ -120,6 +136,17 @@ function cancelledFromSignal(signal: AbortSignal): TowerGenerationCancelledError
     );
 }
 
+function retryReason(error: unknown, retryable: boolean): TowerGenerationRetryReason {
+  if (error instanceof TowerGenerationTimeoutError) return { kind: 'timeout', retryable };
+  if (error instanceof TowerGenerationCancelledError) return { kind: 'cancelled', retryable };
+  const candidate = error as { name?: unknown; code?: unknown; failure?: unknown } | null;
+  if (candidate?.name === 'GenerationTransportError' || candidate?.failure !== undefined) {
+    return { kind: 'transport', retryable };
+  }
+  if (candidate?.name === 'TowerGenerationHostError') return { kind: 'host', retryable };
+  return { kind: 'exception', retryable };
+}
+
 /**
  * A single-lane, chat-scoped queue for pre-generating tower content.
  *
@@ -141,6 +168,9 @@ export class TowerGenerationQueue {
       chatId: requiredId(input.chatId, 'chatId'),
       nodeId: requiredId(input.nodeId, 'nodeId'),
       requestId: requiredId(input.requestId, 'requestId'),
+      ...(typeof input.runScope === 'string' && input.runScope.trim()
+        ? { runScope: input.runScope.trim() }
+        : {}),
     };
     this.activateChat(task.chatId);
 
@@ -286,6 +316,7 @@ export class TowerGenerationQueue {
         }
         const retry = job.attempt < job.maxAttempts
           && (job.task.shouldRetry?.(error, job.attempt) ?? true);
+        job.retryReason = retryReason(error, retry);
         if (retry) continue;
         job.phase = 'failed';
         job.finishedAt = Date.now();
@@ -356,6 +387,7 @@ export class TowerGenerationQueue {
       ...(job.startedAt === undefined ? {} : { startedAt: job.startedAt }),
       ...(job.finishedAt === undefined ? {} : { finishedAt: job.finishedAt }),
       ...(error === undefined ? {} : { error }),
+      ...(job.retryReason ? { retryReason: { ...job.retryReason } } : {}),
     };
   }
 

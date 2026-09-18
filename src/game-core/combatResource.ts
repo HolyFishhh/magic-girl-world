@@ -6,10 +6,14 @@ export interface CombatResourceState {
   id: string;
   name: string;
   emoji: string;
+  /** Authored explanation only; never interpreted as executable mechanics. */
+  description?: string;
   current: number;
   max: number;
   /** reset refills at player turn start; retain preserves the previous amount. */
   refresh: 'reset' | 'retain';
+  start?: number;
+  end_of_battle?: 'retain' | 'reset';
 }
 
 export type CombatResourcePool = Readonly<Record<string, number>>;
@@ -29,7 +33,7 @@ export interface CardResourcePayment {
 }
 
 const RESOURCE_ID = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const RESOURCE_FIELDS = new Set(['id', 'name', 'emoji', 'current', 'max', 'refresh']);
+const RESOURCE_FIELDS = new Set(['id', 'name', 'emoji', 'description', 'start', 'current', 'max', 'refresh', 'end_of_battle']);
 
 export interface CombatResourceDefinitionIssue {
   path: string;
@@ -42,6 +46,7 @@ export interface CombatResourceDefinitionIssue {
     | 'DUPLICATE_RESOURCE_ID'
     | 'INVALID_RESOURCE_NAME'
     | 'INVALID_RESOURCE_EMOJI'
+    | 'INVALID_RESOURCE_DESCRIPTION'
     | 'INVALID_RESOURCE_VALUE'
     | 'INVALID_RESOURCE_REFRESH';
   message: string;
@@ -167,13 +172,17 @@ export function normalizeCombatResourceStates(
     const id = typeof item.id === 'string' && RESOURCE_ID.test(item.id) ? item.id : '';
     if (!id || id === 'energy' || result[id]) continue;
     const max = amount(item.max);
+    const initialValue = item.current === undefined ? item.start : item.current;
     result[id] = {
       id,
       name: typeof item.name === 'string' && item.name.trim() ? item.name.trim() : id,
       emoji: typeof item.emoji === 'string' && item.emoji.trim() ? item.emoji.trim() : '◆',
-      current: Math.min(max, amount(item.current)),
+      ...(typeof item.description === 'string' ? { description: item.description } : {}),
+      current: Math.min(max, amount(initialValue)),
       max,
       refresh: item.refresh === 'reset' ? 'reset' : 'retain',
+      ...(item.start === undefined ? {} : { start: Math.min(max, amount(item.start)) }),
+      ...(item.end_of_battle === undefined ? {} : { end_of_battle: item.end_of_battle === 'reset' ? 'reset' : 'retain' }),
     };
   }
   return result;
@@ -183,54 +192,73 @@ export function normalizeCombatResourceStates(
 export function validateCombatResourceDefinitions(
   value: unknown,
   path = 'resources',
+  reportLocation?: (issue: CombatResourceDefinitionIssue, relativePath: readonly (string | number)[]) => void,
 ): CombatResourceDefinitionIssue[] {
+  const issues: CombatResourceDefinitionIssue[] = [];
+  const report = (issue: CombatResourceDefinitionIssue, relativePath: readonly (string | number)[]): void => {
+    issues.push(issue);
+    reportLocation?.(issue, relativePath);
+  };
   if (value === undefined) return [];
   if (!Array.isArray(value)) {
-    return [{ path, code: 'INVALID_RESOURCE_COLLECTION', message: '自定义资源必须是数组' }];
+    report({ path, code: 'INVALID_RESOURCE_COLLECTION', message: '自定义资源必须是数组' }, []);
+    return issues;
   }
-  const issues: CombatResourceDefinitionIssue[] = [];
   if (value.length > 16) {
-    issues.push({ path, code: 'TOO_MANY_RESOURCES', message: '自定义资源最多 16 项' });
+    report({ path, code: 'TOO_MANY_RESOURCES', message: '自定义资源最多 16 项' }, []);
   }
   const ids = new Set<string>();
   value.forEach((raw, index) => {
     const entryPath = `${path}[${index}]`;
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-      issues.push({ path: entryPath, code: 'INVALID_RESOURCE_ENTRY', message: '资源定义必须是对象' });
+      report({ path: entryPath, code: 'INVALID_RESOURCE_ENTRY', message: '资源定义必须是对象' }, [index]);
       return;
     }
     const item = raw as Record<string, unknown>;
     for (const key of Object.keys(item)) {
       if (!RESOURCE_FIELDS.has(key)) {
-        issues.push({ path: `${entryPath}.${key}`, code: 'UNKNOWN_RESOURCE_FIELD', message: `不支持的资源字段: ${key}` });
+        report({ path: `${entryPath}.${key}`, code: 'UNKNOWN_RESOURCE_FIELD', message: `不支持的资源字段: ${key}` }, [index, key]);
       }
+    }
+    if (item.end_of_battle !== undefined && !['reset', 'retain'].includes(String(item.end_of_battle))) {
+      report({ path: entryPath + '.end_of_battle', code: 'INVALID_RESOURCE_REFRESH', message: 'end_of_battle 必须是 retain 或 reset' }, [index, 'end_of_battle']);
     }
     const id = item.id;
     if (typeof id !== 'string' || !RESOURCE_ID.test(id) || id === 'energy') {
-      issues.push({ path: `${entryPath}.id`, code: 'INVALID_RESOURCE_ID', message: '资源 ID 必须是稳定英文 ID 且不能是 energy' });
+      report({ path: `${entryPath}.id`, code: 'INVALID_RESOURCE_ID', message: '资源 ID 必须是稳定英文 ID 且不能是 energy' }, [index, 'id']);
     } else if (ids.has(id)) {
-      issues.push({ path: `${entryPath}.id`, code: 'DUPLICATE_RESOURCE_ID', message: `资源 ID 重复: ${id}` });
+      report({ path: `${entryPath}.id`, code: 'DUPLICATE_RESOURCE_ID', message: `资源 ID 重复: ${id}` }, [index, 'id']);
     } else {
       ids.add(id);
     }
     if (typeof item.name !== 'string' || !item.name.trim()) {
-      issues.push({ path: `${entryPath}.name`, code: 'INVALID_RESOURCE_NAME', message: '资源名称不能为空' });
+      report({ path: `${entryPath}.name`, code: 'INVALID_RESOURCE_NAME', message: '资源名称不能为空' }, [index, 'name']);
     }
     if (typeof item.emoji !== 'string' || !item.emoji.trim()) {
-      issues.push({ path: `${entryPath}.emoji`, code: 'INVALID_RESOURCE_EMOJI', message: '资源 emoji 不能为空' });
+      report({ path: `${entryPath}.emoji`, code: 'INVALID_RESOURCE_EMOJI', message: '资源 emoji 不能为空' }, [index, 'emoji']);
+    }
+    if (item.description !== undefined && typeof item.description !== 'string') {
+      report({ path: `${entryPath}.description`, code: 'INVALID_RESOURCE_DESCRIPTION', message: '资源说明必须是文本' }, [index, 'description']);
     }
     if (!Number.isInteger(item.max) || Number(item.max) <= 0) {
-      issues.push({ path: `${entryPath}.max`, code: 'INVALID_RESOURCE_VALUE', message: '资源上限必须是正整数' });
+      report({ path: `${entryPath}.max`, code: 'INVALID_RESOURCE_VALUE', message: '资源上限必须是正整数' }, [index, 'max']);
     }
-    if (
-      !Number.isInteger(item.current) ||
-      Number(item.current) < 0 ||
-      (Number.isInteger(item.max) && Number(item.current) > Number(item.max))
-    ) {
-      issues.push({ path: `${entryPath}.current`, code: 'INVALID_RESOURCE_VALUE', message: '资源当前值必须是 0..max 内的整数' });
+    for (const field of ['start', 'current'] as const) {
+      if (item[field] === undefined) continue;
+      if (
+        !Number.isInteger(item[field]) ||
+        Number(item[field]) < 0 ||
+        (Number.isInteger(item.max) && Number(item[field]) > Number(item.max))
+      ) {
+        report({
+          path: `${entryPath}.${field}`,
+          code: 'INVALID_RESOURCE_VALUE',
+          message: `资源${field === 'start' ? '初始值' : '当前值'}必须是 0..max 内的整数`,
+        }, [index, field]);
+      }
     }
     if (item.refresh !== 'reset' && item.refresh !== 'retain') {
-      issues.push({ path: `${entryPath}.refresh`, code: 'INVALID_RESOURCE_REFRESH', message: '资源刷新方式只能是 reset 或 retain' });
+      report({ path: `${entryPath}.refresh`, code: 'INVALID_RESOURCE_REFRESH', message: '资源刷新方式只能是 reset 或 retain' }, [index, 'refresh']);
     }
   });
   return issues;
@@ -270,10 +298,10 @@ export function describeCardCost(
   resources?: Readonly<Record<string, Pick<CombatResourceState, 'name' | 'emoji'>>>,
 ): string {
   const components = normalizeCardCost(cost);
-  if (Object.keys(components).length === 0) return '0';
+  if (Object.keys(components).length === 0) return '0⚡能量';
   return Object.entries(components).map(([id, component]) => {
     const resource = resources?.[id];
-    const label = resource ? `${resource.emoji}${resource.name}` : id === 'energy' ? '💎能量' : id;
+    const label = id === 'energy' ? '⚡能量' : resource ? `${resource.emoji}${resource.name}` : id;
     return `${component === 'all' ? 'X' : component}${label}`;
   }).join(' + ');
 }

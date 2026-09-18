@@ -16,7 +16,15 @@ const {
 } = require('../src/common/runTransactions.ts');
 
 const baseBattle = () => ({
-  core: { emoji: '✨', hp: 70, max_hp: 80, card_removal_count: 1, resources: [] },
+  core: {
+    emoji: '✨',
+    hp: 70,
+    max_hp: 80,
+    lust: 10,
+    max_lust: 100,
+    card_removal_count: 1,
+    resources: [{ id: 'star_charge', name: '星辉', emoji: '⭐', current: 3, max: 5, refresh: 'retain' }],
+  },
   cards: [
     {
       id: 'starter_strike',
@@ -74,6 +82,11 @@ function reachableChoice(kind) {
 }
 
 function readyNode(stat, choice, content, reward) {
+  if (choice.kind === 'rest') {
+    assert.equal(stat.run.nodeContent[choice.id].phase, 'ready');
+    activateTowerNodeInStat(stat, choice.id);
+    return;
+  }
   let store = contentCore.queueTowerNodeContent(stat.run.nodeContent, choice.id, stat.run.stateRevision).store;
   store = contentCore.claimTowerGeneration(store, choice.id).store;
   const envelope = store[choice.id];
@@ -111,8 +124,10 @@ function assertNodePayloadCleared(stat) {
             outcome: {
               hp: -5,
               max_hp: 4,
+              lust: 15,
               gold: 7,
               card_removals: 1,
+              resources: { star_charge: 2 },
               reward: {
                 items: [{ id: 'star_water', name: '星水', count: 1, effects: { heal: 5 } }],
               },
@@ -128,7 +143,16 @@ function assertNodePayloadCleared(stat) {
   assert.equal(result.pendingReward, true);
   assert.equal(stat.battle.core.hp, 65);
   assert.equal(stat.battle.core.max_hp, 84);
+  assert.equal(stat.battle.core.lust, 25);
   assert.equal(stat.battle.core.card_removal_count, 2);
+  assert.equal(stat.battle.core.resources[0].current, 5);
+  assert.deepEqual(result.resourceChanges, [{
+    id: 'star_charge',
+    name: '星辉',
+    delta: 2,
+    before: 3,
+    after: 5,
+  }]);
   assert.equal(stat.run.gold, beforeGold + 7);
   assert.equal(stat.run.phase, 'in_node');
   assert.equal(stat.run_result.node_id, reached.choice.id);
@@ -143,6 +167,27 @@ function assertNodePayloadCleared(stat) {
   assert.equal(stat.run.phase, 'awaiting_choice');
   assert.equal(stat.battle.items[0].id, 'star_water');
   assertNodePayloadCleared(stat);
+}
+
+// A resource cost is checked before commit and leaves every scalar unchanged
+// when the player cannot afford it.
+{
+  const reached = reachableChoice('event');
+  const stat = towerStat(reached.state);
+  readyNode(stat, reached.choice, {
+    title: '星辉门锁',
+    payload: {
+      event: {
+        choices: [
+          { id: 'spend', label: '投入星辉', outcome: { hp: -5, gold: 20, resources: { star_charge: -4 } } },
+          { id: 'leave', label: '离开', outcome: {} },
+        ],
+      },
+    },
+  });
+  const before = structuredClone(stat);
+  assert.throws(() => settleTowerEventChoiceInStat(stat, 'spend'), /星辉不足，需要 4，当前只有 3/);
+  assert.deepEqual(stat, before, 'an unaffordable resource cost is an atomic no-op');
 }
 
 // A reward-free option completes immediately and cannot leave stale content.

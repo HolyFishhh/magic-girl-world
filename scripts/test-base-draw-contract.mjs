@@ -1,0 +1,41 @@
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
+import Ajv2020 from 'webpack/node_modules/ajv/dist/2020.js';
+const require = createRequire(import.meta.url);
+process.env.TS_NODE_COMPILER_OPTIONS = JSON.stringify({ module: 'CommonJS', moduleResolution: 'node' });
+require('ts-node/register/transpile-only');
+const { withAiContentDefinitions } = require('../src/game-core/aiContentJsonSchema.ts');
+const { createInitialDraftJsonSchema } = require('../src/game-core/initialDraftSchema.ts');
+const { createProviderSafeJsonSchema } = require('../src/sillytavern-extension/towerGenerationHost.ts');
+const { compileCompactEffectList } = require('../src/game-core/compactEffectDsl.ts');
+const { validateEffectProgramPolicy } = require('../src/game-core/effectProgramPolicy.ts');
+const { describeCompactStatus } = require('../src/game-core/contentDescription.ts');
+const { compactEffectProtocolSections } = require('../src/game-core/authoredEffectProtocol.ts');
+const effect = { modify: 'draw_per_turn', subtract: 'stacks' };
+const ajv = new Ajv2020({ strict: false });
+const passive = ajv.compile(withAiContentDefinitions({ $ref: '#/$defs/mwgPassiveEffect' }));
+const immediate = ajv.compile(withAiContentDefinitions({ $ref: '#/$defs/mwgCardEffect' }));
+assert.equal(passive(effect), true);
+assert.equal(immediate(effect), false);
+const compiled = compileCompactEffectList(effect);
+assert.equal(compiled.ok, true);
+assert.equal(validateEffectProgramPolicy(compiled.value, { modifierPolicy: 'only', allowStatusStacks: true }).ok, true);
+assert.equal(validateEffectProgramPolicy(compiled.value, { modifierPolicy: 'only', allowStatusStacks: false }).ok, false);
+const status = { id: 'slow', name: '减抽', type: 'debuff', stacks_change: -1, triggers: { hold: effect } };
+assert.match(describeCompactStatus(status), /回合基础抽牌数.*减少/);
+const clause = compactEffectProtocolSections().flatMap(s => s.clauses).find(s => s.startsWith('基础抽牌修饰：'));
+assert.ok(clause);
+assert.ok(readFileSync('worldbook_new/2战斗内容生成要求.md', 'utf8').includes(clause));
+let enumCount = 0;
+const visit = value => {
+  if (!value || typeof value !== 'object') return;
+  if (value.properties?.modify?.enum) {
+    enumCount++;
+    assert.ok(value.properties.modify.enum.includes('draw_per_turn'));
+  }
+  Object.values(value).forEach(visit);
+};
+visit(createProviderSafeJsonSchema(createInitialDraftJsonSchema({ includeNarrative: false })).value);
+assert.ok(enumCount > 0, 'actual provider passive outlines advertise the new stat');
+console.log('PASS base draw contract: passive schema, immediate rejection, stacks ownership, rule display, shared prose, actual provider enums.');

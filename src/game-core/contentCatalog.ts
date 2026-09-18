@@ -8,4 +8,4 @@ export const CARD_RARITY_SET: ReadonlySet<string> = new Set([
   'Legendary',
   'Corrupt',
 ]);
-export const RELIC_RARITY_SET: ReadonlySet<string> = new Set(['Common', 'Uncommon', 'Rare', 'Boss', 'ENS']);
+export const RELIC_RARITY_SET: ReadonlySet<string> = new Set(['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Boss', 'ENS']);

@@ -3,6 +3,7 @@ import type { CardOrigin } from './cardIdentity';
 import type { CardCost } from './combatResource';
 import type { CardPileZone, CardZoneCard, CardZoneState } from './cardZoneReducer';
 export interface SelectableCard extends CardZoneCard {
+    unique?: boolean;
     name?: string;
     type?: string;
     rarity?: string;
@@ -15,6 +16,10 @@ export interface SelectableCard extends CardZoneCard {
     origin?: CardOrigin;
     upgraded?: boolean;
     upgradeLevel?: number;
+    retain?: boolean;
+    exhaust?: boolean;
+    ethereal?: boolean;
+    innate?: boolean;
 }
 /** `all` intentionally preserves its legacy meaning and excludes the exhaust pile. */
 export declare function selectorZones(zone: CardSelector['zone']): CardPileZone[];

@@ -69,6 +69,10 @@ const allowCurse = rule('allow_card_play', { selector: selector({ types: ['Curse
 assert.equal(core.prepareCardPlay('curse', { ...basePlayState, cardPlayRules: [allowCurse] }).ok, true);
 const allowSkill = rule('allow_card_play', { selector: selector({ tags: ['guard'] }) });
 assert.equal(core.prepareCardPlay('skill', { ...basePlayState, statusIds: ['silenced'], cardPlayRules: [allowSkill] }).ok, true);
+assert.equal(core.prepareCardPlay('attack', {
+  ...basePlayState,
+  cardPlayRules: [denyAttacks, rule('allow_card_play', { selector: selector({ tags: ['strike'] }) })],
+}).ok, true, 'an explicit allow rule overrides a matching continuous deny rule');
 
 const limitAttacks = rule('limit_card_play', { limit: 1, selector: selector({ types: ['Attack'] }) });
 assert.equal(core.prepareCardPlay('attack', {
@@ -81,6 +85,36 @@ assert.equal(core.prepareCardPlay('skill', {
   cardPlayRules: [limitAttacks],
   playedCardsThisTurn: [attack],
 }).ok, true, 'filtered play limits do not consume unrelated cards');
+assert.equal(core.prepareCardPlay('attack', {
+  ...basePlayState,
+  cardPlayRules: [limitAttacks, rule('allow_card_play', { selector: selector({ tags: ['strike'] }) })],
+  playedCardsThisTurn: [attack],
+}).ok, true, 'an explicit allow rule overrides a matching continuous play limit');
+
+const filteredReplay = rule('replay', { limit: 1, extra: 1, selector: selector({ types: ['Attack'] }) });
+assert.equal(core.prepareCardPlay('attack', {
+  ...basePlayState,
+  cardsPlayedThisTurn: 1,
+  cardRuleUsesThisTurn: 1,
+  cardPlayRules: [filteredReplay],
+  playedCardsThisTurn: [skill],
+}).repeatCount, 2, 'unrelated cards do not consume a filtered replay window');
+assert.equal(core.prepareCardPlay('attack', {
+  ...basePlayState,
+  cardsPlayedThisTurn: 1,
+  cardRuleUsesThisTurn: 1,
+  cardPlayRules: [filteredReplay],
+  playedCardsThisTurn: [attack],
+}).repeatCount, 1, 'a matching card consumes a filtered replay window');
+const filteredFree = rule('free', { limit: 1, selector: selector({ types: ['Attack'] }) });
+assert.equal(core.prepareCardPlay('attack', {
+  ...basePlayState,
+  energy: 0,
+  cardsPlayedThisTurn: 1,
+  cardRuleUsesThisTurn: 1,
+  cardPlayRules: [filteredFree],
+  playedCardsThisTurn: [skill],
+}).ok, true, 'unrelated cards do not consume a filtered free-play window');
 
 const destinationRules = [
   rule('card_destination', { selector: selector({ types: ['Attack'] }), destination: 'exhaust', priority: 1 }),

@@ -1,0 +1,56 @@
+.tower-archetype-picker {
+  margin: 16px 0;
+  padding: 14px;
+  min-width: 0;
+  border: 1px solid var(--mwg-paper-line, #e7d6ce);
+  border-radius: 12px;
+  background: var(--surface-muted, #f8f3ed);
+  color: var(--mwg-ink, #6d5b5b);
+  font-size: 13px;
+  line-height: 1.6;
+  box-sizing: border-box;
+  [hidden] { display: none !important; }
+  p { margin: 6px 0 10px; color: var(--mwg-ink-muted, #897474); }
+  .archetype-heading, .archetype-selection { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+  .archetype-heading > strong { font-size: 16px; }
+  .archetype-heading > span { color: var(--mwg-ink-muted, #897474); }
+  .archetype-level-heading { margin: 10px 0 6px; }
+  .archetype-level-heading p { margin-bottom: 6px; }
+  .archetype-filters { display: grid; grid-template-columns: minmax(0, 1fr) minmax(130px, .65fr); gap: 10px; margin-bottom: 10px; }
+  label { display: grid; gap: 4px; min-width: 0; }
+  input, select, button { box-sizing: border-box; font: inherit; color: inherit; border: 1px solid #dfcfc5; border-radius: 7px; background: #fffaf7; }
+  input, select { width: 100%; min-width: 0; padding: 7px 9px; }
+  button { cursor: pointer; white-space: normal; }
+  button:disabled { cursor: wait; opacity: .55; }
+  :is(input, select, button):focus-visible { outline: 2px solid #a64c72; outline-offset: 2px; }
+  .archetype-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; max-height: 360px; overflow-y: auto; padding: 3px; scrollbar-gutter: stable; }
+  .archetype-list button { display: flex; flex-direction: column; gap: 4px; text-align: left; padding: 10px; min-height: 94px; overflow-wrap: anywhere; }
+  .archetype-list button span { color: var(--mwg-ink-muted, #897474); font-size: 12px; }
+  .archetype-list button[aria-pressed="true"] { border-color: #a64c72; background: #fceaf1; }
+  .archetype-list button:hover { border-color: #a64c72; }
+  .archetype-selection { margin-top: 12px; }
+  .archetype-selection button { padding: 5px 9px; }
+  .archetype-detail { margin-top: 8px; display: grid; gap: 6px; }
+  .archetype-detail div { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; padding: 7px 9px; border: 1px solid #eadbd3; border-radius: 7px; overflow-wrap: anywhere; }
+  .archetype-detail p { color: #873657; }
+  .archetype-detail ul { margin: 6px 0 0; padding-left: 20px; }
+  @media (max-width: 520px) {
+    padding: 10px;
+    .archetype-filters { grid-template-columns: minmax(0, 1fr); }
+    .archetype-list { grid-template-columns: minmax(0, 1fr); max-height: 330px; }
+    .archetype-list button { min-height: 76px; }
+  }
+}
+
+.tower-start-panel .tower-archetype-picker {
+  background: #23263e;
+  border-color: #565475;
+  color: #eceaf7;
+  p, .archetype-heading > span, .archetype-list button span { color: #c6c3d6; }
+  input, select, button { border-color: #555273; background: #191d30; color: #eceaf7; }
+  .archetype-list button[aria-pressed="true"] { border-color: #d4b7ff; background: #393151; }
+  .archetype-list button:hover { border-color: #c3a5eb; }
+  .archetype-detail p { color: #e2cffc; }
+  .archetype-detail div { border-color: #555273; }
+  :is(input, select, button):focus-visible { outline-color: #d4b7ff; }
+}

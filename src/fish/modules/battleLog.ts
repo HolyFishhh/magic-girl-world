@@ -37,7 +37,8 @@ export class BattleLog {
           <div class="log-content"></div>
         </div>
       `;
-      $('body').append(logHtml);
+      const host = $('#battle-scene');
+      (host.length ? host : $('body')).append(logHtml);
 
       // 添加关闭按钮事件
     }

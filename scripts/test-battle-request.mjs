@@ -113,11 +113,11 @@ assert.equal(runtime.enemy.name, 'Dummy');
 assert.equal(runtime.core.hp, 63);
 
 const budget = core.summarizeBuildBudget(request.content, { hp: 63, maxHp: 80 });
-assert.deepEqual(budget, { deck: 10, attack: 28, defense: 13, sustain: 0, draw: 0, energy: 0, hp: 63, maxHp: 80 });
-assert.equal(core.formatBuildBudget(budget), 'deck=10 atk=28 def=13 heal=0 draw=0 energy=0 hp=63/80');
+assert.deepEqual(budget, { deck: 10, attack: 24, defense: 13, sustain: 0, draw: 0, energy: 0, hp: 63, maxHp: 80 });
+assert.equal(core.formatBuildBudget(budget), 'deck=10 atk=24 def=13 heal=0 draw=0 energy=0 hp=63/80');
 const enemyBudget = core.recommendEnemyBudget(budget, request.route.danger, request.route.act);
-assert.deepEqual(enemyBudget, { hpMin: 42, hpMax: 84, hitMin: 5, hitMax: 13 });
-assert.equal(core.formatEnemyBudget(enemyBudget), 'hp=42..84 hit=5..13');
+assert.deepEqual(enemyBudget, { hpMin: 36, hpMax: 72, hitMin: 5, hitMax: 13 });
+assert.equal(core.formatEnemyBudget(enemyBudget), 'hp=36..72 hit=5..13');
 assert.deepEqual(core.assessEnemyBudget(request, budget).warnings, []);
 
 const lustPressureRequest = core.createBattleRequest({
@@ -126,6 +126,7 @@ const lustPressureRequest = core.createBattleRequest({
     enemy: {
       ...runtime.enemy,
       actions: [{ name: '欲望注入', effects: [{ lust: 20 }] }],
+      lust_effect: { name: '欲望失控', effects: [{ damage: 8 }] },
     },
   }),
   player: request.player,
@@ -135,7 +136,7 @@ const lustPressureRequest = core.createBattleRequest({
 assert.deepEqual(
   core.assessEnemyBudget(lustPressureRequest, budget).warnings,
   [],
-  'lust-only enemy actions count as pressure instead of being reported as risk-free',
+  'lust-only enemy actions require their real overflow route and count as pressure instead of being reported as risk-free',
 );
 
 const overflowPressureRequest = core.createBattleRequest({

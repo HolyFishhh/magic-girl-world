@@ -12,7 +12,7 @@ const manifest = JSON.parse(await fs.readFile(path.join(source, 'manifest.json')
 const version = String(manifest.version || '').trim();
 if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`扩展版本无效：${version || '空'}`);
 
-for (const file of ['index.js', 'design-worker.js', 'index.css', 'manifest.json']) {
+for (const file of ['index.js', 'design-worker.js', 'encounter-worker.js', 'index.css', 'manifest.json']) {
   const stat = await fs.stat(path.join(source, file));
   if (!stat.isFile() || stat.size === 0) throw new Error(`扩展发布文件缺失：${file}`);
 }

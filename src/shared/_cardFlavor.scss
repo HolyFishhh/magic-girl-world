@@ -1,0 +1,15 @@
+// Flavor is a separate bottom strip, never part of the executable rule stack.
+@mixin layout {
+  .mwg-card.enhanced-card > .card-flavor-footer {
+    flex: 0 0 auto; margin-top: auto; padding: 4px 7px; box-sizing: border-box;
+    border-top: 1px solid #ffffff22; background: #080e1c55; min-width: 0;
+  }
+  .mwg-card.enhanced-card > .card-flavor-footer > .card-description.card-flavor-text {
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+    margin: 0; padding: 0; max-height: 2.9em; min-height: 1.45em; overflow: hidden;
+    color: #c3cbda; font: normal 10px/1.45 system-ui; white-space: normal; overflow-wrap: anywhere;
+  }
+  .mwg-card-preview .mwg-card.enhanced-card > .card-flavor-footer > .card-description.card-flavor-text {
+    display: block; -webkit-line-clamp: unset; max-height: none; overflow: visible; font-size: 12px;
+  }
+}

@@ -53,6 +53,7 @@ export const TRIGGER_DEFINITIONS: Readonly<Record<string, TriggerDefinition>> = 
   deal_lust_decrease: { id: 'deal_lust_decrease', name: '造成欲望减少时', icon: '🧊', color: '#0284c7' },
   gain_block: { id: 'gain_block', name: '获得格挡时', icon: '🛡️', color: '#2563eb' },
   lose_block: { id: 'lose_block', name: '失去格挡时', icon: '💨', color: '#4b5563' },
+  kill: { id: 'kill', name: '击败敌人时', icon: '⚔️', color: '#b91c1c' },
   defeated: { id: 'defeated', name: '被击败时', icon: '💀', color: '#991b1b' },
   gain_buff: { id: 'gain_buff', name: '获得增益时', icon: '✨', color: '#059669' },
   gain_debuff: { id: 'gain_debuff', name: '获得减益时', icon: '🌫️', color: '#dc2626' },

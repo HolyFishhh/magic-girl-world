@@ -9,6 +9,10 @@ export type CardUpgradeChange = Pick<Extract<CardPatch, {
 }>, 'kind' | 'keyword' | 'enabled'> | Pick<Extract<CardPatch, {
     kind: 'replay';
 }>, 'kind' | 'extra'> | Pick<Extract<CardPatch, {
+    kind: 'hits';
+}>, 'kind' | 'add'> | {
+    kind: 'area';
+} | Pick<Extract<CardPatch, {
     kind: 'x_value';
 }>, 'kind' | 'operator' | 'value'> | Pick<Extract<CardPatch, {
     kind: 'dynamic_cost';

@@ -1,17 +1,28 @@
 import type { CardOrigin } from './cardIdentity';
 import type { CardCost } from './combatResource';
+import { abilityTriggerRecipientScope, type AbilityTrigger } from './battleTriggers';
+import { impliedTriggerEventFilter, triggerEventFilterConflicts } from './triggerEventContract';
+import { CARD_DISCARD_TRIGGER_REASONS } from './cardAttachment';
 
 export type BattleEventPhase = 'before' | 'resolve' | 'after';
 export type BattleEventKind =
   | 'turn_started'
   | 'turn_ended'
   | 'card_drawn'
+  | 'draw_pile_shuffled'
   | 'card_moved'
   | 'card_played'
   | 'damage_resolved'
   | 'heal_resolved'
+  | 'lust_increased'
+  | 'lust_decreased'
+  | 'block_gained'
+  | 'block_lost'
   | 'resource_spent'
   | 'resource_changed'
+  | 'status_applied'
+  | 'status_triggered'
+  | 'status_removed'
   | 'stance_changed'
   | 'orb_channeled'
   | 'orb_evoked'
@@ -27,8 +38,10 @@ export type BattleEventKind =
   | 'entity_defeated';
 
 export const BATTLE_EVENT_KINDS: readonly BattleEventKind[] = [
-  'turn_started', 'turn_ended', 'card_drawn', 'card_moved', 'card_played', 'damage_resolved',
-  'heal_resolved', 'resource_spent', 'resource_changed', 'stance_changed', 'orb_channeled',
+  'turn_started', 'turn_ended', 'card_drawn', 'draw_pile_shuffled', 'card_moved', 'card_played',
+  'damage_resolved', 'heal_resolved', 'lust_increased', 'lust_decreased', 'block_gained', 'block_lost',
+  'resource_spent', 'resource_changed', 'status_applied', 'status_triggered', 'status_removed',
+  'stance_changed', 'orb_channeled',
   'orb_evoked', 'orb_value_changed', 'turn_control_changed', 'summon_spawned', 'summon_acted',
   'summon_intercepted', 'summon_defeated', 'summon_status_applied', 'summon_status_triggered',
   'summon_status_removed', 'entity_defeated',
@@ -36,6 +49,9 @@ export const BATTLE_EVENT_KINDS: readonly BattleEventKind[] = [
 
 export type CardMoveReason =
   | 'player_choice'
+  // Resolving a played card is not a hand-discard lifecycle. In particular it
+  // must not consume first/nth on_discard event ordinals.
+  | 'played'
   | 'random_effect'
   | 'effect'
   | 'turn_cleanup'
@@ -79,10 +95,14 @@ interface BattleEventBase {
   kind: BattleEventKind;
   depth: number;
   cause: BattleEventCause;
+  /** Runtime-owned provenance survives unit removal and encounter changes. */
+  actorSide?: 'player' | 'enemy';
+  targetSide?: 'player' | 'enemy';
 }
 
 export type BattleEvent =
   | (BattleEventBase & { kind: 'turn_started' | 'turn_ended'; actorId: string })
+  | (BattleEventBase & { kind: 'draw_pile_shuffled'; actorId: string; recycledCards: number })
   | (BattleEventBase & {
       kind: 'card_drawn';
       actorId: string;
@@ -136,6 +156,14 @@ export type BattleEvent =
       hpGained: number;
     })
   | (BattleEventBase & {
+      kind: 'lust_increased' | 'lust_decreased' | 'block_gained' | 'block_lost';
+      actorId: string;
+      targetId: string;
+      previousValue: number;
+      nextValue: number;
+      amount: number;
+    })
+  | (BattleEventBase & {
       kind: 'resource_spent';
       actorId: string;
       resource: string;
@@ -150,6 +178,37 @@ export type BattleEvent =
       previousValue: number;
       nextValue: number;
       change: 'gain' | 'set';
+    })
+  | (BattleEventBase & {
+      kind: 'status_applied';
+      /** Persist polarity, rather than guessing it from prose or a later registry. */
+      statusType?: string;
+      actorId: string;
+      targetId: string;
+      statusId: string;
+      statusName: string;
+      stacks: number;
+      trigger: 'apply' | 'stack';
+    })
+  | (BattleEventBase & {
+      kind: 'status_triggered';
+      statusType?: string;
+      actorId: string;
+      targetId: string;
+      statusId: string;
+      statusName: string;
+      stacks: number;
+      trigger: 'apply' | 'stack' | 'tick' | 'remove';
+    })
+  | (BattleEventBase & {
+      kind: 'status_removed';
+      statusType?: string;
+      actorId: string;
+      targetId: string;
+      statusId: string;
+      statusName: string;
+      stacks: number;
+      reason: 'explicit' | 'decay';
     })
   | (BattleEventBase & {
       kind: 'stance_changed';
@@ -278,6 +337,14 @@ export interface RunEventHistoryState {
   records: RunBattleEventRecord[];
 }
 
+/**
+ * A three-act run can create thousands of small events. Keep one generous hard
+ * ceiling at the storage reader so corrupted/AI-written host variables cannot
+ * make every history formula scan an unbounded array. Runtime-owned archives
+ * are expected to remain well below this limit.
+ */
+export const MAX_RUN_EVENT_HISTORY_RECORDS = 20_000;
+
 export interface EventCounterFilter {
   kind?: BattleEventKind;
   phase?: BattleEventPhase;
@@ -303,7 +370,7 @@ export interface EventCounterQuery {
 }
 
 export interface EventOrdinalQuery extends EventCounterQuery {
-  ordinal: 'first' | 'nth' | 'every_n';
+  ordinal: 'first' | 'first_n' | 'nth' | 'every_n';
   n?: number;
 }
 
@@ -327,6 +394,8 @@ export interface EventHistoryValueQuery extends EventCounterQuery {
 
 /** Standard metadata passed to filtered ability/relic triggers. */
 export interface BattleTriggerEventContext {
+  /** Status affected by this event; distinct from the causing sourceId. */
+  statusId?: string;
   eventId?: string;
   /** True when this event is already present in the supplied journal. */
   eventRecorded?: boolean;
@@ -342,6 +411,10 @@ export interface BattleTriggerEventContext {
   damageKind?: DamageKind;
   actorId?: string;
   targetId?: string;
+  actorSide?: 'player' | 'enemy';
+  targetSide?: 'player' | 'enemy';
+  /** Runtime-owned actor ids used when an AI-facing query selects team scope. */
+  teamActorIds?: readonly string[];
   eventJournal?: BattleEventJournalState;
 }
 
@@ -363,8 +436,11 @@ export function battleTriggerContextFromEvent(
     ...('templateId' in event ? { templateId: event.templateId } : {}),
     ...('cardInstanceId' in event ? { cardInstanceId: event.cardInstanceId } : {}),
     ...('damageKind' in event ? { damageKind: event.damageKind } : {}),
+    ...('statusId' in event ? { statusId: event.statusId } : {}),
     ...('actorId' in event ? { actorId: event.actorId } : {}),
     ...('targetId' in event ? { targetId: event.targetId } : {}),
+    ...(event.actorSide ? { actorSide: event.actorSide } : {}),
+    ...(event.targetSide ? { targetSide: event.targetSide } : {}),
     eventJournal,
   };
 }
@@ -374,6 +450,44 @@ const MAX_EVENTS_PER_ROOT_SIGNATURE = 64;
 
 export function createRunEventHistory(records: readonly RunBattleEventRecord[] = []): RunEventHistoryState {
   return { schemaVersion: 1, records: records.map(record => structuredClone(record)) };
+}
+
+function isRecord(value: unknown): value is Record<string, any> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isStoredBattleEvent(value: unknown): value is BattleEvent {
+  if (!isRecord(value)) return false;
+  if (
+    typeof value.id !== 'string' || !value.id ||
+    !Number.isInteger(value.sequence) || value.sequence < 1 ||
+    !Number.isInteger(value.turn) || value.turn < 0 ||
+    !Number.isInteger(value.depth) || value.depth < 0 || value.depth > MAX_EVENT_DEPTH ||
+    !BATTLE_EVENT_KINDS.includes(value.kind) ||
+    !BATTLE_EVENT_PHASES.includes(value.phase) ||
+    !isRecord(value.cause) || !isRecord(value.cause.source) ||
+    !EVENT_SOURCE_KINDS.includes(value.cause.source.kind) ||
+    typeof value.cause.source.id !== 'string' || !value.cause.source.id
+  ) return false;
+
+  const { id: _id, sequence: _sequence, depth: _depth, ...draft } = value;
+  return appendBattleEvent(createBattleEventJournal(), draft as BattleEventDraft).ok;
+}
+
+/** Strict reader for run-owned history restored from host variables. */
+export function readRunEventHistory(value: unknown): RunEventHistoryState | null {
+  if (!isRecord(value) || value.schemaVersion !== 1 || !Array.isArray(value.records)) return null;
+  if (value.records.length > MAX_RUN_EVENT_HISTORY_RECORDS) return null;
+  const records: RunBattleEventRecord[] = [];
+  for (const record of value.records) {
+    if (
+      !isRecord(record) || typeof record.encounterId !== 'string' ||
+      !record.encounterId.trim() || record.encounterId.length > 128 ||
+      !isStoredBattleEvent(record.event)
+    ) return null;
+    records.push({ encounterId: record.encounterId, event: structuredClone(record.event) });
+  }
+  return createRunEventHistory(records);
 }
 
 export function createBattleEventJournal(
@@ -446,6 +560,8 @@ export type AppendBattleEventResult =
   | { ok: false; code: 'MAX_EVENT_DEPTH' | 'REENTRANT_EVENT_LIMIT' | 'INVALID_EVENT_VALUE'; state: BattleEventJournalState };
 
 export function appendBattleEvent(state: BattleEventJournalState, draft: BattleEventDraft): AppendBattleEventResult {
+  if ([draft.actorSide, draft.targetSide].some(side => side !== undefined && side !== 'player' && side !== 'enemy'))
+    return { ok: false, code: 'INVALID_EVENT_VALUE', state };
   const sequence = Math.max(1, Math.floor(state.nextSequence || 1));
   const depth = Math.max(0, Math.floor(draft.depth || 0));
   if (depth > MAX_EVENT_DEPTH) return { ok: false, code: 'MAX_EVENT_DEPTH', state };
@@ -475,6 +591,13 @@ export function appendBattleEvent(state: BattleEventJournalState, draft: BattleE
       [event.previousValue, event.nextValue].some(value => !Number.isInteger(value) || value < 0)
     ) return { ok: false, code: 'INVALID_EVENT_VALUE', state };
   }
+  if (event.kind === 'draw_pile_shuffled' && (!Number.isInteger(event.recycledCards) || event.recycledCards < 0))
+    return { ok: false, code: 'INVALID_EVENT_VALUE', state };
+  if (
+    (event.kind === 'lust_increased' || event.kind === 'lust_decreased' ||
+      event.kind === 'block_gained' || event.kind === 'block_lost') &&
+    ([event.previousValue, event.nextValue, event.amount].some(value => !Number.isFinite(value) || value < 0) || event.amount === 0)
+  ) return { ok: false, code: 'INVALID_EVENT_VALUE', state };
   if ((event.kind === 'orb_channeled' || event.kind === 'orb_evoked') && (!Number.isFinite(event.value) || event.value < 0))
     return { ok: false, code: 'INVALID_EVENT_VALUE', state };
   if (event.kind === 'orb_value_changed' && [event.previousValue, event.nextValue].some(value => !Number.isFinite(value) || value < 0))
@@ -488,8 +611,9 @@ export function appendBattleEvent(state: BattleEventJournalState, draft: BattleE
     [event.blocked, event.hpLost].some(value => !Number.isFinite(value) || value < 0)
   ) return { ok: false, code: 'INVALID_EVENT_VALUE', state };
   if (
-    (event.kind === 'summon_status_applied' || event.kind === 'summon_status_triggered' || event.kind === 'summon_status_removed') &&
-    (!event.summonId || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(event.statusId) || !event.statusName ||
+    (event.kind === 'status_applied' || event.kind === 'status_triggered' || event.kind === 'status_removed' ||
+      event.kind === 'summon_status_applied' || event.kind === 'summon_status_triggered' || event.kind === 'summon_status_removed') &&
+    (('summonId' in event && !event.summonId) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(event.statusId) || !event.statusName ||
       !Number.isFinite(event.stacks) || event.stacks < 0)
   ) return { ok: false, code: 'INVALID_EVENT_VALUE', state };
   const signature = eventSignature(event);
@@ -522,23 +646,33 @@ function eventInScope(event: BattleEvent, query: EventCounterQuery): boolean {
   return true;
 }
 
-export function countBattleEvents(state: BattleEventJournalState, query: EventCounterQuery): number {
-  const current = state.events.filter(event => eventInScope(event, query) && battleEventMatches(event, query.filter)).length;
+export function countBattleEvents(
+  state: BattleEventJournalState,
+  query: EventCounterQuery,
+  predicate: (event: BattleEvent) => boolean = () => true,
+): number {
+  const current = state.events.filter(event => eventInScope(event, query) && battleEventMatches(event, query.filter) && predicate(event)).length;
   if (query.scope !== 'run') return current;
-  const archived = state.runHistory?.records.filter(record => battleEventMatches(record.event, query.filter)).length || 0;
+  const archived = state.runHistory?.records.filter(record => battleEventMatches(record.event, query.filter) && predicate(record.event)).length || 0;
   return archived + current;
 }
 
-export function matchesEventOrdinal(state: BattleEventJournalState, eventId: string, query: EventOrdinalQuery): boolean {
-  const matching = state.events.filter(event => eventInScope(event, query) && battleEventMatches(event, query.filter));
+export function matchesEventOrdinal(
+  state: BattleEventJournalState,
+  eventId: string,
+  query: EventOrdinalQuery,
+  predicate: (event: BattleEvent) => boolean = () => true,
+): boolean {
+  const matching = state.events.filter(event => eventInScope(event, query) && battleEventMatches(event, query.filter) && predicate(event));
   const index = matching.findIndex(event => event.id === eventId);
   if (index < 0) return false;
   const archived = query.scope === 'run'
-    ? state.runHistory?.records.filter(record => battleEventMatches(record.event, query.filter)).length || 0
+    ? state.runHistory?.records.filter(record => battleEventMatches(record.event, query.filter) && predicate(record.event)).length || 0
     : 0;
   const ordinal = archived + index + 1;
   if (query.ordinal === 'first') return ordinal === 1;
   const n = Math.max(1, Math.floor(query.n || 1));
+  if (query.ordinal === 'first_n') return ordinal <= n;
   return query.ordinal === 'nth' ? ordinal === n : ordinal % n === 0;
 }
 
@@ -550,31 +684,95 @@ function contextMatchesFilter(context: BattleTriggerEventContext, filter: EventC
   return keys.every(key => filter[key] === undefined || context[key] === filter[key]);
 }
 
+/** Count only events capable of dispatching this gameplay trigger to this recipient. */
+function triggerHistoryPredicate(
+  trigger: AbilityTrigger,
+  context: BattleTriggerEventContext,
+  scope: HistoryScope,
+  checkPolarity = true,
+): (event: BattleEvent) => boolean {
+  const role = abilityTriggerRecipientScope(trigger);
+  const roleKey = role === 'holder' || role === 'observer' ? 'targetId' : 'actorId';
+  const currentOwner = context[roleKey];
+  const team = context.teamActorIds;
+  const sideKey = roleKey === 'targetId' ? 'targetSide' : 'actorSide';
+  const currentSide = context[sideKey];
+  const polarity = trigger.endsWith('_debuff') ? 'debuff' : trigger.endsWith('_buff') ? 'buff' : undefined;
+  return event => {
+    if (trigger === 'on_discard' && (
+      event.kind !== 'card_moved' || event.from !== 'hand' || event.to !== 'discardPile' ||
+      !CARD_DISCARD_TRIGGER_REASONS.has(event.moveReason)
+    )) return false;
+    if (trigger === 'on_exhaust' && (
+      event.kind !== 'card_moved' || event.to !== 'exhaustPile' || event.moveReason !== 'exhaust'
+    )) return false;
+    if (event.kind === 'damage_resolved' && event.hpLost <= 0) return false;
+    if (event.kind === 'heal_resolved' && event.hpGained <= 0) return false;
+    if (role === 'source' && 'targetId' in event && event.actorId === event.targetId) return false;
+    // Older journals did not persist polarity. Never infer it from a status
+    // name; those ambiguous records are handled before ordinal evaluation.
+    if (checkPolarity && polarity && (!('statusType' in event) || event.statusType !== polarity)) return false;
+    const entityId = roleKey === 'targetId' && 'targetId' in event ? event.targetId
+      : roleKey === 'actorId' && 'actorId' in event ? event.actorId : undefined;
+    if (!entityId) return false;
+    if ((role === 'observer' || scope === 'team') && currentSide && event[sideKey])
+      return event[sideKey] === currentSide;
+    if (role === 'observer' && team?.length) return !team.includes(entityId);
+    if (scope === 'team') return Boolean(team?.includes(entityId));
+    return currentOwner !== undefined && entityId === currentOwner;
+  };
+}
+
 /** Match a filtered/ordinal trigger against one dispatched event. */
 export function matchesEventTriggerQuery(
   context: BattleTriggerEventContext,
   query?: EventTriggerQuery,
+  trigger?: AbilityTrigger,
 ): boolean {
   if (!query) return true;
+  if (triggerEventFilterConflicts(trigger, query.filter)) return false;
+  query = { ...query, filter: { ...impliedTriggerEventFilter(trigger), ...query.filter } };
   if (!contextMatchesFilter(context, query.filter)) return false;
   if (!query.ordinal) return true;
   const journal = context.eventJournal;
   if (!journal) return false;
+  // A legacy journal lacking polarity cannot establish an exact nth buff or
+  // debuff. Fail closed instead of ignoring that history and firing again.
+  if (trigger && (trigger.endsWith('_buff') || trigger.endsWith('_debuff'))) {
+    const sameRecipient = triggerHistoryPredicate(trigger, context, query.scope, false);
+    const relevant = (event: BattleEvent) => battleEventMatches(event, query.filter) &&
+      sameRecipient(event) &&
+      (query.scope !== 'turn' || event.turn === (query.turn ?? context.turn)) &&
+      (query.scope !== 'card_instance' || ('cardInstanceId' in event && event.cardInstanceId === (query.cardInstanceId ?? context.cardInstanceId)));
+    const ambiguous = (event: BattleEvent) => relevant(event) &&
+      (!('statusType' in event) || !['buff', 'debuff', 'neutral'].includes(event.statusType || ''));
+    if (journal.events.some(ambiguous) ||
+      (query.scope === 'run' && journal.runHistory?.records.some(record => ambiguous(record.event)))) return false;
+  }
   const resolvedQuery: EventTriggerQuery = {
     ...query,
     ...(query.scope === 'turn' && query.turn === undefined ? { turn: context.turn } : {}),
     ...(query.scope === 'card_instance' && query.cardInstanceId === undefined
       ? { cardInstanceId: context.cardInstanceId }
       : {}),
+    ...(query.scope === 'team' && query.teamActorIds === undefined && context.teamActorIds
+      ? { teamActorIds: context.teamActorIds }
+      : {}),
   };
+  const predicate = trigger ? triggerHistoryPredicate(trigger, context, query.scope) : undefined;
+  // A holder's team query follows the recipients, not the attackers. The
+  // trigger-aware predicate applies that boundary; generic history queries
+  // retain their existing actor-based team semantics.
+  if (trigger && query.scope === 'team') resolvedQuery.scope = 'combat';
   if (context.eventRecorded && context.eventId) {
-    return matchesEventOrdinal(journal, context.eventId, { ...resolvedQuery, ordinal: query.ordinal });
+    return matchesEventOrdinal(journal, context.eventId, { ...resolvedQuery, ordinal: query.ordinal }, predicate);
   }
   // Some domain triggers are dispatched before their corresponding journal
   // event is appended. In that case the candidate is the next matching event.
-  const ordinal = countBattleEvents(journal, resolvedQuery) + 1;
+  const ordinal = countBattleEvents(journal, resolvedQuery, predicate) + 1;
   if (query.ordinal === 'first') return ordinal === 1;
   const n = Math.max(1, Math.floor(query.n || 1));
+  if (query.ordinal === 'first_n') return ordinal <= n;
   return query.ordinal === 'nth' ? ordinal === n : ordinal % n === 0;
 }
 

@@ -76,4 +76,29 @@ assert.deepEqual(
   'template filter remains distinct from same-name selection',
 );
 
+const keywordRecovery = compileCompactEffectList({
+  recover: 1,
+  from: 'discard',
+  pick: 'choose',
+  keyword: 'exhaust',
+  exclude_keyword: 'ethereal',
+});
+assert.equal(keywordRecovery.ok, true, keywordRecovery.ok ? '' : JSON.stringify(keywordRecovery.issues));
+assert.deepEqual(keywordRecovery.value.steps[0].filter, {
+  keywords: ['exhaust'],
+  excludedKeywords: ['ethereal'],
+});
+const keywordCards = [
+  { id: 'exhaust-only', exhaust: true },
+  { id: 'exhaust-ethereal', exhaust: true, ethereal: true },
+  { id: 'plain' },
+];
+assert.deepEqual(
+  keywordCards
+    .filter(card => selectorRuntime.cardMatchesSelectorFilter(card, keywordRecovery.value.steps[0].filter))
+    .map(card => card.id),
+  ['exhaust-only'],
+  'intrinsic card keywords are reusable selector filters instead of prose-only promises',
+);
+
 console.log('Typed card selection plans passed.');

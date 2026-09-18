@@ -1,4 +1,7 @@
-export declare const COMPACT_EFFECT_META_KEYS: readonly ["to", "targets", "when", "on", "stacks", "hits", "damage_type", "bypass_block", "lifesteal", "threshold_mode", "exclude_tags", "trigger_fatal", "from", "pick", "count", "add", "subtract", "multiply", "divide", "set", "limit", "extra", "scope", "match", "future_copies", "timing", "minimum", "maximum", "enabled", "min", "max", "name", "card_type", "rarity", "cost", "min_cost", "max_cost", "tag", "template_id", "run_instance_id", "combat_instance_id", "origin", "upgraded", "root_only", "include_copies", "phase", "priority", "repeat_every", "repeats", "effects", "free", "destination", "position", "options", "changes", "levels", "max_level", "orb_id", "resources"];
+/** Shared by compilation and bounded repair so filters survive both paths. */
+export declare const COMPACT_CARD_SELECTOR_FILTER_KEYS: readonly ["name", "name_contains", "card_type", "rarity", "cost", "min_cost", "max_cost", "tag", "id", "template_id", "run_instance_id", "combat_instance_id", "origin", "upgraded", "keyword", "exclude_keyword", "root_only"];
+export declare const COMPACT_CARD_SELECTOR_INPUT_KEYS: readonly ["from", "pick", "name", "name_contains", "card_type", "rarity", "cost", "min_cost", "max_cost", "tag", "id", "template_id", "run_instance_id", "combat_instance_id", "origin", "upgraded", "keyword", "exclude_keyword", "root_only"];
+export declare const COMPACT_EFFECT_META_KEYS: readonly ["id", "to", "targets", "when", "on", "stacks", "hits", "damage_type", "bypass_block", "lifesteal", "threshold_mode", "exclude_tags", "trigger_fatal", "from", "pick", "count", "add", "subtract", "multiply", "divide", "set", "limit", "extra", "scope", "match", "future_copies", "timing", "minimum", "maximum", "enabled", "min", "max", "name", "name_contains", "card_type", "rarity", "cost", "min_cost", "max_cost", "tag", "template_id", "summon_template", "run_instance_id", "combat_instance_id", "origin", "upgraded", "keyword", "exclude_keyword", "root_only", "include_copies", "phase", "priority", "repeat_every", "repeats", "effects", "free", "destination", "position", "options", "changes", "levels", "max_level", "orb_id", "resources"];
 export declare const COMPACT_EFFECT_META_KEY_SET: Set<string>;
 /**
  * Stable expansion order for an unordered JSON effect bundle.
@@ -7,12 +10,6 @@ export declare const COMPACT_EFFECT_META_KEY_SET: Set<string>;
 export declare const COMPACT_EFFECT_BUNDLE_OPERATIONS: readonly ["damage", "heal", "block", "energy", "lust", "apply_status", "remove_status", "draw"];
 export type CompactEffectBundleOperation = (typeof COMPACT_EFFECT_BUNDLE_OPERATIONS)[number];
 export declare const COMPACT_EFFECT_BUNDLE_OPERATION_SET: Set<string>;
-/**
- * One auxiliary card-zone operation may accompany a common shallow bundle.
- * Its position is deterministic (after common operations), so the adapter can
- * split the object internally without guessing author intent.
- */
-export declare const COMPACT_EFFECT_SAFE_AUXILIARY_BUNDLE_OPERATION_SET: Set<string>;
 /** AI may omit the array wrapper when a card has exactly one shallow effect. */
 export declare function normalizeCompactEffectEntries(value: unknown): unknown[] | null;
 export declare function isCompactEffectList(value: unknown): boolean;

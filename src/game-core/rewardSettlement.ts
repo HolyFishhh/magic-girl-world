@@ -1,4 +1,9 @@
-import { readRewardCandidateQuantity, validateRewardCandidateAgainstLibrary } from './rewardCandidateValidation';
+import {
+  readRewardCandidateQuantity,
+  readRewardCandidateSupportStatuses,
+  rewardStatusDefinitionsEqual,
+  validateRewardCandidateAgainstLibrary,
+} from './rewardCandidateValidation';
 import {
   validateRewardSelections,
   type RewardCategory,
@@ -27,6 +32,7 @@ export interface RewardSelectionPlanInput {
   existing: Record<RewardCategory, readonly unknown[]>;
   statusDefinitions?: readonly unknown[];
   knownResourceIds?: Iterable<string>;
+  playerDesireEffect?: unknown;
   limits: RewardSelectionLimits;
 }
 
@@ -211,6 +217,7 @@ export function planRewardSelections(input: RewardSelectionPlanInput): RewardSel
         throw new Error(`奖励选择失败：${category} 候选项缺少 id/name`);
       }
       const validation = validateRewardCandidateAgainstLibrary(category, raw, {
+        playerDesireEffect: input.playerDesireEffect,
         existing: libraries[category],
         statusDefinitions,
         knownResourceIds: input.knownResourceIds,
@@ -221,14 +228,19 @@ export function planRewardSelections(input: RewardSelectionPlanInput): RewardSel
       if (quantity === null) throw new Error(`奖励 ${rewardName(value)} 的数量无效`);
       if (category === 'cards') value.quantity = quantity;
       if (category === 'items') value.count = quantity;
-      if (isRecord(value.status)) {
-        const statusId = String(value.status.id);
+      const supportStatuses = readRewardCandidateSupportStatuses(value);
+      if (!supportStatuses.ok) throw new Error(`奖励 ${rewardName(value)} 无效：${supportStatuses.message}`);
+      for (const supportStatus of supportStatuses.statuses) {
+        const statusId = String(supportStatus.id);
+        const alreadyRegistered = statusDefinitions.some(definition => definition.id === statusId);
         const existing = statuses.get(statusId);
-        if (existing && JSON.stringify(existing) !== JSON.stringify(value.status)) {
+        if (!alreadyRegistered && existing && !rewardStatusDefinitionsEqual(existing, supportStatus)) {
           throw new Error(`奖励状态 ${statusId} 在所选候选中定义不一致`);
         }
-        if (!existing) statuses.set(statusId, clone(value.status));
+        if (!alreadyRegistered && !existing) statuses.set(statusId, clone(supportStatus));
       }
+      delete value.status;
+      delete value.statuses;
       libraries[category].push(clone(value));
       entries.push({ category, index, value, name: rewardName(value), quantity });
       summary[category].push(`${rewardName(value)}${quantity > 1 ? ` x${quantity}` : ''}`);

@@ -21,6 +21,7 @@ const MAP_COLUMNS = 5;
 
 export interface TowerAppCallbacks {
   onNodeSelect?: (node: RunMapNode, snapshot: RunState) => void;
+  onBlockedNode?: (node: RunMapNode, snapshot: RunState) => void;
   onRetryNode?: (node: RunMapNode, snapshot: RunState) => void;
   onRetry?: (snapshot: RunState) => void;
   onActChange?: (act: number, snapshot: RunState) => void;
@@ -77,8 +78,9 @@ function createElement<K extends keyof HTMLElementTagNameMap>(
   return element;
 }
 
-function createMetric(document: Document, label: string, value: string, className: string): HTMLElement {
+function createMetric(document: Document, icon: string, label: string, value: string, className: string): HTMLElement {
   const metric = createElement(document, 'div', `tower-metric ${className}`);
+  metric.append(createElement(document, 'span', 'tower-metric-icon', icon));
   metric.append(createElement(document, 'span', 'tower-metric-label', label));
   metric.append(createElement(document, 'strong', 'tower-metric-value', value));
   return metric;
@@ -87,11 +89,16 @@ function createMetric(document: Document, label: string, value: string, classNam
 function contentPhaseLabel(node: TowerNodePresentation): string {
   switch (node.contentPhase) {
     case 'queued':
-      return '排队';
+      return node.inPreparationWindow ? '排队中' : '';
     case 'generating':
-      return '准备中';
+      return node.inPreparationWindow ? '准备中' : '';
+    case 'idle':
+      return node.inPreparationWindow || node.routeState === 'reachable' ? '待准备' : '';
     case 'ready':
-      return node.routeState === 'reachable' ? '可进入' : '已备好';
+      if (node.routeState === 'reachable') return '可进入';
+      // Lookahead may lawfully prepare an entire non-combat window.  A later
+      // node is still route-locked until it becomes one of the live choices.
+      return node.routeState === 'locked' ? '已备好·路线未到' : '已备好';
     case 'failed':
       return '可重试';
     default:
@@ -106,6 +113,8 @@ class TowerMapApp implements TowerAppController {
   private callbacks: TowerAppCallbacks;
   private selectedAct: number;
   private difficultyPercent?: number;
+  private playerHp?: number;
+  private playerMaxHp?: number;
   private error: string;
   private readonly title: string;
   private shell: HTMLElement | null = null;
@@ -129,8 +138,11 @@ class TowerMapApp implements TowerAppController {
     this.callbacks = options.callbacks ?? {};
     this.selectedAct = options.selectedAct ?? options.snapshot.act;
     this.difficultyPercent = options.difficultyPercent;
+    this.playerHp = options.playerHp;
+    this.playerMaxHp = options.playerMaxHp;
     this.error = String(options.error || '');
-    this.title = String(options.title || '星路远征');
+    this.title = String(options.title || '星路冒险');
+    this.root.addEventListener('mwg-focus-current-node', this.focusCurrentNode);
     this.document.addEventListener('fullscreenchange', this.handleFullscreenChange);
     this.document.addEventListener('keydown', this.handleKeyDown);
     this.unsubscribeParentFullscreen = subscribeRuntimeParentFullscreen(active => {
@@ -143,6 +155,8 @@ class TowerMapApp implements TowerAppController {
     this.snapshot = snapshot;
     if (options.selectedAct !== undefined) this.selectedAct = options.selectedAct;
     if (options.difficultyPercent !== undefined) this.difficultyPercent = options.difficultyPercent;
+    if (options.playerHp !== undefined) this.playerHp = options.playerHp;
+    if (options.playerMaxHp !== undefined) this.playerMaxHp = options.playerMaxHp;
     if (options.error !== undefined) this.error = String(options.error || '');
     this.render();
   }
@@ -158,7 +172,14 @@ class TowerMapApp implements TowerAppController {
     this.render();
   }
 
+  private readonly focusCurrentNode = (): void => {
+    this.lastScrollKey = '';
+    this.selectedAct = this.snapshot.act;
+    this.render();
+  };
+
   destroy(): void {
+    this.root.removeEventListener('mwg-focus-current-node', this.focusCurrentNode);
     if (this.pseudoFullscreen) void requestRuntimeParentFullscreen(false, 'tower');
     this.unsubscribeParentFullscreen();
     this.cancelPendingScrollFrame();
@@ -247,9 +268,10 @@ class TowerMapApp implements TowerAppController {
     identity.append(copy);
 
     const metrics = createElement(this.document, 'div', 'tower-metrics');
-    metrics.append(createMetric(this.document, '层数', presentation.floorLabel, 'is-floor'));
-    metrics.append(createMetric(this.document, '金币', presentation.goldLabel, 'is-gold'));
-    metrics.append(createMetric(this.document, '难度', presentation.difficultyLabel, 'is-difficulty'));
+    metrics.append(createMetric(this.document, '🗺️', '层数', presentation.floorLabel, 'is-floor'));
+    metrics.append(createMetric(this.document, '❤️', '生命', presentation.playerHpLabel, 'is-hp'));
+    metrics.append(createMetric(this.document, '🪙', '金币', presentation.goldLabel, 'is-gold'));
+    metrics.append(createMetric(this.document, '⚔️', '难度', presentation.difficultyLabel, 'is-difficulty'));
 
     this.fullscreenButton = createElement(this.document, 'button', 'tower-fullscreen-button', '全屏游玩');
     this.fullscreenButton.type = 'button';
@@ -386,6 +408,7 @@ class TowerMapApp implements TowerAppController {
     button.type = 'button';
     button.dataset.nodeId = node.node.id;
     button.dataset.floor = String(node.node.floor);
+    button.dataset.column = String(node.node.column);
     button.dataset.routeState = node.routeState;
     button.dataset.contentState = node.contentPhase;
     button.setAttribute('aria-label', node.ariaLabel);
@@ -399,6 +422,11 @@ class TowerMapApp implements TowerAppController {
     sigil.setAttribute('aria-hidden', 'true');
     const label = createElement(this.document, 'span', 'tower-node-label', node.type.label);
     button.append(sigil, label);
+    if (node.narrative) {
+      button.classList.add('has-narrative');
+      button.append(createElement(this.document, 'span', 'tower-map-narrative-bubble', Array.from(node.narrative.replace(/\s+/g, ' ').trim()).slice(0, 20).join('')));
+      button.title = `${node.ariaLabel}\n${node.narrative}`;
+    }
     const phase = contentPhaseLabel(node);
     if (phase) button.append(createElement(this.document, 'span', 'tower-node-phase', phase));
     if (node.contentPhase === 'queued' || node.contentPhase === 'generating') {
@@ -412,7 +440,17 @@ class TowerMapApp implements TowerAppController {
       button.classList.add('can-enter');
       button.addEventListener('click', () => this.callbacks.onNodeSelect?.(node.node, this.snapshot));
     } else {
-      button.disabled = true;
+      const adjacent = node.node.act === this.snapshot.act && (
+        node.routeState === 'reachable' || node.routeState === 'current' ||
+        this.snapshot.map?.edges.some(edge => edge.to === node.node.id && (
+          edge.from === this.snapshot.currentNode?.id ||
+          this.snapshot.floor === 0 && this.snapshot.choices.some(choice => choice.id === edge.from)
+        ))
+      );
+      if (adjacent && this.callbacks.onBlockedNode) {
+        button.setAttribute('aria-disabled', 'true');
+        button.addEventListener('click', () => this.callbacks.onBlockedNode?.(node.node, this.snapshot));
+      } else button.disabled = true;
     }
     return button;
   }
@@ -427,8 +465,8 @@ class TowerMapApp implements TowerAppController {
         'span',
         '',
         presentation.selectedAct === presentation.activeAct
-          ? '点选发光地点继续远征，浅蓝路线代表当前可达。'
-          : `正在预览第 ${presentation.selectedAct} 幕，当前远征仍在第 ${presentation.activeAct} 幕。`,
+          ? '点选发光地点继续冒险，浅蓝路线代表当前可达。'
+          : `正在预览第 ${presentation.selectedAct} 幕，当前冒险仍在第 ${presentation.activeAct} 幕。`,
       ),
     );
     status.append(instruction);
@@ -571,6 +609,8 @@ class TowerMapApp implements TowerAppController {
     const presentation = createTowerMapPresentation(this.snapshot, {
       selectedAct: this.selectedAct,
       difficultyPercent: this.difficultyPercent,
+      playerHp: this.playerHp,
+      playerMaxHp: this.playerMaxHp,
     });
     this.selectedAct = presentation.selectedAct;
     this.root.classList.add('mwg-tower-host');

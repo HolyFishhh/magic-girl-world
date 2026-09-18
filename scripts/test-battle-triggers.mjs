@@ -32,7 +32,7 @@ assert.deepEqual(core.resolvePlayedCardTriggers('Event'), ['card_played']);
 assert.deepEqual(core.resolvePlayedCardTriggers(null), ['card_played']);
 assert.equal(core.normalizeAbilityTrigger('tick'), null);
 assert.equal(core.isStatusTrigger(' STACK '), true);
-assert.equal(core.isStatusTrigger('turn_start'), false);
+assert.equal(core.isStatusTrigger('turn_start'), true, 'held statuses may observe concrete battle events');
 
 assert.equal(core.REGISTERABLE_EFFECT_TRIGGER_SET.has('battle_start'), false);
 assert.equal(core.REGISTERABLE_EFFECT_TRIGGER_SET.has('passive'), false);

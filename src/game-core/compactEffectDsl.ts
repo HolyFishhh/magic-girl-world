@@ -1,9 +1,20 @@
+import { isEmptyProtectionEffect, normalizeDamageProtectionRule } from './damageProtection';
+import { validateEnemyActionReferences } from './enemyActionReferences';
+import { validPersistentGrowthTarget } from './persistentGrowth';
 import jsep from 'jsep';
+import { validateCardLifecycle } from './cardLifecycle';
+import { SUMMON_AUTHORING_FIELDS, SUMMON_ACTION_AUTHORING_FIELDS, SUMMON_ABILITY_AUTHORING_FIELDS } from './summonAuthoringFields';
+import { compactEffectDefaultTarget } from './compactEffectTarget';
 
-import { ABILITY_TRIGGER_SET, REGISTERABLE_EFFECT_TRIGGER_SET } from './battleTriggers';
 import {
+  ABILITY_TRIGGER_SET,
+  EVENT_FILTERABLE_TRIGGER_SET,
+  REGISTERABLE_EFFECT_TRIGGER_SET,
+  RUNTIME_REGISTERED_EFFECT_TRIGGER_SET,
+} from './battleTriggers';
+import {
+  COMPACT_CARD_SELECTOR_INPUT_KEYS as CARD_SELECTOR_INPUT_KEYS,
   COMPACT_EFFECT_BUNDLE_OPERATION_SET,
-  COMPACT_EFFECT_SAFE_AUXILIARY_BUNDLE_OPERATION_SET,
   COMPACT_EFFECT_META_KEY_SET,
   compactBundleMetaKeys,
   compactEffectOperationKeys,
@@ -37,12 +48,21 @@ import {
   type EffectCardAttachmentDefinition,
   validateEffectProgram,
 } from './effectDsl';
-import type { CardMoveReason } from './battleEventJournal';
-import type { EventHistoryMetric, EventTriggerQuery } from './battleEventJournal';
+import {
+  BATTLE_EVENT_KINDS,
+  BATTLE_EVENT_PHASES,
+  DAMAGE_KINDS as BATTLE_DAMAGE_KINDS,
+  EVENT_SOURCE_KINDS,
+  type CardMoveReason,
+  type EventHistoryMetric,
+  type EventTriggerQuery,
+} from './battleEventJournal';
 import { resolveEventTriggerQueryInput, resolveTriggerInput } from './triggerInput';
+import { CARD_TYPE_BY_TRIGGER, EVENT_KIND_BY_TRIGGER, EVENT_PHASE_BY_TRIGGER } from './triggerEventContract';
 import type { EnemyTargetSelector } from './combatantCollection';
-import { validateCardCost, type CardCost } from './combatResource';
+import { validateCardCost, validateCombatResourceDefinitions, type CardCost } from './combatResource';
 import type { SummonSelector } from './summonUnit';
+import { validateEffectProgramPolicy, type EffectProgramPolicyOptions } from './effectProgramPolicy';
 import {
   describeCompactCardWhenNeeded,
   isMechanicalDescriptionRestatement,
@@ -78,12 +98,12 @@ type FormulaResult =
 type AmountOperation = 'damage' | 'heal' | 'gain_block' | 'gain_energy' | 'gain_lust';
 
 const MAX_FORMULA_LENGTH = 256;
-const AMOUNT_OPERATIONS: Record<string, { op: AmountOperation; target: EffectTarget }> = {
-  damage: { op: 'damage', target: 'opponent' },
-  heal: { op: 'heal', target: 'self' },
-  block: { op: 'gain_block', target: 'self' },
-  energy: { op: 'gain_energy', target: 'self' },
-  lust: { op: 'gain_lust', target: 'opponent' },
+const AMOUNT_OPERATIONS: Record<string, { op: AmountOperation }> = {
+  damage: { op: 'damage' },
+  heal: { op: 'heal' },
+  block: { op: 'gain_block' },
+  energy: { op: 'gain_energy' },
+  lust: { op: 'gain_lust' },
 };
 const SET_OPERATIONS: Record<string, 'hp' | 'lust' | 'energy' | 'block'> = {
   set_hp: 'hp',
@@ -91,7 +111,7 @@ const SET_OPERATIONS: Record<string, 'hp' | 'lust' | 'energy' | 'block'> = {
   set_energy: 'energy',
   set_block: 'block',
 };
-const MODIFIER_STATS = new Set<ModifierStat>(['damage', 'damage_taken', 'lust', 'lust_taken', 'heal', 'block', 'summon_capacity']);
+const MODIFIER_STATS = new Set<ModifierStat>(['damage', 'damage_taken', 'lust', 'lust_taken', 'heal', 'block', 'summon_capacity', 'draw_per_turn']);
 const MODIFIER_OPERATORS = new Set<EffectModifierOperator>(['add', 'subtract', 'multiply', 'divide', 'set']);
 const CARD_VALUE_STATS = new Set<CardValueStat>(['damage', 'block', 'lust', 'stacks']);
 const CARD_VALUE_OPERATORS = new Set<CardValueOperator>(['add', 'subtract', 'multiply', 'divide']);
@@ -100,11 +120,12 @@ const CARD_PLAY_RULES = new Set<CardPlayRuleKind>([
   'limit_energy_gain', 'deny_card_play', 'allow_card_play', 'limit_card_play', 'card_destination',
 ]);
 const DAMAGE_KINDS = new Set(['attack', 'effect', 'hp_loss', 'retaliation', 'damage_over_time']);
-const ARITHMETIC_OPERATORS: Record<string, 'add' | 'subtract' | 'multiply' | 'divide'> = {
+const ARITHMETIC_OPERATORS: Record<string, 'add' | 'subtract' | 'multiply' | 'divide' | 'modulo'> = {
   '+': 'add',
   '-': 'subtract',
   '*': 'multiply',
   '/': 'divide',
+  '%': 'modulo',
 };
 const COMPARISON_OPERATORS: Record<string, 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte'> = {
   '==': 'eq',
@@ -123,8 +144,8 @@ function addIssue(issues: CompactEffectValidationIssue[], path: string, code: st
   issues.push({ path, code, message });
 }
 
-function hasAtMostOneAuthoredDecimal(value: number): boolean {
-  return Math.abs(value * 10 - Math.round(value * 10)) < 1e-7;
+function hasAtMostTwoAuthoredDecimals(value: number): boolean {
+  return Math.abs(value * 100 - Math.round(value * 100)) < 1e-7;
 }
 
 function validateAuthoredNumber(
@@ -136,8 +157,8 @@ function validateAuthoredNumber(
     addIssue(issues, path, 'INVALID_NUMBER', 'Number must be finite');
     return false;
   }
-  if (!hasAtMostOneAuthoredDecimal(value)) {
-    addIssue(issues, path, 'TOO_MANY_DECIMALS', 'AI-authored numbers may contain at most one decimal place');
+  if (!hasAtMostTwoAuthoredDecimals(value)) {
+    addIssue(issues, path, 'TOO_MANY_DECIMALS', 'AI-authored effect numbers may contain at most two decimal places');
     return false;
   }
   return true;
@@ -153,6 +174,93 @@ function rejectUnknownEntryKeys(
   const allowedKeys = new Set(allowTrigger ? [...allowed, 'on'] : allowed);
   Object.keys(value).forEach(key => {
     if (!allowedKeys.has(key)) addIssue(issues, `${path}.${key}`, 'UNKNOWN_FIELD', `Unknown field: ${key}`);
+  });
+}
+
+const STRUCTURED_TRIGGER_KEYS = [
+  'on', 'effects', 'scope', 'ordinal', 'n', 'event', 'phase', 'reason', 'source_kind', 'source_id',
+  'damage_type', 'card_type', 'template_id', 'card_instance_id', 'actor_id', 'target_id',
+] as const;
+const HISTORY_SCOPES = new Set(['turn', 'combat', 'run', 'card_instance', 'team']);
+const TRIGGER_ORDINALS = new Set(['first', 'first_n', 'nth', 'every_n']);
+const BATTLE_EVENT_KIND_SET = new Set<string>(BATTLE_EVENT_KINDS);
+const BATTLE_EVENT_PHASE_SET = new Set<string>(BATTLE_EVENT_PHASES);
+const EVENT_SOURCE_KIND_SET = new Set<string>(EVENT_SOURCE_KINDS);
+const TRIGGER_DAMAGE_KIND_SET = new Set(['attack', 'effect', 'hp_loss', 'retaliation', 'damage_over_time', 'execute']);
+
+/** Keep structured trigger metadata identical to the model-facing JSON Schema. */
+export function validateStructuredTriggerInput(
+  value: unknown,
+  path: string,
+  issues: CompactEffectValidationIssue[],
+): void {
+  if (!isRecord(value)) return;
+  rejectUnknownEntryKeys(value, [...STRUCTURED_TRIGGER_KEYS], path, issues, false);
+  const filterKeys = STRUCTURED_TRIGGER_KEYS.filter(key => key !== 'on' && key !== 'effects');
+  const hasFilters = filterKeys.some(key => value[key] !== undefined);
+  if (hasFilters && !EVENT_FILTERABLE_TRIGGER_SET.has(String(value.on))) {
+    addIssue(issues, path, 'UNSUPPORTED_TRIGGER_FILTER', 'this trigger does not expose causal event filters');
+  }
+  if (value.scope !== undefined && !HISTORY_SCOPES.has(String(value.scope)))
+    addIssue(issues, `${path}.scope`, 'INVALID_EVENT_SCOPE', 'unsupported trigger history scope');
+  if (value.ordinal !== undefined && !TRIGGER_ORDINALS.has(String(value.ordinal)))
+    addIssue(issues, `${path}.ordinal`, 'INVALID_EVENT_ORDINAL', 'ordinal must be first, first_n, nth, or every_n');
+  if (value.n !== undefined && (!Number.isSafeInteger(value.n) || Number(value.n) < 1))
+    addIssue(issues, `${path}.n`, 'INVALID_EVENT_ORDINAL', 'n must be a positive safe integer');
+  if (value.ordinal === 'first' && value.n !== undefined)
+    addIssue(issues, `${path}.n`, 'INVALID_EVENT_ORDINAL', 'first does not accept n');
+  if ((value.ordinal === 'first_n' || value.ordinal === 'nth' || value.ordinal === 'every_n') && value.n === undefined)
+    addIssue(issues, `${path}.n`, 'INVALID_EVENT_ORDINAL', `${String(value.ordinal)} requires n`);
+  if (value.n !== undefined && value.ordinal !== 'first_n' && value.ordinal !== 'nth' && value.ordinal !== 'every_n')
+    addIssue(issues, `${path}.ordinal`, 'INVALID_EVENT_ORDINAL', 'n requires ordinal first_n, nth or every_n');
+  if (value.event !== undefined && !BATTLE_EVENT_KIND_SET.has(String(value.event)))
+    addIssue(issues, `${path}.event`, 'INVALID_EVENT_KIND', 'unsupported battle event kind');
+  const impliedKind = EVENT_KIND_BY_TRIGGER[String(value.on)];
+  const impliedCardType = CARD_TYPE_BY_TRIGGER[String(value.on)];
+  if (impliedKind && value.event !== undefined && value.event !== impliedKind)
+    addIssue(issues, `${path}.event`, 'CONFLICTING_TRIGGER_EVENT', `${String(value.on)} requires event ${impliedKind}`);
+  if (impliedCardType && value.card_type !== undefined && value.card_type !== impliedCardType)
+    addIssue(issues, `${path}.card_type`, 'CONFLICTING_TRIGGER_CARD_TYPE', `${String(value.on)} requires card_type ${impliedCardType}`);
+  const impliedPhase = EVENT_PHASE_BY_TRIGGER[String(value.on)];
+  if (impliedPhase && value.phase !== undefined && value.phase !== impliedPhase)
+    addIssue(issues, `${path}.phase`, 'CONFLICTING_TRIGGER_PHASE', `${String(value.on)} requires phase ${impliedPhase}`);
+  if (value.phase !== undefined && !BATTLE_EVENT_PHASE_SET.has(String(value.phase)))
+    addIssue(issues, `${path}.phase`, 'INVALID_EVENT_PHASE', 'phase must be before, resolve, or after');
+  if (value.source_kind !== undefined && !EVENT_SOURCE_KIND_SET.has(String(value.source_kind)))
+    addIssue(issues, `${path}.source_kind`, 'INVALID_EVENT_SOURCE', 'unsupported event source kind');
+  if (value.damage_type !== undefined && !TRIGGER_DAMAGE_KIND_SET.has(String(value.damage_type)))
+    addIssue(issues, `${path}.damage_type`, 'INVALID_DAMAGE_KIND', 'unsupported damage kind');
+  for (const key of ['reason', 'source_id', 'card_type', 'template_id', 'card_instance_id', 'actor_id', 'target_id'] as const) {
+    if (value[key] !== undefined && (typeof value[key] !== 'string' || !value[key].trim()))
+      addIssue(issues, `${path}.${key}`, 'INVALID_EVENT_FILTER', `${key} must be non-empty text`);
+  }
+}
+
+/**
+ * JSON Schema never exposes null as an alias for an omitted field. Treating
+ * explicit null as a default through `??` made the runtime accept structures
+ * that the model-facing contract rejects. The only public null value is
+ * `stance:null`, which explicitly means leaving the current stance.
+ */
+function rejectUnexpectedNullFields(
+  value: unknown,
+  path: string,
+  issues: CompactEffectValidationIssue[],
+): void {
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => {
+      if (entry === null) addIssue(issues, `${path}[${index}]`, 'INVALID_NULL', 'null is not allowed here');
+      else rejectUnexpectedNullFields(entry, `${path}[${index}]`, issues);
+    });
+    return;
+  }
+  if (!isRecord(value)) return;
+  Object.entries(value).forEach(([key, entry]) => {
+    if (entry === null) {
+      if (key !== 'stance') addIssue(issues, `${path}.${key}`, 'INVALID_NULL', 'null is not allowed here');
+      return;
+    }
+    rejectUnexpectedNullFields(entry, `${path}.${key}`, issues);
   });
 }
 
@@ -178,10 +286,12 @@ function compileCompactSummonSelector(
     typeof entry === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(entry);
   if (!['self', 'opponent', 'any'].includes(String(owner)))
     addIssue(issues, `${path}.owner`, 'INVALID_SUMMON_OWNER', 'owner must be self, opponent, or any');
-  if (!['left', 'right', 'choose', 'first', 'last', 'random', 'random_n', 'all', 'lowest_hp', 'highest_hp', 'by_id'].includes(String(pick)))
+  if (!['left', 'right', 'choose', 'first', 'last', 'random', 'random_n', 'all', 'lowest_hp', 'highest_hp', 'by_id', 'source'].includes(String(pick)))
     addIssue(issues, `${path}.pick`, 'INVALID_SUMMON_PICK', 'unsupported summon pick mode');
   if (value.count !== undefined && (!Number.isSafeInteger(value.count) || Number(value.count) < 1))
     addIssue(issues, `${path}.count`, 'INVALID_SUMMON_COUNT', 'summon selector count must be a positive safe integer');
+  if (pick === 'random_n' && value.count === undefined)
+    addIssue(issues, `${path}.count`, 'INVALID_SUMMON_COUNT', 'random_n requires count');
   if (pick === 'all' && value.count !== undefined)
     addIssue(issues, `${path}.count`, 'INVALID_SUMMON_COUNT', 'all cannot include count');
   if (pick === 'by_id' && !stableId(value.id))
@@ -231,14 +341,19 @@ function normalizeVariablePath(path: string): string | null {
   if (path === 'cards_played_this_turn') return 'battle.cards_played_this_turn';
   if (path === 'attacks_played_this_turn') return 'battle.attacks_played_this_turn';
   if (path === 'skills_played_this_turn') return 'battle.skills_played_this_turn';
-  // Models often treat battle counters like actor attributes. Their meaning is
-  // still unambiguous, so accept the harmless `self.` prefix at the boundary.
+  // Models often treat battle counters like actor attributes. The runtime has
+  // one authoritative player-card counter rather than per-combatant card
+  // counters, so either actor prefix is a harmless redundant spelling.
   if (path === 'self.turn_number') return 'battle.turn_number';
   if (path === 'self.cards_played_this_turn') return 'battle.cards_played_this_turn';
   if (path === 'self.attacks_played_this_turn') return 'battle.attacks_played_this_turn';
   if (path === 'self.skills_played_this_turn') return 'battle.skills_played_this_turn';
+  if (path === 'opponent.turn_number') return 'battle.turn_number';
+  if (path === 'opponent.cards_played_this_turn') return 'battle.cards_played_this_turn';
+  if (path === 'opponent.attacks_played_this_turn') return 'battle.attacks_played_this_turn';
+  if (path === 'opponent.skills_played_this_turn') return 'battle.skills_played_this_turn';
   if (/^(self|opponent)\.(hp|max_hp|lust|max_lust|energy|max_energy|block)$/.test(path)) return path;
-  if (/^self\.(hand_size|draw_pile_size|discard_pile_size|exhaust_pile_size)$/.test(path)) return path;
+  if (/^(self|opponent)\.(hand_size|draw_pile_size|discard_pile_size|exhaust_pile_size|summon_count|ally_count)$/.test(path)) return path;
   if (/^(self|opponent)\.status\.[A-Za-z0-9_]+\.stacks$/.test(path)) return path;
   if (/^(self|opponent)\.resource\.[A-Za-z_][A-Za-z0-9_]*\.(current|max)$/.test(path)) return path;
   return null;
@@ -261,6 +376,15 @@ function compileNumericAst(
   if (node.type === 'Literal') return compileLiteral(node as jsep.Literal, path, issues);
   if (node.type === 'Identifier' || node.type === 'MemberExpression') {
     const rawPath = readVariablePath(node);
+    if (rawPath === 'discard_count') return { op: 'discard_count' };
+    const statusCount = rawPath?.match(/^(self|opponent)\.(buff|debuff|neutral|status)_count$/);
+    if (statusCount) {
+      return {
+        op: 'count_statuses',
+        target: statusCount[1] as EffectTarget,
+        ...(statusCount[2] === 'status' ? {} : { statusType: statusCount[2] as 'buff' | 'debuff' | 'neutral' }),
+      };
+    }
     const variablePath = rawPath ? normalizeVariablePath(rawPath) : null;
     if (!variablePath) addIssue(issues, path, 'UNKNOWN_VARIABLE', `Unsupported variable: ${rawPath || node.type}`);
     return variablePath ? { op: 'var', path: variablePath } : null;
@@ -268,6 +392,36 @@ function compileNumericAst(
   if (node.type === 'UnaryExpression' && (node as jsep.UnaryExpression).operator === '-') {
     const nested = compileNumericAst((node as jsep.UnaryExpression).argument, `${path}.value`, issues);
     return nested !== null ? { op: 'negate', value: nested } : null;
+  }
+  if (node.type === 'CallExpression') {
+    const call = node as jsep.CallExpression;
+    const name = call.callee.type === 'Identifier' ? (call.callee as jsep.Identifier).name : '';
+    if (!['floor', 'ceil', 'abs', 'min', 'max'].includes(name)) {
+      addIssue(
+        issues,
+        path,
+        'UNSUPPORTED_FORMULA',
+        `Unsupported numeric function: ${name || call.callee.type}`,
+      );
+      return null;
+    }
+    if (name === 'floor' || name === 'ceil' || name === 'abs') {
+      if (call.arguments.length !== 1) {
+        addIssue(issues, path, 'INVALID_NUMERIC_FUNCTION_ARGUMENTS', `${name} requires exactly one numeric argument`);
+        return null;
+      }
+      const value = compileNumericAst(call.arguments[0] as jsep.Expression, `${path}.value`, issues);
+      return value === null ? null : { op: name, value };
+    }
+    if (call.arguments.length < 1 || call.arguments.length > 32) {
+      addIssue(issues, path, 'INVALID_NUMERIC_FUNCTION_ARGUMENTS', `${name} requires 1 to 32 numeric arguments`);
+      return null;
+    }
+    const values = call.arguments.map((argument, index) =>
+      compileNumericAst(argument as jsep.Expression, `${path}.values[${index}]`, issues));
+    return values.every((value): value is NumericExpression => value !== null)
+      ? { op: name as 'min' | 'max', values }
+      : null;
   }
   if (node.type === 'BinaryExpression') {
     const binary = node as jsep.BinaryExpression;
@@ -287,6 +441,53 @@ function compileConditionAst(
   path: string,
   issues: CompactEffectValidationIssue[],
 ): ConditionExpression | null {
+  if (node.type === 'Identifier' || node.type === 'MemberExpression') {
+    const rawPath = readVariablePath(node);
+    const statusPresence = rawPath?.match(/^(self|opponent)\.has_(buff|debuff|neutral|status)$/);
+    if (statusPresence) {
+      return {
+        op: 'compare',
+        relation: 'gt',
+        left: {
+          op: 'count_statuses',
+          target: statusPresence[1] as EffectTarget,
+          ...(statusPresence[2] === 'status'
+            ? {}
+            : { statusType: statusPresence[2] as 'buff' | 'debuff' | 'neutral' }),
+        },
+        right: 0,
+      };
+    }
+    const summonPresence = rawPath?.match(/^(self|opponent)\.has_summon$/);
+    if (summonPresence) {
+      return {
+        op: 'compare',
+        relation: 'gt',
+        left: { op: 'var', path: `${summonPresence[1]}.summon_count` },
+        right: 0,
+      };
+    }
+    const allyPresence = rawPath?.match(/^(self|opponent)\.has_ally$/);
+    if (allyPresence) {
+      return {
+        op: 'compare',
+        relation: 'gt',
+        left: { op: 'var', path: `${allyPresence[1]}.ally_count` },
+        right: 0,
+      };
+    }
+    const alive = rawPath?.match(/^(self|opponent)\.alive$/);
+    if (alive) {
+      return {
+        op: 'compare',
+        relation: 'gt',
+        left: { op: 'var', path: `${alive[1]}.hp` },
+        right: 0,
+      };
+    }
+    addIssue(issues, path, 'UNKNOWN_VARIABLE', `Unsupported variable: ${rawPath || node.type}`);
+    return null;
+  }
   if (node.type === 'CallExpression') {
     const call = node as jsep.CallExpression;
     const name = call.callee.type === 'Identifier' ? (call.callee as jsep.Identifier).name : '';
@@ -296,13 +497,21 @@ function compileConditionAst(
         ? String((argument as jsep.Literal).value)
         : null;
     };
-    if (name === 'last_card_type') {
-      const cardType = literal(0);
-      if (!cardType || !CARD_TYPES.has(cardType)) {
-        addIssue(issues, path, 'INVALID_CARD_TYPE', 'last_card_type requires one supported card type string');
+    if (name === 'event_status_is') {
+      const statusId = literal(0);
+      if (call.arguments.length !== 1 || !statusId || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(statusId)) {
+        addIssue(issues, path, 'INVALID_STATUS', 'event_status_is requires one stable status ID string');
         return null;
       }
-      return { op: 'last_card_type', cardType: cardType as CardType };
+      return { op: 'event_status_is', statusId };
+    }
+    if (name === 'last_card_type' || name === 'discarded_card_type') {
+      const cardType = literal(0);
+      if (!cardType || !CARD_TYPES.has(cardType) || (name === 'discarded_card_type' && call.arguments.length !== 1)) {
+        addIssue(issues, path, 'INVALID_CARD_TYPE', `${name} requires one supported card type string`);
+        return null;
+      }
+      return { op: name, cardType: cardType as CardType };
     }
     if (name === 'intent_is') {
       const intentType = literal(0);
@@ -340,6 +549,65 @@ function compileConditionAst(
     const binary = node as jsep.BinaryExpression;
     const relation = COMPARISON_OPERATORS[binary.operator];
     if (relation) {
+      const leftStance = readVariablePath(binary.left)?.match(/^(self|opponent)\.stance$/);
+      const rightStance = readVariablePath(binary.right)?.match(/^(self|opponent)\.stance$/);
+      if (leftStance || rightStance) {
+        const literal = leftStance ? binary.right : binary.left;
+        const id = literal.type === 'Literal' ? (literal as jsep.Literal).value : undefined;
+        if ((relation !== 'eq' && relation !== 'neq') ||
+          (id !== null && (typeof id !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(id)))) {
+          addIssue(issues, path, 'INVALID_STANCE_CONDITION',
+            'self.stance/opponent.stance only support == or != with a stable stance ID string or null');
+          return null;
+        }
+        return { op: 'stance_is', target: (leftStance || rightStance)![1] as EffectTarget, relation, stanceId: id };
+      }
+      if (relation === 'eq' || relation === 'neq') {
+        const readEventDamageKind = (expression: jsep.Expression): string | null => {
+          const rawPath = readVariablePath(expression);
+          return rawPath === 'event.damage_type' || rawPath === 'self.damage_type' || rawPath === 'opponent.damage_type'
+            ? rawPath
+            : null;
+        };
+        const readDamageKindLiteral = (expression: jsep.Expression): string | null =>
+          expression.type === 'Literal' && typeof (expression as jsep.Literal).value === 'string'
+            ? String((expression as jsep.Literal).value)
+            : null;
+        const leftEvent = readEventDamageKind(binary.left);
+        const rightEvent = readEventDamageKind(binary.right);
+        const damageKind = leftEvent
+          ? readDamageKindLiteral(binary.right)
+          : rightEvent
+            ? readDamageKindLiteral(binary.left)
+            : null;
+        if (leftEvent || rightEvent) {
+          if (!damageKind || !BATTLE_DAMAGE_KINDS.includes(damageKind as never)) {
+            addIssue(issues, path, 'INVALID_DAMAGE_KIND', 'event.damage_type requires one supported damage type string');
+            return null;
+          }
+          return {
+            op: 'event_damage_kind',
+            relation,
+            damageKind: damageKind as import('./battleEventJournal').DamageKind,
+          };
+        }
+      }
+      if (relation === 'eq' || relation === 'neq') {
+        const leftBoolean = binary.left.type === 'Literal' && typeof (binary.left as jsep.Literal).value === 'boolean'
+          ? Boolean((binary.left as jsep.Literal).value)
+          : null;
+        const rightBoolean = binary.right.type === 'Literal' && typeof (binary.right as jsep.Literal).value === 'boolean'
+          ? Boolean((binary.right as jsep.Literal).value)
+          : null;
+        if ((leftBoolean === null) !== (rightBoolean === null)) {
+          const literal = leftBoolean === null ? rightBoolean! : leftBoolean;
+          const expression = leftBoolean === null ? binary.left : binary.right;
+          const condition = compileConditionAst(expression, `${path}.condition`, issues);
+          if (!condition) return null;
+          const positive = (relation === 'eq') === literal;
+          return positive ? condition : { op: 'not', condition };
+        }
+      }
       const left = compileNumericAst(binary.left, `${path}.left`, issues);
       const right = compileNumericAst(binary.right, `${path}.right`, issues);
       return left !== null && right !== null ? { op: 'compare', relation, left, right } : null;
@@ -455,15 +723,40 @@ function compileFormula(value: unknown, path: string, issues: CompactEffectValid
   }
   const ast = parseCel(value, path, issues);
   if (!ast) return null;
-  if (ast.type === 'ConditionalExpression') {
-    const conditional = ast as jsep.ConditionalExpression;
-    const condition = compileConditionAst(conditional.test, `${path}.condition`, issues);
-    const thenValue = compileFormulaAst(conditional.consequent, `${path}.then`, issues);
-    const elseValue = compileFormulaAst(conditional.alternate, `${path}.else`, issues);
-    return condition && thenValue && elseValue ? { kind: 'choice', condition, then: thenValue, else: elseValue } : null;
+  const formula = compileFormulaAst(ast, path, issues);
+  if (formula && formulaBranchCount(formula) > 64) {
+    addIssue(issues, path, 'CEL_TOO_COMPLEX', 'Numeric choices cannot expand beyond 64 branches');
+    return null;
   }
-  const expression = compileNumericAst(ast, path, issues);
-  return expression !== null ? { kind: 'number', value: expression } : null;
+  return formula;
+}
+
+function formulaBranchCount(formula: FormulaResult): number {
+  return formula.kind === 'number' ? 1 : formulaBranchCount(formula.then) + formulaBranchCount(formula.else);
+}
+
+// Lift pure numeric choices into the existing effect-level branch IR. No
+// effect executes until all choices resolve, and only one resulting effect
+// executes. Bound the Cartesian product before constructing its branches.
+function combineFormulaOperands(
+  operands: FormulaResult[],
+  build: (values: NumericExpression[]) => NumericExpression,
+  path: string,
+  issues: CompactEffectValidationIssue[],
+): FormulaResult | null {
+  if (operands.reduce((count, operand) => count * formulaBranchCount(operand), 1) > 64) {
+    addIssue(issues, path, 'CEL_TOO_COMPLEX', 'Numeric choices cannot expand beyond 64 branches');
+    return null;
+  }
+  const expand = (values: FormulaResult[]): FormulaResult => {
+    const index = values.findIndex(value => value.kind === 'choice');
+    if (index < 0) return { kind: 'number', value: build(values.map(value => (value as Extract<FormulaResult, { kind: 'number' }>).value)) };
+    const choice = values[index] as Extract<FormulaResult, { kind: 'choice' }>;
+    const replace = (value: FormulaResult) => values.map((entry, i) => i === index ? value : entry);
+    return { kind: 'choice', condition: choice.condition,
+      then: expand(replace(choice.then)), else: expand(replace(choice.else)) };
+  };
+  return expand(operands);
 }
 
 function compileFormulaAst(
@@ -478,6 +771,35 @@ function compileFormulaAst(
     const elseValue = compileFormulaAst(conditional.alternate, `${path}.else`, issues);
     return condition && thenValue && elseValue ? { kind: 'choice', condition, then: thenValue, else: elseValue } : null;
   }
+  if (ast.type === 'BinaryExpression') {
+    const binary = ast as jsep.BinaryExpression;
+    const op = ARITHMETIC_OPERATORS[binary.operator];
+    if (op) {
+      const left = compileFormulaAst(binary.left, `${path}.left`, issues);
+      const right = compileFormulaAst(binary.right, `${path}.right`, issues);
+      return left && right ? combineFormulaOperands([left, right],
+        ([left, right]) => ({ op, left, right }), path, issues) : null;
+    }
+  }
+  if (ast.type === 'UnaryExpression' && (ast as jsep.UnaryExpression).operator === '-') {
+    const value = compileFormulaAst((ast as jsep.UnaryExpression).argument, `${path}.value`, issues);
+    return value ? combineFormulaOperands([value], ([value]) => ({ op: 'negate', value }), path, issues) : null;
+  }
+  if (ast.type === 'CallExpression') {
+    const call = ast as jsep.CallExpression;
+    const name = call.callee.type === 'Identifier' ? (call.callee as jsep.Identifier).name : '';
+    const unary = ['floor', 'ceil', 'abs'].includes(name);
+    if ((unary && call.arguments.length === 1)
+      || (['min', 'max'].includes(name) && call.arguments.length >= 1 && call.arguments.length <= 32)) {
+      const values = call.arguments.map((argument, index) =>
+        compileFormulaAst(argument, `${path}.values[${index}]`, issues));
+      return values.every((value): value is FormulaResult => value !== null)
+        ? combineFormulaOperands(values, values => unary
+          ? { op: name as 'floor' | 'ceil' | 'abs', value: values[0] }
+          : { op: name as 'min' | 'max', values }, path, issues)
+        : null;
+    }
+  }
   const expression = compileNumericAst(ast, path, issues);
   return expression !== null ? { kind: 'number', value: expression } : null;
 }
@@ -489,6 +811,17 @@ function compileWhen(value: unknown, path: string, issues: CompactEffectValidati
   }
   const ast = parseCel(value, path, issues);
   return ast ? compileConditionAst(ast, path, issues) : null;
+}
+
+/** Compile one authored condition for a runtime feature that shares `when` semantics. */
+export function compileCompactCondition(value: unknown, path = '$.when'): {
+  ok: true; value: ConditionExpression;
+} | {
+  ok: false; issues: CompactEffectValidationIssue[];
+} {
+  const issues: CompactEffectValidationIssue[] = [];
+  const condition = compileWhen(value, path, issues);
+  return condition && issues.length === 0 ? { ok: true, value: condition } : { ok: false, issues };
 }
 
 function lowerFormula(formula: FormulaResult, createNode: (amount: NumericExpression) => EffectNode): EffectNode {
@@ -507,7 +840,7 @@ function isSupportedModifierFormula(expression: NumericExpression): boolean {
   if (expression.op === 'negate' || expression.op === 'floor' || expression.op === 'ceil' || expression.op === 'abs') return isSupportedModifierFormula(expression.value);
   if (expression.op === 'clamp_min') return isSupportedModifierFormula(expression.value);
   if (expression.op === 'min' || expression.op === 'max') return expression.values.every(isSupportedModifierFormula);
-  if (expression.op === 'count_cards' || expression.op === 'count_statuses' || expression.op === 'history' || expression.op === 'intent_value') return false;
+  if (expression.op === 'discard_count' || expression.op === 'count_cards' || expression.op === 'count_statuses' || expression.op === 'history' || expression.op === 'intent_value') return false;
   return isSupportedModifierFormula(expression.left) && isSupportedModifierFormula(expression.right);
 }
 
@@ -525,6 +858,27 @@ function compileTarget(
   return target;
 }
 
+/**
+ * A selector without `team` remains the old concrete-enemy collection. `team`
+ * selects the source-relative side, including its actor and summons.
+ */
+function compileEffectTarget(
+  value: Readonly<Record<string, unknown>>,
+  defaultTarget: EffectTarget,
+  path: string,
+  issues: CompactEffectValidationIssue[],
+  enemyCollectionTarget: EffectTarget,
+): EffectTarget | null {
+  const team = isRecord(value.targets) ? value.targets.team : undefined;
+  const selectorTarget = team === 'self' ? 'self' : team === 'opponent' ? 'opponent' : enemyCollectionTarget;
+  return compileTarget(
+    value.to,
+    value.targets === undefined ? defaultTarget : selectorTarget,
+    path,
+    issues,
+  );
+}
+
 function compileEnemyTargetSelector(
   value: unknown,
   target: EffectTarget,
@@ -533,17 +887,18 @@ function compileEnemyTargetSelector(
   enemyCollectionTarget: EffectTarget = 'opponent',
 ): EnemyTargetSelector | undefined {
   if (value === undefined) return undefined;
-  if (target !== enemyCollectionTarget) {
-    addIssue(
-      issues,
-      path,
-      'INVALID_TARGET_SELECTOR',
-      `targets can only address the ${enemyCollectionTarget} combatant collection in this source context`,
-    );
-    return undefined;
-  }
   if (!isRecord(value)) {
     addIssue(issues, path, 'INVALID_TARGET_SELECTOR', 'targets must be an object');
+    return undefined;
+  }
+  const team = value.team;
+  if (team !== undefined && team !== 'self' && team !== 'opponent' && team !== 'enemies') {
+    addIssue(issues, `${path}.team`, 'INVALID_TARGET_SELECTOR', 'targets.team must be self, opponent, or enemies');
+    return undefined;
+  }
+  const expectedTarget = team === 'self' ? 'self' : team === 'opponent' ? 'opponent' : enemyCollectionTarget;
+  if (target !== expectedTarget) {
+    addIssue(issues, path, 'INVALID_TARGET_SELECTOR', `targets.team ${team || 'enemies'} requires to:${expectedTarget} in this source context`);
     return undefined;
   }
   const mode = value.mode;
@@ -554,10 +909,10 @@ function compileEnemyTargetSelector(
   }
   const keys = new Set(
     mode === 'by_id'
-      ? ['mode', 'id']
+      ? ['mode', 'id', 'team']
       : mode === 'random' || mode === 'random_n'
-        ? ['mode', 'count', 'allow_repeat', 'retarget']
-        : ['mode'],
+        ? ['mode', 'count', 'allow_repeat', 'retarget', 'team']
+        : ['mode', 'team'],
   );
   Object.keys(value).filter(key => !keys.has(key)).forEach(key =>
     addIssue(issues, `${path}.${key}`, 'UNKNOWN_FIELD', `Unknown target selector field: ${key}`),
@@ -567,7 +922,7 @@ function compileEnemyTargetSelector(
       addIssue(issues, `${path}.id`, 'INVALID_TARGET_SELECTOR', 'by_id requires a non-empty id');
       return undefined;
     }
-    return { mode, id: value.id.trim() };
+    return { mode, id: value.id.trim(), ...(team ? { team } : {}) };
   }
   if (mode === 'random' || mode === 'random_n') {
     if (value.allow_repeat !== undefined && typeof value.allow_repeat !== 'boolean')
@@ -577,6 +932,7 @@ function compileEnemyTargetSelector(
     const common: { allowRepeat?: boolean; retarget?: 'locked' | 'each_hit' } = {
       ...(value.allow_repeat === true ? { allowRepeat: true } : {}),
       ...(value.retarget === 'each_hit' || value.retarget === 'locked' ? { retarget: value.retarget } : {}),
+      ...(team ? { team } : {}),
     };
     if (mode === 'random_n') {
       if (!Number.isInteger(value.count) || Number(value.count) < 1 || Number(value.count) > 100) {
@@ -587,7 +943,7 @@ function compileEnemyTargetSelector(
     }
     return { mode, ...common };
   }
-  return { mode } as EnemyTargetSelector;
+  return { mode, ...(team ? { team } : {}) } as EnemyTargetSelector;
 }
 
 function compileCardSelector(
@@ -640,24 +996,6 @@ function compileCardSelector(
 const CARD_TYPES = new Set(['Attack', 'Skill', 'Power', 'Event', 'Curse']);
 const CARD_RARITIES = new Set(['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Corrupt']);
 const CARD_ORIGINS = new Set(['deck', 'generated', 'copied', 'transformed']);
-const CARD_SELECTOR_INPUT_KEYS = [
-  'from',
-  'pick',
-  'name',
-  'card_type',
-  'rarity',
-  'cost',
-  'min_cost',
-  'max_cost',
-  'tag',
-  'template_id',
-  'run_instance_id',
-  'combat_instance_id',
-  'origin',
-  'upgraded',
-  'root_only',
-] as const;
-
 function stringArray(value: unknown): string[] | null {
   if (typeof value === 'string' && value.trim()) return [value.trim()];
   if (Array.isArray(value) && value.length > 0 && value.every(entry => typeof entry === 'string' && entry.trim())) {
@@ -672,10 +1010,20 @@ function compileCardSelectorFilter(
   issues: CompactEffectValidationIssue[],
 ): CardSelectorFilter | null {
   const filter: CardSelectorFilter = {};
+  if (value.id !== undefined) {
+    if (typeof value.id !== 'string' || !value.id.trim()) addIssue(issues, `${path}.id`, 'INVALID_CARD_FILTER', 'id must be a non-empty card ID');
+    else filter.templateId = value.id.trim();
+    if (value.template_id !== undefined && value.template_id !== value.id) addIssue(issues, path, 'CONFLICTING_CARD_FILTER', 'id and template_id must identify the same card');
+  }
   if (value.name !== undefined) {
     if (typeof value.name !== 'string' || !value.name.trim())
       addIssue(issues, `${path}.name`, 'INVALID_CARD_FILTER', 'name must be a non-empty card name');
     else filter.name = value.name.trim();
+  }
+  if (value.name_contains !== undefined) {
+    if (typeof value.name_contains !== 'string' || !value.name_contains.trim())
+      addIssue(issues, `${path}.name_contains`, 'INVALID_CARD_FILTER', 'name_contains must be non-empty');
+    else filter.nameContains = value.name_contains.trim();
   }
   if (value.card_type !== undefined) {
     const types = stringArray(value.card_type);
@@ -727,6 +1075,21 @@ function compileCardSelectorFilter(
       addIssue(issues, `${path}.upgraded`, 'INVALID_CARD_FILTER', 'upgraded must be boolean');
     else filter.upgraded = value.upgraded;
   }
+  for (const [source, target] of [
+    ['keyword', 'keywords'],
+    ['exclude_keyword', 'excludedKeywords'],
+  ] as const) {
+    if (value[source] === undefined) continue;
+    const keywords = stringArray(value[source]);
+    if (!keywords || keywords.some(keyword => !['retain', 'exhaust', 'ethereal', 'innate'].includes(keyword))) {
+      addIssue(issues, `${path}.${source}`, 'INVALID_CARD_FILTER', `${source} contains an unsupported card keyword`);
+    } else {
+      filter[target] = keywords as CardSelectorFilter[typeof target];
+    }
+  }
+  if (filter.keywords?.some(keyword => filter.excludedKeywords?.includes(keyword))) {
+    addIssue(issues, path, 'CONFLICTING_CARD_FILTER', 'the same card keyword cannot be both required and excluded');
+  }
   if (value.root_only !== undefined) {
     if (typeof value.root_only !== 'boolean')
       addIssue(issues, `${path}.root_only`, 'INVALID_CARD_FILTER', 'root_only must be boolean');
@@ -743,6 +1106,37 @@ function compileFixedCount(value: unknown, path: string, issues: CompactEffectVa
   return value as number;
 }
 
+/**
+ * Card operations whose amount lives in the sibling `count` field share one
+ * selector rule: aggregate zones safely default to `pick:"all"`, while an
+ * authored `count` may never coexist with an all-card selection. Keeping this
+ * in one helper prevents each newer mechanic from inventing a different
+ * interpretation for the same selector shape.
+ */
+function compileCountedCardSelector(
+  value: Record<string, unknown>,
+  path: string,
+  issues: CompactEffectValidationIssue[],
+  defaultPick: CardPick = 'choose',
+  defaultCount = 1,
+): CardSelector | null {
+  const aggregateZone = value.from === 'all' || value.from === 'combat';
+  const selectorSource = aggregateZone && value.pick === undefined
+    ? { ...value, pick: 'all' }
+    : value;
+  const selectsAll = selectorSource.pick === 'all';
+  if (selectsAll && value.count !== undefined) {
+    addIssue(issues, `${path}.count`, 'INVALID_CARD_COUNT', 'pick: all does not accept count');
+  }
+  const count = selectsAll
+    ? undefined
+    : value.count === undefined
+      ? defaultCount
+      : compileFixedCount(value.count, `${path}.count`, issues);
+  if (count === null) return null;
+  return compileCardSelector(selectorSource, path, issues, defaultPick, count);
+}
+
 function compileHitCount(value: unknown, path: string, issues: CompactEffectValidationIssue[]): number | null {
   if (!Number.isInteger(value) || (value as number) < 1 || (value as number) > 20) {
     addIssue(issues, path, 'INVALID_HIT_COUNT', 'hits must be an integer from 1 to 20');
@@ -755,13 +1149,12 @@ function cloneEffectNode(node: EffectNode): EffectNode {
   return JSON.parse(JSON.stringify(node)) as EffectNode;
 }
 
-function repeatDamageNode(node: EffectNode, hits: number): EffectNode[] {
-  if (hits <= 1) return [node];
+function repeatDamageNode(node: EffectNode, hits: number, hitGroup: string): EffectNode[] {
   if (node.op === 'register_trigger') {
     return [
       {
         ...node,
-        effects: node.effects.flatMap(effect => repeatDamageNode(effect, hits)),
+        effects: node.effects.flatMap(effect => repeatDamageNode(effect, hits, hitGroup)),
       },
     ];
   }
@@ -769,12 +1162,15 @@ function repeatDamageNode(node: EffectNode, hits: number): EffectNode[] {
     return [
       {
         ...node,
-        then: node.then.flatMap(effect => repeatDamageNode(effect, hits)),
-        ...(node.else ? { else: node.else.flatMap(effect => repeatDamageNode(effect, hits)) } : {}),
+        then: node.then.flatMap(effect => repeatDamageNode(effect, hits, hitGroup)),
+        ...(node.else ? { else: node.else.flatMap(effect => repeatDamageNode(effect, hits, hitGroup)) } : {}),
       },
     ];
   }
-  return Array.from({ length: hits }, () => cloneEffectNode(node));
+  if (node.op !== 'damage') return [node];
+  // A single authored damage is still a one-hit group.  Permanent hit growth
+  // must be able to turn it into two hits without relying on guessed AST shape.
+  return Array.from({ length: Math.max(1, hits) }, () => ({ ...cloneEffectNode(node), hitGroup }));
 }
 
 function applyWhen(
@@ -826,11 +1222,14 @@ function compileGeneratedCard(
       'description',
       'effects',
       'discard_effects',
+      'lifecycle',
       'trigger',
       'when',
       'retain',
       'exhaust',
       'ethereal',
+      'unique',
+      'requires_summon',
     ],
     path,
     issues,
@@ -850,10 +1249,6 @@ function compileGeneratedCard(
     addIssue(issues, `${path}.name`, 'INVALID_CARD_NAME', 'Template name cannot be empty');
     return null;
   }
-  if (!(Array.isArray(value.effects) || isRecord(value.effects))) {
-    addIssue(issues, `${path}.effects`, 'EMPTY_EFFECTS', 'Card template must contain effects');
-    return null;
-  }
   const type = (value.type ?? 'Skill') as GeneratedCardDefinition['type'];
   const rarity = (value.rarity ?? 'Common') as GeneratedCardDefinition['rarity'];
   if (!['Attack', 'Skill', 'Power', 'Event', 'Curse'].includes(type)) {
@@ -864,25 +1259,97 @@ function compileGeneratedCard(
     addIssue(issues, `${path}.rarity`, 'INVALID_CARD_RARITY', `Unsupported template rarity: ${String(rarity)}`);
     return null;
   }
+  if (type === 'Curse' && value.cost !== undefined) {
+    addIssue(issues, `${path}.cost`, 'INVALID_CURSE_COST', 'Curse card templates cannot contain cost');
+    return null;
+  }
+  for (const flag of ['unique', 'retain', 'exhaust', 'ethereal']) {
+    if (value[flag] !== undefined && typeof value[flag] !== 'boolean') {
+      addIssue(issues, `${path}.${flag}`, 'INVALID_BOOLEAN', `${flag} must be a boolean`);
+      return null;
+    }
+  }
   if (type !== 'Power' && value.trigger !== undefined) {
     addIssue(issues, `${path}.trigger`, 'INVALID_TRIGGER', 'Only Power templates can register a trigger');
     return null;
   }
-  const nested = compileCompactEffectListInternal(
-    value.effects,
-    { trigger: value.trigger, when: value.when, creates: Array.from(templates.values()), statusNames },
-    [...templateStack, id],
-  );
-  if (!nested.ok) {
-    nested.issues.forEach(issue => {
-      const nestedPath =
-        issue.path === '$.trigger'
-          ? `${path}.trigger`
-          : `${path}.effects${issue.path === '$' ? '' : issue.path.slice(1)}`;
-      addIssue(issues, nestedPath, issue.code, issue.message);
+  validateStructuredTriggerInput(value.trigger, `${path}.trigger`, issues);
+  const resolvedTrigger = resolveTriggerInput(value);
+  const compiledPrograms: EffectProgram[] = [];
+  const compileTemplateSource = (
+    source: unknown,
+    sourcePath: string,
+    trigger?: string,
+    triggerQuery?: EventTriggerQuery,
+  ): boolean => {
+    if (!(Array.isArray(source) || isRecord(source))) {
+      addIssue(issues, sourcePath, 'EMPTY_EFFECTS', 'Card template must contain effects');
+      return false;
+    }
+    const result = compileCompactEffectListInternal(
+      source,
+      {
+        ...(trigger ? { trigger, triggerQuery } : {}),
+        ...(trigger ? {} : { when: value.when }),
+        creates: Array.from(templates.values()),
+        statusNames,
+      },
+      [...templateStack, id],
+    );
+    if (result.ok) {
+      compiledPrograms.push(result.value);
+      return true;
+    }
+    result.issues.forEach(issue => {
+      const issuePath = issue.path === '$.trigger'
+        ? `${path}.trigger${resolvedTrigger.structured ? '.on' : ''}`
+        : `${sourcePath}${issue.path === '$' ? '' : issue.path.slice(1)}`;
+      addIssue(issues, issuePath, issue.code, issue.message);
     });
+    return false;
+  };
+  if (resolvedTrigger.structured) {
+    if (resolvedTrigger.immediateEffects !== undefined) {
+      compileTemplateSource(resolvedTrigger.immediateEffects, `${path}.effects`);
+    }
+    if (typeof resolvedTrigger.trigger !== 'string') {
+      addIssue(issues, `${path}.trigger.on`, 'INVALID_TRIGGER', 'Power template trigger must be a supported string');
+    } else {
+      compileTemplateSource(
+        resolvedTrigger.triggeredEffects,
+        `${path}.trigger.effects`,
+        resolvedTrigger.trigger,
+        resolvedTrigger.eventQuery,
+      );
+    }
+  } else if (resolvedTrigger.trigger !== undefined) {
+    if (typeof resolvedTrigger.trigger !== 'string') {
+      addIssue(issues, `${path}.trigger`, 'INVALID_TRIGGER', 'Power template trigger must be a supported string');
+    } else {
+      compileTemplateSource(
+        resolvedTrigger.triggeredEffects,
+        `${path}.effects`,
+        resolvedTrigger.trigger,
+        resolvedTrigger.eventQuery,
+      );
+    }
+  } else if (type === 'Curse' && value.effects === undefined) {
+    // An inert Curse is executable through its card-type rules: it cannot be
+    // played and remains in hand at cleanup. Keep an empty internal program so
+    // the runtime can carry the card without inventing a fake authored effect.
+    compiledPrograms.push({ spec: EFFECT_PROGRAM_SPEC, steps: [] });
+  } else {
+    compileTemplateSource(value.effects, `${path}.effects`);
+  }
+  if (compiledPrograms.length === 0 || issues.some(issue => issue.path === path || issue.path.startsWith(`${path}.`))) {
     return null;
   }
+  const nested: { value: EffectProgram } = {
+    value: {
+      spec: EFFECT_PROGRAM_SPEC,
+      steps: compiledPrograms.flatMap(program => program.steps),
+    },
+  };
   let discardProgram: EffectProgram | undefined;
   const discardEffects = value.discard_effects;
   if (discardEffects !== undefined) {
@@ -914,6 +1381,8 @@ function compileGeneratedCard(
     }
     cost = typeof candidate === 'object' ? structuredClone(candidate) as CardCost : candidate as CardCost;
   }
+  const lifecycleIssue = validateCardLifecycle(value.lifecycle);
+  if (lifecycleIssue) { addIssue(issues, `${path}.lifecycle`, 'INVALID_CARD_LIFECYCLE', lifecycleIssue); return null; }
   const authoredDescription = normalizeChinesePlayerDescription(value.description);
   const result: GeneratedCardDefinition = {
     id,
@@ -928,9 +1397,12 @@ function compileGeneratedCard(
         : describeCompactCardWhenNeeded(value, { includeKeywords: false, statusNames }),
     program: nested.value,
     discardProgram,
+    unique: value.unique === true || undefined,
     retain: value.retain === true || undefined,
+    lifecycle: value.lifecycle ? structuredClone(value.lifecycle) as import('./cardLifecycle').CardLifecycle : undefined,
     exhaust: type === 'Power' || value.exhaust === true || undefined,
     ethereal: value.ethereal === true || undefined,
+    ...(typeof value.requires_summon === 'string' ? { requiresSummonTemplateId: value.requires_summon } : {}),
   };
   return result;
 }
@@ -949,6 +1421,7 @@ function compileSingleEntry(
     addIssue(issues, path, 'INVALID_EFFECT', 'Effect must be an object');
     return null;
   }
+  rejectUnexpectedNullFields(value, path, issues);
   const operationKeys = compactEffectOperationKeys(value);
   if (operationKeys.length !== 1) {
     addIssue(issues, path, 'INVALID_EFFECT', 'Effect must contain one operation plus optional to/when fields');
@@ -957,26 +1430,54 @@ function compileSingleEntry(
   const operation = operationKeys[0];
 
   let node: EffectNode | null = null;
-  const compileNestedEffects = (raw: unknown, nestedPath: string): EffectNode[] | null => {
+  const compileNestedEffects = (
+    raw: unknown,
+    nestedPath: string,
+    nestedOptions: {
+      creates?: unknown;
+      when?: unknown;
+      implicitTarget?: EffectTarget;
+      enemyCollectionTarget?: EffectTarget;
+      inheritImplicitTarget?: boolean;
+    } = {},
+  ): EffectNode[] | null => {
     if (raw === undefined) return [];
-    const entries = normalizeCompactEffectEntries(raw);
-    if (!entries) {
-      addIssue(issues, nestedPath, 'INVALID_EFFECT_LIST', 'nested effects must be an array or effect object');
+    const inheritedTemplates = Array.from(templates.values());
+    const localTemplates = nestedOptions.creates === undefined
+      ? inheritedTemplates
+      : Array.isArray(nestedOptions.creates)
+        ? [...inheritedTemplates, ...nestedOptions.creates]
+        : nestedOptions.creates;
+    const compiled = compileCompactEffectListInternal(
+      raw,
+      {
+        creates: localTemplates,
+        when: nestedOptions.when,
+        statusNames,
+        implicitTarget: nestedOptions.inheritImplicitTarget === false ? undefined : nestedOptions.implicitTarget ?? implicitTarget,
+        enemyCollectionTarget: nestedOptions.enemyCollectionTarget ?? enemyCollectionTarget,
+      },
+      templateStack,
+    );
+    if (compiled.ok) return compiled.value.steps;
+    compiled.issues.forEach(issue => addIssue(
+      issues,
+      `${nestedPath}${issue.path === '$' ? '' : issue.path.slice(1)}`,
+      issue.code,
+      issue.message,
+    ));
+    return null;
+  };
+  if (operation === 'guard') {
+    rejectUnknownEntryKeys(value, ['guard', 'effects'], path, issues, false);
+    const condition = compileWhen(value.guard, `${path}.guard`, issues);
+    if (!Array.isArray(value.effects) || value.effects.length === 0) {
+      addIssue(issues, `${path}.effects`, 'INVALID_GUARD_EFFECTS', 'guard requires a non-empty ordered effects array');
       return null;
     }
-    const compiled = entries.map((entry, index) =>
-      compileEntry(
-        entry,
-        `${nestedPath}[${index}]`,
-        issues,
-        templates,
-        templateStack,
-        statusNames,
-        implicitTarget,
-        enemyCollectionTarget,
-      ));
-    return compiled.some(entry => entry === null) ? null : (compiled as EffectNode[][]).flat();
-  };
+    const effects = compileNestedEffects(value.effects, `${path}.effects`);
+    return condition && effects && effects.length > 0 ? { op: 'if', condition, then: effects } : null;
+  }
   const amountOperation = AMOUNT_OPERATIONS[operation];
   if (amountOperation) {
     rejectUnknownEntryKeys(
@@ -985,7 +1486,13 @@ function compileSingleEntry(
       path,
       issues,
     );
-    const target = compileTarget(value.to, implicitTarget ?? amountOperation.target, `${path}.to`, issues);
+    const target = compileEffectTarget(
+      value,
+      implicitTarget ?? compactEffectDefaultTarget(operation),
+      `${path}.to`,
+      issues,
+      enemyCollectionTarget,
+    );
     const formula = compileFormula(value[operation], `${path}.${operation}`, issues);
     const damageKind = value.damage_type;
     if (operation === 'damage' && damageKind !== undefined && !DAMAGE_KINDS.has(String(damageKind)))
@@ -1029,18 +1536,39 @@ function compileSingleEntry(
       if (typeof id !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(id) || id === 'energy')
         addIssue(issues, `${path}.${operation}.id`, 'INVALID_RESOURCE_ID', 'resource id must be stable English and cannot be energy');
       const amount = compileFormula(raw[amountField], `${path}.${operation}.${amountField}`, issues);
-      const target = compileTarget(value.to, implicitTarget ?? 'self', `${path}.to`, issues);
+      const target = compileEffectTarget(
+        value,
+        implicitTarget ?? compactEffectDefaultTarget(operation),
+        `${path}.to`,
+        issues,
+        enemyCollectionTarget,
+      );
       const targetSelector = target
         ? compileEnemyTargetSelector(value.targets, target, `${path}.targets`, issues, enemyCollectionTarget)
         : undefined;
-      if (target && typeof id === 'string' && amount?.kind === 'number') {
-        node = operation === 'resource'
-          ? { op: 'gain_resource', target, ...(targetSelector ? { targetSelector } : {}), resource: id, amount: amount.value }
-          : { op: 'set_resource', target, ...(targetSelector ? { targetSelector } : {}), resource: id, value: amount.value };
-      } else if (amount?.kind === 'choice') {
-        addIssue(issues, `${path}.${operation}.${amountField}`, 'INVALID_RESOURCE_EFFECT', 'resource effects do not accept conditional formula values');
+      if (target && typeof id === 'string' && amount) {
+        node = lowerFormula(amount, resolved => (
+          operation === 'resource'
+            ? {
+                op: 'gain_resource', target, ...(targetSelector ? { targetSelector } : {}),
+                resource: id, amount: resolved,
+              }
+            : {
+                op: 'set_resource', target, ...(targetSelector ? { targetSelector } : {}),
+                resource: id, value: resolved,
+              }
+        ));
       }
     }
+  } else if (operation === 'enemy_intent' || operation === 'say' || operation === 'wait') {
+    rejectUnknownEntryKeys(value, [operation, 'when'], path, issues);
+    const raw = value[operation];
+    if (operation === 'wait') {
+      if (raw !== true) addIssue(issues, `${path}.wait`, 'INVALID_WAIT', 'wait must be true');
+      else node = { op: 'wait' };
+    } else if (typeof raw !== 'string' || !raw.trim() || (operation === 'enemy_intent' && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(raw))) {
+      addIssue(issues, `${path}.${operation}`, 'INVALID_BEHAVIOR', 'say requires text; enemy_intent requires an existing action ID');
+    } else node = operation === 'say' ? { op: 'say', text: raw.trim() } : { op: 'enemy_intent', actionId: raw };
   } else if (operation === 'spawn_enemy') {
     rejectUnknownEntryKeys(value, [operation, 'when'], path, issues);
     const raw = value.spawn_enemy;
@@ -1051,6 +1579,7 @@ function compileSingleEntry(
         'id', 'name', 'emoji', 'description', 'max_hp', 'hp', 'max_lust', 'lust', 'block',
         'actions', 'abilities', 'status_effects', 'lust_effect', 'action_mode', 'action_config',
         'action_priority', 'speed', 'tags', 'resources', 'stance', 'orb_slots', 'orbs',
+        'escape_when', 'defeat_reward', 'victory_on_defeat',
         'count', 'capacity',
       ], `${path}.spawn_enemy`, issues, false);
       const stableId = (entry: unknown): entry is string =>
@@ -1062,13 +1591,23 @@ function compileSingleEntry(
         addIssue(issues, `${path}.spawn_enemy.emoji`, 'INVALID_ENEMY_EMOJI', 'enemy emoji is required');
       if (raw.description !== undefined && typeof raw.description !== 'string')
         addIssue(issues, `${path}.spawn_enemy.description`, 'INVALID_ENEMY_DESCRIPTION', 'enemy description must be text');
+      if (raw.victory_on_defeat !== undefined && typeof raw.victory_on_defeat !== 'boolean') addIssue(issues, `${path}.spawn_enemy.victory_on_defeat`, 'INVALID_VICTORY_TARGET', 'victory_on_defeat must be boolean');
+      if (raw.escape_when !== undefined) compileWhen(raw.escape_when, `${path}.spawn_enemy.escape_when`, issues);
+      if (raw.defeat_reward !== undefined && !isRecord(raw.defeat_reward))
+        addIssue(issues, `${path}.spawn_enemy.defeat_reward`, 'INVALID_ENEMY_DEFEAT_REWARD', 'defeat_reward must be an object');
       if (!validateAuthoredNumber(raw.max_hp, `${path}.spawn_enemy.max_hp`, issues) || Number(raw.max_hp) <= 0)
         addIssue(issues, `${path}.spawn_enemy.max_hp`, 'INVALID_ENEMY_HP', 'enemy max_hp must be positive');
+      for (const field of ['hp', 'max_lust', 'lust'] as const) {
+        if (raw[field] === undefined)
+          addIssue(issues, `${path}.spawn_enemy.${field}`, 'MISSING_ENEMY_STAT', `${field} is required for a spawned enemy`);
+      }
       for (const field of ['hp', 'max_lust', 'lust', 'block'] as const) {
         if (raw[field] !== undefined && (
           !validateAuthoredNumber(raw[field], `${path}.spawn_enemy.${field}`, issues) || Number(raw[field]) < 0
         )) addIssue(issues, `${path}.spawn_enemy.${field}`, 'INVALID_ENEMY_STAT', `${field} must be non-negative`);
       }
+      if (raw.max_lust !== undefined && Number(raw.max_lust) <= 0)
+        addIssue(issues, `${path}.spawn_enemy.max_lust`, 'INVALID_ENEMY_STAT', 'max_lust must be positive');
       for (const field of ['action_priority', 'speed'] as const) {
         if (raw[field] !== undefined && (!Number.isInteger(raw[field]) || Math.abs(Number(raw[field])) > 999))
           addIssue(issues, `${path}.spawn_enemy.${field}`, 'INVALID_ENEMY_ORDER', `${field} is out of range`);
@@ -1077,9 +1616,41 @@ function compileSingleEntry(
         !Array.isArray(raw.tags) || raw.tags.length > 32 || raw.tags.some(tag => !stableId(tag)) ||
         new Set(raw.tags).size !== raw.tags.length
       )) addIssue(issues, `${path}.spawn_enemy.tags`, 'INVALID_ENEMY_TAGS', 'enemy tags must be unique stable English ids');
-      const importNestedIssues = (result: CompactEffectCompilationResult, nestedPath: string): boolean => {
-        if (result.ok) return true;
-        result.issues.forEach(issue => addIssue(
+      if (raw.action_mode !== undefined && !['random', 'probability', 'sequence', 'sequence_then_probability'].includes(String(raw.action_mode)))
+        addIssue(issues, `${path}.spawn_enemy.action_mode`, 'INVALID_ACTION_MODE', 'unsupported enemy action mode');
+      if (raw.action_config !== undefined && !isRecord(raw.action_config)) {
+        addIssue(issues, `${path}.spawn_enemy.action_config`, 'INVALID_ACTION_CONFIG', 'enemy action_config must be an object');
+      } else if (isRecord(raw.action_config)) {
+        rejectUnknownEntryKeys(raw.action_config, ['probability', 'sequence'], `${path}.spawn_enemy.action_config`, issues, false);
+        if (raw.action_config.probability !== undefined && (
+          !isRecord(raw.action_config.probability) ||
+          Object.keys(raw.action_config.probability).length > 24 ||
+          Object.values(raw.action_config.probability).some(weight => typeof weight !== 'number' || !Number.isFinite(weight) || weight <= 0)
+        )) addIssue(issues, `${path}.spawn_enemy.action_config.probability`, 'INVALID_ACTION_CONFIG', 'probability weights must be positive numbers');
+        if (raw.action_config.sequence !== undefined && (
+          !Array.isArray(raw.action_config.sequence) || raw.action_config.sequence.length < 1 ||
+          raw.action_config.sequence.length > 100 || raw.action_config.sequence.some(name => typeof name !== 'string' || !name.trim())
+        )) addIssue(issues, `${path}.spawn_enemy.action_config.sequence`, 'INVALID_ACTION_CONFIG', 'sequence must contain action names');
+      }
+      issues.push(...validateEnemyActionReferences(raw, `${path}.spawn_enemy`));
+      const knownStatusIds = statusNames ? new Set(Object.keys(statusNames)) : undefined;
+      const importNestedIssues = (
+        result: CompactEffectCompilationResult,
+        nestedPath: string,
+        policyOptions: EffectProgramPolicyOptions,
+      ): boolean => {
+        if (!result.ok) {
+          result.issues.forEach(issue => addIssue(
+            issues,
+            `${nestedPath}${issue.path === '$' ? '' : issue.path.slice(1)}`,
+            issue.code,
+            issue.message,
+          ));
+          return false;
+        }
+        const policy = validateEffectProgramPolicy(result.value, { ...policyOptions, knownStatusIds });
+        if (policy.ok) return true;
+        policy.issues.forEach(issue => addIssue(
           issues,
           `${nestedPath}${issue.path === '$' ? '' : issue.path.slice(1)}`,
           issue.code,
@@ -1099,6 +1670,29 @@ function compileSingleEntry(
             nestedValid = false;
             return;
           }
+          rejectUnknownEntryKeys(
+            entry,
+            ['id', 'name', 'emoji', 'description', 'dialogue', 'weight', 'effects', 'when', 'creates'],
+            actionPath,
+            issues,
+            false,
+          );
+          if (entry.id !== undefined && !stableId(entry.id)) {
+            addIssue(issues, `${actionPath}.id`, 'INVALID_ENEMY_ACTION', 'enemy action id must be stable English');
+            nestedValid = false;
+          }
+          if (entry.emoji !== undefined && typeof entry.emoji !== 'string') {
+            addIssue(issues, `${actionPath}.emoji`, 'INVALID_ENEMY_ACTION', 'enemy action emoji must be text');
+            nestedValid = false;
+          }
+          if (entry.description !== undefined && typeof entry.description !== 'string') {
+            addIssue(issues, `${actionPath}.description`, 'INVALID_ENEMY_ACTION', 'enemy action description must be text');
+            nestedValid = false;
+          }
+          if (entry.dialogue !== undefined && (typeof entry.dialogue !== 'string' || !entry.dialogue.trim())) {
+            addIssue(issues, `${actionPath}.dialogue`, 'INVALID_ENEMY_ACTION', 'enemy action dialogue must be non-empty text');
+            nestedValid = false;
+          }
           if (entry.trigger !== undefined) {
             addIssue(issues, `${actionPath}.trigger`, 'INVALID_ENEMY_ACTION', 'enemy actions cannot register triggers');
             nestedValid = false;
@@ -1114,7 +1708,10 @@ function compileSingleEntry(
             when: entry.when,
             statusNames,
             enemyCollectionTarget: 'self',
-          }), `${actionPath}.effects`) && nestedValid;
+          }), `${actionPath}.effects`, {
+            triggerPolicy: 'forbid',
+            modifierPolicy: 'forbid',
+          }) && nestedValid;
         });
       }
       if (raw.abilities !== undefined && (!Array.isArray(raw.abilities) || raw.abilities.length > 24)) {
@@ -1128,6 +1725,14 @@ function compileSingleEntry(
             nestedValid = false;
             return;
           }
+          rejectUnknownEntryKeys(
+            entry,
+            ['id', 'name', 'emoji', 'description', 'source', 'trigger', 'effects', 'creates', 'protection'],
+            abilityPath,
+            issues,
+            false,
+          );
+          validateStructuredTriggerInput(entry.trigger, `${abilityPath}.trigger`, issues);
           const resolved = resolveTriggerInput(entry);
           if (typeof resolved.trigger !== 'string' || !ABILITY_TRIGGER_SET.has(resolved.trigger)) {
             addIssue(issues, `${abilityPath}.trigger`, 'INVALID_TRIGGER', 'enemy ability trigger is invalid');
@@ -1138,40 +1743,171 @@ function compileSingleEntry(
             addIssue(issues, `${abilityPath}.effects`, 'INVALID_ENEMY_ABILITY', 'triggered enemy abilities cannot also contain immediate effects');
             nestedValid = false;
           }
+          const protection = normalizeDamageProtectionRule(entry.protection);
+          if (entry.protection !== undefined && !protection) {
+            addIssue(issues, `${abilityPath}.protection`, 'INVALID_PROTECTION', 'invalid protection rule');
+            nestedValid = false;
+          }
+          if (protection && resolved.trigger === 'passive' && isEmptyProtectionEffect(resolved.triggeredEffects) && resolved.immediateEffects === undefined) return;
           nestedValid = importNestedIssues(compileCompactEffectListInternal(resolved.triggeredEffects, {
             creates: entry.creates,
             statusNames,
             enemyCollectionTarget: 'self',
-          }), `${abilityPath}.effects`) && nestedValid;
+          }), `${abilityPath}.effects`, {
+            triggerPolicy: 'forbid',
+            modifierPolicy: resolved.trigger === 'passive' ? 'only' : 'forbid',
+          }) && nestedValid;
         });
       }
-      if (!isRecord(raw.lust_effect)) {
-        addIssue(issues, `${path}.spawn_enemy.lust_effect`, 'INVALID_ENEMY_LUST_EFFECT', 'enemy lust_effect must be an object');
-        nestedValid = false;
-      } else {
-        if (typeof raw.lust_effect.name !== 'string' || !raw.lust_effect.name.trim()) {
-          addIssue(issues, `${path}.spawn_enemy.lust_effect.name`, 'INVALID_ENEMY_LUST_EFFECT', 'enemy lust effect requires a name');
+      if (raw.lust_effect !== undefined) {
+        if (!isRecord(raw.lust_effect)) {
+          addIssue(issues, `${path}.spawn_enemy.lust_effect`, 'INVALID_ENEMY_LUST_EFFECT', 'enemy lust_effect must be a non-empty object when provided');
           nestedValid = false;
+        } else {
+          rejectUnknownEntryKeys(
+            raw.lust_effect,
+            ['name', 'emoji', 'description', 'effects', 'when', 'creates'],
+            `${path}.spawn_enemy.lust_effect`,
+            issues,
+            false,
+          );
+          if (typeof raw.lust_effect.name !== 'string' || !raw.lust_effect.name.trim()) {
+            addIssue(issues, `${path}.spawn_enemy.lust_effect.name`, 'INVALID_ENEMY_LUST_EFFECT', 'enemy lust effect requires a name');
+            nestedValid = false;
+          }
+          nestedValid = importNestedIssues(compileCompactEffectListInternal(raw.lust_effect.effects, {
+            creates: raw.lust_effect.creates,
+            when: raw.lust_effect.when,
+            statusNames,
+            enemyCollectionTarget: 'self',
+          }), `${path}.spawn_enemy.lust_effect.effects`, {
+            triggerPolicy: 'forbid',
+            modifierPolicy: 'forbid',
+          }) && nestedValid;
         }
-        nestedValid = importNestedIssues(compileCompactEffectListInternal(raw.lust_effect.effects, {
-          creates: raw.lust_effect.creates,
-          when: raw.lust_effect.when,
-          statusNames,
-          enemyCollectionTarget: 'self',
-        }), `${path}.spawn_enemy.lust_effect.effects`) && nestedValid;
       }
       if (raw.status_effects !== undefined && !Array.isArray(raw.status_effects)) {
         addIssue(issues, `${path}.spawn_enemy.status_effects`, 'INVALID_ENEMY_STATUSES', 'enemy status_effects must be an array');
         nestedValid = false;
+      } else if (Array.isArray(raw.status_effects)) {
+        if (raw.status_effects.length > 64) {
+          addIssue(issues, `${path}.spawn_enemy.status_effects`, 'INVALID_ENEMY_STATUSES', 'enemy status_effects support at most 64 entries');
+          nestedValid = false;
+        }
+        raw.status_effects.forEach((entry, index) => {
+          const statusPath = `${path}.spawn_enemy.status_effects[${index}]`;
+          if (!isRecord(entry)) {
+            addIssue(issues, statusPath, 'INVALID_ACTIVE_STATUS', 'active enemy status must be an object');
+            nestedValid = false;
+            return;
+          }
+          rejectUnknownEntryKeys(entry, ['id', 'stacks'], statusPath, issues, false);
+          if (!stableId(entry.id)) {
+            addIssue(issues, `${statusPath}.id`, 'INVALID_STATUS_ID', 'active enemy status requires a stable English id');
+            nestedValid = false;
+          } else if (knownStatusIds && !knownStatusIds.has(entry.id)) {
+            addIssue(issues, `${statusPath}.id`, 'UNKNOWN_STATUS', `status is not registered: ${entry.id}`);
+            nestedValid = false;
+          }
+          if (!Number.isInteger(entry.stacks) || Number(entry.stacks) < 1 || Number(entry.stacks) > 999) {
+            addIssue(issues, `${statusPath}.stacks`, 'INVALID_STATUS_STACKS', 'active enemy status stacks must be an integer from 1 to 999');
+            nestedValid = false;
+          }
+        });
+      }
+      validateCombatResourceDefinitions(raw.resources, `${path}.spawn_enemy.resources`).forEach(issue => {
+        addIssue(issues, issue.path, issue.code, issue.message);
+        nestedValid = false;
+      });
+      if (raw.stance !== undefined && raw.stance !== null) {
+        const stancePath = `${path}.spawn_enemy.stance`;
+        if (!isRecord(raw.stance)) {
+          addIssue(issues, stancePath, 'INVALID_STANCE', 'initial enemy stance must be an object or null');
+          nestedValid = false;
+        } else {
+          const stance = raw.stance;
+          rejectUnknownEntryKeys(stance, ['id', 'name', 'emoji', 'description', 'enter', 'exit', 'passive'], stancePath, issues, false);
+          if (!stableId(stance.id)) {
+            addIssue(issues, `${stancePath}.id`, 'INVALID_STANCE_ID', 'initial enemy stance requires a stable English id');
+            nestedValid = false;
+          }
+          if (typeof stance.name !== 'string' || !stance.name.trim()) {
+            addIssue(issues, `${stancePath}.name`, 'INVALID_STANCE_NAME', 'initial enemy stance requires a name');
+            nestedValid = false;
+          }
+          for (const field of ['emoji', 'description'] as const) {
+            if (stance[field] !== undefined && typeof stance[field] !== 'string') {
+              addIssue(issues, `${stancePath}.${field}`, 'INVALID_STANCE', `${field} must be text`);
+              nestedValid = false;
+            }
+          }
+          for (const field of ['enter', 'exit', 'passive'] as const) {
+            if (stance[field] === undefined) continue;
+            nestedValid = importNestedIssues(compileCompactEffectListInternal(stance[field], {
+              statusNames,
+              enemyCollectionTarget: 'self',
+            }), `${stancePath}.${field}`, {
+              triggerPolicy: 'forbid',
+              modifierPolicy: field === 'passive' ? 'only' : 'forbid',
+            }) && nestedValid;
+          }
+        }
+      }
+      if (raw.orb_slots !== undefined && (!Number.isInteger(raw.orb_slots) || Number(raw.orb_slots) < 0 || Number(raw.orb_slots) > 20)) {
+        addIssue(issues, `${path}.spawn_enemy.orb_slots`, 'INVALID_ORB_SLOTS', 'initial enemy orb_slots must be an integer from 0 to 20');
+        nestedValid = false;
+      }
+      if (raw.orbs !== undefined && (!Array.isArray(raw.orbs) || raw.orbs.length > 20)) {
+        addIssue(issues, `${path}.spawn_enemy.orbs`, 'INVALID_ORBS', 'initial enemy orbs must be an array with at most 20 entries');
+        nestedValid = false;
+      } else if (Array.isArray(raw.orbs)) {
+        raw.orbs.forEach((entry, index) => {
+          const orbPath = `${path}.spawn_enemy.orbs[${index}]`;
+          if (!isRecord(entry)) {
+            addIssue(issues, orbPath, 'INVALID_ORB', '敌方初始姿态必须是对象');
+            nestedValid = false;
+            return;
+          }
+          rejectUnknownEntryKeys(entry, ['id', 'name', 'emoji', 'description', 'value', 'passive', 'evoke'], orbPath, issues, false);
+          if (!stableId(entry.id)) {
+            addIssue(issues, `${orbPath}.id`, 'INVALID_ORB_ID', '敌方初始姿态需要稳定英文 ID');
+            nestedValid = false;
+          }
+          if (typeof entry.name !== 'string' || !entry.name.trim()) {
+            addIssue(issues, `${orbPath}.name`, 'INVALID_ORB_NAME', '敌方初始姿态需要名称');
+            nestedValid = false;
+          }
+          if (typeof entry.value !== 'number' || !Number.isFinite(entry.value) || entry.value < 0) {
+            addIssue(issues, `${orbPath}.value`, 'INVALID_ORB_VALUE', '敌方初始姿态数值必须是非负有限数');
+            nestedValid = false;
+          }
+          for (const field of ['emoji', 'description'] as const) {
+            if (entry[field] !== undefined && typeof entry[field] !== 'string') {
+              addIssue(issues, `${orbPath}.${field}`, 'INVALID_ORB', `${field} must be text`);
+              nestedValid = false;
+            }
+          }
+          for (const field of ['passive', 'evoke'] as const) {
+            if (entry[field] === undefined) continue;
+            nestedValid = importNestedIssues(compileCompactEffectListInternal(entry[field], {
+              statusNames,
+              enemyCollectionTarget: 'self',
+            }), `${orbPath}.${field}`, {
+              triggerPolicy: 'forbid',
+              modifierPolicy: 'forbid',
+            }) && nestedValid;
+          }
+        });
       }
       const count = compileFormula(raw.count ?? 1, `${path}.spawn_enemy.count`, issues);
-      const capacity = raw.capacity ?? 8;
-      if (!Number.isInteger(capacity) || Number(capacity) < 1 || Number(capacity) > 12)
-        addIssue(issues, `${path}.spawn_enemy.capacity`, 'INVALID_ENEMY_CAPACITY', 'enemy capacity must be 1 to 12');
+      const capacity = raw.capacity ?? Number.MAX_SAFE_INTEGER;
+      if (!Number.isSafeInteger(capacity) || Number(capacity) < 1)
+        addIssue(issues, `${path}.spawn_enemy.capacity`, 'INVALID_ENEMY_CAPACITY', 'enemy capacity must be a positive safe integer');
       if (
         nestedValid && stableId(raw.id) && typeof raw.name === 'string' && raw.name.trim() &&
         typeof raw.emoji === 'string' && raw.emoji.trim() && typeof raw.max_hp === 'number' &&
-        raw.max_hp > 0 && count && Number.isInteger(capacity)
+        raw.max_hp > 0 && typeof raw.hp === 'number' && typeof raw.max_lust === 'number' &&
+        raw.max_lust > 0 && typeof raw.lust === 'number' && count && Number.isInteger(capacity)
       ) {
         const enemy = structuredClone(Object.fromEntries(
           Object.entries(raw).filter(([key]) => key !== 'count' && key !== 'capacity'),
@@ -1189,16 +1925,12 @@ function compileSingleEntry(
       addIssue(issues, `${path}.summoner_effects`, 'EMPTY_SUMMONER_EFFECTS', 'summoner_effects requires at least one nested effect');
   } else if (operation === 'spawn_summon') {
     rejectUnknownEntryKeys(value, [operation, 'to', 'when'], path, issues);
-    const target = compileTarget(value.to, implicitTarget ?? 'self', `${path}.to`, issues);
+    const target = compileTarget(value.to, implicitTarget ?? compactEffectDefaultTarget(operation), `${path}.to`, issues);
     const raw = value.spawn_summon;
     if (!isRecord(raw)) {
       addIssue(issues, `${path}.spawn_summon`, 'INVALID_SUMMON_DEFINITION', 'spawn_summon must be an object');
     } else {
-      rejectUnknownEntryKeys(raw, [
-        'id', 'name', 'emoji', 'description', 'has_hp', 'max_hp', 'block', 'tags', 'resources', 'modifiers',
-        'action', 'actions', 'abilities', 'actions_per_activation', 'action_priority', 'speed', 'intercept', 'slot',
-        'on_existing', 'on_defeated', 'retain_corpse', 'capabilities', 'count', 'capacity', 'overflow',
-      ], `${path}.spawn_summon`, issues, false);
+      rejectUnknownEntryKeys(raw, [...SUMMON_AUTHORING_FIELDS, 'action'], `${path}.spawn_summon`, issues, false);
       const stableId = (entry: unknown): entry is string =>
         typeof entry === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(entry);
       if (!stableId(raw.id)) addIssue(issues, `${path}.spawn_summon.id`, 'INVALID_SUMMON_ID', 'summon id must be stable English');
@@ -1240,25 +1972,41 @@ function compileSingleEntry(
       if (raw.resources !== undefined && !isRecord(raw.resources))
         addIssue(issues, `${path}.spawn_summon.resources`, 'INVALID_SUMMON_RESOURCES', 'summon resources must be an object');
       else if (isRecord(raw.resources)) {
+        if (Object.keys(raw.resources).length > 16)
+          addIssue(issues, `${path}.spawn_summon.resources`, 'INVALID_SUMMON_RESOURCES', 'summon resources support at most 16 entries');
         for (const [resourceId, resource] of Object.entries(raw.resources)) {
           const resourcePath = `${path}.spawn_summon.resources.${resourceId}`;
           if (!stableId(resourceId) || !isRecord(resource)) {
             addIssue(issues, resourcePath, 'INVALID_SUMMON_RESOURCE', 'summon resource definition is invalid');
             continue;
           }
-          rejectUnknownEntryKeys(resource, ['id', 'name', 'emoji', 'current', 'max', 'refresh'], resourcePath, issues, false);
+          rejectUnknownEntryKeys(resource, ['name', 'emoji', 'start', 'current', 'max', 'refresh'], resourcePath, issues, false);
+          const initialValue = resource.current === undefined ? resource.start ?? 0 : resource.current;
           if (
-            resource.id !== resourceId || typeof resource.name !== 'string' || !resource.name.trim() ||
+            typeof resource.name !== 'string' || !resource.name.trim() ||
             typeof resource.emoji !== 'string' || !resource.emoji.trim() ||
-            !Number.isInteger(resource.current) || Number(resource.current) < 0 ||
-            !Number.isInteger(resource.max) || Number(resource.max) < 1 || Number(resource.current) > Number(resource.max) ||
+            !Number.isInteger(initialValue) || Number(initialValue) < 0 ||
+            !Number.isInteger(resource.max) || Number(resource.max) < 1 ||
             !['reset', 'retain'].includes(String(resource.refresh))
-          ) addIssue(issues, resourcePath, 'INVALID_SUMMON_RESOURCE', 'summon resource requires matching id, display fields, valid range, and refresh policy');
+          ) addIssue(issues, resourcePath, 'INVALID_SUMMON_RESOURCE', 'summon resource uses its object key as id and requires display fields, valid range, and refresh policy');
         }
       }
       if (raw.modifiers !== undefined && (
-        !isRecord(raw.modifiers) || Object.values(raw.modifiers).some(entry => typeof entry !== 'number' || !Number.isFinite(entry))
+        !isRecord(raw.modifiers) ||
+        Object.keys(raw.modifiers).some(key => ![
+          'damage_modifier', 'damage_taken_modifier', 'lust_damage_modifier',
+          'lust_damage_taken_modifier', 'heal_modifier', 'block_modifier',
+        ].includes(key)) ||
+        Object.values(raw.modifiers).some(entry => typeof entry !== 'number' || !Number.isFinite(entry))
       )) addIssue(issues, `${path}.spawn_summon.modifiers`, 'INVALID_SUMMON_MODIFIER', 'summon modifiers must be finite numbers');
+      if (raw.action !== undefined && raw.actions !== undefined) {
+        addIssue(
+          issues,
+          `${path}.spawn_summon.actions`,
+          'CONFLICTING_SUMMON_ACTIONS',
+          'summon action and actions are mutually exclusive',
+        );
+      }
       if (raw.intercept !== undefined && !isRecord(raw.intercept))
         addIssue(issues, `${path}.spawn_summon.intercept`, 'INVALID_SUMMON_INTERCEPT', 'summon intercept must be an object');
       else if (isRecord(raw.intercept)) {
@@ -1279,6 +2027,18 @@ function compileSingleEntry(
             addIssue(issues, `${path}.spawn_summon.capabilities.${key}`, 'INVALID_SUMMON_CAPABILITY', 'summon capabilities must be boolean');
         }
       }
+      // A summon resolves future actions from its own owner perspective, not
+      // from the card/enemy that created it. `to:"opponent"` deliberately
+      // creates a unit for the other side, so its enemy-collection direction
+      // must be inverted before nested programs are compiled.
+      const summonEnemyCollectionTarget = target === 'opponent'
+        ? enemyCollectionTarget === 'self' ? 'opponent' : 'self'
+        : enemyCollectionTarget;
+      const existingEffects = raw.on_existing_effects === undefined ? undefined : compileNestedEffects(
+        raw.on_existing_effects, `${path}.spawn_summon.on_existing_effects`, { enemyCollectionTarget: summonEnemyCollectionTarget },
+      );
+      if (raw.on_existing_effects !== undefined && (!raw.slot || raw.on_existing === 'replace' || !existingEffects?.length))
+        addIssue(issues, `${path}.spawn_summon.on_existing_effects`, 'INVALID_SUMMON_POLICY', 'on_existing_effects requires a slot, reinforce policy, and nonempty effects');
       const compiledActions: import('./summonUnit').SummonActionDefinition[] = [];
       if (raw.actions !== undefined && (!Array.isArray(raw.actions) || raw.actions.length > 20)) {
         addIssue(issues, `${path}.spawn_summon.actions`, 'INVALID_SUMMON_ACTIONS', 'summon actions must be an array with at most 20 entries');
@@ -1289,7 +2049,7 @@ function compileSingleEntry(
             addIssue(issues, actionPath, 'INVALID_SUMMON_ACTION', 'summon action must be an object');
             return;
           }
-          rejectUnknownEntryKeys(entry, ['id', 'name', 'emoji', 'description', 'weight', 'fixed', 'effects', 'creates', 'when'], actionPath, issues, false);
+          rejectUnknownEntryKeys(entry, [...SUMMON_ACTION_AUTHORING_FIELDS], actionPath, issues, false);
           if (!stableId(entry.id)) addIssue(issues, `${actionPath}.id`, 'INVALID_SUMMON_ACTION', 'summon action requires a stable English id');
           if (typeof entry.name !== 'string' || !entry.name.trim())
             addIssue(issues, `${actionPath}.name`, 'INVALID_SUMMON_ACTION', 'summon action requires a name');
@@ -1297,17 +2057,26 @@ function compileSingleEntry(
             addIssue(issues, `${actionPath}.emoji`, 'INVALID_SUMMON_ACTION', 'summon action emoji must be text');
           if (entry.description !== undefined && typeof entry.description !== 'string')
             addIssue(issues, `${actionPath}.description`, 'INVALID_SUMMON_ACTION', 'summon action description must be text');
+          if (entry.dialogue !== undefined && (typeof entry.dialogue !== 'string' || !entry.dialogue.trim()))
+            addIssue(issues, `${actionPath}.dialogue`, 'INVALID_SUMMON_ACTION', 'summon action dialogue must be non-empty text');
           if (entry.weight !== undefined && (typeof entry.weight !== 'number' || !Number.isFinite(entry.weight) || entry.weight <= 0))
             addIssue(issues, `${actionPath}.weight`, 'INVALID_SUMMON_ACTION', 'summon action weight must be positive');
           if (entry.fixed !== undefined && typeof entry.fixed !== 'boolean')
             addIssue(issues, `${actionPath}.fixed`, 'INVALID_SUMMON_ACTION', 'summon action fixed must be boolean');
-          const effects = compileNestedEffects(entry.effects, `${actionPath}.effects`);
+          const effects = compileNestedEffects(entry.effects, `${actionPath}.effects`, {
+            creates: entry.creates,
+            when: entry.when,
+            enemyCollectionTarget: summonEnemyCollectionTarget,
+          });
+          if (effects && effects.length === 0)
+            addIssue(issues, `${actionPath}.effects`, 'EMPTY_SUMMON_ACTION', 'summon action requires at least one effect');
           if (stableId(entry.id) && typeof entry.name === 'string' && entry.name.trim() && effects?.length) {
             compiledActions.push({
               id: entry.id,
               name: entry.name.trim(),
               ...(typeof entry.emoji === 'string' ? { emoji: entry.emoji.trim() } : {}),
               ...(typeof entry.description === 'string' ? { description: entry.description } : {}),
+              ...(typeof entry.dialogue === 'string' ? { dialogue: entry.dialogue.trim() } : {}),
               ...(typeof entry.weight === 'number' ? { weight: entry.weight } : {}),
               ...(entry.fixed === true ? { fixed: true } : {}),
               effectProgram: { spec: EFFECT_PROGRAM_SPEC, steps: effects },
@@ -1325,17 +2094,33 @@ function compileSingleEntry(
             addIssue(issues, abilityPath, 'INVALID_SUMMON_ABILITY', 'summon ability must be an object');
             return;
           }
-          rejectUnknownEntryKeys(entry, ['id', 'name', 'emoji', 'description', 'trigger', 'fixed', 'effects', 'creates'], abilityPath, issues, false);
+          rejectUnknownEntryKeys(entry, [...SUMMON_ABILITY_AUTHORING_FIELDS, 'effects'], abilityPath, issues, false);
+          validateStructuredTriggerInput(entry.trigger, `${abilityPath}.trigger`, issues);
           const resolved = resolveTriggerInput(entry);
           if (!stableId(entry.id)) addIssue(issues, `${abilityPath}.id`, 'INVALID_SUMMON_ABILITY', 'summon ability requires a stable English id');
-          if (typeof resolved.trigger !== 'string' || !ABILITY_TRIGGER_SET.has(resolved.trigger))
+          if (
+            typeof resolved.trigger !== 'string' ||
+            !ABILITY_TRIGGER_SET.has(resolved.trigger) ||
+            resolved.trigger === 'passive'
+          )
             addIssue(issues, `${abilityPath}.trigger`, 'INVALID_TRIGGER', 'summon ability trigger is invalid');
           if (resolved.structured && resolved.immediateEffects !== undefined)
             addIssue(issues, `${abilityPath}.effects`, 'INVALID_SUMMON_ABILITY', 'triggered summon abilities cannot also contain immediate effects');
           if (entry.fixed !== undefined && typeof entry.fixed !== 'boolean')
             addIssue(issues, `${abilityPath}.fixed`, 'INVALID_SUMMON_ABILITY', 'summon ability fixed must be boolean');
-          const effects = compileNestedEffects(resolved.triggeredEffects, `${abilityPath}.effects`);
-          if (stableId(entry.id) && typeof resolved.trigger === 'string' && ABILITY_TRIGGER_SET.has(resolved.trigger) && effects?.length) {
+          const effects = compileNestedEffects(resolved.triggeredEffects, `${abilityPath}.effects`, {
+            creates: entry.creates,
+            enemyCollectionTarget: summonEnemyCollectionTarget,
+          });
+          if (effects && effects.length === 0)
+            addIssue(issues, `${abilityPath}.effects`, 'EMPTY_SUMMON_ABILITY', 'summon ability requires at least one triggered effect');
+          if (
+            stableId(entry.id) &&
+            typeof resolved.trigger === 'string' &&
+            ABILITY_TRIGGER_SET.has(resolved.trigger) &&
+            resolved.trigger !== 'passive' &&
+            effects?.length
+          ) {
             compiledAbilities.push({
               id: entry.id,
               ...(typeof entry.name === 'string' && entry.name.trim() ? { name: entry.name.trim() } : {}),
@@ -1356,7 +2141,9 @@ function compileSingleEntry(
       const overflow = raw.overflow ?? 'replace_oldest';
       if (!['reject', 'replace_oldest', 'replace_lowest_hp'].includes(String(overflow)))
         addIssue(issues, `${path}.spawn_summon.overflow`, 'INVALID_SUMMON_OVERFLOW', 'unsupported summon overflow policy');
-      const actionEffects = compileNestedEffects(raw.action, `${path}.spawn_summon.action`);
+      const actionEffects = compileNestedEffects(raw.action, `${path}.spawn_summon.action`, {
+        enemyCollectionTarget: summonEnemyCollectionTarget,
+      });
       if (
         target && stableId(raw.id) && typeof raw.name === 'string' && raw.name.trim() &&
         typeof raw.emoji === 'string' && raw.emoji.trim() && (!hasHp || (typeof raw.max_hp === 'number' && raw.max_hp > 0)) &&
@@ -1383,7 +2170,19 @@ function compileSingleEntry(
           ...(typeof raw.description === 'string' ? { description: raw.description } : {}),
           ...(typeof raw.block === 'number' ? { block: raw.block } : {}),
           ...(Array.isArray(raw.tags) ? { tags: raw.tags as string[] } : {}),
-          ...(isRecord(raw.resources) ? { resources: structuredClone(raw.resources) as any } : {}),
+          ...(isRecord(raw.resources) ? {
+            resources: Object.fromEntries(Object.entries(raw.resources).map(([resourceId, resource]) => {
+              if (!isRecord(resource)) return [resourceId, resource];
+              const normalized = structuredClone(resource);
+              normalized.id = resourceId;
+              normalized.current = Math.min(
+                Number(normalized.max),
+                Math.max(0, Number(normalized.current === undefined ? normalized.start ?? 0 : normalized.current)),
+              );
+              delete normalized.start;
+              return [resourceId, normalized];
+            })) as any,
+          } : {}),
           ...(isRecord(raw.modifiers) ? { modifiers: structuredClone(raw.modifiers) as Record<string, number> } : {}),
           ...(actionEffects.length ? { actionProgram: { spec: EFFECT_PROGRAM_SPEC, steps: actionEffects } as EffectProgram } : {}),
           ...(compiledActions.length ? { actions: compiledActions } : {}),
@@ -1394,13 +2193,14 @@ function compileSingleEntry(
           ...(intercept ? { intercept: intercept as any } : {}),
           ...(typeof raw.slot === 'string' ? { slot: raw.slot } : {}),
           ...(typeof raw.on_existing === 'string' ? { onExisting: raw.on_existing as 'reinforce' | 'replace' } : {}),
+          ...(existingEffects?.length ? { onExistingProgram: { spec: EFFECT_PROGRAM_SPEC, steps: existingEffects } as EffectProgram } : {}),
           ...(typeof raw.on_defeated === 'string' ? { onDefeated: raw.on_defeated as 'new_instance' | 'revive_reset' | 'revive_reinforce' } : {}),
           ...(typeof raw.retain_corpse === 'boolean' ? { retainCorpse: raw.retain_corpse } : {}),
           ...(capabilities ? { capabilities } : {}),
         };
         node = lowerFormula(count, amount => ({
           op: 'spawn_summon', target, summon, count: amount,
-          capacity: Number(capacity), overflow: overflow as 'reject' | 'replace_oldest' | 'replace_lowest_hp',
+          ...(raw.capacity === undefined ? {} : { capacity: Number(capacity) }), overflow: overflow as 'reject' | 'replace_oldest' | 'replace_lowest_hp',
         }));
       }
     }
@@ -1408,7 +2208,7 @@ function compileSingleEntry(
     operation === 'damage_summon' || operation === 'heal_summon' || operation === 'modify_summon' || operation === 'modify_summon_effect' ||
     operation === 'summon_resource' || operation === 'set_summon_resource' ||
     operation === 'apply_summon_status' || operation === 'remove_summon_status' ||
-    operation === 'activate_summon' || operation === 'dismiss_summon' || operation === 'copy_summon'
+    operation === 'activate_summon' || operation === 'trigger_summon_death' || operation === 'dismiss_summon' || operation === 'copy_summon'
   ) {
     rejectUnknownEntryKeys(value, [operation, 'when'], path, issues);
     const raw = value[operation];
@@ -1475,9 +2275,42 @@ function compileSingleEntry(
         if (typeof raw.id !== 'string' || (raw.id !== 'all' && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(raw.id)))
           addIssue(issues, `${path}.${operation}.id`, 'INVALID_STATUS_ID', 'summon status id must be registered or all');
         if (selector && typeof raw.id === 'string') node = { op: 'remove_summon_status', selector, status: raw.id };
-      } else if (operation === 'activate_summon') {
-        rejectUnknownEntryKeys(raw, ['selector'], `${path}.${operation}`, issues, false);
-        if (selector) node = { op: 'activate_summons', selector };
+      } else if (operation === 'activate_summon' || operation === 'trigger_summon_death') {
+        rejectUnknownEntryKeys(raw, ['selector', 'action'], `${path}.${operation}`, issues, false);
+        if (operation === 'trigger_summon_death' && raw.action !== undefined)
+          addIssue(issues, `${path}.${operation}.action`, 'INVALID_SUMMON_ACTION', 'a supplied action cannot be a defeated trigger');
+        let suppliedAction: {
+          id: string; name: string; emoji?: string; description?: string; fixed?: boolean; effectProgram: EffectProgram;
+        } | undefined;
+        if (operation === 'activate_summon' && raw.action !== undefined) {
+          const actionPath = `${path}.activate_summon.action`;
+          if (!isRecord(raw.action)) addIssue(issues, actionPath, 'INVALID_SUMMON_ACTION', 'action must be an object');
+          else {
+            const action = raw.action;
+            rejectUnknownEntryKeys(action, ['id', 'name', 'emoji', 'description', 'fixed', 'effects', 'creates', 'when'], actionPath, issues, false);
+            const validActionId = typeof action.id === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(action.id);
+            if (!validActionId) addIssue(issues, `${actionPath}.id`, 'INVALID_SUMMON_ACTION', 'action requires a stable English id');
+            if (typeof action.name !== 'string' || !action.name.trim()) addIssue(issues, `${actionPath}.name`, 'INVALID_SUMMON_ACTION', 'action requires a name');
+            if (action.emoji !== undefined && (typeof action.emoji !== 'string' || !action.emoji.trim())) addIssue(issues, `${actionPath}.emoji`, 'INVALID_SUMMON_ACTION', 'action emoji must be text');
+            if (action.description !== undefined && typeof action.description !== 'string') addIssue(issues, `${actionPath}.description`, 'INVALID_SUMMON_ACTION', 'action description must be text');
+            if (action.fixed !== undefined && typeof action.fixed !== 'boolean') addIssue(issues, `${actionPath}.fixed`, 'INVALID_SUMMON_ACTION', 'action fixed must be boolean');
+            const actionEnemyCollectionTarget = selector?.owner === 'opponent'
+              ? enemyCollectionTarget === 'self' ? 'opponent' : 'self'
+              : enemyCollectionTarget;
+            const effects = compileNestedEffects(action.effects, `${actionPath}.effects`, {
+              creates: action.creates, when: action.when, enemyCollectionTarget: actionEnemyCollectionTarget,
+            });
+            if (effects && effects.length === 0) addIssue(issues, `${actionPath}.effects`, 'EMPTY_SUMMON_ACTION', 'action requires at least one effect');
+            if (validActionId && typeof action.name === 'string' && action.name.trim() && effects?.length) suppliedAction = {
+              id: String(action.id), name: action.name.trim(),
+              ...(typeof action.emoji === 'string' ? { emoji: action.emoji.trim() } : {}),
+              ...(typeof action.description === 'string' ? { description: action.description } : {}),
+              ...(action.fixed === true ? { fixed: true } : {}),
+              effectProgram: { spec: EFFECT_PROGRAM_SPEC, steps: effects },
+            };
+          }
+        }
+        if (selector) node = { op: 'activate_summons', selector, ...(operation === 'trigger_summon_death' ? { trigger: 'defeated' as const } : {}), ...(suppliedAction ? { suppliedAction } : {}) };
       } else if (operation === 'dismiss_summon') {
         rejectUnknownEntryKeys(raw, ['selector', 'retain_corpse'], `${path}.${operation}`, issues, false);
         if (raw.retain_corpse !== undefined && typeof raw.retain_corpse !== 'boolean')
@@ -1500,7 +2333,7 @@ function compileSingleEntry(
           node = {
             op: 'copy_summons', selector,
             targetOwner: targetOwner as 'same' | 'self' | 'opponent',
-            capacity: Number(capacity),
+            ...(raw.capacity === undefined ? {} : { capacity: Number(capacity) }),
             overflow: overflow as 'reject' | 'replace_oldest' | 'replace_lowest_hp',
           };
         }
@@ -1513,7 +2346,7 @@ function compileSingleEntry(
       path,
       issues,
     );
-    const target = compileTarget(value.to, implicitTarget ?? 'opponent', `${path}.to`, issues);
+    const target = compileEffectTarget(value, implicitTarget ?? compactEffectDefaultTarget(operation), `${path}.to`, issues, enemyCollectionTarget);
     const targetSelector = target
       ? compileEnemyTargetSelector(value.targets, target, `${path}.targets`, issues, enemyCollectionTarget)
       : undefined;
@@ -1552,7 +2385,7 @@ function compileSingleEntry(
     }
   } else if (operation === 'stance') {
     rejectUnknownEntryKeys(value, [operation, 'to', 'targets', 'when'], path, issues);
-    const target = compileTarget(value.to, implicitTarget ?? 'self', `${path}.to`, issues);
+    const target = compileEffectTarget(value, implicitTarget ?? compactEffectDefaultTarget(operation), `${path}.to`, issues, enemyCollectionTarget);
     const targetSelector = target
       ? compileEnemyTargetSelector(value.targets, target, `${path}.targets`, issues, enemyCollectionTarget)
       : undefined;
@@ -1562,7 +2395,7 @@ function compileSingleEntry(
     } else if (!isRecord(raw)) {
       addIssue(issues, `${path}.stance`, 'INVALID_STANCE', 'stance must be an object or null');
     } else {
-      rejectUnknownEntryKeys(raw, ['id', 'name', 'emoji', 'description', 'enter', 'exit', 'passive'], `${path}.stance`, issues, false);
+      rejectUnknownEntryKeys(raw, ['id', 'name', 'emoji', 'description', 'enter', 'exit', 'passive', 'events'], `${path}.stance`, issues, false);
       const id = raw.id;
       const name = raw.name;
       if (typeof id !== 'string' || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(id))
@@ -1576,6 +2409,30 @@ function compileSingleEntry(
       const enterEffects = compileNestedEffects(raw.enter, `${path}.stance.enter`);
       const exitEffects = compileNestedEffects(raw.exit, `${path}.stance.exit`);
       const passiveEffects = compileNestedEffects(raw.passive, `${path}.stance.passive`);
+      const events: import('./effectDsl').EffectStanceEvent[] = [];
+      if (raw.events !== undefined && (!Array.isArray(raw.events) || raw.events.length < 1 || raw.events.length > 16)) {
+        addIssue(issues, `${path}.stance.events`, 'INVALID_STANCE_EVENTS', 'stance events must contain 1..16 structured triggers');
+      } else if (Array.isArray(raw.events)) raw.events.forEach((event, index) => {
+        const eventPath = `${path}.stance.events[${index}]`;
+        if (!isRecord(event)) {
+          addIssue(issues, eventPath, 'INVALID_STANCE_EVENT', 'stance event must be a structured trigger');
+          return;
+        }
+        validateStructuredTriggerInput(event, eventPath, issues);
+        if (typeof event.on !== 'string' || !ABILITY_TRIGGER_SET.has(event.on) || event.on === 'passive') {
+          addIssue(issues, `${eventPath}.on`, 'INVALID_TRIGGER', 'stance event requires a non-passive ability trigger');
+          return;
+        }
+        // Future listeners execute relative to the holder, not the card/status
+        // that granted this stance. Preserve the correct enemy collection side.
+        const effects = compileNestedEffects(event.effects, `${eventPath}.effects`, {
+          inheritImplicitTarget: false,
+          enemyCollectionTarget: target === 'opponent' ? enemyCollectionTarget === 'self' ? 'opponent' : 'self' : enemyCollectionTarget,
+        });
+        if (!effects?.length) addIssue(issues, `${eventPath}.effects`, 'EMPTY_STANCE_EVENT', 'stance event requires executable effects');
+        else events.push({ trigger: event.on as import('./battleTriggers').AbilityTrigger,
+          ...(resolveEventTriggerQueryInput(event) ? { eventQuery: resolveEventTriggerQueryInput(event) } : {}), effects });
+      });
       if (target && typeof id === 'string' && typeof name === 'string' && name.trim() && enterEffects && exitEffects && passiveEffects) {
         node = {
           op: 'set_stance', target, ...(targetSelector ? { targetSelector } : {}),
@@ -1586,13 +2443,14 @@ function compileSingleEntry(
             ...(enterEffects.length ? { enterEffects } : {}),
             ...(exitEffects.length ? { exitEffects } : {}),
             ...(passiveEffects.length ? { passiveEffects } : {}),
+            ...(events.length ? { events } : {}),
           },
         };
       }
     }
   } else if (operation === 'channel_orb') {
     rejectUnknownEntryKeys(value, [operation, 'to', 'targets', 'when'], path, issues);
-    const target = compileTarget(value.to, implicitTarget ?? 'self', `${path}.to`, issues);
+    const target = compileEffectTarget(value, implicitTarget ?? compactEffectDefaultTarget(operation), `${path}.to`, issues, enemyCollectionTarget);
     const targetSelector = target
       ? compileEnemyTargetSelector(value.targets, target, `${path}.targets`, issues, enemyCollectionTarget)
       : undefined;
@@ -1607,13 +2465,13 @@ function compileSingleEntry(
       const passiveEffects = compileNestedEffects(raw.passive, `${path}.channel_orb.passive`);
       const evokeEffects = compileNestedEffects(raw.evoke, `${path}.channel_orb.evoke`);
       if (typeof id !== 'string' || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(id))
-        addIssue(issues, `${path}.channel_orb.id`, 'INVALID_ORB_ID', 'orb id must be stable English');
+        addIssue(issues, `${path}.channel_orb.id`, 'INVALID_ORB_ID', '姿态 ID 必须是稳定英文');
       if (typeof name !== 'string' || !name.trim())
-        addIssue(issues, `${path}.channel_orb.name`, 'INVALID_ORB_NAME', 'orb name is required');
+        addIssue(issues, `${path}.channel_orb.name`, 'INVALID_ORB_NAME', '姿态名称必填');
       if (raw.emoji !== undefined && typeof raw.emoji !== 'string')
-        addIssue(issues, `${path}.channel_orb.emoji`, 'INVALID_ORB_EMOJI', 'orb emoji must be text');
+        addIssue(issues, `${path}.channel_orb.emoji`, 'INVALID_ORB_EMOJI', '姿态图标必须是文本');
       if (raw.description !== undefined && typeof raw.description !== 'string')
-        addIssue(issues, `${path}.channel_orb.description`, 'INVALID_ORB_DESCRIPTION', 'orb description must be text');
+        addIssue(issues, `${path}.channel_orb.description`, 'INVALID_ORB_DESCRIPTION', '姿态说明必须是文本');
       if (target && typeof id === 'string' && typeof name === 'string' && name.trim() && orbValue?.kind === 'number' && passiveEffects && evokeEffects) {
         node = {
           op: 'channel_orb', target, ...(targetSelector ? { targetSelector } : {}),
@@ -1628,23 +2486,30 @@ function compileSingleEntry(
       }
     }
   } else if (operation === 'evoke_orb') {
-    rejectUnknownEntryKeys(value, [operation, 'to', 'targets', 'pick', 'count', 'orb_id', 'when'], path, issues);
-    const target = compileTarget(value.to, implicitTarget ?? 'self', `${path}.to`, issues);
+    rejectUnknownEntryKeys(value, [operation, 'to', 'targets', 'pick', 'orb_id', 'when'], path, issues);
+    const target = compileEffectTarget(value, implicitTarget ?? compactEffectDefaultTarget(operation), `${path}.to`, issues, enemyCollectionTarget);
     const targetSelector = target
       ? compileEnemyTargetSelector(value.targets, target, `${path}.targets`, issues, enemyCollectionTarget)
       : undefined;
     const amount = value.evoke_orb;
     const pick = value.pick ?? (amount === 'all' ? 'all' : 'first');
     if (!['first', 'last', 'all'].includes(String(pick)))
-      addIssue(issues, `${path}.pick`, 'INVALID_ORB_PICK', 'orb pick must be first, last, or all');
-    const count = value.count ?? (typeof amount === 'number' ? amount : 1);
+      addIssue(issues, `${path}.pick`, 'INVALID_ORB_PICK', '姿态选择必须是 first、last 或 all');
+    if (pick === 'all' && amount !== 'all')
+      addIssue(issues, `${path}.evoke_orb`, 'INVALID_ORB_COUNT', 'pick all requires evoke_orb all');
+    if (amount === 'all' && pick !== 'all')
+      addIssue(issues, `${path}.pick`, 'INVALID_ORB_PICK', 'evoke_orb all requires pick all or an omitted pick');
+    const count = typeof amount === 'number' ? amount : 1;
     if (pick !== 'all' && (!Number.isInteger(count) || Number(count) < 1 || Number(count) > 100))
-      addIssue(issues, `${path}.count`, 'INVALID_ORB_COUNT', 'orb count must be an integer from 1 to 100');
+      addIssue(issues, `${path}.count`, 'INVALID_ORB_COUNT', '姿态数量必须是 1 到 100 的整数');
     if (amount !== 'all' && (typeof amount !== 'number' || !Number.isInteger(amount) || amount < 1 || amount > 100))
       addIssue(issues, `${path}.evoke_orb`, 'INVALID_ORB_COUNT', 'evoke_orb must be all or an integer from 1 to 100');
     if (value.orb_id !== undefined && (typeof value.orb_id !== 'string' || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(value.orb_id)))
       addIssue(issues, `${path}.orb_id`, 'INVALID_ORB_ID', 'orb_id must be stable English');
-    if (target && ['first', 'last', 'all'].includes(String(pick))) node = {
+    if (
+      target && ['first', 'last', 'all'].includes(String(pick)) &&
+      !((pick === 'all') !== (amount === 'all'))
+    ) node = {
       op: 'evoke_orbs', target, ...(targetSelector ? { targetSelector } : {}),
       selector: {
         pick: pick as 'first' | 'last' | 'all',
@@ -1654,7 +2519,7 @@ function compileSingleEntry(
     };
   } else if (operation === 'orb_slots') {
     rejectUnknownEntryKeys(value, [operation, 'to', 'targets', 'when'], path, issues);
-    const target = compileTarget(value.to, implicitTarget ?? 'self', `${path}.to`, issues);
+    const target = compileEffectTarget(value, implicitTarget ?? compactEffectDefaultTarget(operation), `${path}.to`, issues, enemyCollectionTarget);
     const targetSelector = target
       ? compileEnemyTargetSelector(value.targets, target, `${path}.targets`, issues, enemyCollectionTarget)
       : undefined;
@@ -1663,7 +2528,7 @@ function compileSingleEntry(
       node = { op: 'set_orb_slots', target, ...(targetSelector ? { targetSelector } : {}), amount: amount.value };
   } else if (operation === 'modify_orb') {
     rejectUnknownEntryKeys(value, [operation, 'to', 'targets', 'pick', 'count', 'orb_id', 'add', 'subtract', 'multiply', 'divide', 'when'], path, issues);
-    const target = compileTarget(value.to, implicitTarget ?? 'self', `${path}.to`, issues);
+    const target = compileEffectTarget(value, implicitTarget ?? compactEffectDefaultTarget(operation), `${path}.to`, issues, enemyCollectionTarget);
     const targetSelector = target
       ? compileEnemyTargetSelector(value.targets, target, `${path}.targets`, issues, enemyCollectionTarget)
       : undefined;
@@ -1674,15 +2539,20 @@ function compileSingleEntry(
     if (authored.length !== 1) addIssue(issues, path, 'INVALID_ORB_VALUE_OPERATOR', 'modify_orb requires exactly one operator');
     const formula = authored.length === 1 ? compileFormula(value[authored[0]], `${path}.${authored[0]}`, issues) : null;
     if (authored[0] === 'divide' && formula?.kind === 'number' && formula.value === 0)
-      addIssue(issues, `${path}.divide`, 'DIVISION_BY_ZERO', 'Orb value cannot divide by zero');
+      addIssue(issues, `${path}.divide`, 'DIVISION_BY_ZERO', '姿态数值不能除以零');
     const pick = value.pick ?? 'first';
     if (!['first', 'last', 'all'].includes(String(pick)))
-      addIssue(issues, `${path}.pick`, 'INVALID_ORB_PICK', 'orb pick must be first, last, or all');
+      addIssue(issues, `${path}.pick`, 'INVALID_ORB_PICK', '姿态选择必须是 first、last 或 all');
+    if (pick === 'all' && value.count !== undefined)
+      addIssue(issues, `${path}.count`, 'INVALID_ORB_COUNT', 'pick all does not accept count');
     if (value.count !== undefined && (!Number.isInteger(value.count) || Number(value.count) < 1 || Number(value.count) > 100))
-      addIssue(issues, `${path}.count`, 'INVALID_ORB_COUNT', 'orb count must be an integer from 1 to 100');
+      addIssue(issues, `${path}.count`, 'INVALID_ORB_COUNT', '姿态数量必须是 1 到 100 的整数');
     if (value.orb_id !== undefined && (typeof value.orb_id !== 'string' || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(value.orb_id)))
       addIssue(issues, `${path}.orb_id`, 'INVALID_ORB_ID', 'orb_id must be stable English');
-    if (target && value.modify_orb === 'value' && authored.length === 1 && formula?.kind === 'number' && ['first', 'last', 'all'].includes(String(pick))) {
+    if (
+      target && value.modify_orb === 'value' && authored.length === 1 && formula?.kind === 'number' &&
+      ['first', 'last', 'all'].includes(String(pick)) && !(pick === 'all' && value.count !== undefined)
+    ) {
       node = {
         op: 'modify_orbs', target, ...(targetSelector ? { targetSelector } : {}),
         selector: {
@@ -1695,23 +2565,26 @@ function compileSingleEntry(
     }
   } else if (operation === 'extra_turn') {
     rejectUnknownEntryKeys(value, [operation, 'to', 'when'], path, issues);
-    const target = compileTarget(value.to, implicitTarget ?? 'self', `${path}.to`, issues);
+    const target = compileEffectTarget(value, implicitTarget ?? compactEffectDefaultTarget(operation), `${path}.to`, issues, enemyCollectionTarget);
     const amount = compileFormula(value.extra_turn, `${path}.extra_turn`, issues);
     if (target && amount?.kind === 'number') node = { op: 'grant_extra_turn', target, amount: amount.value };
   } else if (operation === 'end_turn') {
     rejectUnknownEntryKeys(value, [operation, 'to', 'when'], path, issues);
-    const target = compileTarget(value.to, implicitTarget ?? 'self', `${path}.to`, issues);
+    const target = compileTarget(value.to, implicitTarget ?? compactEffectDefaultTarget(operation), `${path}.to`, issues);
     if (value.end_turn !== true) addIssue(issues, `${path}.end_turn`, 'INVALID_END_TURN', 'end_turn must be true');
     if (target && value.end_turn === true) node = { op: 'force_end_turn', target };
   } else if (operation === 'choose') {
-    rejectUnknownEntryKeys(value, [operation, 'options', 'when'], path, issues);
+    rejectUnknownEntryKeys(value, [operation, 'count', 'options', 'when'], path, issues);
     const choiceId = value.choose;
     if (typeof choiceId !== 'string' || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(choiceId))
       addIssue(issues, `${path}.choose`, 'INVALID_CHOICE_ID', 'choose must use a stable English ID');
     const rawOptions = value.options;
-    if (!Array.isArray(rawOptions) || rawOptions.length < 2 || rawOptions.length > 8) {
-      addIssue(issues, `${path}.options`, 'INVALID_CHOICE_OPTIONS', 'choose requires 2 to 8 options');
+    if (!Array.isArray(rawOptions) || rawOptions.length < 1) {
+      addIssue(issues, `${path}.options`, 'INVALID_CHOICE_OPTIONS', 'choose requires at least one option');
     } else {
+      const count = value.count === undefined ? 1 : value.count;
+      if (typeof count !== 'number' || !Number.isInteger(count) || count < 1 || count > rawOptions.length)
+        addIssue(issues, `${path}.count`, 'INVALID_CHOICE_COUNT', 'choose count must be an integer from 1 to the number of options');
       const optionIds = new Set<string>();
       const options: import('./effectDsl').EffectChoiceOption[] = [];
       rawOptions.forEach((rawOption, optionIndex) => {
@@ -1755,17 +2628,31 @@ function compileSingleEntry(
         if (compiled.some(entry => entry === null)) return;
         options.push({ id, label: label.trim(), effects: (compiled as EffectNode[][]).flat() });
       });
-      if (typeof choiceId === 'string' && options.length === rawOptions.length)
-        node = { op: 'choose_one', choiceId, options };
+      if (typeof choiceId === 'string' && options.length === rawOptions.length
+        && typeof count === 'number' && Number.isInteger(count) && count >= 1 && count <= rawOptions.length)
+        node = { op: 'choose_one', choiceId, ...(value.count === undefined ? {} : { count }), options };
     }
   } else if (SET_OPERATIONS[operation]) {
     rejectUnknownEntryKeys(value, [operation, 'to', 'targets', 'when'], path, issues);
-    const target = compileTarget(value.to, implicitTarget ?? 'self', `${path}.to`, issues);
+    const target = compileEffectTarget(value, implicitTarget ?? compactEffectDefaultTarget(operation), `${path}.to`, issues, enemyCollectionTarget);
     const formula = compileFormula(value[operation], `${path}.${operation}`, issues);
     const stat = SET_OPERATIONS[operation];
     if (target && formula) {
       const targetSelector = compileEnemyTargetSelector(value.targets, target, `${path}.targets`, issues, enemyCollectionTarget);
       node = lowerFormula(formula, assignedValue => ({ op: 'set_stat', target, ...(targetSelector ? { targetSelector } : {}), stat, value: assignedValue }));
+    }
+  } else if (operation === 'persistent_growth') {
+    rejectUnknownEntryKeys(value, [operation, 'summon_template', 'add', 'subtract', 'set', 'when'], path, issues, false);
+    const stat = value.persistent_growth;
+    const operators = ['add', 'subtract', 'set'].filter(key => value[key] !== undefined);
+    if (!validPersistentGrowthTarget(stat, value.summon_template))
+      addIssue(issues, `${path}.persistent_growth`, 'INVALID_PERSISTENT_GROWTH_STAT', 'player growth supports max_hp/max_lust; summon growth requires a template ID and max_hp/damage/lust');
+    if (operators.length !== 1) addIssue(issues, path, 'INVALID_PERSISTENT_GROWTH_OPERATOR', 'persistent_growth needs exactly one add/subtract/set');
+    else {
+      const operator = operators[0] as 'add' | 'subtract' | 'set';
+      const formula = compileFormula(value[operator], `${path}.${operator}`, issues);
+      if (formula && validPersistentGrowthTarget(stat, value.summon_template))
+        node = lowerFormula(formula, amount => ({ op: 'persistent_growth', stat: stat as 'max_hp' | 'max_lust' | 'damage' | 'lust', ...(value.summon_template ? { summonTemplateId: String(value.summon_template) } : {}), operator, value: amount }));
     }
   } else if (operation === 'narrate') {
     rejectUnknownEntryKeys(value, [operation, 'when'], path, issues);
@@ -1778,7 +2665,7 @@ function compileSingleEntry(
   } else if (operation === 'apply_status') {
     rejectUnknownEntryKeys(value, [operation, 'stacks', 'to', 'targets', 'when'], path, issues);
     const status = value.apply_status;
-    const target = compileTarget(value.to, implicitTarget ?? 'opponent', `${path}.to`, issues);
+    const target = compileEffectTarget(value, implicitTarget ?? compactEffectDefaultTarget(operation), `${path}.to`, issues, enemyCollectionTarget);
     if (typeof status !== 'string' || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(status)) {
       addIssue(issues, `${path}.apply_status`, 'INVALID_STATUS_ID', 'apply_status must be a simple status ID');
     }
@@ -1790,7 +2677,7 @@ function compileSingleEntry(
   } else if (operation === 'remove_status') {
     rejectUnknownEntryKeys(value, [operation, 'to', 'targets', 'when'], path, issues);
     const status = value.remove_status;
-    const target = compileTarget(value.to, implicitTarget ?? 'opponent', `${path}.to`, issues);
+    const target = compileEffectTarget(value, implicitTarget ?? compactEffectDefaultTarget(operation), `${path}.to`, issues, enemyCollectionTarget);
     if (
       typeof status !== 'string' ||
       (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(status) && !['all', 'buffs', 'debuffs'].includes(status))
@@ -1820,6 +2707,9 @@ function compileSingleEntry(
   } else if (operation === 'discard' || operation === 'exhaust') {
     rejectUnknownEntryKeys(value, [operation, ...CARD_SELECTOR_INPUT_KEYS, 'when'], path, issues);
     const selectAll = value[operation] === 'all';
+    if (!selectAll && value.pick === 'all') {
+      addIssue(issues, `${path}.${operation}`, 'INVALID_CARD_COUNT', `pick: all requires ${operation}: all`);
+    }
     const selectorSource = selectAll ? { ...value, pick: 'all' } : value;
     const selector = compileCardSelector(selectorSource, path, issues, 'random');
     const amount = selectAll
@@ -1833,7 +2723,7 @@ function compileSingleEntry(
       }));
     }
   } else if (operation === 'recover') {
-    rejectUnknownEntryKeys(value, [operation, 'from', 'pick', 'when'], path, issues);
+    rejectUnknownEntryKeys(value, [operation, ...CARD_SELECTOR_INPUT_KEYS, 'when'], path, issues);
     const source = value.from ?? 'discard';
     const selectAll = value.recover === 'all';
     const pick = selectAll ? 'all' : (value.pick ?? 'choose');
@@ -1846,6 +2736,7 @@ function compileSingleEntry(
     if (!selectAll && pick === 'all') {
       addIssue(issues, `${path}.recover`, 'INVALID_CARD_COUNT', 'pick: all requires recover: all');
     }
+    const filter = compileCardSelectorFilter(value, path, issues);
     const amount = selectAll
       ? ({ kind: 'number', value: 1 } as FormulaResult)
       : compileFormula(value.recover, `${path}.recover`, issues);
@@ -1855,12 +2746,17 @@ function compileSingleEntry(
       (pick === 'random' || pick === 'choose' || pick === 'all') &&
       (selectAll || pick !== 'all')
     ) {
-      node = lowerFormula(amount, count => ({ op: 'recover_cards', source, pick, amount: count }));
+      node = lowerFormula(amount, count => ({
+        op: 'recover_cards',
+        source,
+        pick,
+        amount: count,
+        ...(filter ? { filter } : {}),
+      }));
     }
   } else if (operation === 'reduce_cost') {
     rejectUnknownEntryKeys(value, [operation, ...CARD_SELECTOR_INPUT_KEYS, 'count', 'when'], path, issues);
-    const count = value.count === undefined ? 1 : compileFixedCount(value.count, `${path}.count`, issues);
-    const selector = count === null ? null : compileCardSelector(value, path, issues, 'choose', count);
+    const selector = compileCountedCardSelector(value, path, issues);
     const amount = compileFormula(value.reduce_cost, `${path}.reduce_cost`, issues);
     if (selector && amount)
       node = lowerFormula(amount, reduction => ({ op: 'reduce_card_cost', selector, amount: reduction }));
@@ -1874,10 +2770,7 @@ function compileSingleEntry(
     );
     const stat = value.modify_card;
     const operatorKeys = Array.from(CARD_VALUE_OPERATORS).filter(key => value[key] !== undefined);
-    const selectAll = value.pick === 'all' || value.from === 'all' || value.from === 'combat';
-    const count = selectAll ? undefined : value.count === undefined ? 1 : compileFixedCount(value.count, `${path}.count`, issues);
-    const selectorSource = selectAll ? { ...value, pick: 'all' } : value;
-    const selector = count === null ? null : compileCardSelector(selectorSource, path, issues, 'choose', count);
+    const selector = compileCountedCardSelector(value, path, issues);
     if (typeof stat !== 'string' || !CARD_VALUE_STATS.has(stat as CardValueStat)) {
       addIssue(issues, `${path}.modify_card`, 'INVALID_CARD_VALUE_STAT', `Unsupported card value: ${String(stat)}`);
     }
@@ -1927,13 +2820,7 @@ function compileSingleEntry(
     const scope = value.scope ?? 'combat';
     const match = value.match ?? 'instance';
     const includeFutureCopies = value.future_copies === true;
-    const count = value.pick === 'all' || value.from === 'all' || value.from === 'combat'
-      ? undefined
-      : value.count === undefined
-        ? 1
-        : compileFixedCount(value.count, `${path}.count`, issues);
-    const selectorSource = value.pick === 'all' || value.from === 'all' || value.from === 'combat' ? { ...value, pick: 'all' } : value;
-    const selector = count === null ? null : compileCardSelector(selectorSource, path, issues, 'choose', count);
+    const selector = compileCountedCardSelector(value, path, issues);
     if (!['resolution', 'turn', 'until_played', 'combat', 'run', 'permanent'].includes(String(scope)))
       addIssue(issues, `${path}.scope`, 'INVALID_CARD_PATCH_SCOPE', `Unsupported card patch scope: ${String(scope)}`);
     if (!['instance', 'run_instance', 'template', 'filter'].includes(String(match)))
@@ -1949,6 +2836,31 @@ function compileSingleEntry(
       match: match as NonNullable<EffectCardPatch['match']>,
       ...(includeFutureCopies ? { includeFutureCopies: true } : {}),
     };
+    const patchPayloadKeys = [
+      'add', 'subtract', 'multiply', 'divide', 'set', 'min', 'max',
+      'extra', 'enabled', 'timing', 'minimum', 'maximum',
+    ] as const;
+    const allowedPatchPayloadKeys =
+      typeof patchType === 'string' && CARD_VALUE_STATS.has(patchType as CardValueStat)
+        ? new Set(['add', 'subtract', 'multiply', 'divide'])
+        : patchType === 'cost' || patchType === 'x_value'
+          ? new Set(['add', 'subtract', 'multiply', 'divide', 'set', 'min', 'max'])
+          : patchType === 'dynamic_cost'
+            ? new Set(['add', 'subtract', 'multiply', 'divide', 'set', 'min', 'max', 'timing', 'minimum', 'maximum'])
+            : patchType === 'replay'
+              ? new Set(['extra'])
+              : patchType === 'hits'
+                ? new Set(['add'])
+              : ['retain', 'exhaust', 'ethereal', 'innate'].includes(String(patchType))
+                ? new Set(['enabled'])
+                : null;
+    if (allowedPatchPayloadKeys) {
+      for (const key of patchPayloadKeys) {
+        if (value[key] !== undefined && !allowedPatchPayloadKeys.has(key)) {
+          addIssue(issues, `${path}.${key}`, 'UNEXPECTED_CARD_PATCH_FIELD', `${String(patchType)} patch does not accept ${key}`);
+        }
+      }
+    }
     if (typeof patchType === 'string' && CARD_VALUE_STATS.has(patchType as CardValueStat)) {
       const keys = Array.from(CARD_VALUE_OPERATORS).filter(key => value[key] !== undefined);
       if (keys.length !== 1) addIssue(issues, path, 'INVALID_CARD_VALUE_OPERATOR', 'numeric patch requires exactly one arithmetic operator');
@@ -1959,6 +2871,9 @@ function compileSingleEntry(
           addIssue(issues, `${path}.divide`, 'DIVISION_BY_ZERO', 'card patch cannot divide by zero');
         else if (formula?.kind === 'number') patch = { ...common, kind: 'numeric', stat: patchType as CardValueStat, operator, value: formula.value };
       }
+    } else if (patchType === 'area') {
+      for (const key of patchPayloadKeys) if (value[key] !== undefined) addIssue(issues, `${path}.${key}`, 'UNEXPECTED_CARD_PATCH_FIELD', 'area patch has no numeric payload');
+      patch = { ...common, kind: 'area' };
     } else if (patchType === 'cost') {
       const operators = ['add', 'subtract', 'multiply', 'divide', 'set', 'min', 'max'] as const;
       const keys = operators.filter(key => value[key] !== undefined);
@@ -1973,6 +2888,11 @@ function compileSingleEntry(
     } else if (patchType === 'replay') {
       const formula = compileFormula(value.extra, `${path}.extra`, issues);
       if (formula?.kind === 'number') patch = { ...common, kind: 'replay', extra: formula.value };
+    } else if (patchType === 'hits') {
+      const formula = compileFormula(value.add, `${path}.add`, issues);
+      if (formula?.kind === 'number' && typeof formula.value === 'number' && Number.isInteger(formula.value) && formula.value > 0 && formula.value <= 19)
+        patch = { ...common, kind: 'hits', add: formula.value };
+      else addIssue(issues, `${path}.add`, 'INVALID_HITS_GROWTH', 'hits patch add must be an integer from 1 to 19');
     } else if (patchType === 'x_value') {
       const operators = ['add', 'subtract', 'multiply', 'divide', 'set', 'min', 'max'] as const;
       const keys = operators.filter(key => value[key] !== undefined);
@@ -2030,7 +2950,7 @@ function compileSingleEntry(
       path,
       issues,
     );
-    const selector = compileCardSelector(value, path, issues, 'choose', value.count === undefined ? 1 : compileFixedCount(value.count, `${path}.count`, issues) ?? undefined);
+    const selector = compileCountedCardSelector(value, path, issues);
     const raw = value.attach_card;
     let attachment: EffectCardAttachmentDefinition | null = null;
     if (!isRecord(raw)) {
@@ -2057,15 +2977,14 @@ function compileSingleEntry(
         addIssue(issues, `${path}.attach_card.emoji`, 'INVALID_CARD_ATTACHMENT_EMOJI', 'emoji must be non-empty');
       if (!['resolution', 'turn', 'until_played', 'combat', 'run', 'permanent'].includes(String(scope)))
         addIssue(issues, `${path}.attach_card.scope`, 'INVALID_CARD_PATCH_SCOPE', 'attachment scope is invalid');
-      if (removeOn !== undefined && !['played', 'discarded', 'turn_end', 'combat_end', 'run_end', 'manual'].includes(String(removeOn)))
+      if (removeOn !== undefined && !['resolution_end', 'played', 'discarded', 'turn_end', 'combat_end', 'run_end', 'manual'].includes(String(removeOn)))
         addIssue(issues, `${path}.attach_card.remove_on`, 'INVALID_CARD_ATTACHMENT_REMOVAL', 'remove_on is invalid');
       if (raw.remaining !== undefined && (!Number.isInteger(raw.remaining) || Number(raw.remaining) < 1 || Number(raw.remaining) > 999))
         addIssue(issues, `${path}.attach_card.remaining`, 'INVALID_CARD_ATTACHMENT_DURATION', 'remaining must be 1..999');
       if (raw.priority !== undefined && (!Number.isInteger(raw.priority) || Math.abs(Number(raw.priority)) > 100000))
         addIssue(issues, `${path}.attach_card.priority`, 'INVALID_CARD_ATTACHMENT_PRIORITY', 'priority must be an integer');
       const validReasons = new Set<CardMoveReason>([
-        'player_choice', 'random_effect', 'effect', 'turn_cleanup', 'scry', 'recover', 'exhaust',
-        'generate', 'copy', 'transform', 'auto_play', 'other',
+        'player_choice', 'random_effect', 'effect',
       ]);
       let discardReasons: CardMoveReason[] | undefined;
       if (raw.discard_reasons !== undefined) {
@@ -2163,7 +3082,20 @@ function compileSingleEntry(
           const operators = new Set(['add', 'subtract', 'multiply', 'divide', 'set', 'min', 'max']);
           if (!['on_draw', 'while_in_hand', 'on_play'].includes(String(change.timing))) addIssue(issues, `${changePath}.timing`, 'INVALID_DYNAMIC_COST_TIMING', 'unsupported attachment timing');
           if (!operators.has(String(change.operator))) addIssue(issues, `${changePath}.operator`, 'INVALID_CARD_COST_OPERATOR', 'unsupported attachment cost operator');
-          if (formula?.kind === 'number' && ['on_draw', 'while_in_hand', 'on_play'].includes(String(change.timing)) && operators.has(String(change.operator))) changes.push({
+          if (change.operator === 'divide' && formula?.kind === 'number' && formula.value === 0)
+            addIssue(issues, `${changePath}.value`, 'DIVISION_BY_ZERO', 'attachment dynamic cost cannot divide by zero');
+          if (change.minimum !== undefined && (typeof change.minimum !== 'number' || !Number.isFinite(change.minimum)))
+            addIssue(issues, `${changePath}.minimum`, 'INVALID_DYNAMIC_COST_BOUND', 'minimum must be a finite number');
+          if (change.maximum !== undefined && (typeof change.maximum !== 'number' || !Number.isFinite(change.maximum)))
+            addIssue(issues, `${changePath}.maximum`, 'INVALID_DYNAMIC_COST_BOUND', 'maximum must be a finite number');
+          if (typeof change.minimum === 'number' && typeof change.maximum === 'number' && change.minimum > change.maximum)
+            addIssue(issues, changePath, 'INVALID_DYNAMIC_COST_BOUND', 'minimum cannot exceed maximum');
+          if (
+            formula?.kind === 'number' &&
+            !(change.operator === 'divide' && formula.value === 0) &&
+            ['on_draw', 'while_in_hand', 'on_play'].includes(String(change.timing)) &&
+            operators.has(String(change.operator))
+          ) changes.push({
             kind: 'dynamic_cost', timing: change.timing as 'on_draw' | 'while_in_hand' | 'on_play',
             operator: change.operator as import('./cardPatch').CardCostOperator, value: formula.value,
             ...(typeof change.minimum === 'number' ? { minimum: change.minimum } : {}),
@@ -2186,7 +3118,7 @@ function compileSingleEntry(
           ...(typeof raw.description === 'string' ? { description: raw.description.trim() } : {}),
           ...(typeof raw.emoji === 'string' ? { emoji: raw.emoji.trim() } : {}),
           scope: scope as import('./cardPatch').CardPatchScope,
-          ...(['played', 'discarded', 'turn_end', 'combat_end', 'run_end', 'manual'].includes(String(removeOn))
+          ...(['resolution_end', 'played', 'discarded', 'turn_end', 'combat_end', 'run_end', 'manual'].includes(String(removeOn))
             ? { removeOn: removeOn as import('./cardAttachment').CardAttachmentRemovalEvent }
             : {}),
           ...(typeof raw.remaining === 'number' ? { remaining: raw.remaining } : {}),
@@ -2200,7 +3132,7 @@ function compileSingleEntry(
   } else if (operation === 'upgrade_card') {
     rejectUnknownEntryKeys(
       value,
-      [operation, ...CARD_SELECTOR_INPUT_KEYS, 'count', 'scope', 'levels', 'max_level', 'changes', 'when'],
+      [operation, ...CARD_SELECTOR_INPUT_KEYS, 'scope', 'levels', 'max_level', 'changes', 'when'],
       path,
       issues,
     );
@@ -2232,7 +3164,9 @@ function compileSingleEntry(
         const formula = compileFormula(raw.value, `${changePath}.value`, issues);
         if (!CARD_VALUE_STATS.has(raw.stat as CardValueStat)) addIssue(issues, `${changePath}.stat`, 'INVALID_CARD_VALUE_STAT', 'unsupported upgrade stat');
         if (!CARD_VALUE_OPERATORS.has(raw.operator as CardValueOperator)) addIssue(issues, `${changePath}.operator`, 'INVALID_CARD_VALUE_OPERATOR', 'unsupported upgrade operator');
-        if (formula?.kind === 'number' && CARD_VALUE_STATS.has(raw.stat as CardValueStat) && CARD_VALUE_OPERATORS.has(raw.operator as CardValueOperator))
+        if (raw.operator === 'divide' && formula?.kind === 'number' && formula.value === 0)
+          addIssue(issues, `${changePath}.value`, 'DIVISION_BY_ZERO', 'upgrade change cannot divide by zero');
+        if (formula?.kind === 'number' && !(raw.operator === 'divide' && formula.value === 0) && CARD_VALUE_STATS.has(raw.stat as CardValueStat) && CARD_VALUE_OPERATORS.has(raw.operator as CardValueOperator))
           changes.push({ kind: 'numeric', stat: raw.stat as CardValueStat, operator: raw.operator as CardValueOperator, value: formula.value });
         return;
       }
@@ -2241,7 +3175,9 @@ function compileSingleEntry(
         const formula = compileFormula(raw.value, `${changePath}.value`, issues);
         const operators = new Set(['add', 'subtract', 'multiply', 'divide', 'set', 'min', 'max']);
         if (!operators.has(String(raw.operator))) addIssue(issues, `${changePath}.operator`, 'INVALID_CARD_COST_OPERATOR', 'unsupported cost operator');
-        if (formula?.kind === 'number' && operators.has(String(raw.operator))) changes.push({
+        if (raw.operator === 'divide' && formula?.kind === 'number' && formula.value === 0)
+          addIssue(issues, `${changePath}.value`, 'DIVISION_BY_ZERO', 'upgrade change cannot divide by zero');
+        if (formula?.kind === 'number' && !(raw.operator === 'divide' && formula.value === 0) && operators.has(String(raw.operator))) changes.push({
           kind: raw.kind,
           operator: raw.operator as import('./cardPatch').CardCostOperator,
           value: formula.value,
@@ -2261,6 +3197,19 @@ function compileSingleEntry(
         if (formula?.kind === 'number') changes.push({ kind: 'replay', extra: formula.value });
         return;
       }
+      if (raw.kind === 'area') {
+        rejectUnknownEntryKeys(raw, ['kind'], changePath, issues, false);
+        changes.push({ kind: 'area' });
+        return;
+      }
+      if (raw.kind === 'hits') {
+        rejectUnknownEntryKeys(raw, ['kind', 'add'], changePath, issues, false);
+        const formula = compileFormula(raw.add, `${changePath}.add`, issues);
+        if (formula?.kind === 'number' && typeof formula.value === 'number' && Number.isInteger(formula.value) && formula.value > 0 && formula.value <= 19)
+          changes.push({ kind: 'hits', add: formula.value });
+        else addIssue(issues, `${changePath}.add`, 'INVALID_HITS_GROWTH', 'hits upgrade add must be an integer from 1 to 19');
+        return;
+      }
       if (raw.kind === 'dynamic_cost') {
         rejectUnknownEntryKeys(raw, ['kind', 'timing', 'operator', 'value', 'minimum', 'maximum'], changePath, issues, false);
         const formula = compileFormula(raw.value, `${changePath}.value`, issues);
@@ -2268,7 +3217,20 @@ function compileSingleEntry(
         const operators = new Set(['add', 'subtract', 'multiply', 'divide', 'set', 'min', 'max']);
         if (!['on_draw', 'while_in_hand', 'on_play'].includes(String(timing))) addIssue(issues, `${changePath}.timing`, 'INVALID_DYNAMIC_COST_TIMING', 'unsupported dynamic cost timing');
         if (!operators.has(String(raw.operator))) addIssue(issues, `${changePath}.operator`, 'INVALID_CARD_COST_OPERATOR', 'unsupported cost operator');
-        if (formula?.kind === 'number' && ['on_draw', 'while_in_hand', 'on_play'].includes(String(timing)) && operators.has(String(raw.operator))) changes.push({
+        if (raw.operator === 'divide' && formula?.kind === 'number' && formula.value === 0)
+          addIssue(issues, `${changePath}.value`, 'DIVISION_BY_ZERO', 'upgrade dynamic cost cannot divide by zero');
+        if (raw.minimum !== undefined && (typeof raw.minimum !== 'number' || !Number.isFinite(raw.minimum)))
+          addIssue(issues, `${changePath}.minimum`, 'INVALID_DYNAMIC_COST_BOUND', 'minimum must be a finite number');
+        if (raw.maximum !== undefined && (typeof raw.maximum !== 'number' || !Number.isFinite(raw.maximum)))
+          addIssue(issues, `${changePath}.maximum`, 'INVALID_DYNAMIC_COST_BOUND', 'maximum must be a finite number');
+        if (typeof raw.minimum === 'number' && typeof raw.maximum === 'number' && raw.minimum > raw.maximum)
+          addIssue(issues, changePath, 'INVALID_DYNAMIC_COST_BOUND', 'minimum cannot exceed maximum');
+        if (
+          formula?.kind === 'number' &&
+          !(raw.operator === 'divide' && formula.value === 0) &&
+          ['on_draw', 'while_in_hand', 'on_play'].includes(String(timing)) &&
+          operators.has(String(raw.operator))
+        ) changes.push({
           kind: 'dynamic_cost', timing: timing as 'on_draw' | 'while_in_hand' | 'on_play',
           operator: raw.operator as import('./cardPatch').CardCostOperator, value: formula.value,
           ...(typeof raw.minimum === 'number' ? { minimum: raw.minimum } : {}),
@@ -2285,14 +3247,25 @@ function compileSingleEntry(
       };
     }
   } else if (operation === 'copy' || operation === 'double') {
-    rejectUnknownEntryKeys(value, [operation, ...CARD_SELECTOR_INPUT_KEYS, 'when'], path, issues);
+    rejectUnknownEntryKeys(
+      value,
+      [operation, ...CARD_SELECTOR_INPUT_KEYS, ...(operation === 'copy' ? ['to'] : []), 'when'],
+      path,
+      issues,
+    );
+    // Copies always enter the hand. Some schema transports restate that fixed
+    // destination as `to:"hand"`; accepting the only possible value preserves
+    // identical semantics without opening a second destination contract.
+    if (operation === 'copy' && value.to !== undefined && value.to !== 'hand') {
+      addIssue(issues, `${path}.to`, 'INVALID_CARD_DESTINATION', 'copy.to can only be hand');
+    }
     const selectAll = value[operation] === 'all';
     const count = selectAll ? undefined : compileFixedCount(value[operation], `${path}.${operation}`, issues);
     const selectorSource = selectAll ? { ...value, pick: 'all' } : value;
     const selector = count === null ? null : compileCardSelector(selectorSource, path, issues, 'choose', count);
     if (selector) node = { op: operation === 'copy' ? 'copy_cards' : 'double_card_effect', selector };
   } else if (operation === 'auto_play') {
-    rejectUnknownEntryKeys(value, [operation, ...CARD_SELECTOR_INPUT_KEYS, 'count', 'free', 'when'], path, issues);
+    rejectUnknownEntryKeys(value, [operation, ...CARD_SELECTOR_INPUT_KEYS, 'free', 'when'], path, issues);
     const selectAll = value.auto_play === 'all';
     const amount = selectAll ? undefined : compileFixedCount(value.auto_play, `${path}.auto_play`, issues);
     const selectorSource = selectAll
@@ -2303,6 +3276,28 @@ function compileSingleEntry(
       addIssue(issues, `${path}.free`, 'INVALID_AUTO_PLAY_COST', 'free must be boolean');
     if (selector && (value.free === undefined || typeof value.free === 'boolean'))
       node = { op: 'auto_play_cards', selector, free: value.free !== false };
+  } else if (operation === 'replay_current') {
+    rejectUnknownEntryKeys(value, [operation, 'when'], path, issues);
+    const count = compileFormula(value.replay_current, `${path}.replay_current`, issues);
+    if (count?.kind === 'number') {
+      if (typeof count.value === 'number' && (!Number.isInteger(count.value) || count.value < 1 || count.value > 20)) {
+        addIssue(
+          issues,
+          `${path}.replay_current`,
+          'INVALID_CURRENT_REPLAY_COUNT',
+          'replay_current must be an integer from 1 to 20 or a formula that resolves to a non-negative count',
+        );
+      } else {
+        node = { op: 'replay_current', count: count.value };
+      }
+    } else if (count?.kind === 'choice') {
+      addIssue(
+        issues,
+        `${path}.replay_current`,
+        'UNSUPPORTED_CURRENT_REPLAY_FORMULA',
+        'replay_current does not accept a ternary formula; put the condition in when and use a positive replay count',
+      );
+    }
   } else if (operation === 'card_destination') {
     rejectUnknownEntryKeys(value, [operation, 'when'], path, issues);
     const destination = value.card_destination;
@@ -2312,14 +3307,19 @@ function compileSingleEntry(
   } else if (operation === 'move_card' || operation === 'remove_card') {
     rejectUnknownEntryKeys(
       value,
-      [operation, ...CARD_SELECTOR_INPUT_KEYS, 'count', 'destination', 'position', 'when'],
+      [operation, ...CARD_SELECTOR_INPUT_KEYS, 'destination', 'position', 'when'],
       path,
       issues,
     );
     const selectAll = value[operation] === 'all';
-    const amount = selectAll ? 100 : compileFixedCount(value[operation], `${path}.${operation}`, issues);
+    if (!selectAll && value.pick === 'all') {
+      addIssue(issues, `${path}.${operation}`, 'INVALID_CARD_COUNT', `pick: all requires ${operation}: all`);
+    }
+    const amount = selectAll ? 1 : compileFixedCount(value[operation], `${path}.${operation}`, issues);
     const selectorSource = selectAll ? { ...value, pick: 'all' } : value;
-    const selector = amount === null ? null : compileCardSelector(selectorSource, path, issues, 'choose', amount);
+    const selector = amount === null
+      ? null
+      : compileCardSelector(selectorSource, path, issues, 'choose', selectAll ? undefined : amount);
     if (operation === 'remove_card') {
       if (value.destination !== undefined) addIssue(issues, `${path}.destination`, 'UNKNOWN_FIELD', 'remove_card does not accept destination');
       if (value.position !== undefined) addIssue(issues, `${path}.position`, 'UNKNOWN_FIELD', 'remove_card does not accept position');
@@ -2338,8 +3338,7 @@ function compileSingleEntry(
   } else if (operation === 'transform_card') {
     rejectUnknownEntryKeys(value, [operation, ...CARD_SELECTOR_INPUT_KEYS, 'count', 'when'], path, issues);
     const templateId = value.transform_card;
-    const count = value.count === undefined ? 1 : compileFixedCount(value.count, `${path}.count`, issues);
-    const selector = count === null ? null : compileCardSelector(value, path, issues, 'choose', count);
+    const selector = compileCountedCardSelector(value, path, issues);
     if (typeof templateId !== 'string' || !templateId.trim())
       addIssue(issues, `${path}.transform_card`, 'INVALID_CARD_TEMPLATE', 'transform_card must reference a template ID');
     const template = typeof templateId === 'string' ? templates.get(templateId) : undefined;
@@ -2358,8 +3357,8 @@ function compileSingleEntry(
       addIssue(issues, `${path}.add_card`, 'INVALID_CARD_ID', 'add_card must reference a template ID');
     } else if (!templates.has(templateId)) {
       addIssue(issues, `${path}.add_card`, 'UNKNOWN_CARD_TEMPLATE', `Unknown card template: ${templateId}`);
-    } else if (destination !== 'hand' && destination !== 'deck') {
-      addIssue(issues, `${path}.to`, 'INVALID_CARD_ZONE', 'add_card to must be hand or deck');
+    } else if (destination !== 'hand' && destination !== 'deck' && destination !== 'discard') {
+      addIssue(issues, `${path}.to`, 'INVALID_CARD_ZONE', 'add_card to must be hand, deck, or discard');
     } else if (count !== null) {
       const card = compileGeneratedCard(
         templates.get(templateId),
@@ -2369,7 +3368,13 @@ function compileSingleEntry(
         templateStack,
         statusNames,
       );
-      if (card) node = { op: 'add_card', zone: destination === 'hand' ? 'hand' : 'draw', card, count };
+      if (card?.unique && count !== 1) addIssue(issues, `${path}.count`, 'DUPLICATE_UNIQUE_CARD', '唯一卡牌每次只能生成一张');
+      else if (card) node = {
+        op: 'add_card',
+        zone: destination === 'deck' ? 'draw' : destination,
+        card,
+        count,
+      };
     }
   } else if (operation === 'ensure_card') {
     rejectUnknownEntryKeys(value, [operation, 'to', 'minimum', 'include_copies', 'when'], path, issues);
@@ -2395,7 +3400,8 @@ function compileSingleEntry(
         templateStack,
         statusNames,
       );
-      if (card) node = {
+      if (card?.unique && minimum !== 1) addIssue(issues, `${path}.minimum`, 'DUPLICATE_UNIQUE_CARD', '唯一卡牌只能确保一张');
+      else if (card) node = {
         op: 'ensure_card',
         zone: destination === 'hand' ? 'hand' : 'draw',
         card,
@@ -2407,7 +3413,7 @@ function compileSingleEntry(
     const ruleFilterKeys = CARD_SELECTOR_INPUT_KEYS.filter(key => key !== 'from' && key !== 'pick');
     rejectUnknownEntryKeys(value, [operation, 'limit', 'extra', 'to', 'destination', 'priority', 'resources', ...ruleFilterKeys], path, issues, false);
     const rule = value.card_rule;
-    const target = compileTarget(value.to, implicitTarget ?? 'self', `${path}.to`, issues);
+    const target = compileEffectTarget(value, implicitTarget ?? compactEffectDefaultTarget(operation), `${path}.to`, issues, enemyCollectionTarget);
     if (typeof rule !== 'string' || !CARD_PLAY_RULES.has(rule as CardPlayRuleKind)) {
       addIssue(issues, `${path}.card_rule`, 'INVALID_CARD_PLAY_RULE', `Unsupported card rule: ${String(rule)}`);
     }
@@ -2424,8 +3430,10 @@ function compileSingleEntry(
     if (limitFormula && (limitFormula.kind !== 'number' || !isSupportedModifierFormula(limitFormula.value))) {
       addIssue(issues, `${path}.limit`, 'INVALID_CARD_RULE_FORMULA', 'Card rule formulas may only use numbers and status stacks');
     }
+    if (rule === 'replay' && value.extra === undefined)
+      addIssue(issues, `${path}.extra`, 'MISSING_CARD_REPLAY_COUNT', 'replay card_rule requires extra');
     const extraFormula =
-      rule === 'replay' ? compileFormula(value.extra ?? 1, `${path}.extra`, issues) : null;
+      rule === 'replay' && value.extra !== undefined ? compileFormula(value.extra, `${path}.extra`, issues) : null;
     if (rule !== 'replay' && value.extra !== undefined)
       addIssue(issues, `${path}.extra`, 'UNEXPECTED_CARD_REPLAY_COUNT', 'only replay card_rule accepts extra');
     if (extraFormula && (extraFormula.kind !== 'number' || !isSupportedModifierFormula(extraFormula.value))) {
@@ -2512,21 +3520,8 @@ function compileSingleEntry(
     if (!(Array.isArray(value.effects) || isRecord(value.effects))) {
       addIssue(issues, `${path}.effects`, 'EMPTY_SCHEDULE_EFFECTS', 'schedule requires nested effects');
     } else {
-      const nested = compileCompactEffectListInternal(
-        value.effects,
-        { creates: Array.from(templates.values()), statusNames },
-        templateStack,
-      );
-      if (!nested.ok) {
-        nested.issues.forEach(issue =>
-          addIssue(
-            issues,
-            `${path}.effects${issue.path === '$' ? '' : issue.path.slice(1)}`,
-            issue.code,
-            issue.message,
-          ),
-        );
-      } else if (
+      const nestedEffects = compileNestedEffects(value.effects, `${path}.effects`);
+      if (nestedEffects && (
         Number.isInteger(afterTurns) &&
         Number(afterTurns) >= 0 &&
         Number(afterTurns) <= 999 &&
@@ -2536,14 +3531,14 @@ function compileSingleEntry(
         (repeatEvery === undefined || (Number.isInteger(repeatEvery) && Number(repeatEvery) >= 1 && Number(repeatEvery) <= 999)) &&
         (repeats === undefined || (Number.isInteger(repeats) && Number(repeats) >= 1 && Number(repeats) <= 999)) &&
         ((repeatEvery === undefined) === (repeats === undefined))
-      ) {
+      )) {
         node = {
           op: 'schedule_effect',
           afterTurns: Number(afterTurns),
           phase: phase as 'turn_start' | 'before_draw' | 'after_draw' | 'turn_end',
           ...(Number(priority) !== 0 ? { priority: Number(priority) } : {}),
           ...(repeatEvery !== undefined ? { repeatEvery: Number(repeatEvery), repeats: Number(repeats) } : {}),
-          effects: nested.value.steps,
+          effects: nestedEffects,
         };
       }
     }
@@ -2557,7 +3552,7 @@ function compileSingleEntry(
     );
     const stat = value.modify;
     const modifierKeys = Array.from(MODIFIER_OPERATORS).filter(key => value[key] !== undefined);
-    const target = compileTarget(value.to, implicitTarget ?? 'self', `${path}.to`, issues);
+    const target = compileEffectTarget(value, implicitTarget ?? compactEffectDefaultTarget(operation), `${path}.to`, issues, enemyCollectionTarget);
     if (typeof stat !== 'string' || !MODIFIER_STATS.has(stat as ModifierStat)) {
       addIssue(issues, `${path}.modify`, 'INVALID_MODIFIER', `Unsupported modifier: ${String(stat)}`);
     }
@@ -2627,7 +3622,7 @@ function compileEntry(
       enemyCollectionTarget,
     );
     if (!node || hits === null) return null;
-    return operations[0] === 'damage' ? repeatDamageNode(node, hits) : [node];
+    return operations[0] === 'damage' ? repeatDamageNode(node, hits, `${path}:damage`) : [node];
   }
 
   if (value.hits !== undefined) {
@@ -2635,10 +3630,7 @@ function compileEntry(
     return null;
   }
   const auxiliaryOperations = operations.filter(operation => !COMPACT_EFFECT_BUNDLE_OPERATION_SET.has(operation));
-  const hasOneSafeAuxiliary =
-    auxiliaryOperations.length === 1 &&
-    COMPACT_EFFECT_SAFE_AUXILIARY_BUNDLE_OPERATION_SET.has(auxiliaryOperations[0]);
-  if (auxiliaryOperations.length > 0 && !hasOneSafeAuxiliary) {
+  if (auxiliaryOperations.length > 0) {
     auxiliaryOperations
       .forEach(operation =>
         addIssue(
@@ -2652,7 +3644,7 @@ function compileEntry(
       issues,
       path,
       'INVALID_EFFECT_BUNDLE',
-      'Only common numeric, status, and draw effects may share one object; use separate array entries for other operations',
+      'Only common numeric, status, and draw effects may share one object; use separate array entries for every other operation',
     );
     return null;
   }
@@ -2667,7 +3659,6 @@ function compileEntry(
 
   const orderedOperations = [
     ...sortCompactBundleOperations(operations.filter(operation => COMPACT_EFFECT_BUNDLE_OPERATION_SET.has(operation))),
-    ...auxiliaryOperations,
   ];
   const nodes = orderedOperations.map(operation =>
     compileSingleEntry(
@@ -2756,7 +3747,7 @@ function compileCompactEffectListInternal(
     programSteps = [{ op: 'if', condition, then: programSteps }];
   }
   if (options.trigger !== undefined) {
-    if (typeof options.trigger !== 'string' || !REGISTERABLE_EFFECT_TRIGGER_SET.has(options.trigger)) {
+    if (typeof options.trigger !== 'string' || !RUNTIME_REGISTERED_EFFECT_TRIGGER_SET.has(options.trigger)) {
       addIssue(issues, '$.trigger', 'INVALID_TRIGGER', `Unsupported card trigger: ${String(options.trigger)}`);
       return { ok: false, issues };
     }
@@ -2793,5 +3784,19 @@ export function compileCompactEffectList(
   value: unknown,
   options: CompactEffectCompilationOptions = {},
 ): CompactEffectCompilationResult {
+  // Check the authoring tree before recursive compilation, including templates.
+  // This also bounds cyclic/non-JSON inputs without using the JS call stack.
+  const pending = [{ value, depth: 0, guards: 0 }, { value: options.creates, depth: 0, guards: 0 }];
+  let visited = 0;
+  while (pending.length) {
+    const entry = pending.pop()!;
+    if (!entry.value || typeof entry.value !== 'object') continue;
+    const guards = entry.guards + (isRecord(entry.value) && 'guard' in entry.value ? 1 : 0);
+    if (++visited > 65536 || entry.depth > 64 || guards > 8) {
+      return { ok: false, issues: [{ path: '$', code: 'AUTHORING_COMPLEXITY_LIMIT',
+        message: 'Authored effects exceed object/depth limits (65536 objects, depth 64, 8 nested guards)' }] };
+    }
+    for (const child of Object.values(entry.value)) pending.push({ value: child, depth: entry.depth + 1, guards });
+  }
   return compileCompactEffectListInternal(value, options);
 }

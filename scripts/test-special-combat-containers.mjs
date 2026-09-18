@@ -38,7 +38,7 @@ assert.deepEqual(core.selectOrbs(container, { pick: 'last', count: 1 }).map(valu
 assert.deepEqual(core.selectOrbs(container, { pick: 'all', id: 'frost' }).map(value => value.instanceId), ['b']);
 const modified = core.modifyOrbValues(container, { pick: 'all' }, 'multiply', 1.5);
 assert.deepEqual(modified.container.orbs.map(value => value.value), [7.5, 10.5]);
-assert.throws(() => core.modifyOrbValues(container, { pick: 'first' }, 'divide', 0), /divided by zero/);
+assert.throws(() => core.modifyOrbValues(container, { pick: 'first' }, 'divide', 0), /不能除以零/);
 const resized = core.resizeOrbContainer(container, 1);
 assert.deepEqual(resized.container.orbs.map(value => value.instanceId), ['b']);
 assert.deepEqual(resized.overflow.map(value => value.instanceId), ['c']);

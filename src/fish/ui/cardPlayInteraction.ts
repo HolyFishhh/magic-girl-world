@@ -26,6 +26,14 @@ export function resolveCardDropAction(input: {
 }
 
 /**
+ * A hidden window can suppress the terminal pointer event. Only a card that
+ * was actually moved out of its hand slot needs restoration on interruption.
+ */
+export function shouldRestoreInterruptedDrag(dragActive: boolean, hasReservedSlot: boolean): boolean {
+  return dragActive && hasReservedSlot;
+}
+
+/**
  * Put the one real card immediately before its invisible slot marker. The DOM
  * slot, rather than a remembered rectangle, is the source of truth.
  */

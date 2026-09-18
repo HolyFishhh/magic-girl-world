@@ -58,13 +58,20 @@ export type EffectCommand =
   | { type: 'gain_resource'; target: EffectTarget; targetSelector?: EnemyTargetSelector; resource: string; amount: number }
   | { type: 'set_resource'; target: EffectTarget; targetSelector?: EnemyTargetSelector; resource: string; value: number }
   | { type: 'set_stat'; target: EffectTarget; targetSelector?: EnemyTargetSelector; stat: 'hp' | 'lust' | 'energy' | 'block'; value: number }
+  | { type: 'persistent_growth'; stat: 'max_hp' | 'max_lust' | 'damage' | 'lust'; summonTemplateId?: string; operator: 'add' | 'subtract' | 'set'; value: number }
   | { type: 'apply_status'; target: EffectTarget; targetSelector?: EnemyTargetSelector; status: string; stacks: number }
   | { type: 'remove_status'; target: EffectTarget; targetSelector?: EnemyTargetSelector; status: string }
   | { type: 'draw_cards'; amount: number }
   | { type: 'scry_cards'; amount: number }
   | { type: 'discard_cards'; selector: CardSelector; amount: number }
   | { type: 'exhaust_cards'; selector: CardSelector; amount: number }
-  | { type: 'recover_cards'; source: RecoverCardZone; pick: 'random' | 'choose' | 'all'; amount: number }
+  | {
+      type: 'recover_cards';
+      source: RecoverCardZone;
+      pick: 'random' | 'choose' | 'all';
+      amount: number;
+      filter?: CardSelector['filter'];
+    }
   | { type: 'reduce_card_cost'; selector: CardSelector; amount: number }
   | {
       type: 'modify_card_value';
@@ -76,6 +83,7 @@ export type EffectCommand =
   | { type: 'copy_cards'; selector: CardSelector }
   | { type: 'double_card_effect'; selector: CardSelector }
   | { type: 'auto_play_cards'; selector: CardSelector; free: boolean }
+  | { type: 'replay_current'; count: number }
   | { type: 'set_card_destination'; destination: import('./cardRules').PlayedCardDestination }
   | { type: 'move_cards'; selector: CardSelector; amount: number; destination: EffectCardPileZone; position: 'top' | 'bottom' }
   | { type: 'remove_cards'; selector: CardSelector; amount: number }
@@ -86,15 +94,18 @@ export type EffectCommand =
       type: 'upgrade_cards'; selector: CardSelector; scope: 'combat' | 'run' | 'permanent'; levels: number;
       maxLevel?: number; changes: EffectCardUpgradeChange[];
     }
-  | { type: 'add_card'; zone: 'hand' | 'draw'; card: GeneratedCardDefinition; count: number }
+  | { type: 'add_card'; zone: 'hand' | 'draw' | 'discard'; card: GeneratedCardDefinition; count: number }
   | {
       type: 'ensure_card'; zone: 'hand' | 'draw'; card: GeneratedCardDefinition;
       minimum: number; includeCopies: boolean;
     }
   | {
       type: 'spawn_summon'; target: EffectTarget; summon: EffectSummonDefinition; count: number;
-      capacity: number; overflow: SummonOverflowPolicy;
+      capacity?: number; overflow: SummonOverflowPolicy;
     }
+  | { type: 'wait' }
+  | { type: 'say'; text: string }
+  | { type: 'enemy_intent'; actionId: string }
   | { type: 'spawn_enemy'; enemy: EffectEnemySpawnDefinition; count: number; capacity: number }
   | { type: 'damage_summons' | 'heal_summons'; selector: SummonSelector; amount: number }
   | {
@@ -109,11 +120,11 @@ export type EffectCommand =
   | { type: 'set_summon_resource'; selector: SummonSelector; resource: string; value: number }
   | { type: 'apply_summon_status'; selector: SummonSelector; status: string; stacks: number }
   | { type: 'remove_summon_status'; selector: SummonSelector; status: string }
-  | { type: 'activate_summons'; selector: SummonSelector }
+  | { type: 'activate_summons'; selector: SummonSelector; trigger?: 'defeated'; suppliedAction?: { id: string; name: string; emoji?: string; description?: string; fixed?: boolean; effectProgram: EffectProgram } }
   | { type: 'dismiss_summons'; selector: SummonSelector; retainCorpse: boolean }
   | {
       type: 'copy_summons'; selector: SummonSelector; targetOwner: 'same' | EffectTarget;
-      capacity: number; overflow: SummonOverflowPolicy;
+      capacity?: number; overflow: SummonOverflowPolicy;
     }
   | { type: 'summoner_effects'; effects: EffectNode[] }
   | {
@@ -174,13 +185,23 @@ export type EffectCommand =
   | { type: 'narration'; text: string };
 
 export interface EffectCommandRuntimePorts {
+  /** UI navigation boundary; hosts must roll back all branch mutations on error. */
+  runChoiceBranch?(execute: () => Promise<boolean>): Promise<boolean>;
   readState(): CoreEffectState;
-  execute(command: EffectCommand, path: string): void | Promise<void>;
+  execute(command: EffectCommand, path: string): void | EffectCommandOutcome | Promise<void | EffectCommandOutcome>;
   isTerminal?(): boolean;
   chooseEffectOption?(
     choice: Extract<EffectNode, { op: 'choose_one' }>,
     path: string,
-  ): string | null | Promise<string | null>;
+  ): string | readonly string[] | null | Promise<string | readonly string[] | null>;
+}
+
+export class EffectChoiceBackRequested extends Error {
+  constructor() { super('返回上一级选择'); this.name = 'EffectChoiceBackRequested'; }
+}
+
+export interface EffectCommandOutcome {
+  discardResult?: import('./cardEffectRuntime').DiscardCommandResult;
 }
 
 export interface EffectCommandRuntimeResult {
@@ -214,6 +235,11 @@ function createCommand(
   path: string,
 ): EffectCommand {
   if (node.op === 'narrate') return { type: 'narration', text: node.text };
+  if (node.op === 'persistent_growth') return {
+    type: 'persistent_growth', stat: node.stat, operator: node.operator,
+    ...(node.summonTemplateId ? { summonTemplateId: node.summonTemplateId } : {}),
+    value: readAmount(node.value, state, context, `${path}.value`, false, true),
+  };
   if (node.op === 'draw_cards' || node.op === 'scry_cards') {
     return { type: node.op, amount: readAmount(node.amount, state, context, `${path}.amount`, true) };
   }
@@ -230,6 +256,7 @@ function createCommand(
       source: node.source,
       pick: node.pick,
       amount: readAmount(node.amount, state, context, `${path}.amount`, true),
+      ...(node.filter ? { filter: clone(node.filter) } : {}),
     };
   }
   if (node.op === 'reduce_card_cost') {
@@ -254,6 +281,12 @@ function createCommand(
   if (node.op === 'auto_play_cards') {
     return { type: 'auto_play_cards', selector: clone(node.selector), free: node.free };
   }
+  if (node.op === 'replay_current') {
+    return {
+      type: 'replay_current',
+      count: Math.min(20, readAmount(node.count, state, context, `${path}.count`, true)),
+    };
+  }
   if (node.op === 'set_card_destination') {
     return { type: 'set_card_destination', destination: node.destination };
   }
@@ -274,7 +307,9 @@ function createCommand(
     if (patch.kind === 'numeric' || patch.kind === 'cost' || patch.kind === 'x_value') {
       patch.value = roundBattleValue(evaluateNumericExpression(patch.value, state, context, `${path}.patch.value`));
     } else if (patch.kind === 'replay') {
-      patch.extra = Math.max(1, Math.floor(evaluateNumericExpression(patch.extra, state, context, `${path}.patch.extra`)));
+      patch.extra = Math.min(20, Math.max(1, Math.floor(evaluateNumericExpression(patch.extra, state, context, `${path}.patch.extra`))));
+    } else if (patch.kind === 'hits') {
+      patch.add = Math.min(19, Math.max(1, Math.floor(evaluateNumericExpression(patch.add, state, context, `${path}.patch.add`))));
     }
     return { type: 'apply_card_patch', selector: clone(node.selector), patch };
   }
@@ -289,12 +324,12 @@ function createCommand(
           `${path}.attachment.changes[${index}].value`,
         ));
       } else if (change.kind === 'replay') {
-        change.extra = Math.max(1, Math.floor(evaluateNumericExpression(
+        change.extra = Math.min(20, Math.max(1, Math.floor(evaluateNumericExpression(
           change.extra,
           state,
           context,
           `${path}.attachment.changes[${index}].extra`,
-        )));
+        ))));
       }
     });
     return {
@@ -309,7 +344,9 @@ function createCommand(
       if (change.kind === 'numeric' || change.kind === 'cost' || change.kind === 'x_value') {
         change.value = roundBattleValue(evaluateNumericExpression(change.value, state, context, `${path}.changes[${index}].value`));
       } else if (change.kind === 'replay') {
-        change.extra = Math.max(1, Math.floor(evaluateNumericExpression(change.extra, state, context, `${path}.changes[${index}].extra`)));
+        change.extra = Math.min(20, Math.max(1, Math.floor(evaluateNumericExpression(change.extra, state, context, `${path}.changes[${index}].extra`))));
+      } else if (change.kind === 'hits') {
+        change.add = Math.min(19, Math.max(1, Math.floor(evaluateNumericExpression(change.add, state, context, `${path}.changes[${index}].add`))));
       }
     });
     return {
@@ -330,14 +367,17 @@ function createCommand(
     return {
       type: 'spawn_summon', target: node.target, summon: clone(node.summon),
       count: readAmount(node.count, state, context, `${path}.count`, true),
-      capacity: node.capacity ?? 3, overflow: node.overflow ?? 'replace_oldest',
+      capacity: node.capacity, overflow: node.overflow ?? 'replace_oldest',
     };
   }
+  if (node.op === 'wait') return { type: 'wait' };
+  if (node.op === 'say') return { type: 'say', text: node.text };
+  if (node.op === 'enemy_intent') return { type: 'enemy_intent', actionId: node.actionId };
   if (node.op === 'spawn_enemy') {
     return {
       type: 'spawn_enemy', enemy: clone(node.enemy),
       count: readAmount(node.count, state, context, `${path}.count`, true),
-      capacity: node.capacity ?? 8,
+      capacity: node.capacity ?? Number.MAX_SAFE_INTEGER,
     };
   }
   if (node.op === 'damage_summons' || node.op === 'heal_summons') {
@@ -379,14 +419,14 @@ function createCommand(
   if (node.op === 'remove_summon_status') {
     return { type: 'remove_summon_status', selector: clone(node.selector), status: node.status };
   }
-  if (node.op === 'activate_summons') return { type: 'activate_summons', selector: clone(node.selector) };
+  if (node.op === 'activate_summons') return { type: 'activate_summons', selector: clone(node.selector), ...(node.trigger ? { trigger: node.trigger } : {}), ...(node.suppliedAction ? { suppliedAction: clone(node.suppliedAction) } : {}) };
   if (node.op === 'dismiss_summons') {
     return { type: 'dismiss_summons', selector: clone(node.selector), retainCorpse: node.retainCorpse === true };
   }
   if (node.op === 'copy_summons') {
     return {
       type: 'copy_summons', selector: clone(node.selector), targetOwner: node.targetOwner ?? 'same',
-      capacity: node.capacity ?? 3, overflow: node.overflow ?? 'replace_oldest',
+      capacity: node.capacity, overflow: node.overflow ?? 'replace_oldest',
     };
   }
   if (node.op === 'summoner_effects') {
@@ -414,7 +454,7 @@ function createCommand(
           : Math.max(0, Math.floor(evaluateNumericExpression(node.limit, state, context, `${path}.limit`))) }),
       extra:
         node.rule === 'replay' && node.extra !== undefined
-          ? Math.max(1, Math.floor(evaluateNumericExpression(node.extra, state, context, `${path}.extra`)))
+          ? Math.min(20, Math.max(1, Math.floor(evaluateNumericExpression(node.extra, state, context, `${path}.extra`))))
           : 0,
       ...(node.selector ? { selector: clone(node.selector) } : {}),
       ...(node.destination ? { destination: node.destination } : {}),
@@ -568,6 +608,8 @@ export async function runEffectCommandProgram(
   context: EffectExecutionContext,
   ports: EffectCommandRuntimePorts,
 ): Promise<EffectCommandRuntimeResult> {
+  // Never inherit a parent's/previous card's local result, even if it reuses context.
+  context = { ...context, discardResult: undefined };
   const validation = validateEffectProgram(value);
   if (!validation.ok) {
     const first = validation.issues[0];
@@ -595,22 +637,52 @@ export async function runEffectCommandProgram(
       if (node.op === 'choose_one') {
         if (!ports.chooseEffectOption)
           throw new EffectExecutionError('CHOICE_HOST_REQUIRED', nodePath, '当前宿主不支持效果选择');
-        const optionId = await ports.chooseEffectOption(node, nodePath);
-        if (optionId === null) throw new EffectExecutionError('CHOICE_CANCELLED', nodePath, '效果选择已取消');
-        const selected = node.options.find(option => option.id === optionId);
-        if (!selected) throw new EffectExecutionError('INVALID_CHOICE', nodePath, `无效选项: ${String(optionId)}`);
-        const command: EffectCommand = {
-          type: 'choice_selected', choiceId: node.choiceId, optionId: selected.id, label: selected.label,
-        };
-        await ports.execute(command, nodePath);
-        commands.push(command);
-        const completed = await executeNodes(selected.effects, `${nodePath}.options.${selected.id}`);
-        if (!completed) return false;
+        while (true) {
+          const selection = await ports.chooseEffectOption(node, nodePath);
+          if (selection === null) throw new EffectExecutionError('CHOICE_CANCELLED', nodePath, '效果选择已取消');
+          const selectedIds = typeof selection === 'string' ? [selection] : [...selection];
+          const count = node.count ?? 1;
+          if (selectedIds.length !== count || new Set(selectedIds).size !== selectedIds.length)
+            throw new EffectExecutionError('INVALID_CHOICE', nodePath, `必须选择 ${count} 个不同选项`);
+          const selected = new Set(selectedIds);
+          if (selectedIds.some(optionId => !node.options.some(option => option.id === optionId)))
+            throw new EffectExecutionError('INVALID_CHOICE', nodePath, `无效选项: ${selectedIds.join(', ')}`);
+          const chosen = node.options.filter(option => selected.has(option.id));
+          const commandsForChoice: EffectCommand[] = chosen.map(option => ({
+            type: 'choice_selected', choiceId: node.choiceId, optionId: option.id, label: option.label,
+          }));
+          const commandCount = commands.length;
+          const previousDiscardResult = context.discardResult;
+          const executeBranch = async () => {
+            for (let index = 0; index < chosen.length; index += 1) {
+              const option = chosen[index];
+              const command = commandsForChoice[index];
+              await ports.execute(command, nodePath);
+              commands.push(command);
+              if (!await executeNodes(option.effects, `${nodePath}.options.${option.id}`)) return false;
+            }
+            return true;
+          };
+          try {
+            const completed = await (ports.runChoiceBranch ? ports.runChoiceBranch(executeBranch) : executeBranch());
+            if (!completed) return false;
+            break;
+          } catch (error) {
+            if (!(error instanceof EffectChoiceBackRequested) || !ports.runChoiceBranch) throw error;
+            commands.length = commandCount;
+            context.discardResult = previousDiscardResult;
+          }
+        }
         continue;
       }
 
       const command = createCommand(node, state, context, nodePath);
-      await ports.execute(command, nodePath);
+      if (command.type === 'discard_cards') context.discardResult = Object.freeze({
+        status: 'pending', cards: Object.freeze([]),
+      });
+      const outcome = await ports.execute(command, nodePath);
+      if (command.type === 'discard_cards' && outcome?.discardResult)
+        context.discardResult = outcome.discardResult;
       commands.push(command);
       if (ports.isTerminal?.()) {
         stoppedAfter = nodePath;

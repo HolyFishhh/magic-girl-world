@@ -1,0 +1,82 @@
+@mixin theme {
+  // A choice owns focus and selection; the complete card face remains the
+  // visual surface, without adding a second card-shaped border around it.
+  #card-options.mwg-card-choice-list,
+  .mwg-card-choice-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+    min-width: 0;
+    justify-items: stretch;
+    align-items: stretch;
+    grid-auto-rows: 1fr;
+  }
+
+  .mwg-card-choice {
+    position: relative;
+    display: flex;
+    min-width: 0;
+    padding: 0;
+    overflow: visible;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .reward-selection-option.mwg-card-choice {
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  // Battle hands position cards absolutely. Choice faces are content, so they
+  // must restore normal flow sizing before the grid can measure them.
+  .mwg-card-choice .mwg-card.enhanced-card {
+    position: relative;
+    inset: auto;
+    display: flex;
+    flex: none;
+    width: 100%;
+    min-width: 0;
+    min-height: 300px;
+    height: 100%;
+    max-height: none;
+    aspect-ratio: 3 / 4;
+    margin: 0;
+    transform: none;
+    transform-origin: center;
+    .card-name { font-size: 17px; white-space: normal; }
+    .card-rules { flex: 0 0 auto; overflow: visible; font-size: 14px; }
+    .card-description { display: none; }
+  }
+  .mwg-card-choice:hover .mwg-card,
+  .mwg-card-choice:focus-visible .mwg-card,
+  .mwg-card-choice.selected .mwg-card,
+  .mwg-card-choice.is-selected .mwg-card {
+    box-shadow: 0 0 0 2px var(--action, var(--blue)), 0 0 16px color-mix(in srgb, var(--action, var(--blue)) 35%, transparent);
+  }
+  .mwg-card-choice.selected .mwg-card,
+  .mwg-card-choice.is-selected .mwg-card {
+    box-shadow: 0 0 0 3px #ffe17a, 0 0 24px #ffd65a99;
+  }
+  .mwg-card-choice.selected::after,
+  .mwg-card-choice.is-selected::after {
+    content: '✓ 已选'; position: absolute; right: 5px; top: -8px; z-index: 4;
+    padding: 3px 9px; border-radius: 12px; background: #ffe17a; color: #302408; font: 700 12px/1.5 sans-serif;
+    pointer-events: none;
+  }
+
+  @media (max-width: 540px) {
+    #card-options.mwg-card-choice-list,
+    .mwg-card-choice-list {
+      grid-template-columns: none;
+      grid-auto-flow: column;
+      grid-auto-columns: minmax(180px, 72vw);
+      overflow-x: auto;
+      overscroll-behavior-inline: contain;
+    }
+  }
+}

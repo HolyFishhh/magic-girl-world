@@ -97,7 +97,7 @@ const gameStateSource = await readFile(resolve('src/fish/core/gameStateManager.t
 assert.match(gameStateSource, /const battleData = readBattleDataContract\(variables\)\?\.data/);
 assert.match(gameStateSource, /const rawCards = battleData\?\.cards/);
 assert.match(gameStateSource, /buildMvuStatusDisplayContext\(battleData\?\.statuses\)/);
-assert.match(gameStateSource, /const battleData = battleContract\?\.data/);
+assert.match(gameStateSource, /const battleData = inspection\.result\.data/);
 assert.match(gameStateSource, /const mvuEnemies = Array\.isArray\(battleData\?\.enemies\)/);
 assert.match(gameStateSource, /convertMvuEnemies\(mvuEnemies/);
 assert.equal(
@@ -118,6 +118,8 @@ assert.doesNotMatch(gameStateSource, /cardsRuntime|variables2\?\.battle\?\.cards
 assert.doesNotMatch(gameStateSource, /variables\?\.battle\?\.enemy \|\| variables\?\.stat_data/);
 assert.doesNotMatch(gameStateSource, /完整的MVU变量调试信息|variables 根对象/);
 assert.doesNotMatch(gameStateSource, /heal:15|apply_status:enemy:weak/);
-assert.match(gameStateSource, /effectProgram:[\s\S]*op: 'damage'[\s\S]*op: 'heal'/);
+assert.match(gameStateSource, /const playerLustEffect = normalizeNamedEffectDefinition\(battleData\.player_lust_effect/);
+assert.match(gameStateSource, /\.\.\.\(playerLustEffect \? \{ player_lust_effect: playerLustEffect \} : \{\}\)/,
+  'missing authored overflow content must stay absent instead of receiving an invented fallback program');
 
 console.log('MUV battle data contract passed.');

@@ -9,7 +9,7 @@ const output = path.join(root, 'dist', 'sillytavern-extension', 'magic-girl-desi
 await fs.mkdir(output, { recursive: true });
 await fs.copyFile(source, path.join(output, 'manifest.json'));
 
-const required = ['index.js', 'design-worker.js', 'index.css', 'manifest.json'];
+const required = ['index.js', 'design-worker.js', 'encounter-worker.js', 'index.css', 'manifest.json'];
 for (const file of required) {
   const stat = await fs.stat(path.join(output, file));
   if (!stat.isFile() || stat.size === 0) throw new Error(`扩展构建产物无效：${file}`);

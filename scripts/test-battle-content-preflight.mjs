@@ -342,11 +342,11 @@ for (const [battle, expectedPath] of [
   [{ ...validBattle, cards: [{ ...validBattle.cards[0], effect: 'OP.hp - 8' }] }, 'battle.cards[0].effect'],
   [{ ...validBattle, cards: [{ ...validBattle.cards[0], effect_program: { spec: 'mwg.effect/v1', steps: [] } }] }, 'battle.cards[0].effect_program'],
   [{ ...validBattle, cards: [{ ...validBattle.cards[0], effects: { discard: { count: 1, pick: 'random' } } }] }, 'battle.cards[0].effects.discard'],
-  [{ ...validBattle, cards: [{ ...validBattle.cards[0], effects: { damage: '6 + floor(self.hp / 10)' } }] }, 'battle.cards[0].effects.damage'],
+  [{ ...validBattle, cards: [{ ...validBattle.cards[0], effects: { damage: '6 + Math.floor(self.hp / 10)' } }] }, 'battle.cards[0].effects.damage'],
   [{ ...validBattle, statuses: [{ ...validBattle.statuses[0], triggers: { tick: 'ME.hp - stacks' } }] }, 'battle.statuses[0]'],
   [{ ...validBattle, enemy: { ...validBattle.enemy, hp: 99 } }, 'battle.enemy.hp'],
-  [{ ...validBattle, enemy: { ...validBattle.enemy, max_hp: 40.12, hp: 40.12 } }, 'battle.enemy.max_hp'],
-  [{ ...validBattle, enemy: { ...validBattle.enemy, actions: [{ name: '精度错误', effects: { damage: 6.25 } }] } }, 'battle.enemy.actions[0]'],
+  [{ ...validBattle, enemy: { ...validBattle.enemy, max_hp: 40.121, hp: 40.121 } }, 'battle.enemy.max_hp'],
+  [{ ...validBattle, enemy: { ...validBattle.enemy, actions: [{ name: '精度错误', effects: { damage: 6.251 } }] } }, 'battle.enemy.actions[0]'],
 ]) {
   const result = preflightBattleContent(battle);
   assert.equal(result.ok, false);

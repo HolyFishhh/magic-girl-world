@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import {estimateWorldbookScenario} from './lib/worldbook-measurement.mjs';
+const rows=[{name:'init',role:'update',tokens:10},{name:'dsl',role:'update',tokens:20},{name:'off',role:'update',tokens:40},{name:'plot',role:'plot',tokens:80}];
+const config={init:{constant:true},dsl:{constant:false},off:{constant:true,enabled:false},plot:{constant:true}};
+const before=JSON.stringify({rows,config});
+assert.deepEqual(estimateWorldbookScenario(rows,config,['init','init','dsl','off','plot']).map(r=>r.name),['init','dsl']);
+assert.equal(estimateWorldbookScenario(rows,config,['init','dsl']).reduce((n,r)=>n+r.tokens,0),30);
+assert.deepEqual(estimateWorldbookScenario(rows,config).map(r=>r.name),['init']);
+assert.equal(JSON.stringify({rows,config}),before);
+console.log('PASS scenario source estimates deduplicate constants, exclude disabled/other-role entries and preserve inputs; not live injection counts.');

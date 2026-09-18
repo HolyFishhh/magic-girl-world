@@ -1,4 +1,8 @@
-import { analyzeContentDefinition } from './contentAnalysis';
+import {
+  analyzeContentDefinition,
+  analyzeDesireOverflowPayload,
+  desireOverflowActivationRate,
+} from './contentAnalysis';
 import { type ContentDefinition, type ContentPack } from './contentPack';
 import { createContentMechanicsFingerprint } from './contentFingerprint';
 import {
@@ -41,12 +45,20 @@ export interface EnemyPowerScore {
   currentHp: number;
   expectedDamagePerTurn: number;
   expectedLustPerTurn: number;
+  /** Expected executable damage from cap-triggered enemy overflow effects. */
+  expectedOverflowDamagePerTurn: number;
   expectedBlockPerTurn: number;
   peakDamage: number;
   actions: EnemyActionPressure[];
   confidence: 'low' | 'medium' | 'high';
   coverage: number;
   reasons: string[];
+}
+
+/** Optional opponent caps for context-sensitive overflow payload estimates. */
+export interface EnemyPowerScoreTarget {
+  maxHp?: number;
+  maxLust?: number;
 }
 
 const scoreCache = new Map<string, EnemyPowerScore>();
@@ -115,11 +127,20 @@ function analyzeActions(enemy: ContentDefinition): EnemyActionPressure[] {
 }
 
 /** Score authored enemy strength without mutating or repairing the generated definition. */
-export function scoreEnemyPower(pack: ContentPack): EnemyPowerScore | null {
+export function scoreEnemyPower(pack: ContentPack, target: EnemyPowerScoreTarget = {}): EnemyPowerScore | null {
   const enemyList = enemies(pack);
   if (enemyList.length === 0) return null;
-  const fingerprint = createContentMechanicsFingerprint({ enemy: pack.enemy, enemies: pack.enemies || [] });
-  const stateKey = enemyList.map(enemy => `${finite(enemy.hp)}:${finite(enemy.lust)}`).join('|');
+  const targetMaxHp = Math.max(1, finite(target.maxHp, 100));
+  const targetMaxLust = Math.max(1, finite(target.maxLust, 100));
+  const fingerprint = createContentMechanicsFingerprint({
+    enemy: pack.enemy,
+    enemies: pack.enemies || [],
+    // Overflow effects can reference a status tick, so definitions are a score dependency.
+    statuses: pack.statuses,
+    targetMaxHp,
+    targetMaxLust,
+  });
+  const stateKey = `${enemyList.map(enemy => `${finite(enemy.hp)}:${finite(enemy.lust)}`).join('|')}:target:${targetMaxHp}:${targetMaxLust}`;
   const cacheKey = `${fingerprint}:${stateKey}`;
   const cached = scoreCache.get(cacheKey);
   if (cached) return cached;
@@ -130,6 +151,8 @@ export function scoreEnemyPower(pack: ContentPack): EnemyPowerScore | null {
   let expectedLust = 0;
   let expectedBlock = 0;
   let expectedHeal = 0;
+  let expectedOverflowDamage = 0;
+  let uncertainOverflowCount = 0;
   let peakDamage = 0;
   for (const set of actionSets) {
     expectedDamage += set.reduce((sum, action) => sum + action.damage * action.probability, 0);
@@ -138,6 +161,19 @@ export function scoreEnemyPower(pack: ContentPack): EnemyPowerScore | null {
     expectedHeal += set.reduce((sum, action) => sum + action.heal * action.probability, 0);
     peakDamage += Math.max(0, ...set.map(action => action.damage));
   }
+  enemyList.forEach((enemy, index) => {
+    if (!record(enemy.lust_effect)) return;
+    const lustPerTurn = actionSets[index].reduce((sum, action) => sum + action.lust * action.probability, 0);
+    const payload = analyzeDesireOverflowPayload(enemy.lust_effect, {
+      selfHp: finite(enemy.max_hp, finite(enemy.hp, 50)),
+      selfMaxHp: finite(enemy.max_hp, finite(enemy.hp, 50)),
+      opponentHp: targetMaxHp,
+      opponentMaxHp: targetMaxHp,
+    }, pack.statuses);
+    // Enemy pressure overflows the player, never the enemy owner.
+    expectedOverflowDamage += payload.attackValue * desireOverflowActivationRate(lustPerTurn, targetMaxLust);
+    if (payload.uncertain) uncertainOverflowCount += 1;
+  });
 
   const maxHp = enemyList.reduce((sum, enemy) => sum + Math.max(1, finite(enemy.max_hp, finite(enemy.hp, 1))), 0);
   const currentHp = enemyList.reduce((sum, enemy) => sum + clamp(finite(enemy.hp, finite(enemy.max_hp, 1)), 0, finite(enemy.max_hp, 1)), 0);
@@ -164,13 +200,13 @@ export function scoreEnemyPower(pack: ContentPack): EnemyPowerScore | null {
     : 0;
 
   const durabilityRaw = maxHp * 0.65 + expectedBlock * 2.1 + expectedHeal * 2.6 + enemyList.length * 4;
-  const pressureRaw = expectedDamage * 2.8 + expectedLust * 1.35 + peakDamage * 0.7;
+  const pressureRaw = (expectedDamage + expectedOverflowDamage) * 2.8 + expectedLust * 1.35 + peakDamage * 0.7;
   const controlRaw = controlCount * 6 + features.statuses.length * 2.5;
   const scalingRaw = scalingCount * 5 + features.triggers.length * 3;
   const totalScore = round(Math.max(1, durabilityRaw + pressureRaw + controlRaw + scalingRaw));
   const currentRatio = clamp(currentHp / Math.max(1, maxHp), 0, 1);
   const currentEncounterScore = round(totalScore - durabilityRaw * (1 - currentRatio));
-  const coverage = clamp(1 - uncertainCount * 0.1 - Math.max(0, features.complexity - 65) / 220, 0.25, 1);
+  const coverage = clamp(1 - (uncertainCount + uncertainOverflowCount) * 0.1 - Math.max(0, features.complexity - 65) / 220, 0.25, 1);
   const dimensions: EnemyPowerDimensions = {
     durability: round(clamp(durabilityRaw / Math.max(1, totalScore) * 150)),
     pressure: round(clamp(pressureRaw / Math.max(1, totalScore) * 150)),
@@ -190,6 +226,7 @@ export function scoreEnemyPower(pack: ContentPack): EnemyPowerScore | null {
     currentHp: round(currentHp),
     expectedDamagePerTurn: round(expectedDamage),
     expectedLustPerTurn: round(expectedLust),
+    expectedOverflowDamagePerTurn: round(expectedOverflowDamage),
     expectedBlockPerTurn: round(expectedBlock),
     peakDamage: round(peakDamage),
     actions,
@@ -197,7 +234,7 @@ export function scoreEnemyPower(pack: ContentPack): EnemyPowerScore | null {
     coverage: round(coverage, 3),
     reasons: [
       `满状态强度 ${totalScore}，剧情当前状态强度 ${currentEncounterScore}`,
-      `耐久 ${round(maxHp)}，每回合预计生命伤害 ${round(expectedDamage)}、欲望压力 ${round(expectedLust)}`,
+      `耐久 ${round(maxHp)}，每回合预计生命伤害 ${round(expectedDamage)}、欲望压力 ${round(expectedLust)}、满溢伤害 ${round(expectedOverflowDamage)}`,
       `峰值生命伤害 ${round(peakDamage)}，估算覆盖率 ${Math.round(coverage * 100)}%`,
     ],
   };
@@ -209,4 +246,3 @@ export function scoreEnemyPower(pack: ContentPack): EnemyPowerScore | null {
 export function clearEnemyPowerScoreCache(): void {
   scoreCache.clear();
 }
-

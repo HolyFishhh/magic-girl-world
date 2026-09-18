@@ -49,6 +49,12 @@ function enemy(id, hp, damage, familyId = undefined) {
 function variables(withEnemy = true) {
   return {
     stat_data: {
+      status: {
+        time: '122年04月17日 21:40',
+        location: '铁匠街·灰烬熔炉工坊',
+        profession: { name: '冒险者', ability: '读取魔力轨迹' },
+      },
+      npcs: [{ id: 'bai_ya', name: '白鸦', relation: '锻刀委托' }],
       battle: {
         core: { emoji: '🧙', hp: 58, max_hp: 80, lust: 24, max_lust: 100 },
         cards: [
@@ -126,7 +132,9 @@ assert.ok(first.deckProfile.totalScore > 0);
 assert.equal(first.enemyEnvelope.requestedRatio, 80);
 assert.match(first.prompt, /^\[MWG_DESIGN_CONTEXT\/v1\]/);
 assert.match(first.prompt, /当前流派：/);
-assert.match(first.prompt, /核心组成=.*→/);
+assert.match(first.prompt, /支持卡：/);
+assert.match(first.prompt, /卡组评分未提供/);
+assert.doesNotMatch(first.prompt, /卡组评分=\d|能力维度：爆发\d/);
 assert.match(first.prompt, /删去描述后仍须能从 effects、trigger、状态、资源、召唤、增援、牌区干扰或规则字段中成立/);
 assert.match(first.prompt, /知识图谱邻接路径：/);
 assert.match(first.prompt, /self恒指该效果的拥有者/);
@@ -316,7 +324,7 @@ globalThis.MagicGirlWorldMvuMonitor = {
 };
 globalThis.TavernHelper = {
   injectPrompts(prompts, options) {
-    lifecyclePromptCalls.push({ prompts: structuredClone(prompts), options: structuredClone(options) });
+    lifecyclePromptCalls.push({ prompts: prompts.map(prompt => ({ ...prompt })), options: structuredClone(options) });
     let active = true;
     return {
       uninject() {
@@ -344,6 +352,74 @@ assert.ok(controller.getKnowledgeGraphStats().nodes > 0);
 const ordinaryPayload = { prompt: [{ role: 'user', content: 'normal story request' }] };
 await events.emit('generate_after_data', ordinaryPayload);
 assert.equal(hasDesignContext(ordinaryPayload), false, 'ordinary story generation must not receive design context');
+const presetPayload = {
+  messages: [{ role: 'user', content: '[MWG_TOWER_NARRATIVE_REQUEST]\n故事正文' }],
+  model: 'fixture-model', max_tokens: 3210, stream: true, include_reasoning: true,
+  proxy_password: 'fixture-never-display', reverse_proxy: 'fixture-never-display',
+};
+const presetBefore = structuredClone(presetPayload);
+duringExtra = true;
+await events.emit('chat_completion_settings_ready', presetPayload);
+duringExtra = false;
+assert.deepEqual(presetPayload, presetBefore, 'preset narrative sampling and text stay unchanged even during an MVU lifecycle');
+assert.equal(capturedMvuRequests.at(-1).payload.purpose, 'preset-narrative');
+assert.equal(capturedMvuRequests.at(-1).payload.max_tokens, 3210);
+assert.doesNotMatch(JSON.stringify(capturedMvuRequests.at(-1)), /fixture-never-display/);
+capturedMvuRequests.length = 0;
+
+const schemaTransportPayload = {
+  chat_completion_source: 'deepseek',
+  messages: [{ role: 'system', content: 'MWG_TOWER_STRUCTURED_REQUEST:integration' }],
+  json_schema: require(resolve('src/sillytavern-extension/towerGenerationHost.ts')).createProviderSafeJsonSchema(
+    require(resolve('src/game-core/towerRequest.ts')).createTowerInitialContentJsonSchema(),
+  ),
+  max_tokens: 15000,
+};
+const foreignSchemaTransport = structuredClone(schemaTransportPayload);
+await events.emit('chat_completion_settings_ready', foreignSchemaTransport);
+assert.deepEqual(foreignSchemaTransport, schemaTransportPayload, 'compact mode is opt-in while being evaluated');
+controller.updateSettings({ firstAuthoringSchemaTransport: 'compact-context' });
+context.characters = [{ data: { extensions: {} } }];
+await events.emit('chat_completion_settings_ready', foreignSchemaTransport);
+assert.deepEqual(foreignSchemaTransport, schemaTransportPayload, 'schema transport is isolated to this character');
+context.characters = [scopedCharacter];
+await events.emit('chat_completion_settings_ready', schemaTransportPayload);
+assert.equal(schemaTransportPayload.messages.length, 2, 'production request boundary attaches the shared schema once');
+assert.match(schemaTransportPayload.messages[1].content, /^\[MWG_RESPONSE_SCHEMA\/v1\]/);
+assert.equal(schemaTransportPayload.max_tokens, 15000, 'structured transport does not run the MVU token policy');
+assert.equal(capturedMvuRequests.length, 1);
+assert.deepEqual(capturedMvuRequests[0].payload, schemaTransportPayload, 'monitor captures the actual post-transport request');
+await events.emit('chat_completion_settings_ready', schemaTransportPayload);
+assert.equal(schemaTransportPayload.messages.length, 2, 'duplicate compatibility events do not repeat the schema');
+capturedMvuRequests.length = 0;
+controller.updateSettings({ firstAuthoringSchemaTransport: 'provider-outline' });
+
+const repairSchemaPayload = {
+  chat_completion_source: 'deepseek',
+  messages: [{ role: 'system', content: 'MWG_TOWER_STRUCTURED_REQUEST:repair_integration' }],
+  json_schema: require(resolve('src/sillytavern-extension/towerGenerationHost.ts')).createProviderSafeJsonSchema(
+    require(resolve('src/game-core/towerRequest.ts')).createTowerInitialSlotRepairJsonSchema([{
+      token: 'r0', slots: [], allowSupportStatuses: true, supportStatusIds: ['missing_status'],
+    }]),
+  ),
+  max_tokens: 15000,
+};
+const originalRepairPayload = structuredClone(repairSchemaPayload);
+context.characters = [{ data: { extensions: {} } }];
+await events.emit('chat_completion_settings_ready', repairSchemaPayload);
+assert.deepEqual(repairSchemaPayload, originalRepairPayload, 'repair factoring is character-scoped');
+context.characters = [scopedCharacter];
+await events.emit('chat_completion_settings_ready', repairSchemaPayload);
+assert.ok(JSON.stringify(repairSchemaPayload.json_schema).length < 64_000, 'default repair transport bounds repeated status events');
+assert.equal(repairSchemaPayload.max_tokens, 15000);
+assert.deepEqual(repairSchemaPayload.messages, originalRepairPayload.messages, 'repair prose stays unchanged');
+assert.deepEqual(capturedMvuRequests[0].payload, repairSchemaPayload);
+const factoredRepairPayload = structuredClone(repairSchemaPayload);
+duringExtra = true;
+await events.emit('chat_completion_settings_ready', repairSchemaPayload);
+assert.deepEqual(repairSchemaPayload, factoredRepairPayload);
+duringExtra = false;
+capturedMvuRequests.length = 0;
 
 duringExtra = true;
 const unrelatedPayload = { prompt: [{ role: 'user', content: 'another card extra request' }] };
@@ -368,8 +444,16 @@ const extraPayload = {
 };
 await events.emit('generate_after_data', extraPayload);
 assert.equal(hasDesignContext(extraPayload), true, 'MVU extra-model request must receive dynamic context');
-assert.equal(extraPayload.include_reasoning, true, 'MVU extra-model request must preserve provider reasoning');
+assert.equal('include_reasoning' in extraPayload, false, 'the plugin must not invent provider-specific reasoning fields');
 assert.equal(extraPayload.max_tokens, 20000, 'captured MVU request must reflect the final output budget policy');
+assert.match(JSON.stringify(extraPayload), /铁匠街·灰烬熔炉工坊/);
+assert.match(JSON.stringify(extraPayload), /白鸦/);
+const injectedMvuPrompt = extraPayload.prompt.find(entry =>
+  typeof entry?.content === 'string' && entry.content.includes(DESIGN_ASSISTANT_PROMPT_MARKER),
+);
+assert.ok(injectedMvuPrompt, 'the injected MVU prompt must be inspectable as an ordinary prompt message');
+assert.match(injectedMvuPrompt.content, /"id":"mark"/);
+assert.match(JSON.stringify(extraPayload), /当前 MVU 游戏事实/);
 assert.equal(capturedMvuRequests.length, 1);
 assert.equal(capturedMvuRequests[0].source, 'official');
 assert.equal(
@@ -416,7 +500,7 @@ assert.equal(
   true,
   'the strict MVU request fingerprint must recover injection when the lifecycle flag is stale',
 );
-assert.equal(fingerprintOnlyPayload.include_reasoning, true);
+assert.equal('include_reasoning' in fingerprintOnlyPayload, false);
 assert.equal(context.chatMetadata[DESIGN_ASSISTANT_METADATA_KEY].lastInjectionCount, 2);
 
 hostNow += 3000;
@@ -437,6 +521,9 @@ assert.equal(lifecyclePromptCalls[0].prompts[0].id, 'mwg-design-context');
 assert.equal(lifecyclePromptCalls[0].prompts[0].position, 'in_chat');
 assert.equal(lifecyclePromptCalls[0].prompts[0].depth, 0);
 assert.match(lifecyclePromptCalls[0].prompts[0].content, /^\[MWG_DESIGN_CONTEXT\/v1\]/);
+assert.match(lifecyclePromptCalls[0].prompts[0].content, /当前 MVU 游戏事实/);
+assert.match(lifecyclePromptCalls[0].prompts[0].content, /铁匠街·灰烬熔炉工坊/);
+assert.match(lifecyclePromptCalls[0].prompts[0].content, /"id":"mark"/);
 assert.equal(context.chatMetadata[DESIGN_ASSISTANT_METADATA_KEY].lastInjectionSource, 'mvu-lifecycle');
 assert.equal(context.chatMetadata[DESIGN_ASSISTANT_METADATA_KEY].lastInjectionMessageId, 1);
 assert.equal(context.chatMetadata[DESIGN_ASSISTANT_METADATA_KEY].lastInjectionCount, 3);
@@ -444,7 +531,8 @@ await events.emit('mag_variable_update_ended', currentVariables, structuredClone
 assert.equal(lifecyclePromptCleanupCount, 1, 'MVU completion must remove any still-active lifecycle prompt');
 
 context.extensionSettings[DESIGN_ASSISTANT_EXTENSION_ID].enabled = false;
-// The optional design switch does not disable the card-scoped request policy.
+// The optional design switch disables scoring, but current MVU facts and the
+// card-scoped output budget remain part of the reliable second-stage path.
 duringExtra = true;
 const policyOnlyPayload = {
   include_reasoning: true,
@@ -456,7 +544,32 @@ await events.emit('generate_after_data', policyOnlyPayload);
 assert.equal(policyOnlyPayload.include_reasoning, true, 'card-scoped MVU policy must survive optional assistant disable');
 assert.equal(policyOnlyPayload.reasoning_effort, 'high');
 assert.equal(policyOnlyPayload.max_tokens, 20000);
-assert.equal(hasDesignContext(policyOnlyPayload), false, 'disabled assistant must not inject design context');
+assert.equal(hasDesignContext(policyOnlyPayload), true, 'disabled scoring must not remove the current MVU facts');
+assert.match(JSON.stringify(policyOnlyPayload), /当前 MVU 游戏事实/);
+assert.doesNotMatch(JSON.stringify(policyOnlyPayload), /卡组强度=/, 'disabled scoring omits only the computed advice');
+// A plain first reply has no handoff marker. Activate its existing worldbook
+// contract independently of the optional score engine, without adding model text.
+{
+  const originalCards = currentVariables.stat_data.battle.cards;
+  currentVariables.stat_data.battle.cards = [];
+  await events.emit('mag_variable_update_started', currentVariables);
+  const scan = lifecyclePromptCalls.at(-1).prompts.find(prompt => prompt.id === 'mwg-initialization-worldbook-scan');
+  assert.ok(scan, 'unmarked first assistant floor gets a scan-only initialization route');
+  assert.equal(scan.position, 'none');
+  assert.equal(scan.content, '<CHARACTER_INIT_PENDING>');
+  assert.equal(scan.should_scan, true);
+  assert.equal(scan.filter(), true);
+  duringExtra = false;
+  assert.equal(scan.filter(), false, 'the preset story request cannot consume initialization rules');
+  duringExtra = true;
+  const originalChatId = context.chatId;
+  context.chatId = 'another-chat';
+  assert.equal(scan.filter(), false, 'an injected activation cannot cross chats');
+  context.chatId = originalChatId;
+  currentVariables.stat_data.battle.cards = originalCards;
+  await events.emit('mag_variable_update_started', currentVariables);
+  assert.equal(lifecyclePromptCalls.at(-1).prompts.length, 1, 'existing cards receive facts without initialization activation');
+}
 context.extensionSettings[DESIGN_ASSISTANT_EXTENSION_ID].enabled = true;
 
 const beforeEnemy = structuredClone(currentVariables);
@@ -537,10 +650,10 @@ const calibrated = engine.calibrateGeneratedEnemy(calibrationVariables, null, {
   ...settings,
   autoCalibration: true,
 });
-assert.equal(calibrated.changed, true);
-assert.notEqual(calibrationVariables.stat_data.battle.enemy.max_hp, originalMaxHp);
+assert.equal(calibrated.changed, false, 'post-generation scoring must never rewrite an authored enemy');
+assert.equal(calibrationVariables.stat_data.battle.enemy.max_hp, originalMaxHp);
 assert.equal(calibrated.state.lastCalibration.requestedRatio, 80);
-assert.equal(calibrated.state.lastCalibration.winnableAtCurrentResources, true);
+assert.equal(calibrated.state.lastCalibration.mode, 'advisory');
 assert.ok(calibrated.state.lastCalibration.changedPaths.length > 0);
 
 const advisoryVariables = variables(false);
@@ -632,10 +745,11 @@ delete globalThis.MagicGirlWorldMvuMonitor;
   };
   globalThis.TavernHelper = {
     getLastMessageId: () => 1,
-    getChatMessages: () => [{ message: settlementMessage }],
+    getChatMessages: () => [{ message: settlementMessage, swipe_id: 0 }],
     setChatMessages: async updates => {
       settlementMessage = updates[0].message;
       settlementContext.chat[1].mes = settlementMessage;
+      if (updates[0].data !== undefined) settlementVariables = structuredClone(updates[0].data);
     },
     getVariables: options => structuredClone(settlementVariables),
     replaceVariables: async value => { settlementVariables = structuredClone(value); },
@@ -683,7 +797,11 @@ delete globalThis.MagicGirlWorldMvuMonitor;
   ) {
     await new Promise(resolve => setTimeout(resolve, 20));
   }
-  assert.equal(settlementVariables.stat_data.reward.request, null);
+  assert.equal(
+    settlementVariables.stat_data.reward.request,
+    null,
+    JSON.stringify({ settlementGenerationCalls, structuredMonitorEvents, settlementMessage }),
+  );
   assert.equal(settlementGenerationCalls, 1);
   assert.equal(settlementVariables.stat_data.battle.core.hp, 0);
   assert.equal(settlementVariables.stat_data.battle.exp, 225);
@@ -825,4 +943,53 @@ delete globalThis.Worker;
 delete globalThis.location;
 delete globalThis.TavernHelper;
 
-console.log('SillyTavern design assistant injects only into MVU, queries the graph, persists lineage, and calibrates enemies.');
+// The controller must invalidate old repair tokens even after A -> B -> A,
+// swipe0 -> swipe1 -> swipe0, or deactivate -> activate restores the same IDs.
+{
+  const scopeEvents = new FakeEvents();
+  const scopeContext = {
+    ...context, chatId: 'repair-A', chat: [{ mes: 'repair target', swipe_id: 0 }],
+    chatMetadata: {}, eventSource: scopeEvents,
+  };
+  globalThis.TavernHelper = {
+    getLastMessageId: () => scopeContext.chat.length - 1,
+    getChatMessages: () => [{ message: 'repair target', swipe_id: scopeContext.chat[0].swipe_id }],
+    setChatMessages: async () => {}, getVariables: () => ({}), replaceVariables: async () => {},
+    getAllEnabledScriptButtons: () => ({}), getScriptTrees: () => [],
+  };
+  const scopeController = new DesignAssistantController({
+    context: () => scopeContext, mvu: () => null, now: () => 1, notify() {},
+  });
+  const guards = [];
+  scopeController.persistentMvuRepairHost.request = async (_helper, _chat, _input, guard) => guards.push(guard);
+  const input = { spec: 'mwg.mvu-repair-request/v1', scope: 'generic', prompt: 'scope test' };
+  scopeController.activate();
+  await scopeController.requestMvuExtraRepair(input);
+  assert.equal(guards.at(-1)(), true);
+  scopeContext.chatId = 'repair-B';
+  await scopeEvents.emit('chat_id_changed');
+  scopeContext.chatId = 'repair-A';
+  await scopeEvents.emit('chat_id_changed');
+  assert.equal(guards.at(-1)(), false, 'chat ABA must invalidate the old repair');
+  await scopeController.requestMvuExtraRepair(input);
+  scopeContext.chat[0].swipe_id = 1;
+  await scopeEvents.emit('message_swiped', 0);
+  scopeContext.chat[0].swipe_id = 0;
+  await scopeEvents.emit('message_swiped', 0);
+  assert.equal(guards.at(-1)(), false, 'swipe ABA must invalidate the old repair');
+  await scopeController.requestMvuExtraRepair(input);
+  const pendingAtLoad = new Promise(() => {});
+  scopeController.persistentMvuRepairHost.pending.set('repair-A:0:0:generic', { promise: pendingAtLoad, current: () => false });
+  scopeContext.chat[0] = { mes: 'repair target', swipe_id: 0 };
+  await scopeEvents.emit('chatLoaded');
+  assert.equal(guards.at(-1)(), false, 'rematerialized message object invalidates the old token');
+  assert.equal(scopeController.persistentMvuRepairHost.pending.size, 0, 'chat load clears old dedupe entries');
+  await scopeController.requestMvuExtraRepair(input);
+  scopeController.deactivate();
+  scopeController.activate();
+  assert.equal(guards.at(-1)(), false, 'reactivation must not revive an old repair');
+  scopeController.deactivate();
+  delete globalThis.TavernHelper;
+}
+
+console.log('SillyTavern design assistant injects only into MVU, queries the graph, persists lineage, and scores enemies without rewriting them.');

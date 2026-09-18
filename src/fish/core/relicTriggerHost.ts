@@ -45,6 +45,10 @@ export class TavernRelicTriggerHost {
   public async triggerRelics(trigger: AbilityTrigger, context: Record<string, unknown> = {}): Promise<void> {
     await this.runtime.run(trigger, {
       ...context,
+      teamActorIds: [
+        'player',
+        ...this.gameStateManager.getSummons('player').map(unit => unit.instanceId),
+      ],
       eventJournal: this.gameStateManager.getGameState().eventJournal,
     });
   }

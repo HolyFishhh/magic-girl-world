@@ -1,8 +1,17 @@
+import { prepareDrawnCardElement } from './pileFlowAnimation';
+import { describeStatusStackChange, normalizeChinesePlayerDescription } from '../../game-core/contentDescription';
+import { statusAppearanceDisplayTags } from '../../game-core/effectDisplay';
+import { battleTriggerDisplayName } from '../../game-core/effectDisplay';
+import { resolveCharacterEmoji } from '../../game-core/characterAppearance';
 /**
  * 战斗UI管理模块
  */
 
 import { DynamicStatusManager } from '../combat/dynamicStatusManager';
+import { renderCardFace } from '../../shared/cardFace';
+import { renderCardTraits } from '../../shared/cardTraits';
+import { renderSupportDetails } from '../../shared/supportPresentation';
+import { renderSummonPanel } from '../../shared/summonPresentation';
 import { CardSystem } from '../combat/cardSystem';
 import { UnifiedEffectExecutor } from '../combat/unifiedEffectExecutor';
 import { GameStateManager } from '../core/gameStateManager';
@@ -14,18 +23,27 @@ import {
   roundBattleDisplayValue,
   type Card,
   type CardResourcePayment,
+  type CombatResourceState,
 } from '../../game-core';
 import { CardPlayMode } from './cardPlayMode';
+import { stageHealthBar, stageSummonMarkup, positionStageSummonOrbits } from './stageUnitDisplay';
+import { summonIntentBadges } from './summonIntentDisplay';
 import { EnemyIntentPresenter } from './enemyIntentPresenter';
+import { AnimationManager } from './animationManager';
 import { PileStatsDisplay } from './pileViewer';
 import { EffectProgramDisplay } from './effectProgramDisplay';
+import { evaluateHandCardConditionHighlight } from './handCardConditionHighlight';
 
 export class BattleUI {
   private static effectDisplay = EffectProgramDisplay.getInstance();
+  private static readonly animationManager = AnimationManager.getInstance();
   private static activeCardTooltip: JQuery | null = null;
   private static activeCardTooltipAnchor: JQuery | null = null;
   private static handResizeBound = false;
+  private static summonResizeObserver: ResizeObserver | null = null;
   private static handResizeFrame: number | null = null;
+  private static focusedStageTargetId: string | null = null;
+  private static formationResetBound = false;
 
   private static displayBattleValue(value: unknown, fallback = 0): number {
     return typeof value === 'number' && Number.isFinite(value) ? roundBattleDisplayValue(value) : fallback;
@@ -38,12 +56,12 @@ export class BattleUI {
   ): string {
     const components = normalizeCardCost(cost);
     if (Object.keys(components).length <= 1 && typeof cost === 'number' && (!payment || payment.waived.length === 0))
-      return escapeHtml(String(cost));
+      return escapeHtml(`${cost}⚡`);
     const pool = resourcePoolFromCombatant(player.energy || 0, player.resources);
     return Object.entries(components)
       .map(([id, amount]) => {
         const definition = player.resources?.[id];
-        const emoji = id === 'energy' ? '💎' : definition?.emoji || '◆';
+        const emoji = id === 'energy' ? '⚡' : definition?.emoji || '◆';
         const name = id === 'energy' ? '能量' : definition?.name || id;
         const waived = payment?.waived.includes(id) === true;
         const required = waived || amount === 'all' ? 0 : amount;
@@ -105,6 +123,9 @@ export class BattleUI {
 
       this.updateEnemyRoster(enemies, enemy?.id || null);
       this.updateSummonDisplays(gameState.summons);
+      $('#stage-player-health').html(stageHealthBar(player?.currentHp, player?.maxHp, player?.name || '我方', player?.block));
+      this.animationManager.syncStageHealthBar('player', Number(player?.currentHp) || 0, Number(player?.maxHp) || 0, undefined, Number(player?.block) || 0);
+      this.animationManager.restoreStageHealthLoss('player');
 
       // 更新敌人信息
       if (enemy) {
@@ -138,6 +159,7 @@ export class BattleUI {
 
       // 更新能力显示
       this.updateAbilitiesDisplay(gameState.player.abilities || [], enemy?.abilities || []);
+      this.updateStageSupports('player', player?.statusEffects || [], player?.abilities || []);
     } catch (error) {
       console.error('❌ 刷新战斗UI失败:', error);
     }
@@ -148,19 +170,27 @@ export class BattleUI {
    */
   private static updateEnemyDisplay(enemy: any): void {
     $('#enemy-name').text(enemy.name || '未知敌人');
-    $('.enemy-emoji').text(enemy.emoji || '👹');
-    $('#stage-enemy-emoji').text(enemy.emoji || '👹');
+    const description = normalizeChinesePlayerDescription(enemy.description || enemy.dialogue);
+    const hints = [enemy.escapePending ? '正在准备逃跑；逃走后不会获得它的击杀收益。' : '', enemy.defeatReward ? '击败后可获得专属战利品。' : ''].filter(Boolean);
+    $('#enemy-description').text([description, ...hints].filter(Boolean).join(' ')).prop('hidden', !description && !hints.length);
+    $('.enemy-emoji').text(resolveCharacterEmoji(enemy, id => DynamicStatusManager.getInstance().getStatusDefinition(id), '👹'));
+    $('#stage-enemy-emoji').text(resolveCharacterEmoji(enemy, id => DynamicStatusManager.getInstance().getStatusDefinition(id), '👹'));
 
     // 更新敌人血条
     const enemyHpPercent = enemy.maxHp > 0 ? (enemy.currentHp / enemy.maxHp) * 100 : 0;
-    $('.enemy-card .hp-fill').css('width', `${enemyHpPercent}%`);
+    // A lethal hit may have an in-flight animation to zero. Stop it before
+    // painting the newly selected living enemy, otherwise it overwrites this
+    // value after the target has already changed.
+    const enemyFill = $('.enemy-card .hp-fill');
+    if (!enemyFill.parent().find('.hp-loss').length) enemyFill.before('<div class="hp-loss" aria-hidden="true"></div>');
+    enemyFill.stop(true, true).css('width', `${enemyHpPercent}%`);
     $('#enemy-hp').text(`${this.displayBattleValue(enemy.currentHp)}/${this.displayBattleValue(enemy.maxHp, 1)}`);
 
     // 更新敌人欲望条
     const enemyLustPercent = enemy.maxLust > 0 ? (enemy.currentLust / enemy.maxLust) * 100 : 0;
 
     // 使用新的统一选择器
-    $('.enemy-card .lust-fill').css('width', `${enemyLustPercent}%`);
+    $('.enemy-card .lust-fill').stop(true, true).css('width', `${enemyLustPercent}%`);
     $('#enemy-lust').text(`${this.displayBattleValue(enemy.currentLust)}/${this.displayBattleValue(enemy.maxLust, 1)}`);
 
     // 更新敌人格挡 - 条件显示
@@ -174,9 +204,9 @@ export class BattleUI {
     } else {
       enemyBlockContainer.hide();
     }
-    const resources = Object.values(enemy.resources || {}) as Array<{ id: string; name: string; emoji: string; current: number; max: number }>;
+    const resources = Object.values(enemy.resources || {}) as CombatResourceState[];
     $('#enemy-combat-resources').html(resources.map(resource => `
-      <span class="combat-resource-chip" data-resource-id="${escapeHtmlAttribute(resource.id)}" title="${escapeHtmlAttribute(resource.name)}">
+      <span class="combat-resource-chip" data-resource-id="${escapeHtmlAttribute(resource.id)}" title="${escapeHtmlAttribute(resource.description ? `${resource.name}：${resource.description}` : resource.name)}">
         <span>${escapeHtml(resource.emoji)}</span><span>${escapeHtml(resource.name)}</span>
         <b>${this.displayBattleValue(resource.current)}/${this.displayBattleValue(resource.max)}</b>
       </span>
@@ -192,11 +222,22 @@ export class BattleUI {
 
   private static updateEnemyRoster(enemies: any[], activeEnemyId: string | null): void {
     const living = enemies.filter(enemy => enemy && enemy.currentHp > 0);
-    const multi = living.length > 1;
+    const renderedIds = new Set(enemies.map(enemy => String(enemy.id)));
+    $('#stage-enemy-party .stage-enemy-member').each((_, element) => {
+      const member = $(element);
+      if (!renderedIds.has(String(member.attr('data-enemy-id') || ''))) this.animationManager.showEnemyDeparture(member);
+    });
+    const party = $('#stage-enemy-party');
+    const multi = living.length > 1 || party.attr('data-multi-layout') === 'true';
+    if (multi) party.attr('data-multi-layout', 'true');
     $('.battle-main-grid').toggleClass('multi-enemy-battle', multi);
     $('.enemy-section').toggleClass('is-multi-enemy', multi);
-    this.updateEnemyStageParty(living, activeEnemyId);
+    this.updateEnemyStageParty(enemies, activeEnemyId);
     const roster = $('#enemy-roster');
+    if (multi && roster.length) {
+      const height=roster[0].getBoundingClientRect().height;
+      if(height>0)roster.css('min-height', `${height}px`);
+    }
     if (!multi) {
       roster.empty().hide();
       return;
@@ -214,11 +255,11 @@ export class BattleUI {
         const support = [
           ...(Array.isArray(enemy.statusEffects) ? enemy.statusEffects : []).map((status: any) => ({ emoji: status.emoji || '◈', title: `${status.name || status.id}${Number(status.stacks) > 1 ? ` ${this.displayBattleValue(status.stacks)}层` : ''}` })),
           ...(Array.isArray(enemy.abilities) ? enemy.abilities : []).map((ability: any) => ({ emoji: ability.emoji || '⚡', title: `能力：${ability.name || ability.id}` })),
-          ...(enemy.lustEffect ? [{ emoji: enemy.lustEffect.emoji || '💗', title: `欲望效果：${enemy.lustEffect.name || '未命名'}` }] : []),
+          ...(enemy.lustEffect ? [{ emoji: enemy.lustEffect.emoji || '💗', title: `敌方欲望效果（我方欲望满时）：${enemy.lustEffect.name || '未命名'}` }] : []),
         ];
         const supportHtml = support.map(entry => `<span class="enemy-roster-support" title="${escapeHtmlAttribute(entry.title)}">${escapeHtml(entry.emoji)}</span>`).join('');
         return `<button class="enemy-roster-unit${enemy.id === activeEnemyId ? ' is-active' : ''}" data-enemy-id="${escapeHtmlAttribute(String(enemy.id))}" type="button" aria-pressed="${enemy.id === activeEnemyId ? 'true' : 'false'}" title="${escapeHtmlAttribute(intentModel.description)}">
-          <span class="enemy-roster-emoji">${escapeHtml(String(enemy.emoji || '👹'))}</span>
+          <span class="enemy-roster-emoji">${escapeHtml(resolveCharacterEmoji(enemy, id => DynamicStatusManager.getInstance().getStatusDefinition(id), '👹'))}</span>
           <span class="enemy-roster-copy">
             <span class="enemy-roster-heading"><b>${escapeHtml(String(enemy.name || enemy.id))}</b>${Number(enemy.block) > 0 ? `<em>🛡${this.displayBattleValue(enemy.block)}</em>` : ''}</span>
             <span class="enemy-roster-bars">
@@ -239,28 +280,127 @@ export class BattleUI {
   }
 
   private static updateEnemyStageParty(enemies: any[], activeEnemyId: string | null): void {
+    if (!this.formationResetBound) {
+      this.formationResetBound = true;
+      GameStateManager.getInstance().addEventListener('game_reset', () => {
+        $('#stage-enemy-party').removeAttr('data-slot-origin data-multi-layout').css('min-height','');
+        $('#enemy-roster').css('min-height','');
+      });
+    }
     const party = $('#stage-enemy-party');
     const stage = $('#stage-enemy');
     if (!party.length) return;
-    const multi = enemies.length > 1;
+    const multi = true;
     stage.toggleClass('has-enemy-party', multi);
     party.attr('data-enemy-count', String(enemies.length));
     // Keep the authored queue order stable. Selecting a target may update the
     // detailed HUD, but the other actors must not jump around on the stage.
-    const ordered = [...enemies];
-    party.html(ordered.map((enemy, index) => {
-      const active = enemy.id === activeEnemyId || (!activeEnemyId && index === ordered.length - 1);
+    const ordered = [...enemies].filter(enemy => Number.isInteger(enemy.stageSlot) && enemy.stageSlot >= 0 && enemy.stageSlot < 5).sort((a, b) => a.stageSlot - b.stageSlot);
+    // Stored slots are execution identity, not authored screen coordinates.
+    // Older saves start at slot 5-N. Anchor once per stage DOM so reversing
+    // their order does not put those padding slots on the right; deaths keep gaps.
+    const priorOrigin = party.attr('data-slot-origin');
+    const origin = priorOrigin === undefined ? (ordered[0]?.stageSlot ?? 0) : Number(priorOrigin);
+    if (ordered.length && priorOrigin === undefined) party.attr('data-slot-origin', String(origin));
+    const previousHeight = party[0].getBoundingClientRect().height;
+    if (previousHeight > 0) party.css('min-height', `${previousHeight}px`);
+    party.html(Array.from({ length: 5 }, (_, position) => {
+      const slot = (origin + 4 - position) % 5;
+      const index = slot;
+      const enemy = ordered.find(enemy => enemy.stageSlot === slot);
+      if (!enemy) return `<span class="stage-enemy-empty" aria-hidden="true" data-stage-slot="${slot}" style="grid-column:${position + 1};grid-row:1"></span>`;
+      const active = enemy.id === activeEnemyId || (!activeEnemyId && enemy === ordered[0]);
       const intent = EnemyIntentPresenter.getInstance().createDisplayModel(enemy);
-      const badges = intent.badges.map(badge => `${escapeHtml(badge.icon)}${badge.value ? `<b>${escapeHtml(badge.value)}</b>` : ''}`).join('');
-      return `<button class="stage-enemy-member${active ? ' is-active' : ''}" type="button" data-enemy-id="${escapeHtmlAttribute(String(enemy.id))}" aria-pressed="${active ? 'true' : 'false'}" aria-label="选择目标：${escapeHtmlAttribute(String(enemy.name || enemy.id))}，下一步${escapeHtmlAttribute(intent.description)}" style="--party-order:${index};--party-depth:${ordered.length - index}">
-        <span class="stage-enemy-member-intent" title="${escapeHtmlAttribute(intent.description)}">${badges || '❓'}</span>
-        <span class="stage-emoji"${active ? ' id="stage-enemy-emoji"' : ''}>${escapeHtml(String(enemy.emoji || '👹'))}</span>
+      const badges = intent.badges.map(badge => `<span class="stage-intent-badge">${escapeHtml(badge.icon)}${badge.value ? `<b>${escapeHtml(badge.value)}</b>` : ''}</span>`).join('');
+      return `<button class="stage-enemy-member${active ? ' is-active' : ''}" type="button" data-enemy-id="${escapeHtmlAttribute(String(enemy.id))}" aria-pressed="${active ? 'true' : 'false'}" aria-label="选择目标：${escapeHtmlAttribute(String(enemy.name || enemy.id))}，下一步${escapeHtmlAttribute(intent.description)}" style="grid-column:${position + 1};grid-row:1;--party-order:${index};--party-depth:${ordered.length - index}">
+        <span class="stage-enemy-member-intent" role="button" tabindex="0" title="${escapeHtmlAttribute(`查看行动：${intent.description}`)}" aria-label="查看敌方行动：${escapeHtmlAttribute(intent.description)}">${badges || '❓'}</span>
+        <span class="stage-emoji"${active ? ' id="stage-enemy-emoji"' : ''}>${escapeHtml(resolveCharacterEmoji(enemy, id => DynamicStatusManager.getInstance().getStatusDefinition(id), '👹'))}</span>
+        ${stageHealthBar(enemy.currentHp, enemy.maxHp, String(enemy.name || '敌人'), enemy.block)}
+        ${enemy.victoryOnDefeat ? '<span class="stage-victory-target">击倒即胜利</span>' : ''}
+        ${this.stageSupportsMarkup('enemy', enemy.statusEffects || [], enemy.abilities || [])}
       </button>`;
     }).join(''));
+    const reserves = GameStateManager.getInstance().getReserveEnemies();
+    if (reserves.length) party.append(`<details class="stage-reserves"><summary aria-label="查看后备敌人，共${reserves.length}名">⋯<small>${reserves.length}</small></summary><div class="stage-reserves-list"><b>后备敌人 · 上场后参与战斗</b>${reserves.map(enemy => `<div>${escapeHtml(enemy.emoji || '👹')} ${escapeHtml(enemy.name)} <span>${this.displayBattleValue(enemy.currentHp)}/${this.displayBattleValue(enemy.maxHp)}</span>${enemy.victoryOnDefeat ? ' · 击倒即胜利' : ''}</div>`).join('')}</div></details>`);
+    ordered.forEach(enemy => this.animationManager.syncStageHealthBar('enemy', Number(enemy.currentHp) || 0, Number(enemy.maxHp) || 0, String(enemy.id), Number(enemy.block) || 0));
+    ordered.forEach(enemy => this.animationManager.restoreStageHealthLoss('enemy', String(enemy.id)));
+    const focusedId = activeEnemyId || String(ordered.find(enemy => Number(enemy.currentHp) > 0)?.id || '');
+    if (focusedId && focusedId !== this.focusedStageTargetId) {
+      this.focusedStageTargetId = focusedId;
+      const focused = party.find('.stage-enemy-member').filter((_index, element) => String(element.dataset.enemyId) === focusedId);
+      focused.addClass('is-target-focus');
+      window.setTimeout(() => focused.removeClass('is-target-focus'), 1500);
+    }
     party.off('click.mwg-stage-enemy').on('click.mwg-stage-enemy', '.stage-enemy-member', event => {
+      if ($(event.target).closest('.stage-support-item,.stage-enemy-member-intent').length) return;
       const enemyId = String($(event.currentTarget).attr('data-enemy-id') || '');
       if (!enemyId || !GameStateManager.getInstance().setActiveEnemy(enemyId)) return;
       void this.refreshBattleUI(GameStateManager.getInstance().getGameState());
+    });
+    party.off('click.mwg-stage-support').on('click.mwg-stage-support', '.stage-support-item', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      const item = $(event.currentTarget);
+      const target = String(item.data('target'));
+      if (item.data('status-id')) {
+        const enemyId = String(item.closest('.stage-enemy-member').data('enemy-id') || '');
+        const owner = target === 'enemy' ? GameStateManager.getInstance().getGameState().enemies?.find(entry => entry.id === enemyId) : undefined;
+        this.showStatusDetail(String(item.data('status-id')), target, owner);
+      }
+      else {
+        const enemyId = String(item.closest('.stage-enemy-member').data('enemy-id') || '');
+        const state = GameStateManager.getInstance().getGameState();
+        const owner = target === 'enemy' ? (state.enemies || []).find((entry: any) => String(entry.id) === enemyId) : state.player;
+        const ability = (owner?.abilities || []).find((entry: any) => String(entry.id) === String(item.data('ability-id')));
+        this.showSupportDetails(item, ability, target === 'enemy' ? '敌方被动' : '我方能力');
+      }
+    });
+    party.off('click.mwg-stage-intent').on('click.mwg-stage-intent', '.stage-enemy-member-intent', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      const member = $(event.currentTarget).closest('.stage-enemy-member');
+      const enemyId = String(member.data('enemy-id') || '');
+      const enemy = (GameStateManager.getInstance().getGameState().enemies || []).find((entry: any) => String(entry.id) === enemyId);
+      const action = enemy?.nextAction || (Array.isArray(enemy?.actions) ? enemy.actions[0] : null);
+      if (action) this.showSupportDetails($(event.currentTarget), action, '敌方行动');
+    });
+    party.off('keydown.mwg-stage-intent').on('keydown.mwg-stage-intent', '.stage-enemy-member-intent', event => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      $(event.currentTarget).trigger('click');
+    });
+  }
+
+  private static stageSupportsMarkup(target: 'player' | 'enemy', statuses: any[], abilities: any[]): string {
+    $(document).off('keydown.mwg-stage-support').on('keydown.mwg-stage-support', '.stage-support-item', event => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault(); event.stopPropagation();
+      $(event.currentTarget).trigger('click');
+    });
+    const statusItems = statuses.map(status => {
+      const definition = DynamicStatusManager.getInstance().getStatusDefinition(status.id);
+      const emoji = definition?.emoji || status.emoji || '◈';
+      const name = definition?.name || status.name || status.id;
+      const stacks = this.displayBattleValue(status.stacks, 1);
+      return `<span class="stage-support-item stage-status-support" role="button" tabindex="0" data-target="${target}" data-status-id="${escapeHtmlAttribute(String(status.id))}" title="${escapeHtmlAttribute(`${name}${stacks > 1 ? ` ${stacks}层` : ''}`)}" aria-label="查看状态：${escapeHtmlAttribute(name)}">${escapeHtml(emoji)}<b>${stacks}</b></span>`;
+    });
+    const abilityItems = abilities.map(ability => `<span class="stage-support-item stage-ability-support" role="button" tabindex="0" data-target="${target}" data-ability-id="${escapeHtmlAttribute(String(ability.id || ''))}" title="${escapeHtmlAttribute(`能力：${ability.name || ability.id || '未命名'}`)}" aria-label="查看能力：${escapeHtmlAttribute(String(ability.name || ability.id || '未命名'))}">${escapeHtml(ability.emoji || '⚡')}</span>`);
+    return `<span class="stage-unit-supports" aria-label="${target === 'enemy' ? '敌方' : '我方'}状态与能力">${statusItems.concat(abilityItems).join('')}</span>`;
+  }
+
+  private static updateStageSupports(target: 'player' | 'enemy', statuses: any[], abilities: any[]): void {
+    const container = $(`#stage-${target}-supports`);
+    if (!container.length) return;
+    container.html(this.stageSupportsMarkup(target, statuses, abilities));
+    container.off('click.mwg-stage-support').on('click.mwg-stage-support', '.stage-support-item', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      const item = $(event.currentTarget);
+      if (item.data('status-id')) this.showStatusDetail(String(item.data('status-id')), target);
+      else {
+        const ability = abilities.find(entry => String(entry.id) === String(item.data('ability-id')));
+        this.showSupportDetails(item, ability, '我方能力');
+      }
     });
   }
 
@@ -270,89 +410,76 @@ export class BattleUI {
       const units = living.filter((unit: any) => unit?.owner === owner && (unit.hasHp === false || Number(unit.currentHp) > 0));
       const container = $(`#${owner}-summons`);
       if (!container.length) continue;
-      container.html(units.map((unit: any, index: number) => {
-        const hp = unit.hasHp === false ? '' : this.displayBattleValue(unit.currentHp);
-        const maxHp = unit.hasHp === false ? '' : this.displayBattleValue(unit.maxHp, 1);
-        const title = `${unit.name || unit.templateId} · ${unit.hasHp === false ? '无生命，不承受攻击' : `生命 ${hp}/${maxHp}${Number(unit.block) > 0 ? ` · 格挡 ${this.displayBattleValue(unit.block)}` : ''}`}`;
-        let ring = 0;
-        let ringIndex = index;
-        let ringCapacity = 8;
-        while (ringIndex >= ringCapacity) {
-          ringIndex -= ringCapacity;
-          ring += 1;
-          ringCapacity = 8 + ring * 4;
-        }
-        const ringStart = index - ringIndex;
-        const ringItemCount = Math.max(1, Math.min(ringCapacity, units.length - ringStart));
-        const angle = -90 + (360 * ringIndex) / ringItemCount;
-        const xRadius = 35 + ring * 19;
-        const yRadius = 27 + ring * 15;
-        const x = Math.round(Math.cos((angle * Math.PI) / 180) * xRadius);
-        const y = Math.round(Math.sin((angle * Math.PI) / 180) * yRadius);
-        return `<button type="button" class="stage-summon-unit" data-summon-index="${index}" data-summon-id="${escapeHtmlAttribute(String(unit.instanceId || ''))}"
-          style="--summon-x:${x}px;--summon-y:${y}px;--summon-order:${index}"
-          aria-label="查看召唤单位：${escapeHtmlAttribute(title)}" title="${escapeHtmlAttribute(title)}">
-          <span class="stage-summon-emoji" aria-hidden="true">${escapeHtml(String(unit.emoji || '◆'))}</span>
-        </button>`;
-      }).join('')).toggle(units.length > 0);
+      const limit = GameStateManager.getInstance().getGameState().summonLimits?.[owner];
+      const meterId = `${owner}-summon-capacity`;
+      let meter = $(`#${meterId}`);
+      if (!meter.length) { meter = $(`<span id="${meterId}" class="summon-capacity-meter"></span>`); container.after(meter); }
+      meter.text(limit === undefined ? '' : `召唤 ${units.length}/${limit}`).toggle(limit !== undefined);
+      const orbit = units.length > 3;
+      const stage = $(`#stage-${owner}`);
+      stage.toggleClass('has-orbit-summons', orbit).toggleClass('has-inline-summons', units.length > 0 && !orbit);
+      container.toggleClass('is-orbit', orbit).toggleClass('is-inline', !orbit);
+      const state = GameStateManager.getInstance().getGameState();
+      const mainCount = owner === 'player' ? 1 : Math.max(1, (state.enemies || []).filter(enemy => enemy.currentHp > 0).length);
+      document.getElementById('battle-stage')?.style.setProperty(`--${owner}-units`, `${orbit ? Math.max(3, mainCount * 2) : mainCount + units.length}fr`);
+      container.html(units.map((unit: any, index: number) => stageSummonMarkup({ ...unit, emoji: resolveCharacterEmoji(unit, id => DynamicStatusManager.getInstance().getStatusDefinition(id), '◆') }, index, orbit,
+        orbit ? [] : summonIntentBadges(unit, state), String(unit.name || unit.templateId || '召唤物'))).join('')).toggle(units.length > 0);
+      units.filter((unit: any) => unit.hasHp !== false).forEach((unit: any) => this.animationManager.syncSummonHealthBar(owner, String(unit.instanceId || ''), Number(unit.currentHp) || 0, Number(unit.maxHp) || 0, Number(unit.block) || 0));
+      units.filter((unit: any) => unit.hasHp !== false).forEach((unit: any) => this.animationManager.restoreSummonHealthLoss(owner, String(unit.instanceId || '')));
       container.find('.stage-summon-unit').each((index, element) => {
         $(element).data('summon', units[index]);
+        if (!orbit) $(element).append(this.stageSupportsMarkup(owner, units[index].statusEffects || [], units[index].abilities || []));
       });
       container.off('click.mwgSummon').on('click.mwgSummon', '.stage-summon-unit', function (event) {
         event.preventDefault();
         event.stopPropagation();
-        BattleUI.showSummonDetails($(this), $(this).data('summon'));
+        const unit = $(this).data('summon');
+        const support = $(event.target).closest('.stage-support-item');
+        if (support.length) {
+          if (support.data('status-id')) BattleUI.showStatusDetail(String(support.data('status-id')), owner, unit);
+          else BattleUI.showSupportDetails(support, unit.abilities?.find((ability: any) => ability.id === support.data('ability-id')), '召唤物能力');
+          return;
+        }
+        BattleUI.showSummonDetails($(this), unit);
       });
+    }
+    positionStageSummonOrbits();
+    if (typeof ResizeObserver !== 'undefined' && !this.summonResizeObserver) {
+      const stage = document.getElementById('battle-stage');
+      if (stage) {
+        this.summonResizeObserver = new ResizeObserver(() => positionStageSummonOrbits());
+        this.summonResizeObserver.observe(stage);
+      }
     }
   }
 
   private static showSummonDetails(anchor: JQuery, unit: any): void {
     $('.support-details-popover').remove();
     if (!unit) return;
-    const context = unit.owner === 'enemy'
-      ? { selfLabel: '敌方', opponentLabel: '我方' }
-      : { selfLabel: '我方', opponentLabel: '敌方' };
-    const actions = Array.isArray(unit.actions) && unit.actions.length
-      ? unit.actions
-      : unit.actionProgram
-        ? [{ id: `${unit.templateId || unit.id}_action`, name: '自动行动', emoji: unit.emoji, effectProgram: unit.actionProgram }]
-        : [];
-    const abilities = Array.isArray(unit.abilities) ? unit.abilities : [];
-    const resources = Object.values(unit.resources || {}) as Array<{ name?: string; emoji?: string; current?: number; max?: number }>;
-    const statuses = Array.isArray(unit.statusEffects) ? unit.statusEffects : [];
-    const details = [
-      `<div class="summon-detail-stats">${unit.hasHp === false ? '<span>无生命 · 不承受攻击与援护</span>' : `<span>生命 ${escapeHtml(this.displayBattleValue(unit.currentHp))}/${escapeHtml(this.displayBattleValue(unit.maxHp, 1))}</span>${Number(unit.block) > 0 ? `<span>格挡 ${escapeHtml(this.displayBattleValue(unit.block))}</span>` : ''}`}<span>每次行动 ${escapeHtml(this.displayBattleValue(unit.actionsPerActivation, 1))} 次</span></div>`,
-      resources.length ? `<div class="summon-detail-resources">${resources.map(resource => `<span>${escapeHtml(String(resource.emoji || '◆'))}${escapeHtml(String(resource.name || '资源'))} ${escapeHtml(this.displayBattleValue(resource.current))}/${escapeHtml(this.displayBattleValue(resource.max))}</span>`).join('')}</div>` : '',
-      statuses.length ? `<div class="summon-detail-statuses">${statuses.map((status: any) => `<span>${escapeHtml(String(status.emoji || '◆'))}${escapeHtml(String(status.name || status.id))} ${escapeHtml(this.displayBattleValue(status.stacks, 1))}层</span>`).join('')}</div>` : '',
-    ].join('');
-    const actionDetails = actions.map((action: any) => {
-      const tags = this.effectDisplay.programToTags(action.effectProgram, context);
-      return `<section class="summon-detail-program"><div class="summon-detail-program-title"><span>${escapeHtml(String(action.emoji || unit.emoji || '◆'))}</span><strong>${escapeHtml(String(action.name || action.id || '行动'))}</strong>${action.fixed === true ? '<small class="summon-fixed-effect">固定效果</small>' : ''}${Number(action.weight) > 0 ? `<small>权重 ${escapeHtml(this.displayBattleValue(action.weight, 1))}</small>` : ''}</div>${action.description ? `<p>${escapeHtml(String(action.description))}</p>` : ''}${tags.length ? this.effectDisplay.createWrappedEffectTagsHTML(tags) : '<div class="status-no-effect">没有可执行效果。</div>'}</section>`;
-    }).join('');
-    const abilityDetails = abilities.map((ability: any) => {
-      const tags = this.effectDisplay.triggeredProgramToTags(ability.trigger, ability.effectProgram, context);
-      return `<section class="summon-detail-program summon-detail-ability"><div class="summon-detail-program-title"><span>${escapeHtml(String(ability.emoji || '⚡'))}</span><strong>${escapeHtml(String(ability.name || ability.id || '触发能力'))}</strong>${ability.fixed === true ? '<small class="summon-fixed-effect">固定效果</small>' : ''}</div>${ability.description ? `<p>${escapeHtml(String(ability.description))}</p>` : ''}${tags.length ? this.effectDisplay.createWrappedEffectTagsHTML(tags) : '<div class="status-no-effect">没有可执行效果。</div>'}</section>`;
-    }).join('');
+    const state = GameStateManager.getInstance().getGameState();
+    const summoner = unit.owner === 'player' ? state.player : (state.enemies || []).find(enemy => enemy.id === unit.summonerId);
+    const names = (resources: any) => Object.fromEntries(Object.values(resources || {}).map((resource: any) => [resource.id, resource.name]));
+    const emojis = (resources: any) => Object.fromEntries(Object.values(resources || {}).map((resource: any) => [resource.id, resource.emoji || '◆']));
+    unit = { ...unit, displayResourceEmojis: { ...emojis(summoner?.resources), ...emojis(unit.resources) }, displaySummonerResourceEmojis: emojis(summoner?.resources), displayResourceNames: { ...names(summoner?.resources), ...names(unit.resources) }, displaySummonerResourceNames: names(summoner?.resources) };
     const popover = $(`
       <div class="support-details-popover summon-details-popover" role="dialog" aria-label="${escapeHtmlAttribute(String(unit.name || '召唤单位'))}">
-        <div class="support-details-heading"><span>${escapeHtml(String(unit.emoji || '◆'))}</span><strong>${escapeHtml(String(unit.name || unit.templateId || '召唤单位'))}</strong><small>${unit.owner === 'enemy' ? '敌方召唤单位' : '我方召唤单位'}</small></div>
-        ${unit.description ? `<div class="support-details-description">${escapeHtml(String(unit.description))}</div>` : ''}
-        ${details}
-        <div class="support-details-effects">${actionDetails || '<div class="status-no-effect">该单位没有自动行动。</div>'}${abilityDetails}</div>
+        <button type="button" class="tooltip-close">关闭</button>${renderSummonPanel(unit)}
       </div>`);
-    $('body').append(popover);
+    const host = $('#battle-scene');
+    (host.length ? host : $('body')).append(popover);
     const width = Math.min(430, ($(window).width() || 446) - 16);
     popover.css({ width });
-    const offset = anchor.offset();
+    const rect = anchor[0]?.getBoundingClientRect();
     const height = popover.outerHeight() || 180;
     const viewportWidth = $(window).width() || width;
     const viewportHeight = $(window).height() || height;
-    const left = offset
-      ? Math.max(8, Math.min(offset.left + (anchor.outerWidth() || 0) / 2 - width / 2, viewportWidth - width - 8))
+    const left = rect
+      ? Math.max(8, Math.min(rect.left + rect.width / 2 - width / 2, viewportWidth - width - 8))
       : Math.max(8, (viewportWidth - width) / 2);
-    const preferredTop = offset ? offset.top + (anchor.outerHeight() || 0) + 6 : (viewportHeight - height) / 2;
+    const preferredTop = rect ? rect.bottom + 6 : (viewportHeight - height) / 2;
     popover.css({ left, top: Math.max(8, Math.min(preferredTop, viewportHeight - height - 8)) });
-    $(document).off('click.mwgSummonPopover').on('click.mwgSummonPopover', () => {
+    $(document).off('click.mwgSummonPopover').on('click.mwgSummonPopover', event => {
+      if ($(event.target).closest(popover).length && !$(event.target).closest('.tooltip-close').length) return;
       popover.remove();
       $(document).off('click.mwgSummonPopover');
     });
@@ -368,12 +495,14 @@ export class BattleUI {
     const playerMaxLust = this.displayBattleValue(player.maxLust, 100);
     const playerEnergy = this.displayBattleValue(player.energy);
     const playerBlock = this.displayBattleValue(player.block);
-    const playerEmoji = typeof player.emoji === 'string' && player.emoji.trim() ? player.emoji.trim() : '✨';
+    const playerEmoji = resolveCharacterEmoji(player, id => DynamicStatusManager.getInstance().getStatusDefinition(id));
     $('.player-emblem, #stage-player-emoji').text(playerEmoji);
 
     // 更新玩家血条
     const playerHpPercent = playerMaxHp > 0 ? (playerHp / playerMaxHp) * 100 : 0;
-    $('.player-card .hp-fill').css('width', `${playerHpPercent}%`);
+    const playerFill = $('.player-card .hp-fill');
+    if (!playerFill.parent().find('.hp-loss').length) playerFill.before('<div class="hp-loss" aria-hidden="true"></div>');
+    playerFill.css('width', `${playerHpPercent}%`);
     $('#player-hp').text(`${playerHp}/${playerMaxHp}`);
 
     // 更新玩家欲望条
@@ -385,9 +514,9 @@ export class BattleUI {
 
     // 更新能量显示
     $('#player-energy').text(`${playerEnergy}/${this.displayBattleValue(player.maxEnergy, 3)}`);
-    const resources = Object.values(player.resources || {}) as Array<{ id: string; name: string; emoji: string; current: number; max: number }>;
+    const resources = Object.values(player.resources || {}) as CombatResourceState[];
     $('#player-combat-resources').html(resources.map(resource => `
-      <span class="combat-resource-chip" data-resource-id="${escapeHtmlAttribute(resource.id)}" title="${escapeHtmlAttribute(resource.name)}">
+      <span class="combat-resource-chip" data-resource-id="${escapeHtmlAttribute(resource.id)}" title="${escapeHtmlAttribute(resource.description ? `${resource.name}：${resource.description}` : resource.name)}">
         <span>${escapeHtml(resource.emoji)}</span><span>${escapeHtml(resource.name)}</span>
         <b>${this.displayBattleValue(resource.current)}/${this.displayBattleValue(resource.max)}</b>
       </span>
@@ -464,9 +593,9 @@ export class BattleUI {
   static updateHandCardsDisplay(handCards: any[]): void {
     try {
       const handContainer = $('.player-hand');
-      handContainer.empty();
 
       if (!handCards || !Array.isArray(handCards)) {
+        handContainer.empty();
         return;
       }
 
@@ -474,10 +603,31 @@ export class BattleUI {
 
       // 开始创建手牌元素 - 移除日志减少输出
 
+      const kept = new Set(validCards.map(card => String(card.id)));
+      handContainer.children('.mwg-card').each((_index, element) => {
+        if (!kept.has(String(element.dataset.cardId))) $(element).remove();
+      });
       validCards.forEach((card: any, index: number) => {
+        if (document.querySelector(`.card-cast-flight[data-card-id="${CSS.escape(String(card.id))}"]`)) return;
         if (card && card.name) {
           const cardElement = this.createEnhancedCardElement(card, index);
-          handContainer.append(cardElement);
+          const existing = handContainer.children('.mwg-card').filter((_i, element) => element.dataset.cardId === String(card.id)).first();
+          if (existing.length) {
+            const selected = existing.hasClass('selected');
+            existing.attr('class', cardElement.attr('class') || '').toggleClass('selected', selected);
+            ['data-condition-highlight', 'data-condition-hint', 'title', 'aria-label'].forEach(attribute => {
+              const value = cardElement.attr(attribute);
+              if (value === undefined) existing.removeAttr(attribute);
+              else existing.attr(attribute, value);
+            });
+            const face = cardElement.html();
+            if (existing.data('renderedFace') !== face) {
+              existing.empty().append(cardElement.children());
+              existing.data('renderedFace', face);
+            }
+            existing.data('cardData', cardElement.data('cardData'));
+            prepareDrawnCardElement(existing[0]);
+          } else { cardElement.data('renderedFace', cardElement.html()); prepareDrawnCardElement(cardElement[0]); handContainer.append(cardElement); }
         }
       });
 
@@ -520,7 +670,7 @@ export class BattleUI {
               Math.floor((handContainerWidth - 8 - cardGap * Math.max(0, count - 1)) / count),
             )
           : maxCardWidth;
-      const cardWidth = Math.max(minCardWidth, Math.min(maxCardWidth, heightBound, widthBound));
+      const cardWidth = cards.first().outerWidth() || 150;
       const normalOffset = cardWidth + cardGap;
       const fitOffset = count <= 1 ? 0 : (handContainerWidth - cardWidth - 8) / (count - 1);
       const offset = count <= 1 ? 0 : Math.max(isCompactHand ? 12 : 14, Math.min(normalOffset, fitOffset));
@@ -540,12 +690,27 @@ export class BattleUI {
   /**
    * 创建增强的卡牌元素
    */
+  private static cardTraitContext(card: Card, preview = CardSystem.getInstance().previewCardPlay(card.id)): import('../../shared/cardTraits').CardTraitContext {
+    const player = GameStateManager.getInstance().getPlayer();
+    const denied = !preview.ok && ['CURSE_UNPLAYABLE', 'RULE_DENIED', 'RULE_LIMIT_REACHED', 'DOMINATED_ATTACK', 'SILENCED_SKILL'].includes(preview.code);
+    const allowed = preview.ok || (!preview.ok && ['INSUFFICIENT_ENERGY', 'INSUFFICIENT_RESOURCE'].includes(preview.code));
+    return {
+      playAccess: denied ? 'denied' : allowed ? 'allowed' : undefined,
+      temporary: !!card.parentCombatInstanceId && card.origin === 'copied' ||
+        !!card.runInstanceId && !player.deck.some(owned => owned.runInstanceId === card.runInstanceId),
+    };
+  }
+
   private static createEnhancedCardElement(card: any, index: number): JQuery {
     // 创建卡牌元素 - 移除日志减少输出
 
     // 确保卡牌有必要的属性
     const cardData: Card = {
       id: card.id || card.originalId || `card_${index}`,
+      origin: card.origin,
+      runInstanceId: card.runInstanceId,
+      parentCombatInstanceId: card.parentCombatInstanceId,
+      attachments: card.attachments,
       name: card.name || '未知卡牌',
       cost: card.cost ?? 0,
       type: card.type || 'Skill',
@@ -555,6 +720,7 @@ export class BattleUI {
       description: card.description || '',
       discardEffectProgram: card.discardEffectProgram,
       retain: card.retain || false,
+      lifecycle: card.lifecycle,
       exhaust: card.exhaust || false,
       ethereal: card.ethereal || false,
       innate: card.innate || false,
@@ -594,37 +760,50 @@ export class BattleUI {
     const isPlayerTurn = gameState.phase === 'player_turn';
     const isCurse = cardData.type === 'Curse';
     // 如果被眩晕，所有卡牌都不可点击
-    const isClickable = isPlayerTurn && preview.ok && !isCurse;
+    const isClickable = isPlayerTurn && preview.ok;
+    // This reads the exact executor snapshot for each live target. It neither executes
+    // the program nor predicts payment/event contexts that are only known during play.
+    const executor = UnifiedEffectExecutor.getInstance();
+    const targets = GameStateManager.getInstance().getEnemies({ livingOnly: true });
+    const conditionHighlight = evaluateHandCardConditionHighlight({
+      program: cardData.effectProgram,
+      targets,
+      activeTargetId: gameState.activeEnemyId || targets[0]?.id || null,
+      getState: enemy => executor.getCoreEffectState(true, enemy),
+    });
 
     // 创建完整的卡牌元素
-    const cardElement = $(`
-      <div class="card enhanced-card rarity-${escapeHtmlAttribute(cardData.rarity)} card-type-${escapeHtmlAttribute(cardData.type)} ${
-        isClickable ? 'clickable' : shortage ? 'unaffordable' : 'blocked'
-      }"
-           data-card-id="${escapeHtmlAttribute(cardData.id)}">
-        <div class="card-header">
-          <div class="card-cost ${typeof previewCard.cost === 'object' && previewCard.cost !== null || (previewPayment && previewPayment.waived.length > 0) ? 'composite-card-cost' : ''} ${canAfford ? '' : 'insufficient-cost'}" aria-label="${escapeHtmlAttribute(displayCost)}">${displayCostHtml}</div>
-          <div class="card-rarity-badge"><span class="card-rarity-gem"></span>${escapeHtml(this.translateRarity(cardData.rarity))}</div>
-        </div>
-        <div class="card-artwork">
-          <div class="card-emoji">${escapeHtml(cardData.emoji)}</div>
-          <div class="card-keywords">
-            ${cardData.innate ? '<div class="card-keyword innate">固有</div>' : ''}
-            ${cardData.retain ? '<div class="card-keyword retain">保留</div>' : ''}
-            ${cardData.exhaust ? '<div class="card-keyword exhaust">消耗</div>' : ''}
-            ${cardData.ethereal ? '<div class="card-keyword ethereal">空灵</div>' : ''}
-          </div>
-        </div>
-        <div class="card-body">
-          <div class="card-title-row">
-            <div class="card-name">${escapeHtml(cardData.name)}</div>
-            <div class="card-type-indicator">${escapeHtml(this.translateCardType(cardData.type))}</div>
-          </div>
-          ${cardData.description ? `<div class="card-description">${escapeHtml(cardData.description)}</div>` : ''}
-        </div>
-        <div class="card-glow"></div>
-      </div>
-    `);
+    const cardElement = $(renderCardFace(cardData, {
+      traitContext: this.cardTraitContext(cardData, preview),
+      costLabel: displayCost, costHtml: displayCostHtml,
+      rarityLabel: this.translateRarity(cardData.rarity), typeLabel: this.translateCardType(cardData.type),
+      interactionClass: isClickable ? 'clickable' : shortage ? 'unaffordable' : 'blocked',
+      compositeCost: (typeof previewCard.cost === 'object' && previewCard.cost !== null) || !!previewPayment?.waived.length,
+      insufficient: !canAfford,
+      rulesHtml: this.effectDisplay.createCompactEffectTagsHTML(this.effectDisplay.cardToTags(cardData, {
+        damageAmountText: node => {
+          // A random or group selector is not the selected opponent. Keep its
+          // authored formula until a per-recipient estimate can be shown.
+          if (node.targetSelector) return undefined;
+          try {
+            const { base, value } = executor.previewPlayerCardDamage(node.amount, node.target, node.damageKind, previewPayment);
+            return Number.isFinite(value) ? `${value}${value > base ? '↑' : value < base ? '↓' : ''}` : undefined;
+          } catch { return undefined; }
+        },
+      })) + (cardData.discardEffectProgram?.steps?.length
+        ? `<section class="card-trigger-rules"><strong>主动或被效果弃置时</strong>${this.effectDisplay.createCompactEffectTagsHTML(this.effectDisplay.programToTags(cardData.discardEffectProgram))}</section>` : '')
+        + this.effectDisplay.createCompactEffectTagsHTML(this.effectDisplay.attachmentToTags(cardData.attachments)),
+    }));
+
+    if (conditionHighlight.kind !== 'none') {
+      cardElement
+        .addClass(`hand-card-condition-${conditionHighlight.kind}`)
+        .attr('data-condition-highlight', conditionHighlight.kind)
+        .attr('data-condition-hint', conditionHighlight.hint || '')
+        .attr('title', conditionHighlight.hint || '')
+        .attr('aria-label', `${cardData.name}，${conditionHighlight.hint}`);
+    }
+    if (conditionHighlight.glows) cardElement.addClass('hand-card-condition-match');
 
     // 添加悬停效果
     cardElement
@@ -639,17 +818,16 @@ export class BattleUI {
           return;
         }
         cardElement.addClass('card-hover');
-        this.showCardTooltip(cardElement, cardData);
+        // Shared card preview handles the complete face on every surface.
       })
       .on('mouseleave', () => {
         cardElement.removeClass('card-hover');
-        this.hideCardTooltip();
       });
 
     // 保存原始点击处理器
     const originalClickHandler = () => {
-      // 点击时也隐藏工具提示，防止工具提示卡住
-      this.hideCardTooltip();
+      if (cardElement.data('suppressPlayClick')) return;
+      // Preview remains pinned until explicitly closed, replaced, or the card is played.
     };
     cardElement.data('originalClick', originalClickHandler);
     cardElement.on('click', originalClickHandler);
@@ -673,7 +851,7 @@ export class BattleUI {
     this.activeCardTooltip?.stop(true, true).remove();
     $('.card-tooltip').stop(true, true).remove();
     // 解析效果标签 - 工具提示内完整换行显示
-    const effectTags = BattleUI.effectDisplay.programToTags(card.effectProgram);
+    const effectTags = BattleUI.effectDisplay.cardToTags(card);
     const wrappedEffectHTML = BattleUI.effectDisplay.createWrappedEffectTagsHTML(effectTags);
 
     const discardEffectTags = BattleUI.effectDisplay.programToTags(card.discardEffectProgram);
@@ -690,28 +868,21 @@ export class BattleUI {
         <div class="tooltip-meta">
           <span class="tooltip-cost">${escapeHtml(describeCardCost(card.cost, GameStateManager.getInstance().getPlayer().resources))}</span>
           <span class="tooltip-type">${escapeHtml(this.translateCardType(card.type))}</span>
-          <span class="tooltip-rarity">${escapeHtml(this.translateRarity(card.rarity))}</span>
+          <span class="tooltip-rarity">${escapeHtml(card.type === 'Curse' ? '诅咒' : this.translateRarity(card.rarity))}</span>
         </div>
-        ${wrappedEffectHTML ? `<div class="tooltip-effects">${wrappedEffectHTML}</div>` : ''}
+        ${wrappedEffectHTML ? `<div class="tooltip-effects"><div class="tooltip-subtitle">${card.type === 'Curse' ? '回合结束时（仍在手牌）' : '打出时'}</div>${wrappedEffectHTML}</div>` : ''}
         ${wrappedDiscardHTML ? `<div class="tooltip-effects"><div class="tooltip-subtitle">此牌被战斗效果弃掉后：</div>${wrappedDiscardHTML}</div>` : ''}
         ${wrappedAttachmentHTML ? `<div class="tooltip-effects"><div class="tooltip-subtitle">卡牌附着：</div>${wrappedAttachmentHTML}</div>` : ''}
         ${card.description ? `<div class="tooltip-description">${escapeHtml(card.description)}</div>` : ''}
-        ${
-          card.innate || card.retain || card.exhaust || card.ethereal
-            ? `
-          <div class="tooltip-keywords">
-            ${card.innate ? '<span class="keyword">固有</span>' : ''}
-            ${card.retain ? '<span class="keyword">保留</span>' : ''}
-            ${card.exhaust ? '<span class="keyword">消耗</span>' : ''}
-            ${card.ethereal ? '<span class="keyword">空灵</span>' : ''}
-          </div>
-        `
-            : ''
-        }
+        <div class="card-traits">${renderCardTraits(card, this.cardTraitContext(card))}</div>
       </div>
     `);
 
-    $('body').append(tooltip);
+    const close = $('<button type="button" class="tooltip-close" aria-label="关闭卡牌详情">关闭</button>');
+    close.on('click', event => { event.stopPropagation(); this.dismissCardTooltip(); });
+    tooltip.prepend(close);
+    const host = $('#battle-scene');
+    (host.length ? host : $('body')).append(tooltip);
     this.activeCardTooltip = tooltip;
     this.activeCardTooltipAnchor = cardElement;
     this.repositionCardTooltip(cardElement);
@@ -770,7 +941,8 @@ export class BattleUI {
   /**
    * 隐藏卡牌工具提示
    */
-  private static hideCardTooltip(): void {
+  public static dismissCardTooltip(): void {
+    CardPlayMode.getInstance().clearSelection();
     this.activeCardTooltip = null;
     this.activeCardTooltipAnchor = null;
     $('.card-tooltip').stop(true, true).remove();
@@ -829,7 +1001,7 @@ export class BattleUI {
           <button type="button" class="relic-toggle support-icon-button"
                   aria-label="查看遗物：${escapeHtmlAttribute(relic.name || '未知遗物')}"
                   title="${escapeHtmlAttribute(relic.name || '未知遗物')}">
-            <span aria-hidden="true">${escapeHtml(relic.emoji || '📿')}</span>
+            <span aria-hidden="true">${escapeHtml(relic.emoji || '📿')}</span><span class="relic-caption">${escapeHtml(relic.name || '未知遗物')}</span>
           </button>
         </div>
       `;
@@ -866,19 +1038,20 @@ export class BattleUI {
         const statusDef = DynamicStatusManager.getInstance().getStatusDefinition(status.id);
         const emoji = statusDef?.emoji || '⚡';
         const name = statusDef?.name || status.name || status.id;
-        const stacks = status.stacks || 1;
+        const stacks = status.stacks ?? 1;
+        const statusType = ['buff', 'debuff', 'neutral'].includes(statusDef?.type || '') ? statusDef!.type : 'neutral';
         const duration = status.duration;
 
         const title = `${name}${stacks > 0 ? ` · ${stacks}层` : ''}${duration && duration > 0 ? ` · ${duration}回合` : ''}`;
 
         return `
-          <button type="button" class="status-effect-item support-icon-button clickable"
+          <button type="button" class="status-effect-item support-icon-button clickable status-kind-${statusType}"
                data-status-id="${escapeHtmlAttribute(status.id)}"
                data-target="${target}"
                aria-label="查看状态：${escapeHtmlAttribute(title)}"
                title="${escapeHtmlAttribute(title)}">
             <span class="status-effect-emoji" aria-hidden="true">${escapeHtml(emoji)}</span>
-            ${stacks > 1 ? `<span class="status-stack-badge">${escapeHtml(stacks)}</span>` : ''}
+            ${stacks > 0 ? `<span class="status-stack-badge" aria-hidden="true">${escapeHtml(stacks)}</span>` : ''}
             ${duration && duration > 0 ? `<span class="status-duration-badge">${escapeHtml(duration)}</span>` : ''}
           </button>
         `;
@@ -913,12 +1086,12 @@ export class BattleUI {
         </button>`
       : '';
     const orbHtml = slots > 0
-      ? `<div class="orb-strip" aria-label="Orb ${orbs.length}/${slots}">
-          <span class="orb-count">Orb ${orbs.length}/${slots}</span>
+      ? `<div class="orb-strip" aria-label="姿态槽 ${orbs.length}/${slots}">
+          <span class="orb-count">姿态槽 ${orbs.length}/${slots}</span>
           ${orbs.map((orb: any, index: number) => `
             <button type="button" class="special-container-toggle orb-toggle" data-special-kind="orb" data-orb-index="${index}"
-              aria-label="查看 Orb：${escapeHtmlAttribute(String(orb.name || orb.id || index))}，数值 ${escapeHtml(this.displayBattleValue(orb.value))}"
-              title="${escapeHtmlAttribute(String(orb.name || orb.id || 'Orb'))} · ${escapeHtmlAttribute(String(this.displayBattleValue(orb.value)))}">
+              aria-label="查看姿态：${escapeHtmlAttribute(String(orb.name || orb.id || index))}，数值 ${escapeHtml(this.displayBattleValue(orb.value))}"
+              title="${escapeHtmlAttribute(String(orb.name || orb.id || '姿态'))} · 数值 ${escapeHtmlAttribute(String(this.displayBattleValue(orb.value)))}">
               <span aria-hidden="true">${escapeHtml(String(orb.emoji || '◆'))}</span><b>${escapeHtml(this.displayBattleValue(orb.value))}</b>
             </button>`).join('')}
         </div>`
@@ -952,7 +1125,7 @@ export class BattleUI {
     $('.support-details-popover').remove();
     if (!value) return;
     const context = target === 'enemy'
-      ? { selfLabel: '敌方', opponentLabel: '我方' }
+      ? { selfLabel: '自身', opponentLabel: '对方', sourceSide: 'enemy' }
       : { selfLabel: '自身', opponentLabel: '敌方' };
     const groups = kind === 'stance'
       ? [
@@ -971,20 +1144,26 @@ export class BattleUI {
         return `<section class="special-details-group"><strong>${escapeHtml(label)}</strong>${this.effectDisplay.createWrappedEffectTagsHTML(tags)}</section>`;
       })
       .join('');
+    const eventHtml = kind === 'stance' && Array.isArray(value.events) ? value.events.map((event: any) => {
+      const tags = this.effectDisplay.triggeredProgramToTags(event.trigger,
+        { spec: 'mwg.effect/v1', steps: event.effects }, context, event.eventQuery);
+      return `<section class="special-details-group"><strong>仅此姿态生效期间</strong>${this.effectDisplay.createWrappedEffectTagsHTML(tags)}</section>`;
+    }).join('') : '';
     const sourceName = typeof value.source?.name === 'string' ? value.source.name : '';
     const popover = $(`
       <div class="support-details-popover special-container-popover" role="dialog" aria-label="${escapeHtmlAttribute(String(value.name || kind))}">
         <div class="support-details-heading">
           <span>${escapeHtml(String(value.emoji || (kind === 'stance' ? '◈' : '◆')))}</span>
-          <strong>${escapeHtml(String(value.name || (kind === 'stance' ? '姿态' : 'Orb')))}</strong>
-          <small>${kind === 'stance' ? '姿态' : `Orb · 数值 ${escapeHtml(this.displayBattleValue(value.value))}`}</small>
+          <strong>${escapeHtml(String(value.name || (kind === 'stance' ? '当前姿态' : '姿态')))}</strong>
+          <small>${kind === 'stance' ? '当前姿态' : `姿态槽 · 数值 ${escapeHtml(this.displayBattleValue(value.value))}`}</small>
         </div>
         ${value.description ? `<div class="support-details-description">${escapeHtml(String(value.description))}</div>` : ''}
         ${sourceName ? `<div class="support-details-source">来源：${escapeHtml(sourceName)}</div>` : ''}
-        <div class="support-details-effects">${groupHtml || '<div class="status-no-effect">没有额外效果。</div>'}</div>
+        <div class="support-details-effects">${groupHtml + eventHtml || '<div class="status-no-effect">没有额外效果。</div>'}</div>
       </div>
     `);
-    $('body').append(popover);
+    const host = $('#battle-scene');
+    (host.length ? host : $('body')).append(popover);
     const offset = anchor.offset();
     const width = Math.min(430, ($(window).width() || 446) - 16);
     popover.css({ width });
@@ -1045,7 +1224,7 @@ export class BattleUI {
 
   private static bindEnemyIntentDetails(enemy: any): void {
     const action = enemy?.nextAction || (Array.isArray(enemy?.actions) ? enemy.actions[0] : null);
-    const intent = $('.enemy-intent, #enemy-intent-summary');
+    const intent = $('.enemy-intent');
     intent.toggleClass('clickable', !!action).attr('tabindex', action ? '0' : '-1');
     intent.off('.mwgIntentDetail');
     if (!action) return;
@@ -1064,14 +1243,14 @@ export class BattleUI {
    * 创建能力HTML
    */
   private static createAbilityHTML(ability: any): string {
-    const effectTags = BattleUI.effectDisplay.triggeredProgramToTags(ability.trigger, ability.effectProgram);
+    const effectTags = [...BattleUI.effectDisplay.triggeredProgramToTags(ability.trigger, ability.effectProgram, {}, ability.eventQuery), ...BattleUI.effectDisplay.protectionToTags(ability)];
     const effectTagsHTML = BattleUI.effectDisplay.createEffectTagsHTML(effectTags);
     const description = typeof ability.description === 'string' ? ability.description.trim() : '';
     const name = typeof ability.name === 'string' ? ability.name.trim() : ability.id;
     const source = typeof ability.source === 'string' && ability.source.trim() ? ability.source.trim() : '来源未注明';
 
     return `
-      <button type="button" class="ability-item"
+      <button type="button" class="ability-item support-icon-button"
            data-ability-id="${escapeHtmlAttribute(ability.id)}"
            data-ability-name="${escapeHtmlAttribute(name || ability.id)}"
            data-ability-description="${escapeHtmlAttribute(description)}"
@@ -1103,28 +1282,24 @@ export class BattleUI {
     $('.support-details-popover').remove();
     if (!value) return;
     const name = typeof value.name === 'string' && value.name.trim() ? value.name.trim() : value.id || ownerLabel;
-    const description = typeof value.description === 'string' ? value.description.trim() : '';
-    const source = typeof value.source === 'string' ? value.source.trim() : '';
     const trigger = typeof value.trigger === 'string' ? value.trigger.trim() : '';
+    const ownerId = String(anchor.closest('.stage-enemy-member').data('enemy-id') || '');
+    const enemy = GameStateManager.getInstance().getEnemies().find(entry => entry.id === ownerId) || GameStateManager.getInstance().getEnemy();
+    const enemyActionNames = Object.fromEntries((enemy?.actions || []).filter(action => action.id).map(action => [action.id!, action.name]));
     const displayContext = ownerLabel.startsWith('敌')
-      ? { selfLabel: '敌方', opponentLabel: '我方' }
+      ? { selfLabel: '自身', opponentLabel: '对方', sourceSide: 'enemy', sourceEnemyId: ownerId, enemyActionNames }
       : { selfLabel: '自身', opponentLabel: '敌方' };
     const effectTags = trigger
-      ? this.effectDisplay.triggeredProgramToTags(trigger, value.effectProgram, displayContext)
+      ? this.effectDisplay.triggeredProgramToTags(trigger, value.effectProgram, displayContext, value.eventQuery)
       : this.effectDisplay.programToTags(value.effectProgram, displayContext);
+    effectTags.push(...this.effectDisplay.protectionToTags(value));
     const popover = $(`
       <div class="support-details-popover" role="dialog" aria-label="${escapeHtmlAttribute(name)}">
-        <div class="support-details-heading">
-          <span>${escapeHtml(value.emoji || (ownerLabel.includes('欲望') ? '💗' : ownerLabel === '遗物' ? '🔮' : '⚡'))}</span>
-          <strong>${escapeHtml(name)}</strong>
-          <small>${escapeHtml(ownerLabel)}</small>
-        </div>
-        ${description ? `<div class="support-details-description">${escapeHtml(description)}</div>` : ''}
-        ${source ? `<div class="support-details-source">来源：${escapeHtml(source)}</div>` : ''}
-        <div class="support-details-effects">${this.effectDisplay.createWrappedEffectTagsHTML(effectTags)}</div>
+        ${renderSupportDetails({ ...value, description: normalizeChinesePlayerDescription(value.description) }, { kind: ownerLabel, rulesHtml: this.effectDisplay.createWrappedEffectTagsHTML(effectTags) })}
       </div>
     `);
-    $('body').append(popover);
+    const host = $('#battle-scene');
+    (host.length ? host : $('body')).append(popover);
     const offset = anchor.offset();
     const width = Math.min(430, ($(window).width() || 446) - 16);
     popover.css({ width });
@@ -1150,11 +1325,11 @@ export class BattleUI {
   /**
    * 显示状态效果详情弹窗
    */
-  public static showStatusDetail(statusId: string, target: string): void {
+  public static showStatusDetail(statusId: string, target: string, owner?: any): void {
     // 获取状态定义和当前状态
     const statusDef = DynamicStatusManager.getInstance().getStatusDefinition(statusId);
     const gameState = GameStateManager.getInstance().getGameState();
-    const entity = target === 'player' ? gameState.player : gameState.enemy;
+    const entity = owner || (target === 'player' ? gameState.player : gameState.enemy);
     const currentStatus = entity?.statusEffects?.find((s: any) => s.id === statusId);
 
     if (!statusDef || !currentStatus) {
@@ -1164,17 +1339,28 @@ export class BattleUI {
 
     // 生成效果解析
     let effectsHTML = '';
+    const protectionTags = BattleUI.effectDisplay.protectionToTags(statusDef);
+    effectsHTML += BattleUI.effectDisplay.createWrappedEffectTagsHTML(protectionTags);
+    const statusRuleText: string[] = protectionTags.map(tag => tag.text);
+    statusRuleText.push(...statusAppearanceDisplayTags(statusDef).map(tag => tag.text));
+    if (statusDef.stun) statusRuleText.push('持有时无法行动');
+    const decay = describeStatusStackChange(statusDef.stacks_change);
+    if (decay) statusRuleText.push(decay);
     if (statusDef.triggers) {
       Object.entries(statusDef.triggers).forEach(([trigger, effects]) => {
         if (!effects) return;
-        const displayContext =
-          target === 'enemy'
-            ? { selfLabel: '敌方', opponentLabel: '我方' }
-            : { selfLabel: '自身', opponentLabel: '敌方' };
+        const resources = Object.entries(entity?.resources || {}) as [string, any][];
+        const displayContext = {
+          selfLabel: '自身', opponentLabel: target === 'enemy' ? '对方' : '敌方', sourceSide: target,
+          resourceNames: Object.fromEntries(resources.map(([id, r]) => [id, r.name])),
+          resourceEmojis: Object.fromEntries(resources.map(([id, r]) => [id, r.emoji || '◆'])),
+          enemyActionNames: Object.fromEntries((entity?.actions || []).map((action: any) => [action.id, action.name])),
+        };
         const programs = Array.isArray(effects) ? effects : [effects];
         const triggerTags = programs.flatMap(program =>
           BattleUI.effectDisplay.triggeredProgramToTags(trigger, program, displayContext),
         );
+        statusRuleText.push(...triggerTags.map(tag => tag.text));
         if (triggerTags.length > 0) {
           const triggerNames: Record<string, string> = {
             apply: '获得时',
@@ -1182,9 +1368,10 @@ export class BattleUI {
             tick: '回合变化时',
             remove: '消失时',
             hold: '持续生效',
+            turn_start: '回合开始时', turn_end: '回合结束时', battle_start: '战斗开始时',
           };
           effectsHTML += `<section class="status-trigger-group">
-            <div class="status-trigger-label">${escapeHtml(triggerNames[trigger] || trigger)}</div>
+            <div class="status-trigger-label">${escapeHtml(triggerNames[trigger] || battleTriggerDisplayName(trigger))}</div>
             ${BattleUI.effectDisplay.createWrappedEffectTagsHTML(triggerTags)}
           </section>`;
         }
@@ -1205,12 +1392,13 @@ export class BattleUI {
             <button class="close-status-detail">&times;</button>
           </div>
           <div class="status-detail-body">
-            <div class="status-description">${escapeHtml(statusDef.description || '无额外叙事说明')}</div>
+            <div class="status-description">${escapeHtml(statusRuleText.join('；') || statusDef.description || '暂无可显示的结构化规则')}</div>
+            ${statusDef.flavorText ? `<div class="status-flavor">${escapeHtml(statusDef.flavorText)}</div>` : ''}
               <div class="status-stats">
               <div>层数: ${escapeHtml(currentStatus.stacks || 1)}</div>
               <div>类型: ${statusDef.type === 'buff' ? '增益' : statusDef.type === 'debuff' ? '减益' : '中性'}</div>
               ${statusDef.maxStacks ? `<div>层数上限: ${escapeHtml(statusDef.maxStacks)}</div>` : ''}
-              ${statusDef.stacks_change ? `<div>回合变化: ${escapeHtml(statusDef.stacks_change)}</div>` : ''}
+              ${statusDef.stacks_change ? `<div>${escapeHtml(decay || '回合末层数保持不变')}</div>` : ''}
             </div>
             <div class="status-detail-effects"><h4>完整效果</h4>${effectsHTML || '<div class="status-no-effect">没有额外数值效果，仅保留层数或特殊状态规则。</div>'}</div>
           </div>
@@ -1218,7 +1406,8 @@ export class BattleUI {
       </div>
     `);
 
-    $('body').append(modal);
+    const host = $('#battle-scene');
+    (host.length ? host : $('body')).append(modal);
 
     // 动画显示
     modal.css({ opacity: 0 }).animate({ opacity: 1 }, 200);
@@ -1239,9 +1428,10 @@ export class BattleUI {
     const container = $(containerId);
 
     if (lustEffect && lustEffect.name) {
+      const activationLabel = target === 'enemy' ? '我方欲望满时' : '敌方欲望满时';
       const displayContext =
         target === 'enemy'
-          ? { selfLabel: '敌方', opponentLabel: '我方' }
+          ? { selfLabel: '自身', opponentLabel: '对方', sourceSide: 'enemy' }
           : { selfLabel: '自身', opponentLabel: '敌方' };
       const effectTagsHTML = BattleUI.effectDisplay.createEffectTagsHTML(
         BattleUI.effectDisplay.programToTags(lustEffect.effectProgram, displayContext),
@@ -1250,7 +1440,7 @@ export class BattleUI {
       const description = typeof lustEffect.description === 'string' ? lustEffect.description.trim() : '';
       const effectHTML = `
         <div class="lust-effect-container">
-          <span class="lust-effect-label">欲望效果：</span>
+          <span class="lust-effect-label">${activationLabel}：</span>
           <button type="button" class="lust-effect-toggle" aria-label="查看欲望效果：${escapeHtmlAttribute(lustEffect.name)}" title="点击查看完整效果">${escapeHtml(lustEffect.name)}</button>
           <div class="lust-effect-details">
             <div class="lust-effect-name">${escapeHtml(lustEffect.name)}</div>
@@ -1268,7 +1458,7 @@ export class BattleUI {
         .on('click.mwgLustDetail', function (event) {
           event.preventDefault();
           event.stopPropagation();
-          BattleUI.showSupportDetails($(this), lustEffect, target === 'enemy' ? '敌人欲望效果' : '我方欲望效果');
+          BattleUI.showSupportDetails($(this), lustEffect, target === 'enemy' ? '敌方欲望效果 · 我方欲望满时触发' : '我方欲望效果 · 敌方欲望满时触发');
         });
     } else {
       container.empty();

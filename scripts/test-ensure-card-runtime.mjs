@@ -117,8 +117,10 @@ await future.runtime.execute({
 await future.runtime.execute({
   type: 'ensure_card', zone: 'hand', card: definition, minimum: 1, includeCopies: false,
 });
-assert.equal(future.host.getPlayer().hand[0].effectProgram.steps[0].amount, 5, 'ensure does not accumulate old future-template patches');
-assert.equal(future.host.getPlayer().hand[0].patches?.length || 0, 0);
+assert.equal(future.host.getPlayer().hand[0].effectProgram.steps[0].amount, 15, 'a new ensured root inherits the explicitly requested future-template patch exactly once');
+assert.equal(future.host.getPlayer().hand[0].patches?.length || 0, 1);
+await future.runtime.execute({ type: 'ensure_card', zone: 'hand', card: definition, minimum: 1, includeCopies: false });
+assert.equal(future.host.getPlayer().hand[0].effectProgram.steps[0].amount, 15, 'ensuring the existing root does not reapply the patch');
 
 const overflowState = core.createEmptyBattleState();
 overflowState.player.hand = Array.from({ length: 10 }, (_, index) => ({

@@ -74,3 +74,6 @@ MUV stat_data.battle（直接数组/直接标量）
 - Tavern hosts：MUV、消息、选择 UI、动画和日志。
 
 任何新实现都应扩展这些所有者之一，不能在 UI、适配器或特定内容类型旁路复制规则。
+
+## 自动预生成边界（2026-09-18修正）
+预生成窗口按完整可达层逐层扩展：纳入本层全部节点后，若任意节点实际内容类型为普通战斗、精英或首领，停止所有分支向下一层扩展。仅当本层全部非战斗时继续下一层。未知地点以运行时真实内容类型判定，不借公开地图标签误判。不得为凑满三并发而越过战斗层；已经ready的战斗也仍是边界。队列最多三个并发，存档既有ready内容保留；预生成不等于替玩家进入/结算房间。回归见 `scripts/test-tower-noncombat-prefetch.mjs`、`scripts/test-tower-state-adapter.mjs`、`scripts/test-tower-lookahead-coordinator.mjs`。

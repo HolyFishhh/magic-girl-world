@@ -1,0 +1,223 @@
+/** Prompt-only foundations. Related graph families do not imply a complete bundled build. */
+export interface TowerArchetypePreset {
+  id: string; category: string; name: string; summary: string;
+  loop: readonly string[]; requirements: readonly string[];
+  archetypeIds: readonly string[]; operations: readonly string[]; aliases: readonly string[];
+}
+export const TOWER_ARCHETYPE_CATEGORIES: readonly {id:string;name:string;description:string}[] = [
+  {
+    "id": "pressure",
+    "name": "伤害与终结",
+    "description": "选择伤害结构、倍率条件与终结方式。"
+  },
+  {
+    "id": "status",
+    "name": "状态与持续能力",
+    "description": "选择状态生命周期、叠层与独立能力。"
+  },
+  {
+    "id": "desire",
+    "name": "欲望",
+    "description": "选择欲望压力、阈值和数值读取。"
+  },
+  {
+    "id": "defense",
+    "name": "格挡与生命",
+    "description": "分别选择防护、治疗和生命条件。"
+  },
+  {
+    "id": "zones",
+    "name": "牌区与手牌",
+    "description": "分别选择看牌、移动、回收与离场方式。"
+  },
+  {
+    "id": "cost",
+    "name": "费用与出牌",
+    "description": "选择费用、重放与自动结算机制。"
+  },
+  {
+    "id": "resources",
+    "name": "自定义资源",
+    "description": "选择资源生成、存储、支付与重置。"
+  },
+  {
+    "id": "cards",
+    "name": "卡牌生成与成长",
+    "description": "选择子卡、实例改造、附着和永久成长。"
+  },
+  {
+    "id": "summons",
+    "name": "召唤",
+    "description": "选择单位形态、行动、死亡与维护机制。"
+  },
+  {
+    "id": "containers",
+    "name": "姿态",
+    "description": "区分当前互斥姿态和可容纳多个姿态的槽位。"
+  },
+  {
+    "id": "battlefield",
+    "name": "目标与条件",
+    "description": "选择作用范围和需要判断的战场信息。"
+  },
+  {
+    "id": "timing",
+    "name": "事件与时机",
+    "description": "选择触发来源、计数窗口和未来结算。"
+  }
+];
+export const TOWER_ARCHETYPE_OPERATION_EXCLUSIONS: Readonly<Record<string,string>> = {
+  narrate: '叙事输出不改变战斗机制，不能作为构筑基础。',
+  say: '对白提示不改变战斗机制，不能作为构筑基础。',
+  wait: '等待属于流程控制，不单独形成构筑方向。',
+  enemy_intent: '敌方意图是敌人内容，玩家通过目标、条件或防护机制应对。',
+  spawn_enemy: '正式敌方增援属于敌人内容；玩家可选择多目标与场上数量条件来应对。',
+};
+/** Compound graph families map to foundations instead of selectable recipes. */
+export const TOWER_ARCHETYPE_COMPOSITION_COVERAGE: Readonly<Record<string,readonly string[]>> = {
+  'mixed-pressure': ['direct-damage','lust-pressure'],
+};
+const foundation=(id:string,category:string,name:string,summary:string,operations:readonly string[],archetypeIds:readonly string[],aliases:readonly string[]=[]):TowerArchetypePreset=>({
+  id,category,name,summary,loop:[name],requirements:[summary],operations,archetypeIds,aliases,
+});
+export const TOWER_ARCHETYPE_PRESETS: readonly TowerArchetypePreset[] = [
+  foundation("direct-damage", "pressure", "即时伤害", "直接打出伤害，快速压低敌方生命。", ["damage"], ["direct-pressure"]),
+  foundation("multi-hit", "pressure", "多段伤害", "把伤害分成多次命中，配合每次命中触发的能力。", ["damage"], ["multi-hit"]),
+  foundation("damage-amplification", "pressure", "伤害倍率", "先挂上倍率修饰，再让指定伤害获得更高收益。", ["modify"], ["critical-scaling"]),
+  foundation("piercing", "pressure", "穿透格挡", "让伤害绕过格挡，直接削减敌方生命。", ["damage"], ["direct-pressure"]),
+  foundation("lifesteal", "defense", "吸血生存", "造成伤害后，按敌人实际损失的生命为自己回血。", ["damage"], ["healing-conversion"]),
+  foundation("execute", "pressure", "阈值处决", "先把敌人压到阈值，再用处决收尾。", ["execute"], ["execute-finish"]),
+  foundation("fatal-kill", "pressure", "直接终结", "满足明确条件后直接击杀目标，换取快速终结。", ["kill"], ["execute-finish"]),
+  foundation("missing-hp", "pressure", "已损生命计值", "读取已损生命来提高效果，越受伤收益越明显。", [], ["missing-hp-pressure"]),
+  foundation("block-value", "pressure", "格挡计值", "读取当前格挡来放大效果，把防守转成收益。", [], ["block-conversion"]),
+  foundation("status-value", "pressure", "状态层数计值", "读取状态层数来提高效果，把叠层转成收益。", [], ["status-conversion","status-scaling"]),
+  foundation("resource-value", "pressure", "资源计值", "读取资源数量或支付量，把储备转成一次收益。", [], ["resource-cashout"]),
+  foundation("status-stack", "status", "状态叠层", "反复施加同一状态，靠层数积累后续收益。", ["apply_status"], ["status-stack"]),
+  foundation("timed-status", "status", "限时状态", "施加带期限的状态，利用短时间窗口完成收益。", ["apply_status"], ["status-stack"]),
+  foundation("status-cleanse", "status", "状态净化", "移除指定状态或层数，清除不利状态或配合消耗收益。", ["remove_status"], ["status-detonation"]),
+  foundation("periodic-damage", "status", "持续伤害", "让状态按回合重复造成伤害，持续消耗敌方生命。", ["apply_status","damage"], ["damage-over-time"]),
+  foundation("status-form-engine", "status", "形态联动", "进入指定形态，让关联卡牌变强；不必靠反复叠层。", ["apply_status","modify"], ["status-form-engine"]),
+  foundation("status-gate", "status", "状态条件", "先检查状态存在或层数，再决定效果是否生效。", [], ["status-scaling"]),
+  foundation("status-consumption", "status", "状态消耗", "消耗已有状态层数，换取一次明确效果。", ["remove_status"], ["status-detonation"]),
+  foundation("enemy-status-event", "status", "敌方状态响应", "给敌方施加或观察状态，在对应事件发生时触发收益。", [], ["enemy-status-benefit"]),
+  foundation("persistent-power", "status", "持续能力", "部署一项持续能力，让指定事件反复带来效果。", [], ["power-engine"]),
+  foundation("stat-modifier", "status", "持续属性修饰", "在指定期限内修改属性，让后续效果持续变强或变弱。", ["modify"], ["status-scaling"]),
+  foundation("lust-pressure", "desire", "欲望施压", "增加敌方欲望，用欲望压力推动战斗。", ["lust"], ["desire-pressure"]),
+  foundation("lust-reduction", "desire", "欲望降低", "降低目标欲望，延缓危险并制造反击空间。", ["lust"], ["desire-pressure"]),
+  foundation("lust-reset", "desire", "欲望重置", "把欲望设为指定值，直接控制当前压力。", ["set_lust"], ["desire-pressure"]),
+  foundation("lust-overflow", "desire", "欲望满溢", "围绕欲望达到上限设计效果，抓住满溢时机兑现收益。", [], ["desire-overflow"]),
+  foundation("lust-value", "desire", "欲望计值", "读取当前欲望或比例，把欲望转成数值收益。", [], ["desire-conversion"]),
+  foundation("lust-growth", "desire", "欲望上限永久成长", "永久提高欲望上限，让后续战斗拥有更大积累空间。", ["persistent_growth"], ["desire-overflow"]),
+  foundation("block-gain", "defense", "获得格挡", "获得格挡，先抵消伤害再争取行动空间。", ["block"], ["block-engine"]),
+  foundation("block-retain", "defense", "格挡留存", "让格挡跨回合保留，把本回合防守延续到下回合。", ["card_rule"], ["block-retention"]),
+  foundation("block-reset", "defense", "格挡重置", "把格挡设为指定值，稳定控制防护规模。", ["set_block"], ["block-engine"]),
+  foundation("healing", "defense", "生命恢复", "治疗指定目标，恢复生命并延长作战时间。", ["heal"], ["healing-engine"]),
+  foundation("hp-reset", "defense", "生命设值", "把生命设为指定值，直接调整当前生存状态。", ["set_hp"], ["healing-engine"]),
+  foundation("self-damage", "defense", "主动自伤", "主动损失生命，换取更高输出或其他收益。", ["damage"], ["self-damage"]),
+  foundation("low-hp", "defense", "低生命条件", "在低生命时提高效果，把危险状态转成战斗优势。", [], ["missing-hp-pressure"]),
+  foundation("full-hp", "defense", "满生命条件", "保持满血来触发效果，奖励稳定防守。", [], ["healing-engine"]),
+  foundation("retaliation", "defense", "受击反击", "先承受攻击，再按实际受击触发反击。", ["damage"], ["retaliation"]),
+  foundation("max-hp-growth", "defense", "生命上限成长", "提高最大生命，让后续战斗拥有更大的容错。", ["persistent_growth"], ["healing-engine"]),
+  foundation("draw", "zones", "抽牌", "抽更多牌，更快拿到本回合需要的组件。", ["draw"], ["draw-engine"]),
+  foundation("scry", "zones", "占卜", "查看并整理牌库顶部，改善下一次抽牌。", ["scry"], ["topdeck-control"]),
+  foundation("seek", "zones", "定向检索", "按条件检索指定卡牌，稳定拿到关键组件。", ["seek"], ["tempo-cycle"]),
+  foundation("discard", "zones", "主动弃牌", "主动弃牌，触发弃牌收益或整理手牌。", ["discard"], ["discard-engine"]),
+  foundation("exhaust", "zones", "本场消耗", "消耗指定卡牌，换取一次性收益或压缩牌库。", ["exhaust"], ["exhaust-engine"]),
+  foundation("discard-recovery", "zones", "弃牌堆回收", "从弃牌区回收卡牌，让关键组件再次使用。", ["recover"], ["graveyard-recovery"]),
+  foundation("exhaust-recovery", "zones", "消耗区回收", "从消耗区取回卡牌，把一次性资源变成有限循环。", ["recover"], ["exhaust-recovery"]),
+  foundation("topdeck", "zones", "牌顶放置", "把卡牌放到牌库顶部，安排下一次抽牌。", ["move_card"], ["topdeck-control"]),
+  foundation("bottomdeck", "zones", "牌底放置", "把卡牌放到牌库底部，暂时避开不需要的牌。", ["move_card"], ["topdeck-control"]),
+  foundation("zone-move", "zones", "指定牌区移动", "移动卡牌所在区域，配合后续区域触发。", ["move_card"], ["tempo-cycle"]),
+  foundation("retain", "zones", "手牌保留", "保留关键牌到下回合，等待费用或条件成熟。", ["card_rule"], ["retain-engine"]),
+  foundation("card-removal", "zones", "牌组精简", "移除低效卡牌，提高核心卡出现的比例。", ["remove_card"], ["thin-deck"]),
+  foundation("card-destination", "zones", "出牌后去向", "指定卡牌去向，控制它进入哪个牌区。", ["card_destination"], ["rule-control"]),
+  foundation("cost-reduction", "cost", "临时减费", "降低指定卡牌费用，让关键牌更早或更多次打出。", ["reduce_cost"], ["cost-shift"]),
+  foundation("free-play", "cost", "免费出牌", "让指定卡牌免费结算，把费用留给其他行动。", ["card_rule"], ["zero-cost-engine"]),
+  foundation("x-cost", "cost", "可变费用", "按投入资源决定效果规模，用储备换取弹性。", [], ["x-cost-engine"]),
+  foundation("replay", "cost", "卡牌回响", "重复结算已打出的卡牌，再次触发其效果。", ["replay_current"], ["replay-chain"]),
+  foundation("double-effect", "cost", "下次双重结算", "让下一张符合条件的牌结算两次，集中打出爆发。", ["double"], ["replay-chain"]),
+  foundation("auto-play", "cost", "自动出牌", "自动打出符合条件的卡牌，减少操作并维持循环。", ["auto_play"], ["auto-play-engine"]),
+  foundation("play-restriction", "cost", "出牌限制", "限制卡牌何时或如何打出，换取更明确的节奏。", ["card_rule"], ["rule-control"]),
+  foundation("energy-gain", "cost", "能量获取", "获得能量，增加本回合可执行的行动。", ["energy"], ["resource-engine"]),
+  foundation("energy-reset", "cost", "能量重置", "把能量设为指定值，重新安排本回合费用。", ["set_energy"], ["resource-engine"]),
+  foundation("cost-patch", "cost", "费用改造", "修改指定卡牌费用，长期调整牌组节奏。", ["patch_card"], ["cost-shift"]),
+  foundation("resource-gain", "resources", "资源获取", "生成并获得自定义资源，为后续效果准备储备。", ["resource"], ["resource-engine"]),
+  foundation("resource-spend", "resources", "资源消耗", "支付自定义资源，换取对应的强力效果。", ["resource"], ["resource-cashout"]),
+  foundation("resource-store", "resources", "资源蓄积", "保留资源跨回合积累，把储备转成未来爆发。", ["resource"], ["resource-hoard"]),
+  foundation("resource-reset", "resources", "资源重置", "把资源设为指定值，直接调整当前储备。", ["set_resource"], ["resource-engine"]),
+  foundation("resource-capacity", "resources", "资源容量", "提高或利用资源上限，让储备可以容纳更多。", [], ["resource-hoard"]),
+  foundation("multiple-resource-cost", "resources", "多资源支付", "同时支付多种资源，用组合储备换取更高收益。", [], ["multi-resource"]),
+  foundation("generated-card", "cards", "生成子卡", "生成完整可用的子卡，补充当前需要的行动。", ["add_card"], ["generated-card-engine"]),
+  foundation("ensure-card", "cards", "确保持有", "确保指定卡牌进入牌组或牌区，稳定获得组件。", ["ensure_card"], ["generated-card-engine"]),
+  foundation("copy-card", "cards", "复制卡牌", "复制已有卡牌，扩大关键效果的出现次数。", ["copy"], ["generated-card-engine"]),
+  foundation("upgrade-card", "cards", "卡牌升级", "升级指定卡牌，让它在后续循环中更高效。", ["upgrade_card"], ["card-evolution"]),
+  foundation("modify-card", "cards", "本场卡牌修改", "修改卡牌属性，让它适配当前构筑目标。", ["modify_card"], ["card-evolution"]),
+  foundation("patch-card", "cards", "持有实例改造", "只改造选中的那张牌，不自动影响它的其他副本。", ["patch_card"], ["card-evolution"]),
+  foundation("future-copy-patch", "cards", "未来副本改造", "让改造也作用于之后生成的同模板副本，避免新牌失去强化。", ["patch_card"], ["card-evolution"]),
+  foundation("transform-card", "cards", "卡牌变形", "把卡牌变成另一张完整卡，改变后续行动路线。", ["transform_card"], ["card-evolution"]),
+  foundation("enchantment", "cards", "正面附着", "给卡牌附加持续规则，让它获得额外能力。", ["attach_card"], ["enchantment-engine"]),
+  foundation("affliction", "cards", "负面附着", "给卡牌附加负面规则，形成风险或交换收益。", ["attach_card"], ["affliction-engine"]),
+  foundation("curse-card", "cards", "诅咒牌", "加入会妨碍循环的诅咒牌，再围绕它设计处理手段。", ["add_card"], ["curse-utilization"]),
+  foundation("deck-pollution", "cards", "干扰牌", "主动制造牌库杂质，用数量或后续清理换取收益。", ["add_card"], ["deck-pollution"]),
+  foundation("card-lifecycle", "cards", "临时牌期限", "控制卡牌进入、离开和返回牌区的时机。", ["add_card"], ["generated-card-engine"]),
+  foundation("template-selection", "cards", "按模板选牌", "让效果精确筛选同一模板的卡牌，而不是依赖相似名称。", [], ["card-evolution"]),
+  foundation("instance-selection", "cards", "按实例选牌", "让效果精确选中一张持有或战斗实例，不波及其他副本。", [], ["card-evolution"]),
+  foundation("summon-single-core", "summons", "单核心", "召唤一个核心单位，围绕它的生命和行动构筑。", ["spawn_summon"], ["summon-engine"], ["单核心养成"]),
+  foundation("summon-swarm", "summons", "多单位铺场", "一次召唤多个单位，用数量和分工扩大场面。", ["spawn_summon"], ["summon-swarm"]),
+  foundation("summon-self-destruct", "summons", "自爆杂鱼", "让召唤物主动牺牲，在离场时换取爆发收益。", ["spawn_summon","dismiss_summon","damage"], ["summon-sacrifice"], ["自爆","自毁","召唤物自爆"]),
+  foundation("summon-command", "summons", "指挥行动", "用指令激活或操控召唤物，集中安排它的行动。", ["activate_summon"], ["summon-engine"]),
+  foundation("summon-passive", "summons", "召唤被动", "给召唤物持续能力，让它在满足事件时自动工作。", ["spawn_summon"], ["summon-engine","summon-passive-growth"]),
+  foundation("summon-hp-scaling", "summons", "生命计伤", "读取召唤物生命来提高效果，让养大单位带来更高收益。", ["spawn_summon"], ["summon-engine","summon-life-conversion"]),
+  foundation("summon-ordered-action", "summons", "临时行动命令", "给选中的召唤物下达一次临时行动，不改写它平时的招式。", ["activate_summon"], ["summon-engine","summon-command-chain"]),
+  foundation("summon-required-card", "summons", "指定召唤出牌门槛", "要求场上有指定召唤物，再让关联卡牌生效。", [], ["summon-engine","summon-single-core"]),
+  foundation("summon-dismiss", "summons", "主动遣散", "主动移除召唤物，腾出位置或配合离场触发能力。", ["dismiss_summon"], ["summon-sacrifice"]),
+  foundation("summon-death-repeat", "summons", "提前触发亡语", "提前执行召唤物的亡语效果，无须等它真正死亡。", ["trigger_summon_death"], ["summon-sacrifice"]),
+  foundation("summon-copy", "summons", "复制召唤物", "复制已有召唤物，扩大单位能力或行动次数。", ["copy_summon"], ["summon-swarm"]),
+  foundation("summon-hurt", "summons", "召唤物受损", "伤害选中的召唤物，可与受伤或死亡触发能力配合。", ["damage_summon"], ["summon-sacrifice"]),
+  foundation("summon-heal", "summons", "召唤物治疗", "治疗召唤物，延长它的在场时间。", ["heal_summon"], ["summon-engine"]),
+  foundation("summon-stat", "summons", "召唤物属性强化", "修改召唤物属性，让它承担更明确的战斗职责。", ["modify_summon"], ["summon-engine"]),
+  foundation("summon-action-upgrade", "summons", "召唤物行动强化", "强化召唤物行动，让它每次激活产生更高收益。", ["modify_summon_effect"], ["summon-engine"]),
+  foundation("summon-status", "summons", "召唤物状态", "给召唤物施加状态，用状态控制它的表现。", ["apply_summon_status"], ["summon-engine"]),
+  foundation("summon-cleanse", "summons", "召唤物净化", "移除召唤物状态，清除限制或重新准备它。", ["remove_summon_status"], ["summon-engine"]),
+  foundation("summon-resource", "summons", "召唤物局部资源", "给召唤物分配资源，让它按自身储备行动。", ["summon_resource"], ["summon-engine"]),
+  foundation("summon-resource-reset", "summons", "召唤物资源重置", "重置召唤物资源，直接安排下一次行动规模。", ["set_summon_resource"], ["summon-engine"]),
+  foundation("summon-owner-effect", "summons", "主人效果", "让召唤物把收益传回主人，形成单位与玩家的循环。", ["summoner_effects"], ["summon-engine"]),
+  foundation("summon-growth", "summons", "召唤模板永久成长", "永久强化召唤模板，让后续战斗召唤出的单位也受益。", ["persistent_growth"], ["summon-engine"]),
+  foundation("summon-revive", "summons", "核心复苏", "让已倒下的召唤物复活，维持核心单位循环。", ["spawn_summon"], ["summon-engine"]),
+  foundation("summon-capacity", "summons", "容量替换", "召唤时指定容量与满员处理方式，决定替换旧单位还是拒绝加入。", ["spawn_summon"], ["summon-swarm"]),
+  foundation("stance-switch", "containers", "当前姿态切换", "切换互斥的当前姿态，按顺序处理旧姿态退出和新姿态进入。", ["stance"], ["stance-engine"]),
+  foundation("stance-passive", "containers", "当前姿态修饰", "当前姿态通过自身的被动效果提供持续修饰，仅在该姿态存续时适用。", ["stance"], ["stance-engine"]),
+  foundation("stance-entry", "containers", "姿态进入触发", "进入指定当前姿态时触发其进入能力。", ["stance"], ["stance-engine"]),
+  foundation("stance-exit", "containers", "姿态退出触发", "退出指定当前姿态时触发其退出能力。", ["stance"], ["stance-engine"]),
+  foundation("orb-channel", "containers", "填充姿态槽", "把具有完整定义的姿态填入姿态槽，使其被动按规则生效。", ["channel_orb"], ["orb-engine"]),
+  foundation("orb-evoke", "containers", "主动激发姿态", "激发指定槽位中的姿态，执行其激发效果并按规则离场。", ["evoke_orb"], ["orb-engine"]),
+  foundation("orb-modify", "containers", "姿态内部值", "修改槽内姿态的内部数值，供其被动或激发效果读取。", ["modify_orb"], ["orb-engine"]),
+  foundation("orb-slots", "containers", "姿态槽容量", "增减可用姿态槽位，按容量变化规则处理已有姿态。", ["orb_slots"], ["orb-engine"]),
+  foundation("orb-overflow", "containers", "满槽挤出", "填充已满的姿态槽时挤出旧姿态并触发其激发效果。", ["channel_orb"], ["orb-engine"]),
+  foundation("all-enemies", "battlefield", "全体敌人", "效果对全部合法敌人分别结算。", [], ["multi-target"]),
+  foundation("random-enemy", "battlefield", "随机敌人", "每次选择从当前合法敌人中随机确定目标。", [], ["multi-target","random-gamble"]),
+  foundation("random-ally", "battlefield", "随机我方", "随机我方目标包含玩家自己与存活的己方召唤物。", [], ["random-gamble"]),
+  foundation("lowest-hp", "battlefield", "最低生命目标", "按合法选择器选择生命最低或生命比例最低的目标。", [], ["multi-target"]),
+  foundation("manual-target", "battlefield", "手选目标", "由玩家从合法候选中指定效果目标。", [], ["reactive-control"]),
+  foundation("unit-count", "battlefield", "场上数量条件", "按己方或敌方当前存活单位数量判断效果条件。", [], ["reactive-control"]),
+  foundation("conditional-guard", "battlefield", "条件保护", "只有条件满足时执行受保护效果，保留条件与效果的关联。", ["guard"], ["rule-control"]),
+  foundation("effect-choice", "battlefield", "效果分支自选", "让玩家在多个可执行效果分支中选择，保留取消交互语义。", ["choose"], ["reactive-control"]),
+  foundation("negative-control", "battlefield", "减益控制", "为目标赋予具有实际弱化或限制效果的状态。", ["apply_status"], ["stall-control"]),
+  foundation("on-play", "timing", "出牌触发", "按实际出牌事件触发能力，区别于回响或效果内部命中。", [], ["on-play-engine"]),
+  foundation("on-hit", "timing", "命中触发", "每次造成实际伤害时触发能力，不把零伤害当作有效命中。", [], ["on-hit-engine"]),
+  foundation("on-discard", "timing", "弃牌触发", "在实际弃置卡牌后触发能力，并使用该次弃牌的信息。", [], ["discard-payoff"]),
+  foundation("on-exhaust", "timing", "消耗触发", "在卡牌实际进入消耗区后触发能力。", [], ["exhaust-engine"]),
+  foundation("on-kill", "timing", "击杀触发", "由实际击杀者触发能力，区分玩家与召唤物的击杀归属。", [], ["execute-finish"]),
+  foundation("on-draw", "timing", "抽牌触发", "在实际抽到卡牌时触发能力，未抽到牌不虚增事件。", [], ["draw-engine"]),
+  foundation("turn-start", "timing", "回合开始触发", "在指定所属方回合开始阶段触发能力。", [], ["power-engine"]),
+  foundation("turn-end", "timing", "回合结束触发", "在指定所属方回合结束阶段触发能力。", [], ["power-engine"]),
+  foundation("first-n", "timing", "本回合前几次", "把指定触发器限制为本回合前若干次，回合变化后重置计数。", [], ["rule-control"]),
+  foundation("battle-uses", "timing", "本场次数限制", "把指定触发器限制为本场最多若干次，后续回合不重置。", [], ["rule-control"]),
+  foundation("periodic-trigger", "timing", "每隔几次触发", "按指定事件的累计次数周期触发，明确计数窗口。", [], ["on-play-engine"]),
+  foundation("event-value", "timing", "事件实际值计量", "效果读取本次事件的实际数值，区别于当前总量或预估值。", [], ["on-hit-engine"]),
+  foundation("schedule", "timing", "预约效果", "将效果预约到未来指定回合与阶段再执行。", ["schedule"], ["delayed-payoff"]),
+  foundation("repeating-schedule", "timing", "周期预约", "预约效果按声明间隔重复执行，具有明确次数或终止条件。", ["schedule"], ["delayed-payoff"]),
+  foundation("extra-turn", "timing", "额外回合", "获得额外回合，依照回合队列和终态规则结算。", ["extra_turn"], ["extra-turn-engine"]),
+  foundation("end-turn", "timing", "主动结束回合", "主动结束当前回合并进入正常回合末结算。", ["end_turn"], ["extra-turn-engine"]),
+];
+

@@ -2,7 +2,7 @@ export interface BattleOutcomeVitals {
     hp: number;
     lust: number;
 }
-/** Return the exact post-battle persistent vitals, clamped to canonical MUV limits. */
+/** Round health only at settlement; combat itself retains its calculation precision. */
 export declare function settleBattleOutcomeVitals(player: {
     currentHp: unknown;
     currentLust: unknown;

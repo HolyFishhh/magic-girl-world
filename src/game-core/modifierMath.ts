@@ -31,6 +31,7 @@ export const MODIFIER_ATTRIBUTE_BY_STAT: Record<ModifierStat, string> = {
   heal: 'heal_modifier',
   block: 'block_modifier',
   summon_capacity: 'summon_capacity_modifier',
+  draw_per_turn: 'draw_per_turn_modifier',
 };
 
 export const MODIFIER_SYMBOL_BY_OPERATOR: Record<EffectModifierOperator, ModifierOperator> = {

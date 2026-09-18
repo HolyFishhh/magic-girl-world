@@ -69,4 +69,123 @@ assert.equal(events.some(event => event.type === 'card_moved'), true);
 assert.equal(events.some(event => event.type === 'card_removed'), true);
 assert.equal(events.some(event => event.type === 'card_transformed'), true);
 
-console.log('Move, remove, and transform compile from compact DSL and commit atomically through shared card-zone transactions.');
+const allCard = (id, zone = 'deck') => core.ensureCardIdentity({
+  id, originalId: id, name: id, emoji: '🃏', type: 'Attack', rarity: 'Common', cost: 2,
+  effectProgram: {
+    spec: core.EFFECT_PROGRAM_SPEC,
+    steps: [{ op: 'damage', target: 'opponent', amount: 6 }],
+  },
+  description: '',
+}, { templateId: id, runInstanceId: `${id}:run`, combatInstanceId: id, origin: zone });
+
+async function executeAllSelection(effect, initialZones, options = {}) {
+  const compilation = core.compileCompactEffectList(effect, options);
+  assert.equal(compilation.ok, true, compilation.ok ? '' : JSON.stringify(compilation.issues));
+  const state = core.createEmptyBattleState();
+  state.player.hand = (initialZones.hand || []).map(id => allCard(id));
+  state.player.drawPile = (initialZones.drawPile || []).map(id => allCard(id));
+  state.player.discardPile = (initialZones.discardPile || []).map(id => allCard(id));
+  state.player.exhaustPile = (initialZones.exhaustPile || []).map(id => allCard(id));
+  const stateStore = new core.BattleStateStore(state);
+  const runtimeEvents = [];
+  const cardRuntime = new core.CardEffectRuntime(stateStore, {
+    drawCards: async () => {},
+    chooseCards: async () => {
+      throw new Error('pick:all must never open an interactive selector');
+    },
+    onCardDiscarded: async () => {},
+    onCardExhausted: async () => {},
+    autoPlayCard: async () => false,
+    present: event => runtimeEvents.push(event),
+  });
+  const emitted = [];
+  await core.runEffectCommandProgram(compilation.value, { spentEnergy: 0 }, {
+    readState: () => ({
+      self: { hp: 20, maxHp: 20, lust: 0, maxLust: 100, energy: 3, maxEnergy: 3, block: 0 },
+      opponent: { hp: 20, maxHp: 20, lust: 0, maxLust: 100, energy: 0, maxEnergy: 0, block: 0 },
+      currentTurn: 1, cardsPlayedThisTurn: 0, attacksPlayedThisTurn: 0, skillsPlayedThisTurn: 0,
+    }),
+    execute: command => emitted.push(command),
+  });
+  for (const command of emitted) await cardRuntime.execute(command);
+  return { compilation, zones: stateStore.readCardZoneState(), events: runtimeEvents };
+}
+
+const allInitialZones = {
+  hand: ['all_hand_a', 'all_hand_b'],
+  drawPile: ['all_draw'],
+  discardPile: ['all_discard_a', 'all_discard_b'],
+  exhaustPile: ['all_exhaust_a', 'all_exhaust_b'],
+};
+
+const movedAll = await executeAllSelection(
+  { move_card: 'all', from: 'discard', pick: 'all', destination: 'draw', position: 'top' },
+  allInitialZones,
+);
+assert.deepEqual(movedAll.zones.discardPile, []);
+assert.deepEqual(
+  new Set(movedAll.zones.drawPile.map(entry => entry.id)),
+  new Set(['all_draw', 'all_discard_a', 'all_discard_b']),
+  'move_card:all must move every matching card instead of only the hidden default count',
+);
+assert.equal(movedAll.events.filter(event => event.type === 'card_moved').length, 2);
+
+const removedAll = await executeAllSelection(
+  { remove_card: 'all', from: 'exhaust', pick: 'all' },
+  allInitialZones,
+);
+assert.deepEqual(removedAll.zones.exhaustPile, []);
+assert.equal(removedAll.events.filter(event => event.type === 'card_removed').length, 2);
+
+const transformedAll = await executeAllSelection(
+  { transform_card: 'changed_template', from: 'hand', pick: 'all' },
+  allInitialZones,
+  { creates: [replacement] },
+);
+assert.equal(transformedAll.zones.hand.length, 2);
+assert.equal(transformedAll.zones.hand.every(entry => entry.templateId === 'changed_template'), true);
+assert.equal(transformedAll.events.filter(event => event.type === 'card_transformed').length, 2);
+
+for (const [name, effect, assertCard] of [
+  [
+    'reduce_cost',
+    { reduce_cost: 1, from: 'combat', pick: 'all' },
+    card => assert.equal(card.cost, 1),
+  ],
+  [
+    'modify_card',
+    { modify_card: 'damage', add: 3, from: 'combat', pick: 'all' },
+    card => assert.equal(card.effectProgram.steps[0].amount, 9),
+  ],
+  [
+    'patch_card',
+    { patch_card: 'cost', subtract: 1, scope: 'combat', from: 'combat', pick: 'all' },
+    card => assert.equal(card.cost, 1),
+  ],
+  [
+    'attach_card',
+    {
+      attach_card: {
+        id: 'all_binding', kind: 'affliction', name: '全体束缚', scope: 'combat',
+        changes: [{ kind: 'cost', operator: 'add', value: 1 }],
+      },
+      from: 'combat', pick: 'all',
+    },
+    card => {
+      assert.equal(card.cost, 3);
+      assert.equal(card.attachments?.some(entry => entry.id === 'all_binding'), true);
+    },
+  ],
+]) {
+  const result = await executeAllSelection(effect, allInitialZones);
+  const affected = Object.values(result.zones).flat();
+  assert.equal(affected.length, 7, `${name} must preserve all cards`);
+  affected.forEach(assertCard);
+  assert.equal(
+    result.compilation.value.steps[0].selector.count,
+    undefined,
+    `${name} pick:all must not retain a hidden one-card count`,
+  );
+}
+
+console.log('All-selection card-zone operations compile and affect every matching runtime card without an interactive prompt.');

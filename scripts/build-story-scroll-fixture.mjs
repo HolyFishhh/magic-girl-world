@@ -1,0 +1,24 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import webpack from 'webpack';
+import {compile} from 'sass';
+const dir=path.resolve('tmp/story-scroll-v470');fs.mkdirSync(dir,{recursive:true});
+fs.writeFileSync(dir+'/loader.cjs',"const ts=require('typescript');module.exports=s=>ts.transpileModule(s,{compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.ESNext}}).outputText");
+fs.writeFileSync(dir+'/entry.ts',`
+import { renderStoryPanel } from '../../src/runtime/storyPanel';
+import {renderBattleOverview} from '../../src/fish/ui/battleOverview';
+import {createEmptyBattleState} from '../../src/game-core/battleState';
+import { ensureRuntimeFrameHeightSync } from '../../src/runtime/runtimeFrameHeight';
+const state:any={stat_data:{game_mode:'tower',run_node:{node_id:'battle-1',narrative:'战斗开始。'},run:{act:1,floor:1,currentNode:{id:'battle-1'},visitedNodeIds:[],nodeContent:{},opening:{phase:'consumed'}}}};
+Object.assign(window,{getVariables:()=>state,replaceVariables:()=>{},updateVariablesWith:()=>{},insertOrAssignVariables:()=>{},getCurrentMessageId:()=>0,getLastMessageId:()=>0,getChatMessages:()=>[{message:'开幕剧情。'}]});
+const legacy=new URLSearchParams(location.search).has('legacy');
+const live=createEmptyBattleState();
+const render=()=>{renderStoryPanel('fish');renderBattleOverview(state.stat_data,live);if(legacy){const story=document.getElementById('mwg-story-panel');story.style.height='auto';story.querySelector('.story-reading-pane').style.overflow='visible';}};
+const update=(count:number)=>{state.stat_data.run_node.narrative=Array.from({length:count},(_,i)=>'第'+i+'段：敌人在墙影中显出轮廓，旅者握紧手里的卡牌。').join('\\n');render();};
+const archive=()=>{state.stat_data.run.visitedNodeIds=['past'];state.stat_data.run.nodeContent.past={kind:'battle',content:{title:'已走过的长廊',narrative:'旧剧情归档。'.repeat(300)}};render();};
+Object.assign(window,{fixture:{update,render,archive,state}});render();ensureRuntimeFrameHeightSync();
+`);
+fs.writeFileSync(dir+'/child.html',`<!doctype html><meta charset="utf-8"><style>${compile('src/shared/_storyPanel.scss').css}html,body{margin:0;font:16px/1.6 sans-serif}*{box-sizing:border-box}.card-game-container{height:900px;background:#16223b;color:white;padding:20px}#battle-scene{height:820px}#hand{margin-top:350px;display:flex;gap:10px}button{width:120px;height:180px}.story-prose{white-space:pre-wrap}#mwg-story-panel{padding:20px;background:#e7ddc5}h2{margin-top:0}</style><main class="card-game-container"><section id="battle-scene"><h1>战斗区域</h1><div id="hand"><button>攻击</button><button>格挡</button></div></section></main><script src="app.js"></script>`);
+fs.writeFileSync(dir+'/host.html',`<!doctype html><meta charset="utf-8"><style>${compile('src/shared/_storyPanel.scss').css}html,body{margin:0;height:100%;font:16px sans-serif}#chat{height:760px;overflow:auto;overflow-anchor:none}#lead,#tail{height:1400px}iframe{display:block;width:100%;height:1200px;border:0}</style><div id="chat"><div id="lead"></div><iframe id="TH-message--0--fixture"></iframe><div id="tail"></div></div><script>document.querySelector('iframe').src='child.html'+location.search;</script>`);
+await new Promise((resolve,reject)=>webpack({mode:'development',devtool:false,entry:dir+'/entry.ts',output:{path:dir,filename:'app.js'},resolve:{extensions:['.ts','.js']},module:{rules:[{test:/\.ts$/,use:dir+'/loader.cjs'}]}}).run((e,s)=>e||s.hasErrors()?reject(e||s.toString({all:false,errors:true})):resolve()));
+console.log(dir);

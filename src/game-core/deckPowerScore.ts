@@ -1,4 +1,4 @@
-import { analyzeContentDefinition } from './contentAnalysis';
+import { analyzeContentDefinition, analyzeDesireOverflowPayload } from './contentAnalysis';
 import {
   summarizeBuildBudgetScenarios,
   type BuildBudget,
@@ -183,6 +183,9 @@ export function scoreDeckPower(input: { pack: ContentPack; maxHp: number; fullHe
     ...(input.pack.desireEffects.player ? [input.pack.desireEffects.player] : []),
   ];
   const features = mergeContentMechanicFeatures(allDefinitions.map(extractContentMechanicFeatures));
+  const overflowPayload = input.pack.desireEffects.player
+    ? analyzeDesireOverflowPayload(input.pack.desireEffects.player, { opponentMaxHp: 100 }, input.pack.statuses)
+    : null;
   const routes = numericRoutePressure(input.pack);
   const playableRatio = playableCardRatio(cards);
   const roleCount = new Set(allDefinitions.flatMap(value => extractContentMechanicFeatures(value).roles)).size;
@@ -192,14 +195,14 @@ export function scoreDeckPower(input: { pack: ContentPack; maxHp: number; fullHe
     'condition', 'history_formula', 'container_formula', 'x_formula', 'x_cost', 'random', 'choose',
   ]);
   const engineOperations = operationCount(features, [
-    'trigger', 'modify', 'patch_card', 'upgrade_card', 'schedule', 'replay', 'auto_play', 'stance',
+    'trigger', 'modify', 'patch_card', 'upgrade_card', 'schedule', 'replay', 'replay_current', 'auto_play', 'stance',
     'channel_orb', 'spawn_summon', 'extra_turn', 'resource', 'set_resource',
   ]);
   const controlOperations = operationCount(features, [
     'apply_status', 'remove_status', 'card_rule', 'end_turn', 'discard', 'exhaust', 'modify',
   ]);
   const unsupportedComplexity = operationCount(features, [
-    'apply_status', 'remove_status', 'trigger', 'replay', 'auto_play', 'schedule', 'extra_turn',
+    'apply_status', 'remove_status', 'trigger', 'replay', 'replay_current', 'auto_play', 'schedule', 'extra_turn',
     'spawn_summon', 'spawn_enemy', 'channel_orb', 'evoke_orb', 'modify_orb',
   ]);
 
@@ -209,8 +212,9 @@ export function scoreDeckPower(input: { pack: ContentPack; maxHp: number; fullHe
   );
   const scaling = clamp(12 + engineOperations * 8 + features.triggers.length * 4 + features.resources.length * 5);
   const economy = clamp(28 + budget.draw * 11 + budget.energy * 14 + features.resources.length * 8 + freeCopies * 1.2);
+  const survivalSignals = operationCount(features, ['heal', 'lifesteal', 'damage_taken_reduction', 'summon_intercept']);
   const survival = clamp(
-    budget.defense * 4.4 + budget.sustain * 5.2 + Math.sqrt(maxHp) * 4.2,
+    budget.defense * 4.4 + budget.sustain * 5.2 + Math.sqrt(maxHp) * 4.2 + survivalSignals * 2.5,
   );
   const output = clamp(
     budget.attack * 5.3 + Math.max(routes.damage, routes.lust * 0.7) * 2.2 + scaling * 0.12,
@@ -240,12 +244,18 @@ export function scoreDeckPower(input: { pack: ContentPack; maxHp: number; fullHe
     + budget.energy * 4 + maxHp * 0.25;
   const qualityMultiplier = 0.78 + consistency / 500 + scaling / 1000 + flexibility / 1200 - volatility / 1600;
   const totalScore = round(Math.max(1, rawThroughput * clamp(qualityMultiplier, 0.62, 1.3) + control * 0.1));
-  const coverage = clamp(1 - unsupportedComplexity * 0.09 - Math.max(0, features.complexity - 55) / 200, 0.25, 1);
+  const coverage = clamp(
+    1 - unsupportedComplexity * 0.09 - (overflowPayload?.uncertain ? 0.1 : 0) - Math.max(0, features.complexity - 55) / 200,
+    0.25,
+    1,
+  );
   const confidence: DeckPowerScore['confidence'] = coverage >= 0.82 ? 'high' : coverage >= 0.58 ? 'medium' : 'low';
   const reasons = [
     `每回合压力约 ${round(budget.attack)}，防护约 ${round(budget.defense)}，恢复约 ${round(budget.sustain)}`,
     `最大生命 ${round(maxHp)}；当前生命不参与基础分`,
     `稳定性 ${round(consistency)}，成长性 ${round(scaling)}，估算覆盖率 ${Math.round(coverage * 100)}%`,
+    ...(survivalSignals ? [`生存识别：${Object.entries({ heal: '治疗', lifesteal: '吸血', damage_taken_reduction: '伤害减免', summon_intercept: '召唤护卫' }).filter(([operation]) => features.operations.includes(operation)).map(([, label]) => label).join('、')}`] : []),
+    ...(overflowPayload?.uncertain ? ['欲望满溢含动态或未登记状态 payload，已保守降低覆盖率'] : []),
     features.axes.length ? `主要机械轴：${features.axes.slice(0, 6).join('、')}` : '尚未形成明确机械轴',
   ];
   const result: DeckPowerScore = {

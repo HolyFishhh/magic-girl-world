@@ -1,5 +1,8 @@
+import { type TowerEncounterBaseline } from './towerEncounterBudget';
 import { type RunMap } from './runMap';
 import { type TowerNodeContentStore } from './towerContentState';
+import { type TowerDungeonPlan } from './towerDungeonPlan';
+import type { TowerCardMemory } from './towerCardMemory';
 import { type TowerRunScore } from './towerRunScore';
 export declare const RUN_STATE_SCHEMA_VERSION: 3;
 export declare const RUN_NODE_KINDS: readonly ["battle", "elite", "event", "rest", "shop", "treasure", "boss"];
@@ -51,6 +54,10 @@ export interface RunState {
     opening: TowerOpeningState;
     score: TowerRunScore;
     stateRevision: number;
+    cardMemory?: TowerCardMemory;
+    shopRemovalCount?: number;
+    encounterBaseline?: TowerEncounterBaseline;
+    dungeonPlan?: TowerDungeonPlan;
 }
 export interface CreateRunStateOptions {
     seed: number;
@@ -74,6 +81,8 @@ export declare function isBattleRunNode(kind: RunNodeKind): boolean;
 /** Keep `choices` as the compatibility view of the current DAG successors. */
 export declare function generateRunChoices(input: RunState): RunState;
 export declare function createRunState(options: CreateRunStateOptions): RunState;
+/** The unique map room settled by the opening gift, without advancing state. */
+export declare function getOpeningTreasureNode(input: RunState): RunNodeChoice | null;
 export declare function enterRunNode(input: RunState, choiceId: string): RunState;
 /** Return the active node or fail before a host mutates node-specific state. */
 export declare function requireActiveRunNode(input: RunState, kind?: RunNodeKind): RunNodeChoice;

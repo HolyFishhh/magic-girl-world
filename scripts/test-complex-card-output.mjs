@@ -28,7 +28,7 @@ function forbiddenProtocolKeys(value, path = '$', issues = []) {
   return issues;
 }
 
-const content = core.createContentPack(fixture);
+const content = core.createContentPack({ ...fixture, playerDesireEffect: fixture.desireEffects.player });
 const contract = core.validateContentPackContract(content, { requireExecutable: true });
 assert.equal(contract.ok, true, contract.ok ? '' : core.formatContentContractIssues(contract.issues, 20));
 assert.deepEqual(forbiddenProtocolKeys(fixture), [], 'AI fixture must contain only the public shallow protocol');

@@ -1,3 +1,4 @@
+import { hasPendingInitialArtifactAcquisition } from './initialArtifactAcquisition';
 import {
   formatRestUpgradePrompt,
   migratePersistentRunDeck,
@@ -45,6 +46,7 @@ import { TavernCommonActionHost, type CommonContinuationPlan, type CommonVariabl
 
 export interface CommonRunActionPorts {
   isLatest(): boolean;
+  initialPublicationReady?(): boolean;
   updateVariablesWith(updater: CommonVariablesUpdater): Promise<Record<string, any>>;
   /** Safe only for fingerprint-guarded historical reward settlement. */
   updateLatestVariablesWith?(updater: CommonVariablesUpdater): Promise<Record<string, any>>;
@@ -63,7 +65,6 @@ export interface CommonRunSyncResult {
   consumedRunResult: boolean;
   restUpgrade: RestUpgradeResult | null;
   restTransform: { runInstanceId: string; cardName: string } | null;
-  rewardReroll: boolean;
 }
 
 export interface CommonRewardSettlement {
@@ -83,11 +84,19 @@ export interface CommonRewardSettlement {
 export interface RewardPoolFingerprint {
   nodeId: string | null;
   poolRevision: string;
-  candidates: Record<RewardRerollCategory, string[]>;
+  /** Gold is independently claimable, so an old menu must not claim a changed offer. */
+  gold: string;
+  candidates: Record<RewardCategory, string[]>;
+  content?: string;
 }
 
 export interface RewardSettlementOptions {
+  acquisitionAnswers?: Record<string, import('./nonCombatSettlementTransactions').NonCombatAnswers>;
   expectedReward?: RewardPoolFingerprint;
+  partial?: boolean;
+  claimGold?: boolean;
+  discardGold?: boolean;
+  cardGroupId?: string;
 }
 
 interface OptionalValueSnapshot {
@@ -115,23 +124,7 @@ interface RestTransformPreparationSnapshot {
   cards: unknown;
 }
 
-type RewardRerollCategory = 'cards' | 'artifacts' | 'items';
-
-interface RewardRerollPending {
-  node_id: string | null;
-  categories: RewardRerollCategory[];
-  expected_counts: Record<string, number>;
-  gold_cost: number;
-  expected_revision: number;
-  original_reward: Record<string, any>;
-}
-
-interface RewardRerollPreparationSnapshot {
-  pending: OptionalValueSnapshot;
-  reward: Record<string, any>;
-}
-
-const REWARD_REROLL_KEYS = { cards: 'card', artifacts: 'artifact', items: 'item' } as const;
+type RewardCategory = 'cards' | 'artifacts' | 'items';
 
 function isRecord(value: unknown): value is Record<string, any> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -159,31 +152,6 @@ function replaceRecord(target: Record<string, any>, source: Record<string, any>)
   Object.assign(target, source);
 }
 
-function readRewardRerollPending(stat: Record<string, any>): RewardRerollPending | null {
-  const value = stat.run_reward_reroll;
-  if (value == null) return null;
-  if (
-    !isRecord(value) ||
-    !Array.isArray(value.categories) ||
-    !isRecord(value.expected_counts) ||
-    !isRecord(value.original_reward)
-  ) {
-    throw new Error('奖励重投状态无效');
-  }
-  return value as RewardRerollPending;
-}
-
-function rerollCategories(values: readonly string[]): RewardRerollCategory[] {
-  if (!Array.isArray(values) || values.length === 0) throw new Error('奖励重投至少需要一个类别');
-  const allowed = new Set<RewardRerollCategory>(['cards', 'artifacts', 'items']);
-  const categories = values.map(value => {
-    if (!allowed.has(value as RewardRerollCategory)) throw new Error(`奖励重投类别无效：${value}`);
-    return value as RewardRerollCategory;
-  });
-  if (new Set(categories).size !== categories.length) throw new Error('奖励重投类别不能重复');
-  return categories;
-}
-
 function persistentCards(stat: Record<string, any>): Record<string, any>[] {
   if (!isRecord(stat.battle)) throw new Error('battle 数据不存在');
   return migratePersistentRunDeck(normalizeMvuList<Record<string, any>>(stat.battle.cards));
@@ -203,12 +171,20 @@ export function createRewardPoolFingerprint(stat: Record<string, any>): RewardPo
   return {
     nodeId: typeof run?.currentNode?.id === 'string' ? run.currentNode.id : null,
     poolRevision: String(stat.reward.pool_revision ?? ''),
+    gold: `${Number(stat.reward.gold) || 0}:${stat.reward.gold_claimed === true}`,
+    content: JSON.stringify(stat.reward),
     candidates: {
       cards: normalizeMvuList(stat.reward.card).map(rewardCandidateIdentity),
       artifacts: normalizeMvuList(stat.reward.artifact).map(rewardCandidateIdentity),
       items: normalizeMvuList(stat.reward.item).map(rewardCandidateIdentity),
     },
   };
+}
+
+export function createShopPurchaseQuote(stat: Record<string, any>) {
+  const run=readRunState(stat);
+  return {pool:createRewardPoolFingerprint(stat),stock:JSON.stringify(stat.reward),
+    runIdentity:JSON.stringify([run?.seed,run?.act,run?.floor,run?.currentNode?.id])};
 }
 
 export function rewardPoolFingerprintMatches(
@@ -219,6 +195,8 @@ export function rewardPoolFingerprintMatches(
   return (
     actual.nodeId === expected.nodeId &&
     actual.poolRevision === expected.poolRevision &&
+    actual.gold === expected.gold &&
+    (expected.content === undefined || actual.content === expected.content) &&
     (['cards', 'artifacts', 'items'] as const).every(
       category =>
         actual.candidates[category].length === expected.candidates[category].length &&
@@ -268,6 +246,7 @@ export class TavernRunActionHost {
       const actionHost = TavernCommonActionHost.getInstance();
       return {
         isLatest: () => isCurrentMessageLatest(),
+        initialPublicationReady: () => (globalThis as any).MagicGirlWorld?.getTowerInitialPublicationStatus?.()?.ready !== false,
         updateVariablesWith: updater => actionHost.updateVariablesWith(updater),
         updateLatestVariablesWith: updater => actionHost.updateLatestVariablesWith(updater),
         continueWithPrompt: plan => actionHost.continueWithPrompt(plan),
@@ -311,42 +290,12 @@ export class TavernRunActionHost {
       consumedRunResult: false,
       restUpgrade: null,
       restTransform: null,
-      rewardReroll: false,
     };
     if (!this.ports.isLatest()) return result;
 
     await this.ports.updateVariablesWith((variables: Record<string, any>) => {
       const stat = statRoot(variables);
       migrateRunProgramStateInStat(stat);
-      const pendingReroll = readRewardRerollPending(stat);
-      if (pendingReroll) {
-        const generatedReward = isRecord(stat.reward) ? stat.reward : {};
-        const ready = pendingReroll.categories.every(
-          category =>
-            normalizeMvuList(generatedReward[REWARD_REROLL_KEYS[category]]).length ===
-            pendingReroll.expected_counts[category],
-        );
-        if (ready) {
-          const draft = structuredClone(stat);
-          const generated = Object.fromEntries(
-            pendingReroll.categories.map(category => [
-              category,
-              normalizeMvuList(generatedReward[REWARD_REROLL_KEYS[category]]),
-            ]),
-          );
-          draft.reward = structuredClone(pendingReroll.original_reward);
-          executeUnifiedRunTransactionInStat(draft, {
-            kind: 'reward_pool',
-            mutation: { kind: 'reroll', categories: pendingReroll.categories, candidates: generated },
-            goldCost: pendingReroll.gold_cost,
-            expectedRevision: pendingReroll.expected_revision,
-            source: { kind: 'system', id: 'ai-reward-reroll' },
-          });
-          delete draft.run_reward_reroll;
-          replaceRecord(stat, draft);
-          result.rewardReroll = true;
-        }
-      }
       const pendingRun = readRunState(stat);
       if (!pendingRun) return variables;
       const pendingEventRewards =
@@ -359,7 +308,7 @@ export class TavernRunActionHost {
       }
 
       const currentRun = readRunState(stat);
-      if (currentRun?.phase === 'in_node' && currentRun.currentNode?.kind === 'rest') {
+      if (currentRun?.routeMode !== 'map' && currentRun?.phase === 'in_node' && currentRun.currentNode?.kind === 'rest') {
         if (stat.run_upgrade && stat.run_transform) throw new Error('营火不能同时结算升级与变形');
         if (stat.run_transform) {
           const runInstanceId = resolvePendingTransformTarget(stat, currentRun.currentNode);
@@ -408,21 +357,24 @@ export class TavernRunActionHost {
     options: RewardSettlementOptions = {},
   ): Promise<CommonRewardSettlement> {
     let settlement: CommonRewardSettlement | null = null;
+    let hasPendingRewards = true;
     const historical = !this.ports.isLatest();
     if (historical && !options.expectedReward) {
       throw new Error('历史奖励缺少校验信息，请在最新消息中重新打开奖励');
     }
     const update = historical ? this.ports.updateLatestVariablesWith : this.ports.updateVariablesWith;
-    if (!update) throw new Error('当前酒馆版本无法安全结算历史奖励，请在最新消息中领取');
-    await update((variables: Record<string, any>) => {
-      const stat = statRoot(variables);
-      if (historical && !rewardPoolFingerprintMatches(stat, options.expectedReward!)) {
+      if (!update) throw new Error('当前酒馆版本无法安全结算历史奖励，请在最新消息中领取');
+      await update((variables: Record<string, any>) => {
+        if (!historical && !this.ports.isLatest()) throw new Error('奖励消息已经更新，请在最新消息中重新领取');
+        const stat = statRoot(variables);
+      if (options.expectedReward && !rewardPoolFingerprintMatches(stat, options.expectedReward)) {
         throw new Error('奖励已经更新，请在最新消息中重新打开奖励后领取');
       }
       const run = readRunState(stat);
       if (run?.phase === 'in_node' && run.currentNode?.kind === 'shop') {
         const transaction = executeUnifiedRunTransactionInStat(stat, {
           kind: 'shop_purchase',
+          acquisitionAnswers: options.acquisitionAnswers,
           selections,
           source: { kind: 'player', id: 'reward-ui' },
         });
@@ -431,6 +383,7 @@ export class TavernRunActionHost {
       } else if (run?.phase === 'in_node' && run.currentNode?.kind === 'treasure') {
         const transaction = executeUnifiedRunTransactionInStat(stat, {
           kind: 'treasure_reward_claim',
+          acquisitionAnswers: options.acquisitionAnswers,
           selections,
           source: { kind: 'player', id: 'reward-ui' },
         });
@@ -443,6 +396,7 @@ export class TavernRunActionHost {
       } else if (run?.phase === 'in_node' && run.currentNode?.kind === 'event' && stat.run_result != null) {
         const transaction = executeUnifiedRunTransactionInStat(stat, {
           kind: 'event_reward_claim',
+          acquisitionAnswers: options.acquisitionAnswers,
           selections,
           source: { kind: 'player', id: 'reward-ui' },
         });
@@ -455,7 +409,12 @@ export class TavernRunActionHost {
       } else {
         const transaction = executeUnifiedRunTransactionInStat(stat, {
           kind: 'reward_claim',
+          acquisitionAnswers: options.acquisitionAnswers,
           selections,
+          partial: options.partial,
+          claimGold: options.claimGold,
+          discardGold: options.discardGold,
+          cardGroupId: options.cardGroupId,
           source: { kind: 'player', id: 'reward-ui' },
         });
         settlement = {
@@ -465,80 +424,14 @@ export class TavernRunActionHost {
           event: transaction.event,
         };
       }
+      hasPendingRewards = hasSelectableRewards(stat);
       return variables;
     });
     if (!settlement) throw new Error('奖励领取失败：MUV 更新未返回结算结果');
-    await this.scheduleTowerGeneration('reward-settled');
+    // A partial claim leaves the current battle node and every other reward
+    // category intact.  Defer background route work until the menu is empty.
+    if (!options.partial || !hasPendingRewards) await this.scheduleTowerGeneration('reward-settled');
     return settlement;
-  }
-
-  public requestRewardReroll(categoriesValue: readonly string[], prompt: string, goldCost = 0): Promise<void> {
-    const categories = rerollCategories(categoriesValue);
-    if (!Number.isInteger(goldCost) || goldCost < 0) throw new Error('奖励重投金币费用无效');
-    return this.ports.continueWithPrompt<RewardRerollPreparationSnapshot>({
-      prompt,
-      prepare: async () => {
-        let snapshot: RewardRerollPreparationSnapshot | null = null;
-        await this.ports.updateVariablesWith((variables: Record<string, any>) => {
-          const stat = statRoot(variables);
-          if (readRewardRerollPending(stat)) throw new Error('已有奖励重投正在生成');
-          if (!isRecord(stat.reward)) throw new Error('reward 数据不存在');
-          const expectedCounts = Object.fromEntries(
-            categories.map(category => [category, normalizeMvuList(stat.reward[REWARD_REROLL_KEYS[category]]).length]),
-          );
-          if (Object.values(expectedCounts).some(count => count < 1)) throw new Error('奖励重投类别没有现有候选');
-          snapshot = { pending: optionalValue(stat, 'run_reward_reroll'), reward: structuredClone(stat.reward) };
-          const run = readRunState(stat);
-          stat.run_reward_reroll = {
-            node_id: run?.currentNode?.id || null,
-            categories,
-            expected_counts: expectedCounts,
-            gold_cost: goldCost,
-            expected_revision: Number(stat.run_transaction_revision ?? 0),
-            original_reward: structuredClone(stat.reward),
-          } satisfies RewardRerollPending;
-          for (const category of categories) stat.reward[REWARD_REROLL_KEYS[category]] = [];
-          return variables;
-        });
-        if (!snapshot) throw new Error('奖励重投未返回可回滚状态');
-        return snapshot;
-      },
-      rollbackBeforeSend: async snapshot => {
-        await this.ports.updateVariablesWith((variables: Record<string, any>) => {
-          const stat = statRoot(variables);
-          stat.reward = snapshot.reward;
-          restoreOptionalValue(stat, 'run_reward_reroll', snapshot.pending);
-          return variables;
-        });
-      },
-    });
-  }
-
-  public retryPendingRewardReroll(prompt: string): Promise<void> {
-    return this.ports.continueWithPrompt<RewardRerollPreparationSnapshot>({
-      prompt,
-      prepare: async () => {
-        let snapshot: RewardRerollPreparationSnapshot | null = null;
-        await this.ports.updateVariablesWith((variables: Record<string, any>) => {
-          const stat = statRoot(variables);
-          const pending = readRewardRerollPending(stat);
-          if (!pending || !isRecord(stat.reward)) throw new Error('没有可重试的奖励重投');
-          snapshot = { pending: optionalValue(stat, 'run_reward_reroll'), reward: structuredClone(stat.reward) };
-          for (const category of pending.categories) stat.reward[REWARD_REROLL_KEYS[category]] = [];
-          return variables;
-        });
-        if (!snapshot) throw new Error('奖励重投重试未返回可回滚状态');
-        return snapshot;
-      },
-      rollbackBeforeSend: async snapshot => {
-        await this.ports.updateVariablesWith((variables: Record<string, any>) => {
-          const stat = statRoot(variables);
-          stat.reward = snapshot.reward;
-          restoreOptionalValue(stat, 'run_reward_reroll', snapshot.pending);
-          return variables;
-        });
-      },
-    });
   }
 
   public enterRunNode(node: RunNodeChoice, prompt: string): Promise<void> {
@@ -571,6 +464,7 @@ export class TavernRunActionHost {
       prepare: async () => {
         let previous: RunState | null = null;
         await this.ports.updateVariablesWith((variables: Record<string, any>) => {
+          if (hasPendingInitialArtifactAcquisition(statRoot(variables))) throw new Error('请先完成初始遗物的选择');
           previous = enterTowerRunNodeInStat(statRoot(variables), node.id).previous;
           return variables;
         });
@@ -603,6 +497,7 @@ export class TavernRunActionHost {
   /** Consume one pre-generated v3 map node without asking AI to generate it again. */
   public async activateTowerRunNode(nodeId: string): Promise<TowerNodeActivationResult> {
     if (!this.ports.isLatest()) throw new Error('历史楼层不能进入爬塔节点');
+    if (this.ports.initialPublicationReady?.() === false) throw new Error('请先完成开局保存确认');
     const normalizedNodeId = String(nodeId || '').trim();
     if (!normalizedNodeId) throw new Error('爬塔节点 ID 不能为空');
 
@@ -610,7 +505,9 @@ export class TavernRunActionHost {
     let activation: TowerNodeActivationResult | null = null;
     try {
       await this.ports.updateVariablesWith((variables: Record<string, any>) => {
+        if (this.ports.initialPublicationReady?.() === false) throw new Error('开局保存尚未确认，未进入节点');
         const stat = statRoot(variables);
+        if (hasPendingInitialArtifactAcquisition(stat)) throw new Error('请先完成初始遗物的选择');
         previousStat = structuredClone(stat);
         activation = activateTowerNodeInStat(stat, normalizedNodeId);
         return variables;
@@ -805,6 +702,19 @@ export class TavernRunActionHost {
     });
   }
 
+  public async actAtCampfire(action: 'train' | 'scavenge' | 'recall', cardId?: string): Promise<string> {
+    let summary = '';
+    await this.ports.updateVariablesWith((variables: Record<string, any>) => {
+      const result = executeUnifiedRunTransactionInStat(statRoot(variables), {
+        kind: 'rest_action', action, cardId, source: { kind: 'player', id: 'run-ui' },
+      }).value as { summary: string };
+      summary = result.summary;
+      return variables;
+    });
+    await this.scheduleTowerGeneration('rest-settled');
+    return summary;
+  }
+
   public async healAtRest(): Promise<RestHealResult> {
     let result: RestHealResult | null = null;
     await this.ports.updateVariablesWith((variables: Record<string, any>) => {
@@ -819,9 +729,44 @@ export class TavernRunActionHost {
     return result;
   }
 
+  public async removeCardAtShop(runInstanceId: string): Promise<void> {
+    if (!this.ports.isLatest()) throw new Error('请在最新消息的商店删卡');
+    await this.ports.updateVariablesWith((variables: Record<string, any>) => {
+      if (!this.ports.isLatest()) throw new Error('请在最新消息的商店删卡');
+      executeUnifiedRunTransactionInStat(statRoot(variables), {kind:'shop_remove_card', runInstanceId, source:{kind:'player',id:'shop-removal'}});
+      return variables;
+    });
+  }
+
+  /** One displayed stock slot, one atomic payment. A stale click never buys its successor. */
+  public async purchaseShopItem(category: RewardCategory, index: number, expected: ReturnType<typeof createShopPurchaseQuote>, acquisitionAnswers?: RewardSettlementOptions['acquisitionAnswers']): Promise<CommonRewardSettlement> {
+    if (!this.ports.isLatest()) throw new Error('请在最新消息的商店购买');
+    let settlement: CommonRewardSettlement | null = null;
+    await this.ports.updateVariablesWith((variables: Record<string, any>) => {
+      if (!this.ports.isLatest()) throw new Error('请在最新消息的商店购买');
+      const stat = statRoot(variables);
+      const current=createShopPurchaseQuote(stat);
+      if (!rewardPoolFingerprintMatches(stat, expected.pool) || current.stock!==expected.stock || current.runIdentity!==expected.runIdentity)
+        throw new Error('商品已经更新，请查看当前货架后再购买');
+      const run = readRunState(stat);
+      if (run?.phase !== 'in_node' || run.currentNode?.kind !== 'shop') throw new Error('当前不在商店');
+      const selections: RewardSelections = { cards: [], artifacts: [], items: [] };
+      if (!['cards','artifacts','items'].includes(category) || !Number.isInteger(index) || index < 0) throw new Error('商品无效');
+      selections[category] = [index];
+      const transaction = executeUnifiedRunTransactionInStat(stat, {kind:'shop_purchase',selections,acquisitionAnswers,source:{kind:'player',id:'shop-item'}});
+      const value = transaction.value as RewardSelectionSummary & {spentGold:number};
+      settlement = {kind:'shop',summary:value,spentGold:value.spentGold,event:transaction.event};
+      return variables;
+    });
+    if (!settlement) throw new Error('购买未完成，请重试');
+    return settlement;
+  }
+
   public async leaveShop(): Promise<RunState> {
+    if (!this.ports.isLatest()) throw new Error('请在最新消息的商店离开');
     let run: RunState | null = null;
     await this.ports.updateVariablesWith((variables: Record<string, any>) => {
+      if (!this.ports.isLatest()) throw new Error('请在最新消息的商店离开');
       run = executeUnifiedRunTransactionInStat(statRoot(variables), {
         kind: 'shop_leave',
         source: { kind: 'player', id: 'run-ui' },
@@ -894,6 +839,23 @@ export class TavernRunActionHost {
     return result;
   }
 
+  public async removeCardWithAllowance(runInstanceId: string, expectedRevision: number): Promise<{ runInstanceId: string; cardName: string }> {
+    if (!this.ports.isLatest()) throw new Error('历史楼层不能删卡');
+    if (this.ports.initialPublicationReady?.() === false) throw new Error('请先完成开局保存确认');
+    let result: { runInstanceId: string; cardName: string } | undefined;
+    await this.ports.updateVariablesWith((variables: Record<string, any>) => {
+      if (!this.ports.isLatest()) throw new Error('历史楼层不能删卡');
+      if (this.ports.initialPublicationReady?.() === false) throw new Error('请先完成开局保存确认');
+      result = executeUnifiedRunTransactionInStat(statRoot(variables), {
+        kind: 'allowance_remove_card', runInstanceId, expectedRevision,
+        source: { kind: 'player', id: 'acquired-removal' },
+      }).value as { runInstanceId: string; cardName: string };
+      return variables;
+    });
+    if (!result) throw new Error('删卡保存未返回结果');
+    return result;
+  }
+
   public async removeCard(cardId: string): Promise<CardRemovalResult> {
     let result: CardRemovalResult | null = null;
     await this.ports.updateVariablesWith((variables: Record<string, any>) => {
@@ -905,11 +867,13 @@ export class TavernRunActionHost {
     return result;
   }
 
-  public async settleTowerOpeningChoice(choiceId: string): Promise<TowerOpeningSettlementResult> {
+  public async settleTowerOpeningChoice(choiceId: string, acquisitionAnswers?: RewardSettlementOptions['acquisitionAnswers']): Promise<TowerOpeningSettlementResult> {
     if (!this.ports.isLatest()) throw new Error('历史楼层不能选择开局馈赠');
+    if (this.ports.initialPublicationReady?.() === false) throw new Error('请先完成开局保存确认');
     let result: TowerOpeningSettlementResult | null = null;
     await this.ports.updateVariablesWith((variables: Record<string, any>) => {
-      result = settleTowerOpeningChoiceInStat(statRoot(variables), choiceId);
+      if (this.ports.initialPublicationReady?.() === false) throw new Error('开局保存尚未确认，未领取馈赠');
+      result = settleTowerOpeningChoiceInStat(statRoot(variables), choiceId, acquisitionAnswers);
       return variables;
     });
     if (!result) throw new Error('开局馈赠结算失败：MUV 更新未返回结果');
@@ -919,8 +883,10 @@ export class TavernRunActionHost {
 
   public async retryTowerOpeningGeneration(): Promise<TowerOpeningRequest> {
     if (!this.ports.isLatest()) throw new Error('历史楼层不能重新生成开局馈赠');
+    if (this.ports.initialPublicationReady?.() === false) throw new Error('请先完成开局保存确认，不要重新生成馈赠');
     let request: TowerOpeningRequest | null = null;
     await this.ports.updateVariablesWith((variables: Record<string, any>) => {
+      if (this.ports.initialPublicationReady?.() === false) throw new Error('开局保存尚未确认');
       request = queueTowerOpeningInStat(statRoot(variables)).request;
       return variables;
     });
@@ -929,11 +895,27 @@ export class TavernRunActionHost {
     return request;
   }
 
-  public async settleTowerEventChoice(choiceId: string): Promise<TowerEventChoiceSettlementResult> {
+  public async settleInitialArtifactAcquisition(generationId: string, answers: Record<string, import('./nonCombatSettlementTransactions').NonCombatAnswers>): Promise<void> {
+    if (!this.ports.isLatest()) throw new Error('请在最新消息中处理初始遗物');
+    if (this.ports.initialPublicationReady?.() === false) throw new Error('请先完成开局保存');
+    await this.ports.updateVariablesWith((variables: Record<string, any>) => {
+      if (!this.ports.isLatest()) throw new Error('消息已经变化，请重新打开初始遗物');
+      executeUnifiedRunTransactionInStat(statRoot(variables), { kind: 'initial_artifact_acquisition', generationId, answers,
+        source: { kind: 'artifact', id: 'initial-acquisition' } });
+      return variables;
+    });
+  }
+
+  public async settleTowerEventChoice(choiceId: string, options: {
+    stageId?: string; expectedEventRevision?: number; expectedRevision?: number;
+    answers?: import('./nonCombatSettlementTransactions').NonCombatAnswers;
+  } = {}): Promise<TowerEventChoiceSettlementResult> {
     if (!this.ports.isLatest()) throw new Error('历史楼层不能选择爬塔事件');
     let result: TowerEventChoiceSettlementResult | null = null;
     await this.ports.updateVariablesWith((variables: Record<string, any>) => {
-      result = settleTowerEventChoiceInStat(statRoot(variables), choiceId);
+      result = executeUnifiedRunTransactionInStat(statRoot(variables), {
+        kind: 'event_step', choiceId, ...options, source: { kind: 'event', id: choiceId },
+      }).value as TowerEventChoiceSettlementResult;
       return variables;
     });
     if (!result) throw new Error('爬塔事件结算失败：MUV 更新未返回结果');

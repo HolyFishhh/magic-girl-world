@@ -1,0 +1,243 @@
+{
+  "player": {
+    "emoji": "🌙",
+    "hp": 72,
+    "maxHp": 72,
+    "lust": 0,
+    "maxLust": 100,
+    "level": 1,
+    "exp": 0
+  },
+  "cards": [
+    {
+      "id": "moon_cut",
+      "name": "月刃",
+      "emoji": "🌙",
+      "type": "Attack",
+      "rarity": "Common",
+      "cost": 1,
+      "quantity": 2,
+      "description": "造成6点伤害。",
+      "effects": { "damage": 6 }
+    },
+    {
+      "id": "veil_guard",
+      "name": "薄幕防御",
+      "emoji": "🛡️",
+      "type": "Skill",
+      "rarity": "Common",
+      "cost": 1,
+      "quantity": 2,
+      "description": "获得6点格挡。",
+      "effects": { "block": 6 }
+    },
+    {
+      "id": "dawn_spark",
+      "name": "晨星",
+      "emoji": "✦",
+      "type": "Attack",
+      "rarity": "Common",
+      "cost": 0,
+      "quantity": 1,
+      "description": "造成3点伤害。",
+      "effects": { "damage": 3 }
+    },
+    {
+      "id": "fading_glint",
+      "name": "流萤闪击",
+      "emoji": "🪲",
+      "type": "Attack",
+      "rarity": "Common",
+      "cost": 0,
+      "quantity": 1,
+      "ethereal": true,
+      "description": "造成5点伤害；回合结束仍在手中则消耗。",
+      "effects": { "damage": 5 }
+    },
+    {
+      "id": "luminary_call",
+      "name": "辉光召来",
+      "emoji": "🕯️",
+      "type": "Skill",
+      "rarity": "Uncommon",
+      "cost": 1,
+      "quantity": 1,
+      "innate": true,
+      "description": "召唤会攻击的辉光使。",
+      "effects": {
+        "spawn_summon": {
+          "id": "luminary",
+          "name": "辉光使",
+          "emoji": "✨",
+          "description": "每回合造成3点伤害。",
+          "max_hp": 7,
+          "actions": [
+            { "id": "luminary_ray", "name": "辉光射线", "emoji": "☀️", "effects": { "damage": 3 } }
+          ],
+          "capacity": 3
+        }
+      },
+      "lifecycle": { "on_play": "exhaust" }
+    },
+    {
+      "id": "familiar_command",
+      "name": "使魔号令",
+      "emoji": "📯",
+      "type": "Skill",
+      "rarity": "Uncommon",
+      "cost": 1,
+      "quantity": 1,
+      "description": "强化最左侧召唤物的伤害2点。",
+      "effects": {
+        "modify_summon_effect": {
+          "selector": { "owner": "self", "pick": "left" },
+          "stat": "damage",
+          "add": 2
+        }
+      }
+    },
+    {
+      "id": "prism_forge",
+      "name": "棱镜锻造",
+      "emoji": "🔷",
+      "type": "Skill",
+      "rarity": "Uncommon",
+      "cost": 1,
+      "quantity": 1,
+      "description": "选择手中一张攻击牌，其直接伤害本场+3。",
+      "effects": {
+        "patch_card": "damage",
+        "add": 3,
+        "scope": "combat",
+        "from": "hand",
+        "pick": "choose",
+        "card_type": "Attack",
+        "root_only": true
+      }
+    },
+    {
+      "id": "star_smith",
+      "name": "星屑铸造",
+      "emoji": "⚒️",
+      "type": "Skill",
+      "rarity": "Uncommon",
+      "cost": 1,
+      "quantity": 1,
+      "description": "将两张临时星屑加入手牌。",
+      "effects": { "add_card": "star_shard", "to": "hand", "count": 2 },
+      "creates": [
+        {
+          "id": "star_shard",
+          "name": "临时星屑",
+          "emoji": "💫",
+          "type": "Attack",
+          "rarity": "Common",
+          "cost": 0,
+          "description": "造成2点伤害；打出后消耗。",
+          "effects": { "damage": 2 },
+          "lifecycle": { "on_play": "exhaust" }
+        }
+      ]
+    },
+    {
+      "id": "tactical_release",
+      "name": "月痕卸载",
+      "emoji": "🗑️",
+      "type": "Skill",
+      "rarity": "Uncommon",
+      "cost": 0,
+      "quantity": 1,
+      "description": "选择弃置1张手牌，然后抽1张牌。",
+      "effects": [
+        { "discard": 1, "from": "hand", "pick": "choose" },
+        { "draw": 1 }
+      ]
+    },
+    {
+      "id": "tether_reclaim",
+      "name": "系月回收",
+      "emoji": "🧵",
+      "type": "Skill",
+      "rarity": "Rare",
+      "cost": 1,
+      "quantity": 1,
+      "description": "抽1张牌；保留，若被弃置则消耗。",
+      "effects": { "draw": 1 },
+      "lifecycle": { "turn_end": "retain", "on_discard": "exhaust" }
+    },
+    {
+      "id": "eclipse_sigil",
+      "name": "蚀月印",
+      "emoji": "🌘",
+      "type": "Skill",
+      "rarity": "Rare",
+      "cost": 1,
+      "quantity": 1,
+      "description": "获得8点格挡；结算后消耗。",
+      "effects": { "block": 8 },
+      "lifecycle": { "on_play": "exhaust" }
+    },
+    {
+      "id": "astral_choir",
+      "name": "星环合唱",
+      "emoji": "🎼",
+      "type": "Power",
+      "rarity": "Epic",
+      "cost": 2,
+      "quantity": 1,
+      "description": "每回合开始获得2点格挡。",
+      "trigger": { "on": "turn_start", "effects": { "block": 2 } }
+    },
+    {
+      "id": "nova_vow",
+      "name": "新星誓约",
+      "emoji": "🌟",
+      "type": "Attack",
+      "rarity": "Legendary",
+      "cost": 3,
+      "quantity": 1,
+      "description": "造成16点伤害；结算后销毁。",
+      "effects": { "damage": 16 },
+      "lifecycle": { "on_play": "purge" }
+    },
+    {
+      "id": "void_whisper",
+      "name": "虚空低语",
+      "emoji": "🕳️",
+      "type": "Curse",
+      "rarity": "Corrupt",
+      "quantity": 1,
+      "description": "无法打出；保留，若被弃置则消耗。",
+      "lifecycle": { "turn_end": "retain", "on_discard": "exhaust" }
+    }
+  ],
+  "statuses": [],
+  "relics": [
+    {
+      "id": "moonstone",
+      "name": "月光石",
+      "emoji": "💠",
+      "rarity": "Common",
+      "description": "战斗开始时获得3点格挡。",
+      "trigger": { "on": "battle_start", "effects": { "block": 3 } }
+    }
+  ],
+  "items": [
+    {
+      "id": "moon_tonic",
+      "name": "月露",
+      "emoji": "🧪",
+      "count": 1,
+      "description": "恢复6点生命。",
+      "effects": { "heal": 6 }
+    }
+  ],
+  "abilities": [],
+  "activeStatuses": [],
+  "playerDesireEffect": {
+    "name": "月相爆发",
+    "emoji": "🌕",
+    "description": "造成8点伤害。",
+    "effects": { "damage": 8 }
+  }
+}

@@ -4,10 +4,12 @@ import { normalizeRunAct, recommendRunNodePacing, type RunPacingContext } from '
 import { stableHash32 } from './deterministicRandom';
 
 export interface BattleRewardBudget {
-  cards: { candidates: number; pick: number; rarities: string[] };
-  artifacts: { candidates: number; pick: number } | null;
+  cards: { candidates: number; pick: number; rarities: string[]; slotRarities?: string[] };
+  artifacts: { candidates: number; pick: number; slotRarities?: string[] } | null;
   items: { candidates: number; pick: number } | null;
   experience: number;
+  /** Program-owned tower victory currency. It is never authored by the content model. */
+  gold?: number;
 }
 
 export interface ShopBudget {
@@ -24,6 +26,66 @@ export interface TowerBattleRewardContext {
   act: number;
   floor: number;
   floorsPerAct?: number;
+  rewardSeed?: number;
+  /** The finalized roster size, rather than an authoring hint. */
+  enemyCount?: number;
+}
+
+export const TOWER_REWARD_RULES = {
+  normalCards: [['Common', 60], ['Rare', 35], ['Epic', 5]],
+  eliteCards: [['Epic', 80], ['Legendary', 20]],
+  normalPotionChance: 0.1,
+  elitePotionChance: 0.25,
+} as const;
+
+function rewardEnemyCount(context: TowerBattleRewardContext): number {
+  const count = Math.floor(Number(context.enemyCount));
+  return Number.isFinite(count) ? Math.max(1, Math.min(5, count)) : 1;
+}
+
+/**
+ * Currency is determined from the saved node seed and the finalized encounter
+ * shape.  It is deliberately separate from generated reward JSON, so a retry,
+ * restore, or model response cannot create a second payout.
+ */
+export function recommendTowerBattleGold(context: TowerBattleRewardContext): number {
+  const enemyCount = rewardEnemyCount(context);
+  const roll = stableHash32({
+    namespace: 'mwg-tower-gold-v1',
+    seed: context.rewardSeed ?? 0,
+    node: context.nodeId,
+    kind: context.kind,
+    act: context.act,
+    floor: context.floor,
+    enemyCount,
+  });
+  const base = context.kind === 'boss' ? 100 : context.kind === 'elite' ? 50 : 20;
+  const actBonus = Math.max(0, Math.floor(context.act) - 1) * 10;
+  const floorBonus = Math.max(0, Math.floor(context.floor) - 1) * 2;
+  const rosterBonus = (enemyCount - 1) * 5;
+  return base + actBonus + floorBonus + rosterBonus + (roll % 7);
+}
+
+function plannedRewardBudget(context: TowerBattleRewardContext, experience: number): BattleRewardBudget {
+  const roll = (slot: string) => stableHash32({namespace:'tower-rewards-v2', seed:context.rewardSeed, node:context.nodeId, slot}) / 0x1_0000_0000;
+  const rarity = (slot: string) => {
+    if (context.kind === 'boss') return 'Legendary';
+    let remaining = roll(slot) * 100;
+    for (const [name, weight] of context.kind === 'elite' ? TOWER_REWARD_RULES.eliteCards : TOWER_REWARD_RULES.normalCards) {
+      remaining -= weight;
+      if (remaining < 0) return name;
+    }
+    return 'Epic';
+  };
+  const slotRarities = [0,1,2].map(index => rarity(`card-${index}`));
+  return {
+    cards: {candidates:3, pick:1, rarities:[...new Set(slotRarities)], slotRarities},
+    artifacts: context.kind === 'battle' ? null : {candidates:1,pick:1,slotRarities:[rarity('relic')]},
+    items: roll('potion') < (context.kind === 'battle' ? TOWER_REWARD_RULES.normalPotionChance : context.kind === 'elite' ? TOWER_REWARD_RULES.elitePotionChance : 0)
+      ? {candidates:1,pick:1} : null,
+    experience,
+    gold: recommendTowerBattleGold(context),
+  };
 }
 
 const TOWER_REWARD_KEYS = {
@@ -48,6 +110,7 @@ export function recommendTowerBattleRewardBudget(context: TowerBattleRewardConte
     floorsPerAct: context.floorsPerAct ?? 16,
     danger,
   });
+  if (context.rewardSeed !== undefined) return plannedRewardBudget(context, budget.experience);
   const chance = context.kind === 'boss' ? 0 : context.kind === 'elite' ? 0.5 : 0.4;
   const roll = stableHash32({
     namespace: 'mwg-tower-item-drop-v1',
@@ -59,6 +122,7 @@ export function recommendTowerBattleRewardBudget(context: TowerBattleRewardConte
   return {
     ...budget,
     items: roll < chance ? { candidates: 1, pick: 1 } : null,
+    gold: recommendTowerBattleGold(context),
   };
 }
 
@@ -73,9 +137,13 @@ export function recommendTowerBattleRewardBudget(context: TowerBattleRewardConte
 export function enforceBattleRewardBudget(
   rewardValue: unknown,
   budget: BattleRewardBudget,
+  options: { allowProgramCurrency?: boolean } = {},
 ): Record<string, unknown> {
   if (!isRecord(rewardValue)) throw new Error('tower battle reward must be an object');
-  const allowedFields = new Set(['card', 'cards', 'artifact', 'artifacts', 'item', 'items', 'limits']);
+  // Parsing and activation both enforce this contract. Program-owned currency
+  // may therefore already exist; it is always recomputed below, never trusted.
+  const allowedFields = new Set(['card', 'cards', 'artifact', 'artifacts', 'item', 'items', 'limits',
+    ...(options.allowProgramCurrency ? ['gold', 'gold_claimed'] : [])]);
   const unknown = Object.keys(rewardValue).find(key => !allowedFields.has(key));
   if (unknown) throw new Error(`tower battle reward contains unsupported field: ${unknown}`);
 
@@ -108,6 +176,12 @@ export function enforceBattleRewardBudget(
       throw new Error(`tower battle reward ${singular} requires ${expected} candidates but received ${source.length}`);
     }
     normalized[singular] = structuredClone(source.slice(0, expected));
+    const slots = category === 'cards' ? budget.cards.slotRarities : category === 'artifacts' ? budget.artifacts?.slotRarities : undefined;
+    slots?.forEach((rarity, index) => {
+      const candidate = normalized[singular][index];
+      if (!isRecord(candidate) || candidate.rarity !== rarity)
+        throw new Error(`tower battle reward ${singular}[${index}].rarity must be ${rarity} (program plan)`);
+    });
   }
 
   return {
@@ -117,6 +191,7 @@ export function enforceBattleRewardBudget(
       artifacts: expectations.artifacts.pick,
       items: expectations.items.pick,
     },
+    ...(budget.gold === undefined ? {} : { gold: budget.gold, gold_claimed: false }),
   };
 }
 
@@ -155,9 +230,12 @@ export function formatBattleRewardBudget(
   options: { includeExperience?: boolean } = {},
 ): string {
   const parts = [`cards=${budget.cards.candidates}/${budget.cards.pick}`, `rarity=${budget.cards.rarities.join(',')}`];
+  if (budget.cards.slotRarities) parts.push(`卡牌依次稀有度=${budget.cards.slotRarities.join('/')}`);
+  if (budget.artifacts?.slotRarities) parts.push(`遗物依次稀有度=${budget.artifacts.slotRarities.join('/')}`);
   if (budget.artifacts) parts.push(`artifacts=${budget.artifacts.candidates}/${budget.artifacts.pick}`);
   if (budget.items) parts.push(`items=${budget.items.candidates}/${budget.items.pick}`);
   if (options.includeExperience !== false) parts.push(`exp=${budget.experience}`);
+  if (budget.gold !== undefined) parts.push(`gold=${budget.gold}`);
   return parts.join(' ');
 }
 
@@ -174,14 +252,18 @@ export function formatBattleRewardChecklist(budget: BattleRewardBudget): string 
     budget.items ? `reward.item=${budget.items.candidates}项` : 'reward.item=[]',
     `reward.limits=${JSON.stringify(limits)}（整对象一次写入，不得添加其他键）`,
   ];
-  return `${parts.join('；')}；每张 reward.card 固定 quantity=1；经验已由程序结算，禁止修改 battle.exp`;
+  const goldInstruction = budget.gold === undefined
+    ? ''
+    : '；金币由程序按本场节点与敌人数写入 reward.gold，禁止生成 gold 或 gold_claimed';
+  return `${parts.join('；')}${goldInstruction}；每张 reward.card 固定 quantity=1；经验已由程序结算，禁止修改 battle.exp`;
 }
 
 export function recommendShopBudget(pacing: RunPacingContext): ShopBudget {
-  const tier = recommendRunNodePacing(pacing).shopTier;
-  if (tier === 'basic') return { cards: 2, artifacts: 1, items: 1 };
-  if (tier === 'premium') return { cards: 3, artifacts: 2, items: 1 };
-  return { cards: 3, artifacts: 1, items: 1 };
+  return { cards: 5, artifacts: 2, items: 2 };
+}
+
+export function towerShopRemovalPrice(run: {shopRemovalCount?: number}): number {
+  return 75 + 25 * Math.max(0, Math.floor(Number(run.shopRemovalCount) || 0));
 }
 
 export function formatShopBudget(budget: ShopBudget): string {
@@ -200,6 +282,8 @@ const ARTIFACT_PRICES: Record<string, number> = {
   Common: 95,
   Uncommon: 115,
   Rare: 140,
+  Epic: 170,
+  Legendary: 220,
   Boss: 170,
   ENS: 150,
 };

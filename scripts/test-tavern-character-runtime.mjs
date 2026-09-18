@@ -1,17 +1,20 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import { resolve } from 'node:path';
 
 import { parseFragment } from 'parse5';
 
 const releaseConfig = JSON.parse(await readFile('release.config.json', 'utf8'));
-const manifest = JSON.parse(await readFile('dist/tavern/character-runtime-manifest.json', 'utf8'));
-const runtimeSource = await readFile('dist/tavern/character-runtime.js', 'utf8');
+const extensionVersion = JSON.parse(await readFile('sillytavern-extension/manifest.json', 'utf8')).version;
+const buildRoot = resolve(process.env.MWG_BUILD_OUTPUT_ROOT || 'dist');
+const manifest = JSON.parse(await readFile(resolve(buildRoot, 'tavern/character-runtime-manifest.json'), 'utf8'));
+const runtimeSource = await readFile(resolve(buildRoot, 'tavern/character-runtime.js'), 'utf8');
 const interfacePayloads = Object.fromEntries(
   await Promise.all(
     ['start', 'common', 'fish', 'update'].map(async name => [
       name,
-      JSON.parse(await readFile(`dist/tavern/${name}-interface.json`, 'utf8')),
+      JSON.parse(await readFile(resolve(buildRoot, `tavern/${name}-interface.json`), 'utf8')),
     ]),
   ),
 );
@@ -28,6 +31,11 @@ assert.match(runtimeSource, /class="mwg-settings-sheet"/, 'general settings must
 assert.match(runtimeSource, /class="mwg-mvu-panel"/, 'MVU progress must have an independent panel');
 assert.match(runtimeSource, /data-mwg-monitor-setting="showMvuWindow"/);
 assert.match(runtimeSource, /data-mwg-difficulty/);
+const testRecordsTag = runtimeSource.match(/<details[^>]*data-mwg-test-records[^>]*>/)?.[0];
+assert.ok(testRecordsTag, 'trial records have their own disclosure');
+assert.doesNotMatch(testRecordsTag, /\sopen(?:[\s=>])/, 'trial records stay collapsed by default');
+assert.match(runtimeSource, /测试表现达成度/);
+assert.match(runtimeSource, /爬塔以80%为标准档/);
 for (const difficultyPercent of [10, 50, 80, 100, 110]) {
   assert.match(runtimeSource, new RegExp(`<option value="${difficultyPercent}">`));
 }
@@ -95,6 +103,8 @@ assert.equal(
 );
 assert.equal(nodesWithAttribute('data-mwg-component', 'design').length, 1);
 assert.equal(nodesWithAttribute('data-mwg-component', 'deck').length, 1);
+assert.equal(nodesWithAttribute('data-mwg-component', 'deck')[0]?.attrs?.some(entry => entry.name === 'open'), false,
+  'default expansion belongs to the in-page status bar, not floating settings');
 assert.equal(nodesWithAttribute('data-mwg-component', 'archetype').length, 1);
 assert.equal(nodesWithAttribute('data-mwg-component', 'lineage').length, 1);
 assert.equal(nodesWithAttribute('data-mwg-component', 'tower').length, 1);
@@ -142,6 +152,7 @@ let authoritativeRuntimeVariables = {
 const intervalCallbacks = [];
 const clearedIntervals = [];
 const context = {
+  structuredClone,
   console: { info() {}, warn() {}, error() {} },
   window: {
     parent: {
@@ -235,6 +246,28 @@ await sharedRuntime.updateMessageVariablesWith(7, variables => {
 assert.equal(authoritativeRuntimeVariables.stat_data.run.act, 3);
 assert.equal(authoritativeRuntimeVariables.stat_data.run.stateRevision, 99);
 assert.equal(authoritativeRuntimeVariables.__magic_girl_world.battle_session.nodeId, 'act-3-boss');
+{
+  let finishAction;
+  const actionReady = new Promise(resolve => { finishAction = resolve; });
+  let started;
+  const actionStarted = new Promise(resolve => { started = resolve; });
+  authoritativeRuntimeVariables.stat_data.run.nodeContent = { upcoming: { phase: 'generating', requestId: 'same-revision-job' } };
+  let calls = 0;
+  const saving = sharedRuntime.updateMessageVariablesWith(7, async variables => {
+    calls++;
+    started();
+    await actionReady;
+    variables.__magic_girl_world.battle_session.turn = 4;
+    return variables;
+  });
+  await actionStarted;
+  authoritativeRuntimeVariables.stat_data.run.nodeContent.upcoming = { phase: 'ready', requestId: 'same-revision-job', content: { title: 'prepared' } };
+  finishAction();
+  await saving;
+  assert.equal(calls, 1, 'a player action is never replayed while merging concurrent generation');
+  assert.equal(authoritativeRuntimeVariables.stat_data.run.nodeContent.upcoming.phase, 'ready');
+  assert.equal(authoritativeRuntimeVariables.__magic_girl_world.battle_session.turn, 4);
+}
 await assert.rejects(
   sharedRuntime.replaceMessageVariables(7, {
     stat_data: { battle: {}, run: { act: 1, floor: 10, stateRevision: 21 } },
@@ -254,6 +287,113 @@ assert.equal(
 assert.equal(typeof sharedRuntime.registerCardRepairHandler, 'function');
 assert.equal(typeof sharedRuntime.requestCardRepair, 'function');
 assert.equal(typeof sharedRuntime.reportMvuValidationFailure, 'function');
+assert.equal(typeof sharedRuntime.getGenerationDiagnosticExportReport, 'function');
+assert.match(runtimeSource, /复制轻量排查信息/);
+assert.match(runtimeSource, /导出排查记录（含保留原文）/);
+assert.match(runtimeSource, /分享前请检查隐私/);
+assert.match(runtimeSource, /report.originalResponse.availability/);
+
+const retainedOriginal = `当前生成的完整最终输出：${'原'.repeat(10_109 - '当前生成的完整最终输出：'.length)}`;
+let retainedEvidence = {
+  spec: 'mwg.initial-generation-evidence/v2',
+  chatId: 'diagnostic-current-chat',
+  runs: [
+    {
+      generationId: 'diagnostic-matching-run', startedAt: 11, updatedAt: 22, outcome: 'failed',
+      records: [
+        { stage: 'provider-final', text: retainedOriginal, characters: retainedOriginal.length, truncated: false, capturedAt: 21 },
+        { stage: 'request-capture', text: 'Authorization: Bearer SHOULD_NEVER_EXPORT', characters: 47, truncated: false, capturedAt: 21 },
+      ],
+      validationErrors: [{ code: 'INVALID_CARD', path: 'battle.cards[6]', message: '候选卡牌不可执行' }],
+      archive: { status: 'saved', path: 'must-not-export-path' },
+    },
+    {
+      generationId: 'other-run', startedAt: 1, updatedAt: 999,
+      records: [{ stage: 'provider-final', text: 'OTHER_RUN_MUST_NOT_LEAK', characters: 25, truncated: false, capturedAt: 2 }],
+      validationErrors: [],
+    },
+  ],
+};
+const evidenceProvider = { getInitialGenerationEvidence: () => retainedEvidence };
+context.MagicGirlDesignAssistant = evidenceProvider;
+context.window.parent.MagicGirlDesignAssistant = evidenceProvider;
+context.MagicGirlWorldMvuMonitor.resetForChat('diagnostic-current-chat');
+context.MagicGirlWorldMvuMonitor.begin({ generationId: 'diagnostic-matching-run' });
+const matchingExport = sharedRuntime.getGenerationDiagnosticExportReport();
+assert.equal(matchingExport.spec, 'mwg.generation-diagnostic-export/v2');
+assert.equal(matchingExport.localOnly, true);
+assert.equal(matchingExport.evidence.availability, 'available');
+assert.equal(matchingExport.evidence.association, 'matching-lightweight-diagnostic');
+assert.equal(matchingExport.evidence.generationId, 'diagnostic-matching-run');
+assert.equal(matchingExport.evidence.run.records[0].text, retainedOriginal, 'primary export must preserve the exact retained final-output original');
+assert.equal(matchingExport.evidence.run.records[0].characters, 10_109);
+assert.equal(matchingExport.originalResponse.availability, 'available');
+assert.equal(matchingExport.originalResponse.stage, 'provider-final');
+assert.equal(matchingExport.evidence.run.records.length, 1, 'unknown evidence stages must not escape the bounded export');
+assert.deepEqual(JSON.parse(JSON.stringify(matchingExport.evidence.run.validationErrors)), retainedEvidence.runs[0].validationErrors, 'primary export must retain candidate validation/error evidence');
+assert.doesNotMatch(JSON.stringify(matchingExport), /OTHER_RUN_MUST_NOT_LEAK|must-not-export-path|SHOULD_NEVER_EXPORT/);
+
+// Primary diagnostic export also carries same-chat tower raw evidence.
+evidenceProvider.getTowerGenerationEvidence = () => ({chatId:'diagnostic-current-chat',records:[{requestId:'tower-6',stage:'response',response:'{"reward":[]}'}]});
+assert.equal(sharedRuntime.getGenerationDiagnosticExportReport().towerEvidence.records[0].response, '{"reward":[]}');
+evidenceProvider.getTowerGenerationEvidence = () => ({chatId:'foreign-chat',records:[{response:'FOREIGN_TOWER'}]});
+assert.equal(sharedRuntime.getGenerationDiagnosticExportReport().towerEvidence, null);
+delete evidenceProvider.getTowerGenerationEvidence;
+
+// A page refresh can lose the lightweight local record while current-chat
+// metadata remains. Export the newest retained run, and explicitly say why.
+context.MagicGirlWorldMvuMonitor.resetForChat('diagnostic-refreshed-chat');
+retainedEvidence = {
+  spec: 'mwg.initial-generation-evidence/v2', chatId: 'diagnostic-refreshed-chat',
+  runs: [{ generationId: 'persisted-after-refresh', startedAt: 31, updatedAt: 32, outcome: 'completed',
+    records: [{ stage: 'compiled-result', text: 'PERSISTED_CURRENT_CHAT_ORIGINAL', characters: 30, truncated: false, capturedAt: 32 }], validationErrors: [] }],
+};
+const refreshedExport = sharedRuntime.getGenerationDiagnosticExportReport();
+assert.equal(refreshedExport.diagnostic.availability, 'missing');
+assert.equal(refreshedExport.evidence.availability, 'available');
+assert.equal(refreshedExport.evidence.association, 'current-chat-retained-evidence-without-lightweight-diagnostic');
+assert.equal(refreshedExport.evidence.run.records[0].text, 'PERSISTED_CURRENT_CHAT_ORIGINAL');
+assert.equal(refreshedExport.originalResponse.availability, 'missing', 'compiled-only retained evidence must not pretend to be a provider original');
+
+// No retained evidence: the current monitor can still provide a full, explicitly
+// non-provider fallback. It must not inherit the lightweight 12k clipboard cap.
+retainedEvidence = null;
+const liveFallback = `LIVE_OUTPUT_${'字'.repeat(12_345)}`;
+context.MagicGirlWorldMvuMonitor.begin({ generationId: 'live-fallback-run' });
+context.MagicGirlWorldMvuMonitor.complete(liveFallback, 'live-fallback-run');
+const liveFallbackExport = sharedRuntime.getGenerationDiagnosticExportReport();
+assert.equal(liveFallbackExport.evidence.availability, 'available');
+assert.equal(liveFallbackExport.evidence.association, 'matching-live-monitor-output-fallback');
+assert.equal(liveFallbackExport.evidence.liveOutput.text, liveFallback);
+assert.equal(liveFallbackExport.evidence.liveOutput.truncated, false);
+assert.equal(liveFallbackExport.evidence.liveOutput.completeness, 'latest-monitor-value');
+assert.equal(liveFallbackExport.originalResponse.availability, 'missing');
+assert.match(liveFallbackExport.originalResponse.reason, /不能断言/);
+
+// A matching diagnostic must never attach evidence from another chat or run.
+context.MagicGirlWorldMvuMonitor.resetForChat('diagnostic-current-chat');
+context.MagicGirlWorldMvuMonitor.begin({ generationId: 'diagnostic-matching-run' });
+retainedEvidence = {
+  spec: 'mwg.initial-generation-evidence/v2', chatId: 'different-chat',
+  runs: [{ generationId: 'diagnostic-matching-run', startedAt: 1, updatedAt: 2, outcome: 'failed',
+    records: [{ stage: 'provider-final', text: 'OTHER_CHAT_MUST_NOT_LEAK', characters: 26, truncated: false, capturedAt: 2 }], validationErrors: [] }],
+};
+const foreignChatExport = sharedRuntime.getGenerationDiagnosticExportReport();
+assert.equal(foreignChatExport.evidence.availability, 'missing');
+assert.match(foreignChatExport.evidence.reason, /其他聊天/);
+assert.doesNotMatch(JSON.stringify(foreignChatExport), /OTHER_CHAT_MUST_NOT_LEAK/);
+retainedEvidence = {
+  spec: 'mwg.initial-generation-evidence/v2', chatId: 'diagnostic-current-chat',
+  runs: [{ generationId: 'different-run', startedAt: 1, updatedAt: 2, outcome: 'failed',
+    records: [{ stage: 'provider-final', text: 'OTHER_GENERATION_MUST_NOT_LEAK', characters: 31, truncated: false, capturedAt: 2 }], validationErrors: [] }],
+};
+const foreignRunExport = sharedRuntime.getGenerationDiagnosticExportReport();
+assert.equal(foreignRunExport.evidence.availability, 'missing');
+assert.match(foreignRunExport.evidence.reason, /没有保留完整原文/);
+assert.doesNotMatch(JSON.stringify(foreignRunExport), /OTHER_GENERATION_MUST_NOT_LEAK/);
+// Isolate these diagnostic fixtures from the existing lifecycle tests below.
+context.MagicGirlWorldMvuMonitor.resetForChat(null);
+retainedEvidence = null;
 let cardRepairRequirement = '';
 const disposeCardRepairHandler = sharedRuntime.registerCardRepairHandler(async requirement => {
   cardRepairRequirement = requirement;
@@ -268,7 +408,7 @@ let towerPersistenceRequest = null;
 let towerRetryRequest = null;
 let towerArchiveCalls = 0;
 let towerWakeReason = null;
-let extensionCapabilitiesVersion = '0.3.3';
+let extensionCapabilitiesVersion = extensionVersion;
 let extensionSupportsSingleFloor = true;
 const officialInstallCalls = [];
 const extensionUpdateRequests = [];
@@ -277,7 +417,7 @@ let installedExtensionNames = ['third-party/magic-girl-world'];
 let installedExtensionTypes = { 'third-party/magic-girl-world': 'local' };
 context.window.parent.fetch = async (url, options = {}) => {
   if (String(url).includes('raw.githubusercontent.com')) {
-    return { ok: true, json: async () => ({ version: '0.3.3' }) };
+    return { ok: true, json: async () => ({ version: extensionVersion }) };
   }
   if (url === '/api/extensions/update') {
     extensionUpdateRequests.push(JSON.parse(options.body));
@@ -347,6 +487,15 @@ const towerSingleFloorStartResult = await sharedRuntime.startTowerSingleFloor({
 });
 assert.equal(towerSingleFloorStartRequest.sourceMessageId, 7);
 assert.equal(towerSingleFloorStartResult.floorCountAfter, 1);
+assert.equal(sharedRuntime.cancelTowerInitialStart({ sourceMessageId: 7 }), false, 'old extension has no cancellation capability');
+let cancelledInitialRequest;
+context.window.parent.MagicGirlDesignAssistant.cancelTowerInitialStart = request => {
+  cancelledInitialRequest = request; return request.sourceMessageId === 7;
+};
+assert.equal(sharedRuntime.cancelTowerInitialStart({ sourceMessageId: 7 }), true);
+assert.equal(cancelledInitialRequest.sourceMessageId, 7);
+assert.equal(sharedRuntime.cancelTowerInitialStart({ sourceMessageId: 8 }), false);
+assert.match(sharedRuntime.getViewAsset('common').bodyHtml, /id="tower-start-cancel"[^>]*hidden/);
 assert.equal(towerGenerationRequest.nodeId, 'act-1-floor-1-col-1');
 assert.equal(towerGenerationResult.response, '预生成完成');
 assert.equal(await sharedRuntime.persistTowerGeneration({ nodeId: 'act-1-floor-1-col-1', requestId: 'request-1' }), true);
@@ -360,7 +509,7 @@ assert.equal(towerArchiveCalls, 1);
 assert.equal(sharedRuntime.getTowerCoordinatorStatus().phase, 'waiting');
 assert.deepEqual(JSON.parse(JSON.stringify(sharedRuntime.getDesignAssistantCapabilities())), {
   spec: 'mwg.design-assistant/v1',
-  version: '0.3.3',
+  version: extensionVersion,
   towerGeneration: true,
   towerCoordinator: true,
   towerArchive: true,
@@ -388,17 +537,19 @@ assert.deepEqual(officialInstallCalls, [[
 ]]);
 assert.equal(extensionUpdateRequests.length, 1, 'a copied legacy folder must migrate instead of calling git update');
 
-extensionCapabilitiesVersion = '0.3.3';
+extensionCapabilitiesVersion = extensionVersion;
 extensionSupportsSingleFloor = true;
 context.MagicGirlWorldMvuMonitor.receiveTowerGenerationStatus({ phase: 'running' });
 context.MagicGirlWorldMvuMonitor.receiveTowerGenerationCompleted({ nodeId: 'act-1-floor-1-col-1' });
 context.MagicGirlWorldMvuMonitor.receiveTowerGenerationFailed({ nodeId: 'act-1-floor-2-col-1', error: '测试失败' });
+context.MagicGirlWorldMvuMonitor.receiveTowerStateChanged({ chatId: 'recovered-chat', messageId: 0 });
 assert.deepEqual(
   Array.from(towerGenerationEvents, event => event.type),
-  ['status', 'completed', 'failed'],
+  ['status', 'completed', 'failed', 'stateChanged'],
   'the parent extension must return tower lifecycle events through the existing iframe monitor bridge',
 );
 assert.equal(sharedRuntime.getTowerGenerationSnapshot().status.phase, 'running');
+assert.equal(sharedRuntime.getTowerGenerationSnapshot().stateChanged.chatId, 'recovered-chat');
 disposeTowerGenerationListener();
 assert.deepEqual(JSON.parse(JSON.stringify(context.MagicGirlWorldMvuMonitor.getSettings())), {
   showMvuWindow: true,
@@ -415,6 +566,33 @@ const exactMvuRequest = {
   include_reasoning: true,
   messages: [{ role: 'system', content: '最终 MVU 约束' }, { role: 'user', content: '本轮剧情与变量' }],
 };
+const presetObservedRequest = {purpose:'preset-narrative',model:'test',stream:true,messages:[{role:'user',content:'剧情'}]};
+assert.equal(context.MagicGirlWorldMvuMonitor.getSnapshot().phase,'idle');
+context.MagicGirlWorldMvuMonitor.captureMvuRequest({source:'official',payload:presetObservedRequest});
+const idlePresetSnapshot=context.MagicGirlWorldMvuMonitor.getSnapshot();
+assert.equal(idlePresetSnapshot.phase,'idle','a passive node preset capture must not start an MVU lifecycle with no terminal event');
+assert.equal(idlePresetSnapshot.startedAt,0,'request inspection is not evidence of a tracked MVU operation');
+assert.equal(idlePresetSnapshot.finishedAt,0);
+assert.deepEqual(JSON.parse(idlePresetSnapshot.requestContent),presetObservedRequest,'passive preset request remains inspectable');
+context.MagicGirlWorldMvuMonitor.captureMvuRequest({source:'tavern-helper',payload:exactMvuRequest});
+const idleMvuSnapshot=context.MagicGirlWorldMvuMonitor.getSnapshot();
+assert.equal(idleMvuSnapshot.phase,'generating','ordinary MVU capture must still start its lifecycle from idle');
+assert.ok(idleMvuSnapshot.startedAt>0);
+assert.equal(idleMvuSnapshot.finishedAt,0);
+assert.deepEqual(JSON.parse(idleMvuSnapshot.requestContent),exactMvuRequest);
+context.MagicGirlWorldMvuMonitor.beginStructuredOperation({generationId:'preset-monitor-test',detail:'正在使用当前酒馆 preset 生成引导剧情'});
+context.MagicGirlWorldMvuMonitor.captureMvuRequest({source:'official',payload:presetObservedRequest});
+const presetObserved = context.MagicGirlWorldMvuMonitor.getSnapshot();
+assert.equal(presetObserved.timeline[0].label,'生成流程开始');
+assert.equal(presetObserved.timeline.at(-1).label,'捕获 preset 剧情请求');
+assert.match(presetObserved.timeline.at(-1).detail,/未应用 MVU 参数策略/);
+assert.doesNotMatch(JSON.stringify(presetObserved.timeline),/第二轮请求开始|已完成请求策略与设计上下文注入/);
+assert.deepEqual(JSON.parse(presetObserved.requestContent),presetObservedRequest,'purpose labeling never changes preset parameters');
+assert.equal(presetObserved.phase,'generating','an explicitly started initial operation must keep its own lifecycle');
+assert.equal(presetObserved.generationId,'preset-monitor-test');
+assert.doesNotMatch(runtimeSource,/最终实际二次请求（注入后）/,'shared request panel must not mislabel preset requests');
+context.MagicGirlWorldMvuMonitor.begin({generationId:'mvu-monitor-test'});
+assert.equal(context.MagicGirlWorldMvuMonitor.getSnapshot().timeline[0].label,'第二轮请求开始','actual MVU lifecycle retains its second-round label');
 context.MagicGirlWorldMvuMonitor.captureMvuRequest({ source: 'tavern-helper', payload: exactMvuRequest });
 assert.deepEqual(
   JSON.parse(context.MagicGirlWorldMvuMonitor.getSnapshot().requestContent),
@@ -585,7 +763,7 @@ assert.equal(settlementAfter.stat_data.status.permanent_status.length, 1);
 assert.equal(settlementAfter.stat_data.reward.request, null);
 
 const firstTurnVariablesBeforeUpdate = { stat_data: { battle: { cards: [] } } };
-const incompleteFirstTurn = {
+const minimalFirstTurn = {
   message_content: '石甲山魈扑向玩家。\n<BATTLE_PENDING>',
   variables: {
     stat_data: {
@@ -595,39 +773,38 @@ const incompleteFirstTurn = {
           { id: 'strike', name: '斩击', type: 'Attack', rarity: 'Common', cost: 1, quantity: 5, effects: { damage: 6 } },
           { id: 'guard', name: '防御', type: 'Skill', rarity: 'Common', cost: 1, quantity: 5, effects: { block: 5 } },
         ],
-        artifacts: [],
-        items: [],
-        player_lust_effect: { name: '满溢', effects: { damage: 5 } },
-        level: 1,
         enemy: { name: '石甲山魈', actions: [{ name: '扑击', effects: { damage: 8 } }] },
       },
     },
   },
 };
-variableUpdateEndedListener(incompleteFirstTurn.variables, firstTurnVariablesBeforeUpdate);
-beforeMessageUpdateListener(incompleteFirstTurn);
+variableUpdateEndedListener(minimalFirstTurn.variables, firstTurnVariablesBeforeUpdate);
+beforeMessageUpdateListener(minimalFirstTurn);
 assert.equal(
-  incompleteFirstTurn.message_content,
-  '石甲山魈扑向玩家。\n<BATTLE_PENDING>',
-  'an empty pre-update deck must require complete first-turn resources even when the plot model omitted the init marker',
-);
-
-const completeFirstTurn = JSON.parse(JSON.stringify(incompleteFirstTurn));
-completeFirstTurn.variables.stat_data.battle.artifacts = [
-  { id: 'stone', name: '护石', trigger: 'battle_start', effects: { block: 2 } },
-];
-completeFirstTurn.variables.stat_data.battle.items = [
-  { id: 'tonic', name: '药剂', count: 1, effects: { heal: 10 } },
-];
-variableUpdateEndedListener(completeFirstTurn.variables, firstTurnVariablesBeforeUpdate);
-beforeMessageUpdateListener(completeFirstTurn);
-assert.equal(
-  completeFirstTurn.message_content,
+  minimalFirstTurn.message_content,
   '石甲山魈扑向玩家。\n\n<BATTLE_START>',
-  'a complete first-turn update must pass the runtime gate without relying on CHARACTER_INIT_PENDING',
+  'a valid non-empty deck and player core must initialize without mandatory relics, items, lust effects, levels, or a ten-card quota',
 );
 
-const completedInitializationWithoutBattle = JSON.parse(JSON.stringify(completeFirstTurn));
+for (const [label, card] of [
+  ['Event', { id: 'story_step', name: '临场抉择', type: 'Event', rarity: 'Common', cost: 0, quantity: 1, effects: { draw: 1 } }],
+  ['Curse', { id: 'dead_weight', name: '沉重', type: 'Curse', rarity: 'Corrupt', quantity: 1, effects: { narrate: '沉重感挥之不去。' } }],
+  ['trigger Power', { id: 'echo_form', name: '回响形态', type: 'Power', rarity: 'Rare', cost: 1, quantity: 1, trigger: { on: 'attack_played', effects: { replay: 1 } } }],
+  ['composite-cost card', { id: 'dual_cast', name: '双源施法', type: 'Skill', rarity: 'Uncommon', cost: { energy: 1, charge: 'all' }, quantity: 1, effects: { block: 5 } }],
+]) {
+  const advancedFirstTurn = JSON.parse(JSON.stringify(minimalFirstTurn));
+  advancedFirstTurn.message_content = `${label} 初始化。\n<BATTLE_PENDING>`;
+  advancedFirstTurn.variables.stat_data.battle.cards = [card];
+  variableUpdateEndedListener(advancedFirstTurn.variables, firstTurnVariablesBeforeUpdate);
+  beforeMessageUpdateListener(advancedFirstTurn);
+  assert.equal(
+    advancedFirstTurn.message_content,
+    `${label} 初始化。\n\n<BATTLE_START>`,
+    `${label} must not be mistaken for a missing initial deck by the lightweight runtime gate`,
+  );
+}
+
+const completedInitializationWithoutBattle = JSON.parse(JSON.stringify(minimalFirstTurn));
 completedInitializationWithoutBattle.message_content = '墨染在据点整理好自己的行装。\n<CHARACTER_INIT_PENDING>';
 completedInitializationWithoutBattle.variables.stat_data.battle.enemy = { name: '', actions: [] };
 variableUpdateEndedListener(completedInitializationWithoutBattle.variables, firstTurnVariablesBeforeUpdate);
@@ -638,7 +815,7 @@ assert.equal(
   'a completed non-battle initialization must consume its one-shot marker so later turns cannot reinitialize the deck',
 );
 
-const expandedCompleteFirstTurn = JSON.parse(JSON.stringify(completeFirstTurn));
+const expandedCompleteFirstTurn = JSON.parse(JSON.stringify(minimalFirstTurn));
 expandedCompleteFirstTurn.message_content = '石甲山魈扑向玩家。\n<BATTLE_PENDING>';
 expandedCompleteFirstTurn.variables.stat_data.battle.cards.forEach(card => {
   card.quantity = 7;
@@ -651,7 +828,7 @@ assert.equal(
   'a legal initial deck above 13 total copies must remain initialized and start battle',
 );
 
-const inferredBattleStart = JSON.parse(JSON.stringify(completeFirstTurn));
+const inferredBattleStart = JSON.parse(JSON.stringify(minimalFirstTurn));
 inferredBattleStart.message_content = '石甲山魈已经扑到面前，战斗一触即发。';
 variableUpdateEndedListener(inferredBattleStart.variables, {
   stat_data: {

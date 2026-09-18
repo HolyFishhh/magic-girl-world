@@ -1,4 +1,4 @@
-import type { CardValueOperator, EffectNode, EffectOrbSelector } from './effectDsl';
+import type { CardValueOperator, EffectNode, EffectOrbSelector, EffectStanceEvent } from './effectDsl';
 export interface ActiveStance {
     id: string;
     name: string;
@@ -7,6 +7,9 @@ export interface ActiveStance {
     enterEffects?: EffectNode[];
     exitEffects?: EffectNode[];
     passiveEffects?: EffectNode[];
+    events?: EffectStanceEvent[];
+    /** Program-owned activation identity. AI authors neither this nor a counter. */
+    activationId?: number;
     enteredTurn: number;
     source?: {
         kind: string;
@@ -44,7 +47,7 @@ export declare function resizeOrbContainer(container: OrbContainer | undefined, 
     container: OrbContainer;
     overflow: OrbInstance[];
 };
-/** Channel to the right; a full container evicts the oldest (left-most) Orb. */
+/** Channel to the right; a full stance slot evicts the oldest (left-most) stance. */
 export declare function channelOrb(container: OrbContainer | undefined, orb: OrbInstance): {
     container: OrbContainer;
     evicted: OrbInstance | null;

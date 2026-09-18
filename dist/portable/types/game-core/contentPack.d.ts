@@ -1,3 +1,4 @@
+import { type PersistentGrowthOperation } from './persistentGrowth';
 export declare const CONTENT_PACK_SCHEMA_VERSION: 1;
 export type ContentDefinition = Readonly<Record<string, any>>;
 export interface ContentPack {
@@ -10,6 +11,12 @@ export interface ContentPack {
     activeStatuses: ContentDefinition[];
     /** Player-owned custom combat resources used by budgets and shadow simulation. */
     playerResources?: ContentDefinition[];
+    playerCardPatches?: import('./cardPatch').CardPatch[];
+    playerSummonGrowth?: PersistentGrowthOperation[];
+    /** Player-owned special combat containers retained for authoring validation. */
+    playerStance?: ContentDefinition | null;
+    playerOrbSlots?: number;
+    playerOrbs?: ContentDefinition[];
     enemy: ContentDefinition | null;
     /** Ordered enemy party. enemy remains the first-entry compatibility alias. */
     enemies?: ContentDefinition[];
@@ -26,6 +33,11 @@ export interface CreateContentPackInput {
     abilities?: unknown;
     activeStatuses?: unknown;
     playerResources?: unknown;
+    playerCardPatches?: unknown;
+    playerSummonGrowth?: unknown;
+    playerStance?: unknown;
+    playerOrbSlots?: unknown;
+    playerOrbs?: unknown;
     enemy?: unknown;
     enemies?: unknown;
     playerDesireEffect?: unknown;

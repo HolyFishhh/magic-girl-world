@@ -1,8 +1,12 @@
+import { requestNavigationFocus } from '../../runtime/navigationFocus';
+import { captureBattleRewardBackdrop } from '../../common/towerScreenPresentation';
+import { isolatedBattlePresentation } from './isolatedBattlePresentation';
 import { settleCurrentMessageBattle } from '../../runtime/battleSettlementAdapter';
 import { getCurrentMessageVariables, replaceCurrentMessageVariables } from '../../runtime/messageVariables';
 import { TavernContinuationHost } from '../../runtime/tavernContinuation';
 import {
   cleanupCardProgression,
+  migratePersistentRunDeck,
   completeRunNode,
   formatBattleEndPrompt,
   effectProgramToDisplayTags,
@@ -14,6 +18,7 @@ import {
   type BattleEndResult,
   type EffectProgram,
   readGameMode,
+  validateEffectProgramPolicy,
 } from '../../game-core';
 import type { GameState } from '../../game-core';
 import { TavernBattleEffectPresenter, type BattleEndDialogRequest } from '../ui/battleEffectPresenter';
@@ -21,7 +26,7 @@ import { DynamicStatusManager } from '../combat/dynamicStatusManager';
 import { GameStateManager } from './gameStateManager';
 import { BattleLog } from '../modules/battleLog';
 import { readRunState } from '../../runtime/runStateAdapter';
-import { writeBackMvuCardProgression } from './mvuBattleAdapter';
+import { writeBackMvuCardProgression, normalizeMvuArray, convertMvuCards } from './mvuBattleAdapter';
 import { switchRuntimeView } from '../../runtime/runtimeViewSwitcher';
 
 export interface TavernBattleEndPorts {
@@ -45,7 +50,7 @@ function battleEndsRun(variables: Record<string, any>, result: BattleEndResult):
   return next.phase === 'won' || next.phase === 'lost';
 }
 
-function finalizeRuntimeCardProgression(
+export function finalizeRuntimeCardProgression(
   gameStateManager: GameStateManager,
   variables: Record<string, any>,
   runEnded: boolean,
@@ -59,7 +64,26 @@ function finalizeRuntimeCardProgression(
   const zones = gameStateManager.readCardZoneState();
   const combatCards = [...zones.hand, ...zones.drawPile, ...zones.discardPile, ...zones.exhaustPile];
   const mvuCards = variables.stat_data?.battle?.cards;
-  return writeBackMvuCardProgression(mvuCards, runCards, combatCards).cards;
+  const removed = new Set(gameStateManager.getGameState().purgedRunInstanceIds || []);
+  const definitions = migratePersistentRunDeck(normalizeMvuArray(mvuCards));
+  // Versions before v425 rejected otherwise valid permanent-growth cards at
+  // runtime. Restore only those exact, unchanged opening definitions, without
+  // granting plays, triggers or upgrades that never happened in this fight.
+  const initial = gameStateManager.getGameState().battleRequest?.content.cards || [];
+  const owned = new Set(runCards.map(card => card.runInstanceId));
+  for (const definition of definitions) {
+    if (owned.has(definition.runInstanceId) || removed.has(definition.runInstanceId)) continue;
+    const original = initial.find(card => card.runInstanceId === definition.runInstanceId);
+    if (!original || JSON.stringify(original) !== JSON.stringify(definition)) continue;
+    const restored = convertMvuCards([definition])[0];
+    if (!restored?.effectProgram) continue;
+    const oldPolicy = validateEffectProgramPolicy(restored.effectProgram, { allowPersistentGrowth: false });
+    if (oldPolicy.ok || oldPolicy.issues.some(issue => issue.code !== 'PERSISTENT_GROWTH_NOT_ALLOWED')) continue;
+    runCards.push(restored);
+    owned.add(restored.runInstanceId);
+  }
+  gameStateManager.updatePlayer({ deck: runCards });
+  return writeBackMvuCardProgression(definitions.filter(card => !removed.has(card.runInstanceId)), runCards, combatCards).cards;
 }
 
 export interface TavernBattleEndPresentationPorts {
@@ -146,6 +170,7 @@ function compactResources(value: unknown): Array<{ name: string; emoji?: string;
 export class TavernBattleEndHost {
   private static instance: TavernBattleEndHost;
   private towerSettlementPending = false;
+  private settledTowerBattleKey: string | null = null;
 
   public constructor(
     private readonly continuationHost = TavernContinuationHost.getInstance(),
@@ -162,7 +187,7 @@ export class TavernBattleEndHost {
         replaceVariables: variables => Promise.resolve(replaceCurrentMessageVariables(variables)),
         settleBattle: input => settleCurrentMessageBattle(input),
         reloadPage: () => location.reload(),
-        openCommonView: () => switchRuntimeView('common'),
+        openCommonView: () => { captureBattleRewardBackdrop(getCurrentMessageVariables()?.stat_data); requestNavigationFocus('#choice-container'); switchRuntimeView('common'); },
       };
     })(),
     private readonly injectedPresentation?: TavernBattleEndPresentationPorts,
@@ -185,6 +210,14 @@ export class TavernBattleEndHost {
       player: gameState.player,
       items: gameState.player.items || [],
       turns: gameState.currentTurn,
+      eventJournal: gameState.eventJournal,
+      persistentGrowth: gameState.persistentGrowth,
+      cardPatches: gameState.cardPatchLedger?.patches,
+      defeatRewards: (gameState.defeatedEnemies || [])
+        .filter(enemy => enemy.defeatReward)
+        .map(enemy => ({ enemyId: enemy.id, reward: structuredClone(enemy.defeatReward!) })),
+      defeatedEnemyIds: (gameState.defeatedEnemies || []).map(enemy => enemy.id),
+      rewardEligibleEnemyIds: gameState.rewardEligibleEnemyIds,
       rewardRequest,
     };
 
@@ -216,34 +249,46 @@ export class TavernBattleEndHost {
 
   /** Settle a tower fight in-place without creating or triggering a chat floor. */
   public async confirmTowerBattleEnd(result: BattleEndResult): Promise<void> {
-    if (this.towerSettlementPending) return;
-    this.towerSettlementPending = true;
+    if (this.towerSettlementPending) throw new Error('正在结算，请稍候。');
     const gameState = this.ports.getState();
+    const key = JSON.stringify([gameState.battleRequest?.seed, gameState.battleRequest?.route?.nodeId]);
+    if (this.settledTowerBattleKey === key) return;
+    this.towerSettlementPending = true;
     const settlement: Parameters<TavernBattleEndPorts['settleBattle']>[0] = {
       result,
       request: gameState.battleRequest,
       player: gameState.player,
       items: gameState.player.items || [],
       turns: gameState.currentTurn,
+      eventJournal: gameState.eventJournal,
+      persistentGrowth: gameState.persistentGrowth,
+      cardPatches: gameState.cardPatchLedger?.patches,
+      defeatRewards: (gameState.defeatedEnemies || [])
+        .filter(enemy => enemy.defeatReward)
+        .map(enemy => ({ enemyId: enemy.id, reward: structuredClone(enemy.defeatReward!) })),
+      defeatedEnemyIds: (gameState.defeatedEnemies || []).map(enemy => enemy.id),
+      rewardEligibleEnemyIds: gameState.rewardEligibleEnemyIds,
       rewardRequest: null,
     };
-    await this.ports.saveBattleSession?.();
-    const snapshot = cloneVariables(this.ports.readVariables());
+    let snapshot: Record<string, any> | undefined;
     try {
+      await this.ports.saveBattleSession?.();
+      snapshot = cloneVariables(this.ports.readVariables());
       const persistentCards = this.ports.finalizeCardProgression?.(battleEndsRun(snapshot, result));
       if (persistentCards) settlement.persistentCards = persistentCards;
       await this.ports.clearBattleSession();
       await this.ports.settleBattle(settlement);
       this.ports.openCommonView?.();
+      this.settledTowerBattleKey = key;
     } catch (error) {
       try {
-        await this.restoreBeforeSend(snapshot);
+        if (snapshot) await this.restoreBeforeSend(snapshot);
       } catch (rollbackError) {
         throw new AggregateError([error, rollbackError], '爬塔战斗结算失败，且完整状态回滚失败');
-      } finally {
-        this.towerSettlementPending = false;
       }
       throw error;
+    } finally {
+      this.towerSettlementPending = false;
     }
   }
 
@@ -260,7 +305,9 @@ export class TavernBattleEndHost {
     );
   }
 
-  public async presentBattleEnd(result: BattleEndResult, narrativeText?: string): Promise<void> {
+  public async presentBattleEnd(result: BattleEndResult, narrativeText?: string, recordLog = true): Promise<void> {
+    const isolated = isolatedBattlePresentation();
+    if (isolated) { isolated.terminal(result); return; }
     try {
       const gameState = this.ports.getState();
       const towerMode = this.isActiveTowerBattle();
@@ -324,6 +371,13 @@ export class TavernBattleEndHost {
               items: rewardBudget.items,
               limits,
               build: guidance,
+              ...(gameState.battle?.player_lust_effect?.name ? {
+                desire_growth: {
+                  allowed: true,
+                  current: compactNamedEffect(gameState.battle.player_lust_effect, resolveStatusName),
+                  instruction: '允许战后增强或深化已有欲望效果，完整替换 battle.player_lust_effect；不减少普通奖励，不降低数回合积累后的兑现收益。',
+                },
+              } : {}),
             }
           : {
               marker: '[MVU_BATTLE_SETTLEMENT]',
@@ -392,7 +446,7 @@ export class TavernBattleEndHost {
         },
         ...(towerMode ? {} : { onRestart: () => this.restartBattle() }),
       });
-      presentation.addLog(`战斗结束：${prompt.resultText}`, 'system');
+      if (recordLog) presentation.addLog(`战斗结束：${prompt.resultText}`, 'system');
     } catch (error) {
       console.error('❌ 触发战斗结束叙事失败:', error);
       throw error;
@@ -407,7 +461,7 @@ export class TavernBattleEndHost {
 
     const result = readBattleEndResult(state);
     if (!result) return;
-    void this.presentBattleEnd(result, state.battleNarrative || undefined);
+    void this.presentBattleEnd(result, state.battleNarrative || undefined, false);
   }
 
   public async restartBattle(): Promise<void> {

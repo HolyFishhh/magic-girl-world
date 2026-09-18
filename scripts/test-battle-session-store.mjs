@@ -85,8 +85,14 @@ const state = {
 };
 
 const towerAwaiting = session.createRunState({ seed: 1 });
-const towerChoice = towerAwaiting.choices[0];
-const towerActiveRun = session.enterRunNode(towerAwaiting, towerChoice.id);
+const towerOpeningChoice = towerAwaiting.choices[0];
+const towerAfterOpening = session.completeRunNode(
+  session.enterRunNode(towerAwaiting, towerOpeningChoice.id),
+  { outcome: 'cleared' },
+);
+const towerChoice = towerAfterOpening.choices.find(choice => session.isBattleRunNode(choice.kind));
+assert.ok(towerChoice, 'the route after the opening reward must expose a battle node');
+const towerActiveRun = session.enterRunNode(towerAfterOpening, towerChoice.id);
 const towerState = clone(state);
 towerState.battleRequest = {
   route: { nodeId: towerChoice.id },
@@ -144,6 +150,74 @@ assert.equal(partialMultiEnemyRestore.activeEnemyId, survivingEnemy.id);
 assert.equal(partialMultiEnemyRestore.enemy.id, survivingEnemy.id);
 assert.deepEqual(partialMultiEnemyRestore.enemies.map(enemy => enemy.id), [survivingEnemy.id]);
 assert.deepEqual(partialMultiEnemyRestore.defeatedEnemies.map(enemy => enemy.id), [defeatedEnemy.id]);
+store.finishRestore();
+
+// Mid-combat refresh must preserve every recently added runtime container,
+// including reinforced enemies and summon-local behaviour/state. Enemy and
+// summon action queues are rebuilt deterministically from these persisted
+// definitions after the current atomic action finishes.
+const richRuntimeState = clone(partialMultiEnemyState);
+richRuntimeState.enemies[0].statusEffects = [
+  { id: 'armor_mark', name: '甲印', emoji: '◆', description: '保留状态', type: 'buff', stacks: 2 },
+];
+richRuntimeState.enemies[0].abilities = [
+  { id: 'rage_start', name: '怒意启动', trigger: 'turn_start', effectProgram },
+];
+richRuntimeState.enemies[0].actions = [
+  { id: 'reinforced_hit', name: '增援重击', weight: 2, effectProgram },
+];
+richRuntimeState.enemies[0].resources.rage.current = 3;
+richRuntimeState.player.stance = {
+  id: 'guard_stance', name: '守势', emoji: '🛡️', enteredTurn: 2,
+  passiveEffects: [{ op: 'gain_block', target: 'self', amount: 1 }],
+};
+richRuntimeState.player.orbs = {
+  slots: 2,
+  orbs: [{
+    instanceId: 'spark_orb:1', id: 'spark_orb', name: '火花球', emoji: '⚡', value: 4,
+    passiveEffects: [{ op: 'damage', target: 'opponent', amount: 2 }],
+    evokeEffects: [{ op: 'damage', target: 'opponent', amount: 5 }],
+  }],
+};
+const summonDefinition = {
+  id: 'clock_guard', name: '发条护卫', emoji: '⚙️', maxHp: 12, block: 3,
+  statusEffects: [{ id: 'summon_charge', name: '蓄力', emoji: '◆', description: '召唤状态', type: 'buff', stacks: 2 }],
+  resources: { charge: { id: 'charge', name: '充能', emoji: '⚡', current: 2, max: 4, refresh: 'retain' } },
+  actions: [{ id: 'clock_hit', name: '齿轮冲撞', weight: 1, effectProgram }],
+  abilities: [{ id: 'clock_guard_start', name: '护卫启动', trigger: 'turn_start', effectProgram }],
+  actionsPerActivation: 2, actionPriority: 3, speed: 4,
+  intercept: { mode: 'unblocked_attack', priority: 2, maxPerTurn: 1 },
+};
+richRuntimeState.summons = core.spawnSummonUnits(
+  core.createSummonCollectionState(), 'player', summonDefinition, 1, 3, 'replace_oldest', 2,
+).state;
+richRuntimeState.summons.living[0].currentHp = 7;
+richRuntimeState.summons.living[0].interceptionsThisTurn = 1;
+richRuntimeState.effectScheduler = core.scheduleEffect(core.createEffectSchedulerState(), {
+  source: { kind: 'card', id: 'delayed_guard', name: '延迟护盾' },
+  owner: 'player', createdTurn: 2, dueTurn: 3, phase: 'turn_start', priority: 1,
+  payload: { type: 'effect_program', program: effectProgram, sourceIsPlayer: true },
+}).state;
+richRuntimeState.turnControl = { extraPlayerTurns: 1, extraEnemyTurns: 0, forceEndPlayer: false, forceEndEnemy: false };
+await store.flush(richRuntimeState);
+const richSnapshot = session.readBattleSessionSnapshot(variables);
+assert.ok(richSnapshot, 'rich runtime state must remain restorable');
+const normalizedRich = new core.BattleStateStore(richSnapshot.state).getGameState();
+assert.equal(normalizedRich.enemies[0].actions[0].id, 'reinforced_hit');
+assert.equal(normalizedRich.enemies[0].abilities[0].id, 'rage_start');
+assert.equal(normalizedRich.enemies[0].statusEffects[0].stacks, 2);
+assert.equal(normalizedRich.enemies[0].resources.rage.current, 3);
+assert.equal(normalizedRich.player.stance.id, 'guard_stance');
+assert.equal(normalizedRich.player.orbs.orbs[0].instanceId, 'spark_orb:1');
+assert.equal(normalizedRich.summons.living[0].instanceId, 'clock_guard__summon__1');
+assert.equal(normalizedRich.summons.living[0].currentHp, 7);
+assert.equal(normalizedRich.summons.living[0].block, 3);
+assert.equal(normalizedRich.summons.living[0].statusEffects[0].id, 'summon_charge');
+assert.equal(normalizedRich.summons.living[0].abilities[0].id, 'clock_guard_start');
+assert.equal(normalizedRich.summons.living[0].resources.charge.current, 2);
+assert.equal(normalizedRich.summons.living[0].interceptionsThisTurn, 1);
+assert.equal(normalizedRich.effectScheduler.queue[0].id, 'schedule:delayed_guard:1');
+assert.equal(normalizedRich.turnControl.extraPlayerTurns, 1);
 store.finishRestore();
 
 const playedInnateState = clone(state);
@@ -268,6 +342,24 @@ let towerVariables = {
     run: towerActiveRun,
   },
 };
+const archivedTurn = session.appendBattleEvent(session.createBattleEventJournal(), {
+  turn: 1,
+  phase: 'after',
+  kind: 'turn_ended',
+  cause: { source: { kind: 'system', id: 'turn' } },
+  actorId: 'player',
+});
+assert.equal(archivedTurn.ok, true);
+const towerRunHistory = session.archiveBattleJournalInRun(
+  session.createRunEventHistory(),
+  'previous-battle',
+  archivedTurn.state,
+);
+towerVariables.stat_data.run_event_history = towerRunHistory;
+towerState.eventJournal = session.attachRunEventHistory(
+  session.createBattleEventJournal(),
+  towerRunHistory,
+);
 const towerStorage = {
   read: () => clone(towerVariables),
   update: async updater => {
@@ -280,6 +372,16 @@ towerStore.prepare(towerStorage.read(), battleA);
 towerStore.enable();
 await towerStore.flush(towerState);
 assert.equal(session.readBattleSessionSnapshot(towerVariables).state.currentTurn, 1);
+assert.equal(
+  session.readBattleSessionSnapshot(towerVariables).state.eventJournal.runHistory,
+  undefined,
+  'the rapid battle snapshot must not duplicate run-owned history',
+);
+assert.deepEqual(
+  towerVariables.stat_data.run_event_history,
+  towerRunHistory,
+  'stripping the snapshot copy must not mutate the canonical run history',
+);
 
 const savedTowerSnapshot = clone(session.readBattleSessionSnapshot(towerVariables));
 towerVariables.stat_data.run = {

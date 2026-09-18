@@ -1,3 +1,7 @@
+import { towerRewardPreferenceContext } from '../game-core/towerCardMemory';
+import { buildTowerFoundationGuidance } from '../game-core/towerFoundationGuidance';
+import { createContentPackFromMvuBattle } from '../runtime/contentPackAdapter';
+import { availableTowerMemoryCards } from '../runtime/towerCardMemory';
 import {
   formatTowerNodeBatchGenerationPrompt,
   formatTowerOpeningGenerationPrompt,
@@ -12,6 +16,7 @@ import {
 } from '../runtime/towerOpeningAdapter';
 import {
   claimQueuedTowerGenerationsInStat,
+  failTowerGenerationInStat,
   queueTowerLookaheadInStat,
   recoverTowerGenerationsInStat,
   retryTowerNodeGenerationInStat,
@@ -22,6 +27,7 @@ import type {
   DesignAssistantSettings,
   MvuDesignSnapshot,
 } from './types';
+import { compactRunEventHistoryForPrompt } from './runHistoryPrompt';
 
 export interface TowerCoordinatorScope {
   chatId: string;
@@ -82,8 +88,184 @@ function clone<T>(value: T): T {
   return value === undefined ? value : structuredClone(value);
 }
 
+function canonicalJson(value: unknown): string {
+  const normalize = (input: unknown): unknown => {
+    if (Array.isArray(input)) return input.map(normalize);
+    if (!isRecord(input)) return input;
+    return Object.fromEntries(Object.keys(input)
+      .sort()
+      .filter(key => input[key] !== undefined)
+      .map(key => [key, normalize(input[key])]));
+  };
+  return JSON.stringify(normalize(value));
+}
+
+/**
+ * Persistent cards are expanded into quantity=1 runtime instances so an
+ * upgrade, attachment or transformation can address one exact copy. Node
+ * authoring does not address those private identities. Recombine only copies
+ * whose complete public/runtime shape is identical after removing their own
+ * runInstanceId; any patch, attachment, origin or other difference therefore
+ * remains a separate card entry.
+ */
+function compactRuntimeCardInstances(value: unknown): unknown {
+  if (!Array.isArray(value)) return clone(value);
+  const result: unknown[] = [];
+  const groupedIndexes = new Map<string, number>();
+  for (const rawCard of value) {
+    if (!isRecord(rawCard)) {
+      result.push(clone(rawCard));
+      continue;
+    }
+    const card = clone(rawCard);
+    const runInstanceId = typeof card.runInstanceId === 'string' ? card.runInstanceId.trim() : '';
+    const quantity = Number(card.quantity ?? 1);
+    if (!runInstanceId || !Number.isInteger(quantity) || quantity < 1) {
+      result.push(card);
+      continue;
+    }
+    delete card.runInstanceId;
+    delete card.quantity;
+    const fingerprint = canonicalJson(card);
+    const existingIndex = groupedIndexes.get(fingerprint);
+    if (existingIndex === undefined) {
+      groupedIndexes.set(fingerprint, result.length);
+      result.push({ ...card, quantity });
+      continue;
+    }
+    const existing = result[existingIndex] as Record<string, any>;
+    existing.quantity = Number(existing.quantity ?? 0) + quantity;
+  }
+  return result;
+}
+
+/**
+ * Project the retrieved graph into its authored semantic facts. Archetype
+ * nodes already contain every required/optional/payoff predicate and role;
+ * their generated mechanic nodes and requires/supports/pays-off edges are a
+ * second storage representation of the same facts. Omitting only that mirror
+ * keeps all design guidance, transitions, constraints and lineage content
+ * while avoiding a large duplicate block in every model request.
+ */
+export function buildTowerKnowledgeGraphPromptContext(
+  value: unknown,
+  activeArchetypeIds: readonly string[] = [],
+): unknown {
+  if (!isRecord(value)
+    || !Array.isArray(value.nodes)
+    || !Array.isArray(value.edges)
+    || !Array.isArray(value.evolutionPaths)
+    || value.nodes.some(node => !isRecord(node))
+    || value.edges.some(edge => !isRecord(edge))
+    || value.evolutionPaths.some(path => !isRecord(path))) {
+    return clone(value);
+  }
+  const allSemanticNodeIds = new Set(value.nodes
+    .filter(node => node.kind !== 'mechanic')
+    .map(node => String(node.id || '')));
+  const activeIds = new Set(activeArchetypeIds
+    .map(id => String(id || '').trim())
+    .filter(Boolean)
+    .map(id => id.startsWith('archetype:') ? id : `archetype:${id}`)
+    .filter(id => allSemanticNodeIds.has(id)));
+  const selectedEvolutionPaths = activeIds.size
+    ? value.evolutionPaths
+      .filter(path => activeIds.has(String(path.from || '')))
+      .slice(0, 12)
+    : value.evolutionPaths;
+  const retainedNodeIds = activeIds.size ? new Set(activeIds) : new Set(allSemanticNodeIds);
+  if (activeIds.size) {
+    selectedEvolutionPaths.forEach(path => {
+      if (allSemanticNodeIds.has(String(path.from || ''))) retainedNodeIds.add(String(path.from));
+      if (allSemanticNodeIds.has(String(path.to || ''))) retainedNodeIds.add(String(path.to));
+    });
+    // Anti-synergy constraints are not duplicated inside archetype.data. Keep
+    // only those attached to the retrieved roots and their immediate
+    // neighbours, plus the small dynamic enemy lineage subgraph.
+    value.nodes.forEach(node => {
+      if (node.kind === 'enemy-family' || node.kind === 'enemy-action') retainedNodeIds.add(String(node.id || ''));
+    });
+    value.edges.forEach(edge => {
+      if (edge.kind === 'anti-synergy' && retainedNodeIds.has(String(edge.from || ''))) {
+        if (allSemanticNodeIds.has(String(edge.to || ''))) retainedNodeIds.add(String(edge.to));
+      }
+      if (
+        ['uses-action', 'related-to'].includes(String(edge.kind || ''))
+        && (retainedNodeIds.has(String(edge.from || '')) || retainedNodeIds.has(String(edge.to || '')))
+      ) {
+        if (allSemanticNodeIds.has(String(edge.from || ''))) retainedNodeIds.add(String(edge.from));
+        if (allSemanticNodeIds.has(String(edge.to || ''))) retainedNodeIds.add(String(edge.to));
+      }
+    });
+  }
+  const semanticNodes = value.nodes.filter(node => retainedNodeIds.has(String(node.id || '')));
+  const semanticEdges = value.edges.filter(edge => (
+    retainedNodeIds.has(String(edge.from || '')) && retainedNodeIds.has(String(edge.to || ''))
+  ));
+  return {
+    spec: value.spec,
+    encoding: activeIds.size ? 'retrieved-semantic-subgraph/v3' : 'semantic-columnar-json/v2',
+    derivedMechanicMirror: 'omitted; archetype.data contains the complete required/optional/payoff/role predicates',
+    ...(activeIds.size ? { activeArchetypeIds: [...activeIds] } : {}),
+    nodeColumns: ['id', 'kind', 'label', 'data'],
+    nodes: semanticNodes.map(node => [node.id, node.kind, node.label, clone(node.data)]),
+    edgeColumns: ['from', 'to', 'kind', 'weight', 'data'],
+    edges: semanticEdges.map(edge => [
+      edge.from,
+      edge.to,
+      edge.kind,
+      edge.weight,
+      edge.data === undefined ? null : clone(edge.data),
+    ]),
+    evolutionPathColumns: ['from', 'to', 'fromLabel', 'toLabel', 'transitionCost', 'bridgeFeatures'],
+    evolutionPaths: selectedEvolutionPaths.map(path => [
+      path.from,
+      path.to,
+      path.fromLabel,
+      path.toLabel,
+      path.transitionCost,
+      clone(path.bridgeFeatures),
+    ]),
+  };
+}
+
+/** Keep the scoring facts the authoring model can act on. Per-seed probes,
+ * fingerprints and cache metadata remain available in the dashboard, but are
+ * not repeated beside the already-readable design prompt on every node. */
+export function buildTowerDeckProfilePromptContext(value: unknown): unknown {
+  if (!isRecord(value)) return clone(value);
+  return {
+    spec: value.spec,
+    totalScore: value.totalScore,
+    confidence: value.confidence,
+    maxHp: value.maxHp,
+    horizons: clone(value.horizons),
+    dimensions: clone(value.dimensions),
+    deckQuality: clone(value.deckQuality),
+    unsupportedFeatures: clone(value.unsupportedFeatures),
+    archetypes: Array.isArray(value.archetypes)
+      ? clone(value.archetypes.slice(0, 5))
+      : [],
+    scatterShare: value.scatterShare,
+    reasons: clone(value.reasons),
+  };
+}
+
 function tail<T>(value: unknown, maximum: number): T[] {
   return Array.isArray(value) ? clone(value.slice(-maximum)) as T[] : [];
+}
+
+/** Strip evaluator receipts only from known node-diagnostic containers. */
+function compactNodeDiagnosticsForPrompt(value: unknown): unknown {
+  if (!isRecord(value)) return clone(value);
+  const projected = clone(value);
+  delete projected.program_balance;
+  delete projected.evaluation;
+  delete projected.originalEvaluation;
+  delete projected.trials;
+  delete projected.seeds;
+  if (isRecord(projected.content)) projected.content = compactNodeDiagnosticsForPrompt(projected.content);
+  return projected;
 }
 
 function stringify(value: unknown, fallback: string): string {
@@ -134,6 +316,15 @@ export function buildTowerSemanticMvuContext(mvuData: Record<string, any>): Reco
     // reports. Keeping both can add tens of thousands of repeated characters.
     delete stat.battle.design_context;
     delete stat.battle.lineage_memory;
+    // Commit receipts are host bookkeeping, never model-authored mechanics.
+    if (isRecord(stat.battle.core)) delete stat.battle.core.persistent_growth_receipts;
+    stat.battle.cards = compactRuntimeCardInstances(stat.battle.cards);
+    if (isRecord(stat.battle.enemy) && Array.isArray(stat.battle.enemies)) {
+      const enemyFingerprint = canonicalJson(stat.battle.enemy);
+      if (stat.battle.enemies.some((enemy: unknown) => canonicalJson(enemy) === enemyFingerprint)) {
+        delete stat.battle.enemy;
+      }
+    }
   }
 
   // Reward is a runtime transaction pool, not a persistent gameplay fact for
@@ -142,6 +333,13 @@ export function buildTowerSemanticMvuContext(mvuData: Record<string, any>): Reco
   delete stat.reward;
   delete stat.run_node_reward;
   delete stat.run_reward_reroll;
+  delete stat.run_event_reveal;
+  delete stat.run_event_state;
+  delete stat.initial_artifact_acquisition;
+  // Program balance reports are committed/audited separately. They must never
+  // become instructions for a later node's authoring request.
+  delete stat.program_balance;
+  if (isRecord(stat.run_node)) stat.run_node = compactNodeDiagnosticsForPrompt(stat.run_node);
   // Tower mode does not run the story-mode relationship simulation. Keep only
   // compact player/location facts that help author the next encounter.
   delete stat.npcs;
@@ -156,6 +354,9 @@ export function buildTowerSemanticMvuContext(mvuData: Record<string, any>): Reco
 
   if (isRecord(stat.run)) {
     const run = stat.run;
+    // A calibration anchor is program measurement state, not a narrative or
+    // mechanic fact for the next authoring request.
+    delete run.encounterBaseline;
     const recentNodeIds = Array.from(new Set([
       ...tail<string>(run.visitedNodeIds, 3),
       ...(isRecord(run.currentNode) && typeof run.currentNode.id === 'string' ? [run.currentNode.id] : []),
@@ -163,7 +364,7 @@ export function buildTowerSemanticMvuContext(mvuData: Record<string, any>): Reco
     const recentNodeContent = isRecord(run.nodeContent)
       ? Object.fromEntries(recentNodeIds
         .filter(nodeId => isRecord(run.nodeContent[nodeId]))
-        .map(nodeId => [nodeId, clone(run.nodeContent[nodeId])]))
+        .map(nodeId => [nodeId, compactNodeDiagnosticsForPrompt(run.nodeContent[nodeId])]))
       : {};
     stat.run = {
       schemaVersion: run.schemaVersion,
@@ -182,6 +383,8 @@ export function buildTowerSemanticMvuContext(mvuData: Record<string, any>): Reco
       score: clone(run.score),
       stateRevision: run.stateRevision,
       recentNodeContent,
+      rewardPreferences: towerRewardPreferenceContext(run as RunState),
+      dungeonPlan: clone(run.dungeonPlan),
     };
   }
 
@@ -190,6 +393,9 @@ export function buildTowerSemanticMvuContext(mvuData: Record<string, any>): Reco
   if (Array.isArray(stat.run_transaction_log)) stat.run_transaction_log = tail(stat.run_transaction_log, 16);
   if (Array.isArray(stat.run_transaction_events)) stat.run_transaction_events = tail(stat.run_transaction_events, 16);
   if (Array.isArray(stat.run_trigger_invocations)) stat.run_trigger_invocations = tail(stat.run_trigger_invocations, 16);
+  if ('run_event_history' in stat) {
+    stat.run_event_history = compactRunEventHistoryForPrompt(stat.run_event_history);
+  }
 
   return {
     spec: 'mwg.tower-semantic-mvu/v1',
@@ -203,14 +409,25 @@ export function buildTowerGenerationContext(scope: TowerCoordinatorScope): Tower
   const semanticMvu = buildTowerSemanticMvuContext(scope.mvuData);
   const semanticStat = semanticMvu.stat_data;
   const snapshot = scope.designSnapshot;
-  const deckBalance = snapshot
-    ? stringify({
-      deckProfile: snapshot.deckProfile,
-      enemyEnvelope: snapshot.enemyEnvelope,
-      knowledgeGraph: snapshot.knowledgeGraph,
-      designPrompt: snapshot.prompt,
-    }, snapshot.prompt || '设计辅助快照不可序列化')
-    : stringify({ battle: semanticStat?.battle, run: semanticStat?.run }, '暂无设计辅助快照');
+  const existingDeckBalance = snapshot
+    ? {
+      // A per-job encounter plan supplies the only live enemy budget. This
+      // shared section deliberately retains qualitative deck guidance only.
+      deckProfile: {
+        unsupportedFeatures: clone(snapshot.deckProfile.unsupportedFeatures),
+        archetypes: clone(snapshot.deckProfile.archetypes.slice(0, 5)),
+      },
+      knowledgeGraph: buildTowerKnowledgeGraphPromptContext(
+        snapshot.knowledgeGraph,
+        snapshot.deckProfile.archetypes.slice(0, 5).map(entry => entry.id),
+      ),
+    }
+    : '暂无独立设计辅助快照；卡组与路线信息见完整游戏事实，敌人预算以本节点程序要求为准。';
+  const foundationGuidance = buildTowerFoundationGuidance(
+    createContentPackFromMvuBattle(isRecord(semanticStat?.battle) ? semanticStat.battle : {}),
+    typeof stat?.selected_mechanics === 'string' ? stat.selected_mechanics : '',
+  );
+  const deckBalance = stringify({ priorDesign: existingDeckBalance, foundationGuidance }, '构筑机制分析不可序列化');
   const lineage = stringify({
     current: snapshot?.lineage,
     persistent: scope.designState?.lineage,
@@ -224,6 +441,39 @@ export function buildTowerGenerationContext(scope: TowerCoordinatorScope): Tower
     internal.tower_requirements,
     internal.towerRequirements,
   );
+  const semanticBattle = isRecord(semanticStat?.battle) ? semanticStat.battle : {};
+  const semanticCore = isRecord(semanticBattle.core) ? semanticBattle.core : {};
+  const contentReferenceContext = stringify({
+    statuses: Array.isArray(semanticBattle.statuses)
+      ? semanticBattle.statuses.filter(isRecord).map((status: Record<string, any>) => ({
+          id: status.id,
+          name: status.name,
+          type: status.type,
+        }))
+      : [],
+    resources: Array.isArray(semanticCore.resources)
+      ? semanticCore.resources.filter(isRecord).map((resource: Record<string, any>) => ({
+          id: resource.id,
+          name: resource.name,
+        }))
+      : isRecord(semanticCore.resources)
+        ? Object.entries(semanticCore.resources).map(([id, resource]) => ({
+            id,
+            ...(isRecord(resource) && typeof resource.name === 'string' ? { name: resource.name } : {}),
+          }))
+        : [],
+    owned_content_ids: {
+      cards: Array.isArray(semanticBattle.cards)
+        ? semanticBattle.cards.filter(isRecord).map((card: Record<string, any>) => card.id).filter(Boolean)
+        : [],
+      artifacts: Array.isArray(semanticBattle.artifacts)
+        ? semanticBattle.artifacts.filter(isRecord).map((artifact: Record<string, any>) => artifact.id).filter(Boolean)
+        : [],
+      items: Array.isArray(semanticBattle.items)
+        ? semanticBattle.items.filter(isRecord).map((item: Record<string, any>) => item.id).filter(Boolean)
+        : [],
+    },
+  }, '当前没有可复用的内容 ID');
   return {
     completeMvuContext: stringify(
       semanticMvu,
@@ -231,6 +481,7 @@ export function buildTowerGenerationContext(scope: TowerCoordinatorScope): Tower
     ),
     deckBalanceContext: deckBalance,
     enemyLineageContext: lineage,
+    contentReferenceContext,
     ...(customRequirements ? { customRequirements } : {}),
     difficultyPercent: scope.settings.difficultyPercent,
   };
@@ -248,6 +499,7 @@ export class TowerLookaheadCoordinator {
   private epoch = 0;
   private scheduled = false;
   private running: Promise<void> | null = null;
+  private runningEpoch: number | null = null;
   private rerunRequested = false;
   private recoveryRequested = false;
   private disposed = false;
@@ -280,7 +532,9 @@ export class TowerLookaheadCoordinator {
   public schedule(_reason = 'state-changed'): void {
     if (this.disposed || !this.chatId) return;
     this.cancelObsoleteGeneration();
-    if (this.running || this.scheduled) {
+    // A prior chat's unresolved transport must never block this chat's retry
+    // button forever. Its late result is fenced by the epoch checks below.
+    if ((this.running && this.runningEpoch === this.epoch) || this.scheduled) {
       this.rerunRequested = true;
       return;
     }
@@ -295,8 +549,12 @@ export class TowerLookaheadCoordinator {
       }
       const task = this.runOnce(epoch);
       this.running = task;
+      this.runningEpoch = epoch;
       void task.finally(() => {
-        if (this.running === task) this.running = null;
+        if (this.running === task) {
+          this.running = null;
+          this.runningEpoch = null;
+        }
         if (this.disposed) return;
         if (epoch !== this.epoch) {
           if (this.chatId) this.schedule('epoch-changed-after-run');
@@ -348,12 +606,12 @@ export class TowerLookaheadCoordinator {
     this.rerunRequested = false;
     this.recoveryRequested = false;
     this.activeGeneration = null;
+    this.runningEpoch = null;
     this.setStatus('idle', '爬塔协调器已停止');
   }
 
   private async runOnce(epoch: number): Promise<void> {
     try {
-      await this.ports.prepareDesignSnapshot?.();
       if (epoch !== this.epoch || this.disposed) return;
       let scope = this.currentScope();
       if (!scope) {
@@ -412,6 +670,9 @@ export class TowerLookaheadCoordinator {
   }
 
   private async generateOpening(scope: TowerCoordinatorScope, epoch: number): Promise<void> {
+    await this.ports.prepareDesignSnapshot?.();
+    if (epoch !== this.epoch || this.disposed) return;
+    scope = this.currentScope() || scope;
     const draft = clone(scope.mvuData);
     const queued = queueTowerOpeningInStat(draft.stat_data);
     const claimed = claimTowerOpeningInStat(draft.stat_data, queued.request.requestId);
@@ -419,19 +680,26 @@ export class TowerLookaheadCoordinator {
       requestId: claimed.request.requestId,
       basedOnRevision: claimed.request.revision,
       seed: claimed.request.seed,
+      act: claimed.request.act,
       context: buildTowerGenerationContext({ ...scope, mvuData: draft }),
     });
     await this.ports.replaceLatest(draft, scope.chatId, scope.messageId);
     if (epoch !== this.epoch) return;
     this.setStatus('opening', '正在生成开局馈赠事件');
-    await this.ports.requestGeneration({
+    const generationRequest: TowerCoordinatorGenerationRequest = {
       generationType: 'opening',
       requestId: claimed.request.requestId,
       revision: claimed.request.revision,
       prompt,
       maxAttempts: 3,
       sourceMessageId: scope.messageId,
-    });
+    };
+    this.activeGeneration = generationRequest;
+    try {
+      await this.ports.requestGeneration(generationRequest);
+    } finally {
+      if (this.activeGeneration === generationRequest) this.activeGeneration = null;
+    }
     if (epoch === this.epoch) {
       this.rerunRequested = true;
       this.setStatus('waiting', '开局馈赠已准备，等待玩家选择');
@@ -447,46 +715,58 @@ export class TowerLookaheadCoordinator {
       if (epoch !== this.epoch) return;
     }
     const requests = claimed.requests;
+    for (const request of requests) if (request.kind === 'shop')
+      request.shopMemoryCards = availableTowerMemoryCards(draft.stat_data, request.nodeId, 'shop').slice(0, 2);
     if (!requests.length) {
       this.setStatus('waiting', '当前可达节点均已准备或等待手动重试');
       return;
     }
-    const batchId = this.batchIdFor(requests);
-    const jobs: TowerGenerationJobDescriptor[] = requests.map(request => ({
-      nodeId: request.nodeId,
-      requestId: request.requestId,
-      basedOnRevision: request.revision,
-      kind: request.kind,
-      act: request.act,
-      floor: request.floor,
-      contentSeed: request.contentSeed,
-      rewardSeed: request.rewardSeed,
-      difficultyMultiplier: request.difficultyMultiplier,
-    }));
-    const prompt = formatTowerNodeBatchGenerationPrompt(
-      batchId,
-      jobs,
-      buildTowerGenerationContext({ ...scope, mvuData: draft }),
-    );
-    this.setStatus('lookahead', `正在一次准备 ${requests.length} 个可达节点`);
-    const generationRequest: TowerCoordinatorGenerationRequest = {
-      generationType: 'batch',
-      nodeId: `__tower_batch__${batchId}`,
-      batchId,
-      jobs: clone(requests),
-      requestId: batchId,
-      basedOnRevision: requests[0].revision,
-      maxAttempts: 3,
-      prompt,
-      sourceMessageId: scope.messageId,
-    };
-    this.activeGeneration = generationRequest;
+    let generationRequest: TowerCoordinatorGenerationRequest | null = null;
     try {
+      await this.ports.prepareDesignSnapshot?.();
+      if (epoch !== this.epoch || this.disposed) {
+        await this.failClaimedRequests(scope, requests, '生成准备在提交前失效，可安全重试');
+        return;
+      }
+      const refreshedScope = this.currentScope();
+      if (refreshedScope) scope = { ...scope, designSnapshot: refreshedScope.designSnapshot };
+      const batchId = this.batchIdFor(requests);
+      const jobs: TowerGenerationJobDescriptor[] = requests.map(request => ({
+        nodeId: request.nodeId,
+        requestId: request.requestId,
+        basedOnRevision: request.revision,
+        kind: request.kind,
+        act: request.act,
+        floor: request.floor,
+        contentSeed: request.contentSeed,
+        rewardSeed: request.rewardSeed,
+        difficultyMultiplier: request.difficultyMultiplier,
+        shopMemoryCards: request.shopMemoryCards,
+      }));
+      const prompt = formatTowerNodeBatchGenerationPrompt(
+        batchId,
+        jobs,
+        buildTowerGenerationContext({ ...scope, mvuData: draft }),
+      );
+      this.setStatus('lookahead', `正在一次准备 ${requests.length} 个可达节点`);
+      generationRequest = {
+        generationType: 'batch',
+        nodeId: `__tower_batch__${batchId}`,
+        batchId,
+        jobs: clone(requests),
+        requestId: batchId,
+        basedOnRevision: requests[0].revision,
+        maxAttempts: 3,
+        prompt,
+        sourceMessageId: scope.messageId,
+      };
+      this.activeGeneration = generationRequest;
       await this.ports.requestGeneration(generationRequest);
     } catch (error) {
-      // One malformed or temporarily failed candidate must not strand the
-      // other already-queued reachable choices. Keep the failed envelope
-      // retryable, then let the next coordinator pass claim a sibling.
+      // Preparation happens after the durable claim. Both a warmup failure and
+      // a transport failure must settle that exact claim; otherwise a reload
+      // is required to recover an ownerless `generating` envelope.
+      await this.failClaimedRequests(scope, requests, error);
       if (epoch === this.epoch) this.rerunRequested = true;
       throw error;
     } finally {
@@ -496,6 +776,38 @@ export class TowerLookaheadCoordinator {
       this.rerunRequested = true;
       this.setStatus('waiting', '节点内容已提交，继续检查可达窗口');
     }
+  }
+
+  /**
+   * Fail only the envelopes claimed by this pass. A newer retry, a completed
+   * response, or a route change must win over this cleanup without being
+   * overwritten by a delayed warmup/transport rejection.
+   */
+  private async failClaimedRequests(
+    scope: TowerCoordinatorScope,
+    requests: readonly TowerStateGenerationRequest[],
+    error: unknown,
+  ): Promise<void> {
+    const latest = this.ports.snapshot();
+    if (!latest || latest.chatId !== scope.chatId || latest.messageId !== scope.messageId) return;
+    const draft = clone(latest.mvuData);
+    let changed = false;
+    const message = error instanceof Error ? error.message : String(error);
+    for (const request of requests) {
+      try {
+        const failed = failTowerGenerationInStat(draft.stat_data, {
+          nodeId: request.nodeId,
+          requestId: request.requestId,
+          revision: request.revision,
+          error: `节点预生成未提交：${message}`,
+        });
+        changed ||= failed.changed;
+      } catch {
+        // The exact claim is already ready, failed, retried, or abandoned.
+        // Do not turn a newer authoritative state back into a failure.
+      }
+    }
+    if (changed) await this.ports.replaceLatest(draft, scope.chatId, scope.messageId);
   }
 
   private currentScope(): TowerCoordinatorScope | null {
@@ -533,7 +845,7 @@ export class TowerLookaheadCoordinator {
 
   private async waitForCurrentPass(): Promise<void> {
     const running = this.running;
-    if (!running) return;
+    if (!running || this.runningEpoch !== this.epoch) return;
     try {
       await running;
     } catch {

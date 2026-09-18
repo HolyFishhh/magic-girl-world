@@ -34,7 +34,7 @@ const guardian = {
   max_hp: 14,
   block: 2,
   resources: {
-    charge: { id: 'charge', name: '充能', emoji: '⚡', current: 1, max: 6, refresh: 'retain' },
+    charge: { name: '充能', emoji: '⚡', current: 1, max: 6, refresh: 'retain' },
   },
   actions: [
     { id: 'guardian_bash', name: '守卫冲击', emoji: '💥', weight: 1, effects: { damage: 3 } },

@@ -29,8 +29,17 @@ assert.equal(applyMvuRequestPolicy(deepSeekPayload), false, 'policy must be idem
 
 const ordinaryPayload = { model: 'ordinary-model', include_reasoning: false, max_tokens: 4096, messages: [] };
 assert.equal(applyMvuRequestPolicy(ordinaryPayload), true);
-assert.deepEqual(ordinaryPayload, { model: 'ordinary-model', include_reasoning: true, max_tokens: 20000, messages: [] });
+assert.deepEqual(
+  ordinaryPayload,
+  { model: 'ordinary-model', include_reasoning: false, max_tokens: 20000, messages: [] },
+  'provider-specific reasoning settings must remain exactly as selected by the active endpoint',
+);
 assert.equal(applyMvuRequestPolicy(ordinaryPayload), false, 'expanded MVU output policy must be idempotent');
+const providerWithoutReasoningFields = { model: 'portable-model', max_completion_tokens: 1024, messages: [] };
+assert.equal(applyMvuRequestPolicy(providerWithoutReasoningFields), true);
+assert.equal('include_reasoning' in providerWithoutReasoningFields, false);
+assert.equal('thinking' in providerWithoutReasoningFields, false);
+assert.equal(providerWithoutReasoningFields.max_completion_tokens, MVU_MAX_OUTPUT_TOKENS);
 assert.equal(applyMvuRequestPolicy(null), false);
 
 console.log('MVU second-stage request policy tests passed.');

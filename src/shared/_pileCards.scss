@@ -1,0 +1,8 @@
+// One collection layout for the battle library and all non-combat collections.
+@use './unifiedCard';
+@mixin layout {
+.pile-viewer-body, .tower-player-card-grid, #card-options {
+  display: grid;
+}
+@include unifiedCard.layout;
+}

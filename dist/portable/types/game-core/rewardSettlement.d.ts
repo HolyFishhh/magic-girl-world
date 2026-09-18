@@ -22,6 +22,7 @@ export interface RewardSelectionPlanInput {
     existing: Record<RewardCategory, readonly unknown[]>;
     statusDefinitions?: readonly unknown[];
     knownResourceIds?: Iterable<string>;
+    playerDesireEffect?: unknown;
     limits: RewardSelectionLimits;
 }
 export interface RewardPoolState {

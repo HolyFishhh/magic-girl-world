@@ -87,7 +87,7 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
     output: {
       devtoolModuleFilenameTemplate: 'webpack://tavern_helper_template/[resource-path]?[loaders]',
       filename: `${script_filepath.name}.js`,
-      path: path.join(__dirname, 'dist/', script_filepath.dir),
+      path: path.resolve(process.env.MWG_BUILD_OUTPUT_ROOT || path.join(__dirname, 'dist'), script_filepath.dir),
       chunkFilename: `${script_filepath.name}.[contenthash].chunk.js`,
       asyncChunks: true,
       chunkLoading: 'import',
@@ -244,6 +244,7 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
         if (
           request === 'jquery' ||
           request === 'jsep' ||
+          request === 'jsonrepair' ||
           request === 'toastr' ||
           request.startsWith('toastr/')
         ) {

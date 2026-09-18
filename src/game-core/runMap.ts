@@ -1,4 +1,5 @@
 import { createBattleRandomState, drawBattleRandom, stableHash32 } from './deterministicRandom';
+import { rollTowerMystery, type TowerMysteryRoll } from './towerMystery';
 
 export const RUN_MAP_SCHEMA_VERSION = 1 as const;
 export const DEFAULT_RUN_MAP_ACTS = 3 as const;
@@ -28,6 +29,12 @@ export interface RunMapNode {
   kind: RunMapNodeKind;
   contentSeed: number;
   rewardSeed: number;
+  /** Program-only resolution; kind remains event for the unrevealed map marker. */
+  mystery?: TowerMysteryRoll;
+}
+
+export function runMapContentKind(node: Pick<RunMapNode, 'kind' | 'mystery'>): RunMapNodeKind {
+  return node.kind === 'event' && node.mystery ? node.mystery.kind : node.kind;
 }
 
 export interface RunMapEdge {
@@ -206,12 +213,12 @@ function chooseNextColumns(current: readonly number[], targetFloor: number, rand
 function generateActTopology(act: number, topologySeed: number): GeneratedTopology {
   const random = createRandomSource(topologySeed);
   const startColumn = Math.floor(DEFAULT_RUN_MAP_COLUMNS / 2);
-  const startId = nodeId(act, 1, startColumn);
   // Three main entrances (left / centre / right) are represented by five
   // tracks. Duplicate tracks may separate later, which creates optional
   // branches without allowing the map to grow exponentially.
   const mainRouteColumns = [0, 0, startColumn, DEFAULT_RUN_MAP_COLUMNS - 1, DEFAULT_RUN_MAP_COLUMNS - 1];
-  const pathColumns = mainRouteColumns.map(column => [startColumn, column]);
+  const pathColumns = mainRouteColumns.map(column => [column, column]);
+  const startNodeIds = [...new Set(mainRouteColumns)].map(column => nodeId(act, 1, column));
   let current = mainRouteColumns;
 
   for (let floor = 3; floor <= DEFAULT_RUN_MAP_ROUTE_FLOORS; floor += 1) {
@@ -226,7 +233,6 @@ function generateActTopology(act: number, topologySeed: number): GeneratedTopolo
   const bossColumn = Math.floor(DEFAULT_RUN_MAP_COLUMNS / 2);
   const bossNodeId = nodeId(act, bossFloor, bossColumn);
   topologyNodes.set(bossNodeId, { id: bossNodeId, act, floor: bossFloor, column: bossColumn });
-  topologyNodes.set(startId, { id: startId, act, floor: 1, column: startColumn });
 
   const paths = pathColumns.map(columns => {
     const path = columns.map((column, index) => {
@@ -262,13 +268,15 @@ function generateActTopology(act: number, topologySeed: number): GeneratedTopolo
     nodes,
     edges,
     paths,
-    startNodeIds: [startId],
+    startNodeIds,
     bossNodeId,
   };
 }
 
 function forcedKind(floor: number): RunMapNodeKind | undefined {
-  if (floor === 1) return 'treasure';
+  // Act openings are independent gift scenes; the visible route begins with
+  // an encounter and treasure remains a separate relic-only room.
+  if (floor === 1) return 'battle';
   if (floor === 2) return 'battle';
   if (floor === 9) return 'treasure';
   if (floor === 15) return 'rest';
@@ -415,6 +423,7 @@ function generateAct(act: number, rootSeeds: RunMapStreamSeeds, difficultyStep: 
     kind: kinds.get(node.id)!,
     contentSeed: deriveSeed(seeds.content, node.id),
     rewardSeed: deriveSeed(seeds.reward, node.id),
+    ...(kinds.get(node.id) === 'event' ? { mystery: rollTowerMystery(deriveSeed(seeds.content, node.id), deriveSeed(seeds.reward, node.id)) } : {}),
   }));
   return {
     act,
@@ -449,6 +458,13 @@ export function validateRunMap(map: Omit<RunMap, 'validation'> | RunMap): RunMap
 
   recordError(errors, map.schemaVersion === RUN_MAP_SCHEMA_VERSION, 'run map schema version is invalid');
   recordError(errors, map.acts.length === DEFAULT_RUN_MAP_ACTS, 'run map must contain three acts');
+  const flattened = new Map(map.nodes.map(node => [node.id, node]));
+  recordError(errors, flattened.size === map.nodes.length, 'run map contains duplicate flattened nodes');
+  recordError(errors, map.nodes.length === map.acts.reduce((sum, act) => sum + act.nodes.length, 0),
+    'run map flattened nodes do not match acts');
+  const sameMystery = (left: TowerMysteryRoll | undefined, right: TowerMysteryRoll | undefined) =>
+    left === undefined || right === undefined ? left === right
+      : (['version', 'roomRoll', 'eventRoll', 'kind', 'tone'] as const).every(key => left[key] === right[key]);
 
   for (const act of map.acts) {
     const nodesById = new Map(act.nodes.map(node => [node.id, node]));
@@ -464,8 +480,15 @@ export function validateRunMap(map: Omit<RunMap, 'validation'> | RunMap): RunMap
         `node ${node.id} has an invalid column`,
       );
       const required = forcedKind(node.floor);
+      const flat = flattened.get(node.id);
+      recordError(errors, !!flat && flat.kind === node.kind && flat.contentSeed === node.contentSeed
+        && flat.rewardSeed === node.rewardSeed && sameMystery(flat.mystery, node.mystery),
+        `node ${node.id} has inconsistent flattened content`);
+      if (node.mystery !== undefined) recordError(errors,
+        node.kind === 'event' && sameMystery(node.mystery, rollTowerMystery(node.contentSeed, node.rewardSeed)),
+        `node ${node.id} has an invalid mystery roll`);
       if (required)
-        recordError(errors, node.kind === required, `node ${node.id} violates forced floor kind ${required}`);
+        recordError(errors, node.kind === required || (act.startNodeIds.length === 1 && node.floor === 1 && node.kind === 'treasure'), `node ${node.id} violates forced floor kind ${required}`);
       if (node.floor <= 5) {
         recordError(
           errors,
@@ -483,7 +506,7 @@ export function validateRunMap(map: Omit<RunMap, 'validation'> | RunMap): RunMap
       recordError(errors, Boolean(to), `edge target is missing: ${edge.to}`);
       if (!from || !to) continue;
       recordError(errors, to.floor === from.floor + 1, `edge ${edgeKey(edge.from, edge.to)} skips a floor`);
-      if (to.kind !== 'boss' && from.id !== act.startNodeIds[0]) {
+      if (to.kind !== 'boss' && !(act.startNodeIds.length === 1 && from.id === act.startNodeIds[0])) {
         recordError(
           errors,
           Math.abs(to.column - from.column) <= 1,
@@ -531,21 +554,29 @@ export function validateRunMap(map: Omit<RunMap, 'validation'> | RunMap): RunMap
 
     const startNode = act.nodes.find(node => node.id === act.startNodeIds[0]);
     const bossNodes = act.nodes.filter(node => node.kind === 'boss');
-    recordError(errors, act.startNodeIds.length === 1, `act ${act.act} must have exactly one start node`);
+    const legacySingleStart = act.startNodeIds.length === 1;
+    recordError(errors, legacySingleStart || act.startNodeIds.length === DEFAULT_RUN_MAP_MAIN_ROUTES, `act ${act.act} must have three entrances (or a saved legacy entrance)`);
+    recordError(errors, new Set(act.startNodeIds).size === act.startNodeIds.length, `act ${act.act} repeats a start node`);
+    recordError(errors, act.nodes.filter(node => node.floor === 1).every(node => act.startNodeIds.includes(node.id)), `act ${act.act} omits a first-floor entrance`);
+    for (const id of act.startNodeIds) {
+      const entrance = nodesById.get(id);
+      recordError(errors, entrance?.floor === 1 && !(incoming.get(id)?.length), `act ${act.act} has an invalid entrance ${id}`);
+    }
     recordError(errors, Boolean(startNode), `act ${act.act} start node is missing`);
     if (startNode) {
       recordError(errors, startNode.floor === 1, `act ${act.act} start node must be on floor 1`);
-      recordError(errors, startNode.kind === 'treasure', `act ${act.act} start node must be a reward room`);
+      // Existing saves retain their original opening-treasure start node.
+      recordError(errors, startNode.kind === 'battle' || startNode.kind === 'treasure', `act ${act.act} start node has an invalid kind`);
       recordError(
         errors,
-        (outgoing.get(startNode.id)?.length ?? 0) === DEFAULT_RUN_MAP_MAIN_ROUTES,
-        `act ${act.act} start node must connect to three main routes`,
+        !legacySingleStart || (outgoing.get(startNode.id)?.length ?? 0) === DEFAULT_RUN_MAP_MAIN_ROUTES,
+        `act ${act.act} legacy start node must connect to three main routes`,
       );
     }
     recordError(errors, bossNodes.length === 1, `act ${act.act} must have exactly one boss node`);
     for (const node of act.nodes) {
       const childCount = outgoing.get(node.id)?.length ?? 0;
-      const maximum = node.id === startNode?.id ? DEFAULT_RUN_MAP_MAIN_ROUTES : 2;
+      const maximum = legacySingleStart && node.id === startNode?.id ? DEFAULT_RUN_MAP_MAIN_ROUTES : 2;
       recordError(errors, childCount <= maximum, `node ${node.id} has too many outgoing branches`);
     }
     for (let floor = 1; floor <= DEFAULT_RUN_MAP_ROUTE_FLOORS; floor += 1) {

@@ -1,0 +1,3 @@
+export function permanentGrowthAuthoringContract(): string {
+  return '永久成长必须跨战斗保留。玩家生命/欲望上限用 {persistent_growth:"max_hp"|"max_lust",add|subtract|set:数值或公式}。卡牌自身的永久伤害/欲望成长用 patch_card 或 upgrade_card，scope:"permanent"，明确选择原牌或牌组；这不会加强该牌召唤的单位。召唤物永久成长用 {persistent_growth:"max_hp"|"damage"|"lust",summon_template:"召唤模板ID",add|subtract|set:数值或公式}：即刻影响我方已有的该模板召唤物，今后召唤和下一场战斗也继承；无须已有召唤物，不填实例ID，固定行动/能力不变，上限提升不附送治疗。只允许玩家来源；召唤 action/ability 中须放在显式 summoner_effects 里。不可写 to/targets。记录由程序结算和持久化，AI 不直接写内部成长账本。普通 modify_summon/modify_summon_effect 只加强执行时现有单位；Buff、Power、普通 heal/set_hp 和局内临时修饰不能冒充永久成长。若要求成长攻击和召唤成长，两条链都必须完整，包括取得、支付、发动、永久写回和下场继承；不要用提高玩家上限替代召唤物成长。说明简短写明数值、目标与“永久”或“本场战斗”，不向玩家展示内部实现长括号。';
+}

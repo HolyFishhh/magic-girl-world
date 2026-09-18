@@ -1,9 +1,10 @@
 import type { CardOrigin } from './cardIdentity';
 import type { CardCost } from './combatResource';
+import { type AbilityTrigger } from './battleTriggers';
 export type BattleEventPhase = 'before' | 'resolve' | 'after';
-export type BattleEventKind = 'turn_started' | 'turn_ended' | 'card_drawn' | 'card_moved' | 'card_played' | 'damage_resolved' | 'heal_resolved' | 'resource_spent' | 'resource_changed' | 'stance_changed' | 'orb_channeled' | 'orb_evoked' | 'orb_value_changed' | 'turn_control_changed' | 'summon_spawned' | 'summon_acted' | 'summon_intercepted' | 'summon_defeated' | 'summon_status_applied' | 'summon_status_triggered' | 'summon_status_removed' | 'entity_defeated';
+export type BattleEventKind = 'turn_started' | 'turn_ended' | 'card_drawn' | 'draw_pile_shuffled' | 'card_moved' | 'card_played' | 'damage_resolved' | 'heal_resolved' | 'lust_increased' | 'lust_decreased' | 'block_gained' | 'block_lost' | 'resource_spent' | 'resource_changed' | 'status_applied' | 'status_triggered' | 'status_removed' | 'stance_changed' | 'orb_channeled' | 'orb_evoked' | 'orb_value_changed' | 'turn_control_changed' | 'summon_spawned' | 'summon_acted' | 'summon_intercepted' | 'summon_defeated' | 'summon_status_applied' | 'summon_status_triggered' | 'summon_status_removed' | 'entity_defeated';
 export declare const BATTLE_EVENT_KINDS: readonly BattleEventKind[];
-export type CardMoveReason = 'player_choice' | 'random_effect' | 'effect' | 'turn_cleanup' | 'scry' | 'recover' | 'exhaust' | 'generate' | 'copy' | 'transform' | 'auto_play' | 'other';
+export type CardMoveReason = 'player_choice' | 'played' | 'random_effect' | 'effect' | 'turn_cleanup' | 'scry' | 'recover' | 'exhaust' | 'generate' | 'copy' | 'transform' | 'auto_play' | 'other';
 export type DamageKind = 'attack' | 'effect' | 'hp_loss' | 'retaliation' | 'damage_over_time' | 'execute';
 export type EventSourceKind = 'card' | 'relic' | 'status' | 'ability' | 'enemy_action' | 'system' | 'summon' | 'enchantment' | 'affliction';
 export declare const BATTLE_EVENT_PHASES: readonly BattleEventPhase[];
@@ -29,10 +30,17 @@ interface BattleEventBase {
     kind: BattleEventKind;
     depth: number;
     cause: BattleEventCause;
+    /** Runtime-owned provenance survives unit removal and encounter changes. */
+    actorSide?: 'player' | 'enemy';
+    targetSide?: 'player' | 'enemy';
 }
 export type BattleEvent = (BattleEventBase & {
     kind: 'turn_started' | 'turn_ended';
     actorId: string;
+}) | (BattleEventBase & {
+    kind: 'draw_pile_shuffled';
+    actorId: string;
+    recycledCards: number;
 }) | (BattleEventBase & {
     kind: 'card_drawn';
     actorId: string;
@@ -81,6 +89,13 @@ export type BattleEvent = (BattleEventBase & {
     requested: number;
     hpGained: number;
 }) | (BattleEventBase & {
+    kind: 'lust_increased' | 'lust_decreased' | 'block_gained' | 'block_lost';
+    actorId: string;
+    targetId: string;
+    previousValue: number;
+    nextValue: number;
+    amount: number;
+}) | (BattleEventBase & {
     kind: 'resource_spent';
     actorId: string;
     resource: string;
@@ -94,6 +109,34 @@ export type BattleEvent = (BattleEventBase & {
     previousValue: number;
     nextValue: number;
     change: 'gain' | 'set';
+}) | (BattleEventBase & {
+    kind: 'status_applied';
+    /** Persist polarity, rather than guessing it from prose or a later registry. */
+    statusType?: string;
+    actorId: string;
+    targetId: string;
+    statusId: string;
+    statusName: string;
+    stacks: number;
+    trigger: 'apply' | 'stack';
+}) | (BattleEventBase & {
+    kind: 'status_triggered';
+    statusType?: string;
+    actorId: string;
+    targetId: string;
+    statusId: string;
+    statusName: string;
+    stacks: number;
+    trigger: 'apply' | 'stack' | 'tick' | 'remove';
+}) | (BattleEventBase & {
+    kind: 'status_removed';
+    statusType?: string;
+    actorId: string;
+    targetId: string;
+    statusId: string;
+    statusName: string;
+    stacks: number;
+    reason: 'explicit' | 'decay';
 }) | (BattleEventBase & {
     kind: 'stance_changed';
     actorId: string;
@@ -209,6 +252,13 @@ export interface RunEventHistoryState {
     schemaVersion: 1;
     records: RunBattleEventRecord[];
 }
+/**
+ * A three-act run can create thousands of small events. Keep one generous hard
+ * ceiling at the storage reader so corrupted/AI-written host variables cannot
+ * make every history formula scan an unbounded array. Runtime-owned archives
+ * are expected to remain well below this limit.
+ */
+export declare const MAX_RUN_EVENT_HISTORY_RECORDS = 20000;
 export interface EventCounterFilter {
     kind?: BattleEventKind;
     phase?: BattleEventPhase;
@@ -231,7 +281,7 @@ export interface EventCounterQuery {
     filter?: EventCounterFilter;
 }
 export interface EventOrdinalQuery extends EventCounterQuery {
-    ordinal: 'first' | 'nth' | 'every_n';
+    ordinal: 'first' | 'first_n' | 'nth' | 'every_n';
     n?: number;
 }
 export interface EventTriggerQuery extends EventCounterQuery {
@@ -244,6 +294,8 @@ export interface EventHistoryValueQuery extends EventCounterQuery {
 }
 /** Standard metadata passed to filtered ability/relic triggers. */
 export interface BattleTriggerEventContext {
+    /** Status affected by this event; distinct from the causing sourceId. */
+    statusId?: string;
     eventId?: string;
     /** True when this event is already present in the supplied journal. */
     eventRecorded?: boolean;
@@ -259,11 +311,17 @@ export interface BattleTriggerEventContext {
     damageKind?: DamageKind;
     actorId?: string;
     targetId?: string;
+    actorSide?: 'player' | 'enemy';
+    targetSide?: 'player' | 'enemy';
+    /** Runtime-owned actor ids used when an AI-facing query selects team scope. */
+    teamActorIds?: readonly string[];
     eventJournal?: BattleEventJournalState;
 }
 /** Convert one persisted event into the canonical context consumed by filtered triggers. */
 export declare function battleTriggerContextFromEvent(event: BattleEvent, eventJournal: BattleEventJournalState): BattleTriggerEventContext;
 export declare function createRunEventHistory(records?: readonly RunBattleEventRecord[]): RunEventHistoryState;
+/** Strict reader for run-owned history restored from host variables. */
+export declare function readRunEventHistory(value: unknown): RunEventHistoryState | null;
 export declare function createBattleEventJournal(events?: readonly BattleEvent[], runHistory?: RunEventHistoryState): BattleEventJournalState;
 /**
  * Commit one completed encounter into run-owned history. Reusing the same
@@ -283,10 +341,10 @@ export type AppendBattleEventResult = {
 };
 export declare function appendBattleEvent(state: BattleEventJournalState, draft: BattleEventDraft): AppendBattleEventResult;
 export declare function battleEventMatches(event: BattleEvent, filter?: EventCounterFilter): boolean;
-export declare function countBattleEvents(state: BattleEventJournalState, query: EventCounterQuery): number;
-export declare function matchesEventOrdinal(state: BattleEventJournalState, eventId: string, query: EventOrdinalQuery): boolean;
+export declare function countBattleEvents(state: BattleEventJournalState, query: EventCounterQuery, predicate?: (event: BattleEvent) => boolean): number;
+export declare function matchesEventOrdinal(state: BattleEventJournalState, eventId: string, query: EventOrdinalQuery, predicate?: (event: BattleEvent) => boolean): boolean;
 /** Match a filtered/ordinal trigger against one dispatched event. */
-export declare function matchesEventTriggerQuery(context: BattleTriggerEventContext, query?: EventTriggerQuery): boolean;
+export declare function matchesEventTriggerQuery(context: BattleTriggerEventContext, query?: EventTriggerQuery, trigger?: AbilityTrigger): boolean;
 export declare function findRecentBattleEvent(state: BattleEventJournalState, query: EventCounterQuery): BattleEvent | undefined;
 export declare function readBattleEventHistoryValue(state: BattleEventJournalState, query: EventHistoryValueQuery): number;
 export declare function resetBattleEventScope(state: BattleEventJournalState, scope: 'turn' | 'combat' | 'run', turn?: number): BattleEventJournalState;

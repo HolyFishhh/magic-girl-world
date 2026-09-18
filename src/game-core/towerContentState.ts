@@ -1,3 +1,5 @@
+import { fixedCampfireEnvelope } from './towerCampfire';
+
 export const TOWER_CONTENT_SCHEMA_VERSION = 1 as const;
 
 export const TOWER_CONTENT_PHASES = [
@@ -97,7 +99,7 @@ export function createTowerContentStore<TContent = unknown, TReward = unknown>(
   const store: TowerNodeContentStore<TContent, TReward> = {};
   for (const node of nodes) {
     if (store[node.id]) throw new Error(`duplicate tower content node: ${node.id}`);
-    store[node.id] = createTowerNodeContent<TContent, TReward>(node.id, node.kind);
+    store[node.id] = fixedCampfireEnvelope(createTowerNodeContent(node.id, node.kind)) as TowerNodeContentEnvelope<TContent, TReward>;
   }
   return store;
 }

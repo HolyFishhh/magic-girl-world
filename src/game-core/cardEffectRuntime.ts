@@ -1,4 +1,5 @@
 import { planCardSelection, resolveCardSelection, type CardSelectionMode } from './cardSelection';
+import { hasCardHitTarget, hasCardValueTarget } from './cardValueTransform';
 import {
   planCardZoneOperation,
   type CardZoneOperationPlan,
@@ -100,12 +101,34 @@ export type CardEffectRuntimeEvent =
   | { type: 'card_upgraded'; previous: Card; card: Card; levels: number; scope: 'combat' | 'run' | 'permanent' }
   | { type: 'card_attachment_applied'; card: Card; attachmentId: string; attachmentKind: 'enchantment' | 'affliction' };
 
+/** A command-local value snapshot, never a live Card reference or persisted history. */
+export interface DiscardCommandResult {
+  readonly status: 'pending' | 'cancelled' | 'committed';
+  readonly cards: readonly Readonly<{ id: string; type: Card['type']; source: CardPileZone }>[];
+}
+
 export interface CardEffectRuntimeContext {
+  /** Caller must allocate a distinct cell for each command/invocation. */
+  discardResult?: { value: DiscardCommandResult };
   currentCardId?: string;
   excludedCardIds?: readonly string[];
   doubleEffectFilter?: 'playable' | 'any';
   currentTurn?: number;
   source?: { kind: CardPatch['source']['kind']; id: string; name?: string };
+  /**
+   * A single effect program can apply several numeric upgrades to one chosen
+   * card. The host supplies this short-lived cell so the first operation asks
+   * once from the union of the operations' eligible targets.
+   */
+  sharedCardChoice?: {
+    requirements: readonly Readonly<{
+      selector: CardSelector;
+      /** Omitted when a non-numeric upgrade can affect any matching card. */
+      stats?: readonly Extract<CardEffectCommand, { type: 'modify_card_value' }>['stat'][];
+      maxLevel?: number;
+    }>[];
+    selectedIds?: readonly string[] | null;
+  };
 }
 
 export interface CardEffectStatePort {
@@ -130,7 +153,7 @@ export interface CardEffectStatePort {
   createRuntimeCardId(sourceId: string): string;
   addCardToHand(card: Card): boolean;
   addCardToDeck(card: Card): void;
-  placeGeneratedCard(card: Card, preferredZone: 'hand' | 'draw'): 'hand' | 'draw' | 'discard';
+  placeGeneratedCard(card: Card, preferredZone: 'hand' | 'draw' | 'discard'): 'hand' | 'draw' | 'discard';
 }
 
 export interface CardEffectRuntimePorts {
@@ -200,14 +223,17 @@ function generatedCard(definition: GeneratedCardDefinition, runtimeId: string): 
     id: runtimeId,
     originalId: definition.id,
     name: definition.name,
+    unique: definition.unique === true,
     emoji: definition.emoji,
     type: definition.type,
     rarity: definition.rarity,
     cost: definition.cost ?? 1,
     effectProgram: definition.program,
     description: definition.description,
+    ...(definition.requiresSummonTemplateId ? { requiresSummonTemplateId: definition.requiresSummonTemplateId } : {}),
     ...(definition.discardProgram ? { discardEffectProgram: definition.discardProgram } : {}),
     retain: definition.retain === true,
+    lifecycle: definition.lifecycle ? structuredClone(definition.lifecycle) : undefined,
     exhaust: definition.type === 'Power' || definition.exhaust === true,
     ethereal: definition.ethereal === true,
   }, { origin: 'generated', templateId: definition.id, combatInstanceId: runtimeId });
@@ -273,6 +299,8 @@ export class CardEffectRuntime {
     request: CardZoneOperationRequest,
     context: CardEffectRuntimeContext = {},
   ): Promise<readonly Card[]> {
+    const resultCell = request.type === 'discard_cards' ? context.discardResult : undefined;
+    if (resultCell) resultCell.value = Object.freeze({ status: 'pending', cards: Object.freeze([]) });
     const zones = this.state.readCardZoneState();
     const sourceById = new Map<string, CardPileZone>();
     for (const zone of ['hand', 'drawPile', 'discardPile', 'exhaustPile'] as const)
@@ -302,12 +330,24 @@ export class CardEffectRuntime {
         maximum: planned.selection.maximum,
         allowCancel: true,
       });
-      if (selected === null) return [];
+      if (selected === null) {
+        if (resultCell) resultCell.value = Object.freeze({ status: 'cancelled', cards: Object.freeze([]) });
+        return [];
+      }
       selectedCardIds = selected;
     }
 
     const committed = this.state.commitCardZoneOperation(planned, selectedCardIds);
     if (!committed.ok) throw new Error(`card zone commit failed: ${committed.code}`);
+
+    // Capture BEFORE lifecycle callbacks: listeners may mutate/transform the
+    // moved cards or recursively execute another discard command.
+    if (resultCell) resultCell.value = Object.freeze({
+      status: 'committed',
+      cards: Object.freeze(committed.moved.map(card => Object.freeze({
+        id: card.id, type: card.type, source: sourceById.get(card.id) || 'hand',
+      }))),
+    });
 
     if (request.type === 'discard_cards') {
       const reason = discardReason(request);
@@ -338,7 +378,37 @@ export class CardEffectRuntime {
     context: CardEffectRuntimeContext,
     filter?: (card: Card) => boolean,
   ): Promise<Card[]> {
-    const candidates = this.candidates(selector, context).filter(card => (filter ? filter(card) : true));
+    let candidates = this.candidates(selector, context).filter(card => (filter ? filter(card) : true));
+    const sharedChoice = context.sharedCardChoice;
+    if (sharedChoice && selector.pick === 'choose') {
+      // A shared target receives every compatible part of a compound upgrade.
+      // Offer the union: an Attack may take damage even without lust/block.
+      const offeredById = new Map(sharedChoice.requirements.flatMap(requirement =>
+        this.candidates(requirement.selector, context).filter(card =>
+          (requirement.maxLevel === undefined || (card.upgradeLevel || 0) < requirement.maxLevel)
+          && (!requirement.stats?.length || requirement.stats.some(stat => hasCardValueTarget(card.effectProgram, stat))),
+        ).map(card => [card.id, card] as const)));
+      const offered = [...offeredById.values()];
+      if (sharedChoice.selectedIds !== undefined) {
+        if (sharedChoice.selectedIds === null) return [];
+        const selected = new Set(sharedChoice.selectedIds);
+        return candidates.filter(card => selected.has(card.id));
+      }
+      if (offered.length === 0) {
+        sharedChoice.selectedIds = [];
+        return [];
+      }
+      const response = await this.ports.chooseCards(offered, {
+        purpose,
+        minimum: 1,
+        maximum: 1,
+        allowCancel: true,
+      });
+      sharedChoice.selectedIds = response === null ? null : response;
+      if (response === null) return [];
+      const selected = new Set(response);
+      return candidates.filter(card => selected.has(card.id));
+    }
     const requested = selector.pick === 'all' ? candidates.length : normalizeCount(selector.count ?? 1);
     const plan = planCardSelection(
       {
@@ -404,7 +474,7 @@ export class CardEffectRuntime {
   }
 
   private async copyCards(selector: CardSelector, context: CardEffectRuntimeContext): Promise<Card[]> {
-    const selected = await this.selectCards(selector, 'copy', context);
+    const selected = await this.selectCards(selector, 'copy', context, card => card.unique !== true);
     for (const card of selected) {
       const combatInstanceId = this.state.createRuntimeCardId(card.templateId || card.originalId || card.id);
       const copy = {
@@ -432,7 +502,8 @@ export class CardEffectRuntime {
     if (command.operator === 'divide' && command.value === 0) {
       throw new Error('card value transform cannot divide by zero');
     }
-    const selected = await this.selectCards(command.selector, 'modify_value', context);
+    const selected = await this.selectCards(command.selector, 'modify_value', context,
+      card => hasCardValueTarget(card.effectProgram, command.stat));
     const updated = this.state.updateOwnedCards(
       selected.map(card => card.id),
       card => appendCardPatch(card, {
@@ -561,6 +632,11 @@ export class CardEffectRuntime {
     context: CardEffectRuntimeContext,
   ): Promise<Card[]> {
     const selected = await this.selectCards(command.selector, 'transform', context);
+    const all = Object.values(this.state.readCardZoneState()).flat();
+    if (selected.length && (command.replacement.unique === true && selected.length > 1
+      || all.some(card => !selected.some(picked => picked.id === card.id)
+        && (card.templateId || card.originalId || card.id) === command.replacement.id
+        && (card.unique === true || command.replacement.unique === true)))) throw new Error('不能生成重复的唯一卡牌');
     const previous = new Map(selected.map(card => [card.id, card]));
     const zones = selectorZones(command.selector.zone);
     const updated = this.state.updateOwnedCards(selected.map(card => card.id), card => {
@@ -587,7 +663,11 @@ export class CardEffectRuntime {
     command: Extract<CardEffectCommand, { type: 'upgrade_cards' }>,
     context: CardEffectRuntimeContext,
   ): Promise<Card[]> {
-    const selected = await this.selectCards(command.selector, 'upgrade', context);
+    const selected = await this.selectCards(command.selector, 'upgrade', context, card =>
+      (command.maxLevel === undefined || (card.upgradeLevel || 0) < command.maxLevel)
+      && command.changes.some(change => change.kind === 'hits'
+        ? hasCardHitTarget(card.effectProgram)
+        : change.kind !== 'numeric' || hasCardValueTarget(card.effectProgram, change.stat)));
     if (selected.length === 0) return [];
     const previous = new Map(selected.map(card => [card.id, card]));
     const changes = command.changes.map(change => {
@@ -596,6 +676,12 @@ export class CardEffectRuntime {
       }
       if (change.kind === 'replay' && typeof change.extra !== 'number')
         throw new Error('resolved card replay upgrade requires a number');
+      if (change.kind === 'hits') {
+        const add = change.add;
+        if (typeof add !== 'number' || !Number.isInteger(add) || add < 1)
+          throw new Error('resolved card hits upgrade requires a positive integer');
+        return { kind: 'hits', add } satisfies CardUpgradeChange;
+      }
       return structuredClone(change) as CardUpgradeChange;
     });
     const source = context.source || { kind: 'system' as const, id: context.currentCardId || 'upgrade' };
@@ -624,8 +710,14 @@ export class CardEffectRuntime {
     command: Extract<CardEffectCommand, { type: 'apply_card_patch' }>,
     context: CardEffectRuntimeContext,
   ): Promise<Card[]> {
-    const selected = await this.selectCards(command.selector, 'patch', context);
-    if (selected.length === 0) return [];
+    const selected = await this.selectCards(command.selector, 'patch', context, card =>
+      command.patch.kind !== 'hits' || hasCardHitTarget(card.effectProgram));
+    // A future-copy rule must register even before the first matching card exists.
+    const anchors = [...selected];
+    if (!anchors.length && command.patch.includeFutureCopies && (command.patch.match === 'filter' || command.selector.filter?.templateId)) {
+      anchors.push({ id: command.selector.filter?.templateId || 'future_filter', templateId: command.selector.filter?.templateId } as Card);
+    }
+    if (!anchors.length) return [];
     const source = context.source || { kind: 'system' as const, id: context.currentCardId || 'effect' };
     const turn = Math.max(0, Math.floor(context.currentTurn || 0));
     const removalByScope = {
@@ -641,7 +733,7 @@ export class CardEffectRuntime {
     const patches: CardPatch[] = [];
     const keys = new Set<string>();
 
-    for (const anchor of selected) {
+    for (const anchor of anchors) {
       const match = command.patch.match || 'instance';
       const target = match === 'instance'
         ? { match: 'instance' as const, combatInstanceId: anchor.combatInstanceId || anchor.id }
@@ -662,7 +754,9 @@ export class CardEffectRuntime {
       if (keys.has(targetKey)) continue;
       keys.add(targetKey);
       const ledger = this.state.readCardPatchLedger();
-      const sequence = Math.max(1, Math.floor(ledger.nextSequence || 1)) + patches.length;
+      let sequence = Math.max(1, Math.floor(ledger.nextSequence || 1)) + patches.length;
+      const usedIds = new Set([...ledger.patches, ...allCards.flatMap(card => card.patches || []), ...patches].map(patch => patch.id));
+      while (usedIds.has(`${source.kind}:${source.id}:${turn}:patch:${sequence}`)) sequence += 1;
       const common = {
         id: `${source.kind}:${source.id}:${turn}:patch:${sequence}`,
         source,
@@ -684,6 +778,13 @@ export class CardEffectRuntime {
       } else if (command.patch.kind === 'replay') {
         if (typeof command.patch.extra !== 'number') throw new Error('resolved replay card patch requires a number');
         patch = { ...common, kind: 'replay', extra: command.patch.extra };
+      } else if (command.patch.kind === 'area') {
+        patch = { ...common, kind: 'area' };
+      } else if (command.patch.kind === 'hits') {
+        const add = command.patch.add;
+        if (typeof add !== 'number' || !Number.isInteger(add) || add < 1)
+          throw new Error('resolved hits card patch requires a positive integer');
+        patch = { ...common, kind: 'hits', add };
       } else if (command.patch.kind === 'x_value') {
         if (typeof command.patch.value !== 'number') throw new Error('resolved X value card patch requires a number');
         patch = { ...common, kind: 'x_value', operator: command.patch.operator, value: command.patch.value };
@@ -749,11 +850,13 @@ export class CardEffectRuntime {
   private addGeneratedCards(
     definition: GeneratedCardDefinition,
     requestedCount: number,
-    zone: 'hand' | 'draw',
+    zone: 'hand' | 'draw' | 'discard',
     options: { inheritFuturePatches?: boolean } = {},
   ): Card[] {
     const cards: Card[] = [];
     for (let index = 0; index < normalizeCount(requestedCount); index += 1) {
+      const existing = [...Object.values(this.state.readCardZoneState()).flat(), ...this.state.getPlayer().deck];
+      if (existing.some(card => (card.templateId || card.originalId || card.id) === definition.id && (definition.unique || card.unique))) break;
       let card = generatedCard(definition, this.state.createRuntimeCardId(definition.id));
       if (options.inheritFuturePatches !== false) {
         const futurePatches = this.state.readCardPatchLedger().patches.filter(patch => cardPatchApplies(card, patch));
@@ -784,7 +887,7 @@ export class CardEffectRuntime {
     const existing = matches();
     const missing = Math.max(0, normalizeCount(command.minimum) - existing.length);
     if (missing > 0) {
-      this.addGeneratedCards(command.card, missing, command.zone, { inheritFuturePatches: false });
+      this.addGeneratedCards(command.card, missing, command.zone, { inheritFuturePatches: true });
     }
     return matches();
   }

@@ -1,6 +1,6 @@
 import type { CardSelectorFilter, CardValueOperator, CardValueStat, EffectProgram, NumericExpression } from './effectDsl';
 import { cardMatchesSelectorFilter, type SelectableCard } from './cardSelectorRuntime';
-import { transformCardEffectProgram } from './cardValueTransform';
+import { transformCardEffectProgram, transformCardHitGroups, transformCardAttacksToArea } from './cardValueTransform';
 import type { CardCost } from './combatResource';
 
 export type CardPatchScope = 'resolution' | 'turn' | 'until_played' | 'combat' | 'run' | 'permanent';
@@ -60,6 +60,8 @@ export type CardPatch =
       kind: 'replay';
       extra: number;
     })
+  | (CardPatchBase & { kind: 'hits'; add: number })
+  | (CardPatchBase & { kind: 'area' })
   | (CardPatchBase & {
       kind: 'x_value';
       operator: Extract<CardCostOperator, 'add' | 'subtract' | 'multiply' | 'divide' | 'set' | 'min' | 'max'>;
@@ -163,6 +165,8 @@ export function validateCardPatch(patch: CardPatch): void {
     if (patch.operator === 'divide' && patch.value === 0) throw new Error('cost patch cannot divide by zero');
   } else if (patch.kind === 'replay') {
     if (!Number.isInteger(patch.extra) || patch.extra < 1 || patch.extra > 20) throw new Error('replay patch extra must be 1..20');
+  } else if (patch.kind === 'hits') {
+    if (!Number.isInteger(patch.add) || patch.add < 1 || patch.add > 19) throw new Error('hits patch add must be 1..19');
   } else if (patch.kind === 'x_value') {
     finiteNumber(patch.value, 'X value patch value');
     if (patch.operator === 'divide' && patch.value === 0) throw new Error('X value patch cannot divide by zero');
@@ -248,6 +252,10 @@ export function materializeCardPatches<TCard extends PatchableCard>(card: TCard,
       keywords[patch.keyword] = patch.enabled;
     } else if (patch.kind === 'replay') {
       replayCount = Math.min(20, replayCount + patch.extra);
+    } else if (patch.kind === 'area') {
+      effectProgram = transformCardAttacksToArea(effectProgram);
+    } else if (patch.kind === 'hits') {
+      effectProgram = transformCardHitGroups(effectProgram, patch.add);
     } else if (patch.kind === 'x_value') {
       xValueBonus = applyCost(xValueBonus, patch) as number;
     }

@@ -48,6 +48,27 @@ const schemaEventProgram = {
   }],
 };
 assert.equal(validateEffectSchema(schemaEventProgram), true, JSON.stringify(validateEffectSchema.errors));
+const opponentCardZoneProgram = {
+  spec: 'mwg.effect/v1',
+  steps: [{ op: 'damage', target: 'opponent', amount: { op: 'var', path: 'opponent.hand_size' } }],
+};
+assert.equal(validateEffectSchema(opponentCardZoneProgram), true, JSON.stringify(validateEffectSchema.errors));
+assert.deepEqual(core.validateEffectProgram(opponentCardZoneProgram), { ok: true, value: opponentCardZoneProgram });
+const generatedDiscardProgram = {
+  spec: 'mwg.effect/v1',
+  steps: [{
+    op: 'add_card',
+    zone: 'discard',
+    count: 1,
+    card: {
+      id: 'burden', name: '负担', emoji: '🕸️', type: 'Skill', rarity: 'Corrupt', cost: 0,
+      description: '直接加入弃牌堆。',
+      program: { spec: 'mwg.effect/v1', steps: [{ op: 'gain_block', target: 'self', amount: 1 }] },
+    },
+  }],
+};
+assert.equal(validateEffectSchema(generatedDiscardProgram), true, JSON.stringify(validateEffectSchema.errors));
+assert.deepEqual(core.validateEffectProgram(generatedDiscardProgram), { ok: true, value: generatedDiscardProgram });
 for (const invalidProgram of [
   {
     ...schemaEventProgram,
@@ -120,6 +141,22 @@ const state = {
   attacksPlayedThisTurn: 1,
   skillsPlayedThisTurn: 0,
 };
+const persistedMultiChoiceProgram = {
+  spec: 'mwg.effect/v1',
+  steps: [{ op: 'choose_one', choiceId: 'saved_routes', count: 2, options: [
+    { id: 'guard', label: '稳守', effects: [{ op: 'gain_block', target: 'self', amount: 3 }] },
+    { id: 'focus', label: '聚焦', effects: [{ op: 'gain_energy', target: 'self', amount: 1 }] },
+    { id: 'strike', label: '强攻', effects: [{ op: 'damage', target: 'opponent', amount: 4 }] },
+  ] }],
+};
+const restoredMultiChoiceProgram = JSON.parse(JSON.stringify(persistedMultiChoiceProgram));
+assert.equal(validateEffectSchema(restoredMultiChoiceProgram), true, JSON.stringify(validateEffectSchema.errors));
+assert.deepEqual(core.validateEffectProgram(restoredMultiChoiceProgram), { ok: true, value: restoredMultiChoiceProgram });
+const restoredMultiChoiceResult = core.executeEffectProgram(restoredMultiChoiceProgram, state, {
+  spentEnergy: 0, choiceSelections: { saved_routes: ['strike', 'guard'] },
+});
+assert.equal(restoredMultiChoiceResult.ok, true);
+assert.deepEqual(restoredMultiChoiceResult.events.filter(event => event.type === 'choice_selected').map(event => event.optionId), ['guard', 'strike']);
 const result = core.executeEffectProgram(program, state, { spentEnergy: 3, statusStacks: 2 });
 assert.equal(result.ok, true);
 assert.equal(result.state.self.hp, 12);

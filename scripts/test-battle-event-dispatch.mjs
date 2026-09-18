@@ -42,6 +42,17 @@ assert.deepEqual(
   ],
 );
 assert.deepEqual(
+  dispatch.resolveAttributeTriggerDispatch({
+    attribute: 'hp', change: -7, target: 'enemy', source: 'enemy',
+    eventContext: { actorId: 'rear_caster', targetId: 'front_guard' },
+  }).slice(0, 2).map(entry => [entry.trigger, entry.context.enemyId]),
+  [
+    ['take_damage', 'front_guard'],
+    ['deal_damage', 'rear_caster'],
+  ],
+  'multi-enemy receiver and source triggers must bind to different exact entities',
+);
+assert.deepEqual(
   dispatch.resolveAttributeTriggerDispatch({ attribute: 'hp', change: 4, target: 'player', source: 'player' }),
   [
     { consumer: 'ability', target: 'player', trigger: 'take_heal', context: { amount: 4 } },
@@ -86,7 +97,7 @@ assert.deepEqual(
       consumer: 'ability',
       target: 'enemy',
       trigger: 'enemy_gain_buff',
-      context: { targetType: 'player', statusType: 'buff' },
+      context: { targetType: 'player', statusType: 'buff', enemyScope: 'all_living' },
     },
     {
       consumer: 'relic',
@@ -95,6 +106,13 @@ assert.deepEqual(
       context: { targetType: 'player', statusType: 'buff' },
     },
   ],
+);
+assert.equal(
+  dispatch.resolveStatusOwnershipTriggerDispatch({
+    target: 'enemy', targetId: 'rear_caster', statusType: 'buff', change: 'gain',
+  })[0].context.enemyId,
+  'rear_caster',
+  'an enemy status owner trigger must retain the exact holder identity',
 );
 assert.deepEqual(
   dispatch.resolveStatusOwnershipTriggerDispatch({ target: 'enemy', statusType: 'debuff', change: 'lose' }).map(

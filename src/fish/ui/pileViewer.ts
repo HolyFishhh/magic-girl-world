@@ -6,6 +6,7 @@ import { describeCardCost, type Card } from '../../game-core';
 import { escapeHtml, escapeHtmlAttribute } from '../shared/html';
 import { EffectProgramDisplay } from './effectProgramDisplay';
 import { GameStateManager } from '../core/gameStateManager';
+import { renderCardFace } from '../../shared/cardFace';
 
 export type BattlePileType = 'deck' | 'draw' | 'discard' | 'exhaust';
 
@@ -32,7 +33,8 @@ export class PileViewer {
     const pileTitle = title || this.getPileTitle(pileType);
     const viewer = this.createPileViewer(pileTitle, cards);
 
-    $('body').append(viewer);
+    const scene = $('#battle-scene');
+    (scene.length ? scene : $('body')).append(viewer);
 
     // 添加动画效果
     viewer.css({ opacity: 0 }).animate({ opacity: 1 }, 300);
@@ -44,9 +46,7 @@ export class PileViewer {
   closePileViewer(): void {
     const existingViewer = $('.pile-viewer');
     if (existingViewer.length > 0) {
-      existingViewer.animate({ opacity: 0 }, 200, function () {
-        $(this).remove();
-      });
+      existingViewer.stop(true, true).remove();
     }
   }
 
@@ -87,8 +87,8 @@ export class PileViewer {
   /**
    * 创建卡牌HTML
    */
-  private createCardHTML(card: Card): string {
-    const effectTags = PileViewer.effectDisplay.programToTags(card.effectProgram);
+  public createCardHTML(card: Card): string {
+    const effectTags = PileViewer.effectDisplay.cardToTags(card);
     const compactTagsHTML = PileViewer.effectDisplay.createCompactEffectTagsHTML(effectTags);
     const discardEffectTags = PileViewer.effectDisplay.programToTags(card.discardEffectProgram).map(entry => ({
       ...entry,
@@ -107,33 +107,11 @@ export class PileViewer {
         ? '—'
         : describeCardCost(card.cost, GameStateManager.getInstance().getPlayer().resources);
 
-    return `
-      <div class="card enhanced-card rarity-${escapeHtmlAttribute(card.rarity)} card-type-${escapeHtmlAttribute(card.type)}" data-card-id="${escapeHtmlAttribute(card.id)}">
-        <div class="card-header">
-          <div class="card-cost">${escapeHtml(displayCost)}</div>
-          <div class="card-rarity-gem"></div>
-        </div>
-        <div class="card-artwork">
-          <div class="card-emoji">${escapeHtml(card.emoji)}</div>
-          <div class="card-keywords">
-            ${card.innate ? '<div class="card-keyword innate">固有</div>' : ''}
-            ${card.retain ? '<div class="card-keyword retain">保留</div>' : ''}
-            ${card.exhaust ? '<div class="card-keyword exhaust">消耗</div>' : ''}
-            ${card.ethereal ? '<div class="card-keyword ethereal">空灵</div>' : ''}
-          </div>
-        </div>
-        <div class="card-body">
-          <div class="card-title-row">
-            <div class="card-name">${escapeHtml(card.name)}</div>
-            <div class="card-type-indicator">${escapeHtml(this.translateCardType(card.type))}</div>
-          </div>
-          ${card.description ? `<div class="card-description">${escapeHtml(card.description)}</div>` : ''}
-          ${compactTagsHTML}
-          ${compactDiscardTagsHTML}
-          ${compactAttachmentTagsHTML}
-        </div>
-      </div>
-    `;
+    return renderCardFace(card, {
+      costLabel: displayCost, rarityLabel: {Common:'普通',Uncommon:'罕见',Rare:'稀有',Epic:'史诗',Legendary:'传说',Corrupt:'腐化'}[card.rarity] || card.rarity,
+      typeLabel: this.translateCardType(card.type),
+      rulesHtml: compactTagsHTML + compactDiscardTagsHTML + compactAttachmentTagsHTML,
+    });
   }
 
   private translateCardType(type: Card['type']): string {
@@ -162,24 +140,25 @@ export class PileViewer {
    * 设置牌堆点击事件
    */
   setupPileClickEvents(): void {
-    $(document).on('click', '.deck-stat[data-pile="deck"]', e => {
+    $(document).off('.mwgPileViewer');
+    $(document).on('click.mwgPileViewer', '.deck-stat[data-pile="deck"]', e => {
       e.preventDefault();
       this.handlePileClick('deck');
     });
     // 抽牌堆点击事件
-    $(document).on('click', '.deck-stat[data-pile="draw"], .draw-pile-indicator', e => {
+    $(document).on('click.mwgPileViewer', '.deck-stat[data-pile="draw"], .draw-pile-indicator', e => {
       e.preventDefault();
       this.handlePileClick('draw');
     });
 
     // 弃牌堆点击事件
-    $(document).on('click', '.deck-stat[data-pile="discard"], .discard-pile-indicator', e => {
+    $(document).on('click.mwgPileViewer', '.deck-stat[data-pile="discard"], .discard-pile-indicator', e => {
       e.preventDefault();
       this.handlePileClick('discard');
     });
 
     // 消耗堆点击事件
-    $(document).on('click', '.deck-stat[data-pile="exhaust"], .exhaust-pile-indicator', e => {
+    $(document).on('click.mwgPileViewer', '.deck-stat[data-pile="exhaust"], .exhaust-pile-indicator', e => {
       e.preventDefault();
       this.handlePileClick('exhaust');
     });

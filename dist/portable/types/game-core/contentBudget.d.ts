@@ -6,16 +6,20 @@ export interface BattleRewardBudget {
         candidates: number;
         pick: number;
         rarities: string[];
+        slotRarities?: string[];
     };
     artifacts: {
         candidates: number;
         pick: number;
+        slotRarities?: string[];
     } | null;
     items: {
         candidates: number;
         pick: number;
     } | null;
     experience: number;
+    /** Program-owned tower victory currency. It is never authored by the content model. */
+    gold?: number;
 }
 export interface ShopBudget {
     cards: number;
@@ -29,7 +33,22 @@ export interface TowerBattleRewardContext {
     act: number;
     floor: number;
     floorsPerAct?: number;
+    rewardSeed?: number;
+    /** The finalized roster size, rather than an authoring hint. */
+    enemyCount?: number;
 }
+export declare const TOWER_REWARD_RULES: {
+    readonly normalCards: readonly [readonly ["Common", 60], readonly ["Rare", 35], readonly ["Epic", 5]];
+    readonly eliteCards: readonly [readonly ["Epic", 80], readonly ["Legendary", 20]];
+    readonly normalPotionChance: 0.1;
+    readonly elitePotionChance: 0.25;
+};
+/**
+ * Currency is determined from the saved node seed and the finalized encounter
+ * shape.  It is deliberately separate from generated reward JSON, so a retry,
+ * restore, or model response cannot create a second payout.
+ */
+export declare function recommendTowerBattleGold(context: TowerBattleRewardContext): number;
 /** Build the fixed battle reward budget without asking callers to invent pacing fields. */
 export declare function recommendTowerBattleRewardBudget(context: TowerBattleRewardContext): BattleRewardBudget;
 /**
@@ -40,7 +59,9 @@ export declare function recommendTowerBattleRewardBudget(context: TowerBattleRew
  * sent through the bounded structure-repair request instead of silently
  * inventing authored content.
  */
-export declare function enforceBattleRewardBudget(rewardValue: unknown, budget: BattleRewardBudget): Record<string, unknown>;
+export declare function enforceBattleRewardBudget(rewardValue: unknown, budget: BattleRewardBudget, options?: {
+    allowProgramCurrency?: boolean;
+}): Record<string, unknown>;
 /** Fixed candidate budgets reduce AI arithmetic and keep rewards comparable between runs. */
 export declare function recommendBattleRewardBudget(route: BattleRouteContext | null): BattleRewardBudget;
 export declare function formatBattleRewardBudget(budget: BattleRewardBudget, options?: {
@@ -49,6 +70,9 @@ export declare function formatBattleRewardBudget(budget: BattleRewardBudget, opt
 /** Flat, non-formula checklist for the MVU model after a victory. */
 export declare function formatBattleRewardChecklist(budget: BattleRewardBudget): string;
 export declare function recommendShopBudget(pacing: RunPacingContext): ShopBudget;
+export declare function towerShopRemovalPrice(run: {
+    shopRemovalCount?: number;
+}): number;
 export declare function formatShopBudget(budget: ShopBudget): string;
 /** Program-owned shop pricing keeps arithmetic and required price fields out of AI output. */
 export declare function recommendShopPrice(category: ShopCandidateCategory, candidate: unknown, act: number): number;

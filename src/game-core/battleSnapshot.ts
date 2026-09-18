@@ -58,7 +58,9 @@ function hasValidCombatResources(value: unknown): boolean {
       typeof raw.emoji === 'string' && raw.emoji.trim().length > 0 &&
       Number.isInteger(raw.current) && raw.current >= 0 &&
       Number.isInteger(raw.max) && raw.max > 0 && raw.current <= raw.max &&
-      (raw.refresh === 'reset' || raw.refresh === 'retain')
+      (raw.refresh === 'reset' || raw.refresh === 'retain') &&
+      (raw.end_of_battle === undefined || raw.end_of_battle === 'reset' || raw.end_of_battle === 'retain') &&
+      (raw.start === undefined || Number.isInteger(raw.start) && raw.start >= 0 && raw.start <= raw.max)
     );
   });
 }
@@ -92,13 +94,18 @@ function hasValidRuntimeContent(state: Record<string, any>): boolean {
     : state.enemy
       ? [state.enemy]
       : [];
-  const enemies = [...livingEnemies, ...(Array.isArray(state.defeatedEnemies) ? state.defeatedEnemies : [])];
+  const enemies = [
+    ...livingEnemies,
+    ...(Array.isArray(state.reserveEnemies) ? state.reserveEnemies : []),
+    ...(Array.isArray(state.defeatedEnemies) ? state.defeatedEnemies : []),
+    ...(Array.isArray(state.escapedEnemies) ? state.escapedEnemies : []),
+  ];
   for (const enemy of enemies) {
     if ([...(enemy.actions || []), ...(enemy.abilities || [])].some(value => !hasValidRuntimeProgram(value))) {
       return false;
     }
     if (!hasValidRuntimeProgram(enemy.nextAction, false)) return false;
-    if (!hasValidRuntimeProgram(enemy.lustEffect)) return false;
+    if (enemy.lustEffect && !hasValidRuntimeProgram(enemy.lustEffect)) return false;
   }
   return hasValidRuntimeProgram(state.battle?.player_lust_effect);
 }
@@ -164,12 +171,23 @@ export function readBattleSessionSnapshot(value: unknown): BattleSessionSnapshot
   }
   if (state.random !== undefined && !isBattleRandomState(state.random)) return null;
   if (state.enemies !== undefined && !Array.isArray(state.enemies)) return null;
+  if (state.reserveEnemies !== undefined && !Array.isArray(state.reserveEnemies)) return null;
   if (state.defeatedEnemies !== undefined && !Array.isArray(state.defeatedEnemies)) return null;
+  if (state.escapedEnemies !== undefined && !Array.isArray(state.escapedEnemies)) return null;
+  if (state.rewardEligibleEnemyIds !== undefined && (
+    !Array.isArray(state.rewardEligibleEnemyIds)
+    || state.rewardEligibleEnemyIds.some(id => typeof id !== 'string' || !id)
+    || new Set(state.rewardEligibleEnemyIds).size !== state.rewardEligibleEnemyIds.length
+  )) return null;
   const enemies = Array.isArray(state.enemies) && state.enemies.length > 0
     ? state.enemies
     : state.enemy
       ? [state.enemy]
       : [];
+  if (enemies.length > 5) return null;
+  for (const enemy of [...enemies, ...(state.reserveEnemies || []), ...(state.defeatedEnemies || []), ...(state.escapedEnemies || [])]) {
+    if (!isRecord(enemy) || (enemy.victoryOnDefeat !== undefined && typeof enemy.victoryOnDefeat !== 'boolean')) return null;
+  }
   const enemyIds = new Set<string>();
   for (const enemy of enemies) {
     if (!isRecord(enemy) || !hasValidCombatNumbers(enemy)) return null;
@@ -178,10 +196,31 @@ export function readBattleSessionSnapshot(value: unknown): BattleSessionSnapshot
     enemyIds.add(enemy.id);
     if (!Array.isArray(enemy.statusEffects) || !Array.isArray(enemy.actions)) return null;
     if (enemy.abilities !== undefined && !Array.isArray(enemy.abilities)) return null;
+    if (enemy.escapePending !== undefined && typeof enemy.escapePending !== 'boolean') return null;
+    if (enemy.escapeReadyTurn !== undefined && (
+      !Number.isInteger(enemy.escapeReadyTurn) || enemy.escapeReadyTurn < 0 || enemy.escapePending !== true
+    )) return null;
   }
   const activeEnemyIds = new Set(enemyIds);
+  const occupiedSlots = enemies.map(enemy => enemy.stageSlot).filter(slot => slot !== undefined);
+  if (occupiedSlots.some(slot => !Number.isInteger(slot) || slot < 0 || slot >= 5) || new Set(occupiedSlots).size !== occupiedSlots.length) return null;
+  for (const enemy of state.reserveEnemies || []) {
+    if (!isRecord(enemy) || !hasValidCombatNumbers(enemy) || !hasValidCombatResources(enemy.resources)) return null;
+    if (typeof enemy.id !== 'string' || typeof enemy.name !== 'string' || enemyIds.has(enemy.id)) return null;
+    if (!Array.isArray(enemy.statusEffects) || !Array.isArray(enemy.actions)) return null;
+    if (enemy.stageSlot !== undefined || enemy.nextAction != null) return null;
+    enemyIds.add(enemy.id);
+  }
   for (const enemy of state.defeatedEnemies || []) {
     if (!isRecord(enemy) || !hasValidCombatNumbers(enemy) || enemy.currentHp > 0) return null;
+    if (!hasValidCombatResources(enemy.resources)) return null;
+    if (typeof enemy.id !== 'string' || typeof enemy.name !== 'string' || enemyIds.has(enemy.id)) return null;
+    enemyIds.add(enemy.id);
+    if (!Array.isArray(enemy.statusEffects) || !Array.isArray(enemy.actions)) return null;
+    if (enemy.abilities !== undefined && !Array.isArray(enemy.abilities)) return null;
+  }
+  for (const enemy of state.escapedEnemies || []) {
+    if (!isRecord(enemy) || !hasValidCombatNumbers(enemy) || enemy.currentHp <= 0) return null;
     if (!hasValidCombatResources(enemy.resources)) return null;
     if (typeof enemy.id !== 'string' || typeof enemy.name !== 'string' || enemyIds.has(enemy.id)) return null;
     enemyIds.add(enemy.id);

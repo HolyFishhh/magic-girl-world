@@ -1,3 +1,11 @@
+import { validateTowerOpeningRewardCandidates } from '../game-core/towerOpeningOutcome';
+import { applyOpeningDeckTransforms } from '../game-core/towerOpeningTransforms';
+import { preparePersistentReplacement } from './persistentReplacement';
+import { hasPendingInitialArtifactAcquisition, settleInitialArtifactAcquisitionInStat } from './initialArtifactAcquisition';
+import { applyNonCombatSettlementInStat, type NonCombatAnswers } from './nonCombatSettlementTransactions';
+import { parseTowerEventFlow, requireTowerEventStage, towerEventRandomKey, type TowerEventFlowState } from '../game-core/towerEventFlow';
+import { materializeTowerEventStageInStat } from '../runtime/towerEventState';
+import { towerShopRemovalPrice } from '../game-core/contentBudget';
 import {
   applyCardUpgrade,
   applyCardUpgradeToDeck,
@@ -5,8 +13,10 @@ import {
   consumeTowerOpening,
   completeRunNode,
   enterRunNode,
+  getOpeningTreasureNode,
   migratePersistentRunDeck,
   planTowerEventOutcome,
+  planTowerEventResourceSettlement,
   planTowerOpeningOutcome,
   fitTowerRewardItems,
   planRestHeal,
@@ -18,17 +28,28 @@ import {
 import { consumePendingRunResultInStat, readRunState } from '../runtime/runStateAdapter';
 import {
   applyRewardSelectionsToStat,
+  applyFixedRewardGrant,
   mutateRewardPoolInStat,
   normalizeMvuList,
   readRewardLimits,
   type RewardPoolMutationResult,
   type RewardSelections,
   type RewardSelectionSummary,
+  type RewardApplicationOptions,
 } from './rewardTransactions';
 import { normalizeMvuStatusDefinitions } from '../runtime/mvuArrays';
 import type { RewardPoolMutation } from '../game-core/rewardSettlement';
-import { validateRewardCandidateAgainstLibrary } from '../game-core/rewardCandidateValidation';
+import { CAMPFIRE_RULES, campfireGold } from '../game-core/towerCampfire';
+import { availableTowerMemoryCards } from '../runtime/towerCardMemory';
+import { rememberTowerCardOffer } from '../game-core/towerCardMemory';
+import {
+  readRewardCandidateSupportStatuses,
+  rewardStatusDefinitionsEqual,
+  validateRewardCandidateAgainstLibrary,
+} from '../game-core/rewardCandidateValidation';
 import { executeRunTransactionTriggers, type RunTriggerInvocation } from './runTransactionTriggers';
+
+export interface CampfireResult { action: 'train' | 'scavenge' | 'recall'; summary: string; run: RunState }
 
 export interface RestHealResult {
   healed: number;
@@ -64,10 +85,18 @@ export interface TowerOpeningSettlementResult extends RewardSelectionSummary {
 export interface TowerEventChoiceSettlementResult {
   choiceId: string;
   pendingReward: boolean;
+  stageAdvanced?: boolean;
   hp: number;
   maxHp: number;
   gold: number;
   cardRemovalCount: number;
+  resourceChanges: Array<{
+    id: string;
+    name: string;
+    delta: number;
+    before: number;
+    after: number;
+  }>;
   run: RunState;
 }
 
@@ -82,23 +111,31 @@ export type RunTransactionEventType =
   | 'reward_claimed'
   | 'treasure_claimed'
   | 'event_reward_claimed'
+  | 'event_step_settled'
+  | 'initial_artifacts_acquired'
   | 'reward_pool_changed'
   | 'shop_purchased'
   | 'shop_left'
   | 'rest_healed'
+  | 'rest_completed'
   | 'card_removed'
   | 'card_duplicated'
   | 'card_transformed'
   | 'card_upgraded';
 
 export type UnifiedRunTransactionRequest = (
-  | { kind: 'reward_claim'; selections: RewardSelections }
+  | { kind: 'reward_claim'; selections: RewardSelections; partial?: boolean; claimGold?: boolean; discardGold?: boolean; cardGroupId?: string }
   | { kind: 'treasure_reward_claim'; selections: RewardSelections }
   | { kind: 'event_reward_claim'; selections: RewardSelections }
+  | { kind: 'event_step'; choiceId: string; stageId?: string; expectedEventRevision?: number; answers?: NonCombatAnswers }
+  | { kind: 'initial_artifact_acquisition'; generationId: string; answers: Record<string, NonCombatAnswers> }
   | { kind: 'reward_pool'; mutation: RewardPoolMutation; goldCost?: number }
   | { kind: 'shop_purchase'; selections: RewardSelections }
   | { kind: 'shop_leave' }
+  | { kind: 'shop_remove_card'; runInstanceId: string }
+  | { kind: 'allowance_remove_card'; runInstanceId: string }
   | { kind: 'rest_heal'; ratio?: number }
+  | { kind: 'rest_action'; action: 'train' | 'scavenge' | 'recall'; cardId?: string }
   | { kind: 'rest_remove_card'; runInstanceId: string }
   | { kind: 'rest_duplicate_card'; runInstanceId: string }
   | {
@@ -111,7 +148,8 @@ export type UnifiedRunTransactionRequest = (
       runInstanceId: string;
       patch: Record<string, unknown>;
     }
-) & { expectedRevision?: number; source?: RunTransactionSource };
+) & { expectedRevision?: number; source?: RunTransactionSource; acquisitionAnswers?: Record<string, NonCombatAnswers>;
+  acquisitionPreview?: RewardApplicationOptions['acquisitionPreview'] };
 
 export interface RunTransactionEvent {
   id: string;
@@ -155,6 +193,9 @@ export interface UnifiedRunTransactionResult {
     | ShopSettlementResult
     | RestUpgradeResult
     | RestHealResult
+    | CampfireResult
+    | TowerEventChoiceSettlementResult
+    | { artifactNames: string[] }
     | RunState
     | { runInstanceId: string; cardName: string }
     | { sourceRunInstanceId: string; createdRunInstanceId: string; cardName: string };
@@ -245,10 +286,15 @@ function transactionEventType(kind: UnifiedRunTransactionRequest['kind']): RunTr
     reward_claim: 'reward_claimed',
     treasure_reward_claim: 'treasure_claimed',
     event_reward_claim: 'event_reward_claimed',
+    event_step: 'event_step_settled',
+    initial_artifact_acquisition: 'initial_artifacts_acquired',
     reward_pool: 'reward_pool_changed',
     shop_purchase: 'shop_purchased',
     shop_leave: 'shop_left',
+    shop_remove_card: 'card_removed',
+    allowance_remove_card: 'card_removed',
     rest_heal: 'rest_healed',
+    rest_action: 'rest_completed',
     rest_remove_card: 'card_removed',
     rest_duplicate_card: 'card_duplicated',
     rest_transform_card: 'card_transformed',
@@ -305,65 +351,13 @@ function selectedRunCard(cards: readonly Record<string, any>[], runInstanceId: s
   return matches[0];
 }
 
-function preparePersistentReplacement(
-  stat: Record<string, any>,
-  cards: readonly Record<string, any>[],
-  sourceRunInstanceId: string,
-  replacement: Record<string, unknown>,
-): Record<string, unknown> {
-  const battle = requireRecord(stat.battle, 'battle 数据不存在');
-  const prepared = clone(replacement);
-  for (const key of [
-    'runInstanceId',
-    'runInstanceIds',
-    'combatInstanceId',
-    'parentCombatInstanceId',
-    'parentRunInstanceId',
-    'templateId',
-    'origin',
-    '$meta',
-    'upgrade_level',
-  ])
-    delete prepared[key];
-  const statusDefinitions = normalizeMvuStatusDefinitions(battle.statuses);
-  const supportStatus = prepared.status;
-  if (
-    supportStatus !== undefined &&
-    (!supportStatus || typeof supportStatus !== 'object' || Array.isArray(supportStatus))
-  ) {
-    throw new Error('卡牌变形失败：候选 status 必须是状态定义对象');
-  }
-  if (supportStatus && typeof supportStatus === 'object') {
-    const supportId = String((supportStatus as Record<string, unknown>).id || '');
-    const existing = statusDefinitions.find(status => status.id === supportId);
-    if (existing) {
-      if (JSON.stringify(existing) !== JSON.stringify(supportStatus)) {
-        throw new Error(`卡牌变形失败：状态 ${supportId} 已存在但定义不同`);
-      }
-      delete prepared.status;
-    }
-  }
-  const validation = validateRewardCandidateAgainstLibrary('cards', prepared, {
-    existing: cards.filter(card => card.runInstanceId !== sourceRunInstanceId),
-    statusDefinitions,
-    knownResourceIds: normalizeMvuList<Record<string, any>>(battle.core?.resources)
-      .map(resource => String(resource?.id || ''))
-      .filter(Boolean),
-  });
-  if (!validation.ok) throw new Error(`卡牌变形失败：${validation.message}`);
-  if (prepared.status && typeof prepared.status === 'object') {
-    const statuses = Array.isArray(battle.statuses) ? battle.statuses : null;
-    if (!statuses) throw new Error('卡牌变形失败：battle.statuses 不是数组');
-    statuses.push(clone(prepared.status));
-    delete prepared.status;
-  }
-  return prepared;
-}
 
-function logSummary(request: UnifiedRunTransactionRequest, value: UnifiedRunTransactionResult['value']): string {
+function logSummary(request: UnifiedRunTransactionRequest, value: UnifiedRunTransactionResult['value'], goldDelta = 0): string {
+  if (request.kind === 'initial_artifact_acquisition') return '已结算初始遗物的获得时效果';
+  if (request.kind === 'event_step') return `事件选择：${request.choiceId}`;
   if (request.kind === 'reward_claim') {
     const summary = value as RewardSelectionSummary;
-    return `领取奖励：${[...summary.cards, ...summary.artifacts, ...summary.items].join('、') || '跳过'}`;
+    return `领取奖励：${[...(request.claimGold ? [`${Math.max(0, goldDelta)} 金币`] : []), ...summary.cards, ...summary.artifacts, ...summary.items].join('、') || '跳过'}`;
   }
   if (request.kind === 'treasure_reward_claim') {
     const summary = value as RewardSelectionSummary;
@@ -381,7 +375,10 @@ function logSummary(request: UnifiedRunTransactionRequest, value: UnifiedRunTran
     return `商店结算：花费 ${(value as ShopSettlementResult).spentGold} 金币`;
   }
   if (request.kind === 'shop_leave') return '离开商店';
+  if (request.kind === 'allowance_remove_card') return `使用删卡次数：${(value as {cardName:string}).cardName}`;
+  if (request.kind === 'shop_remove_card') return `商店删卡：${(value as {cardName:string}).cardName}`;
   if (request.kind === 'rest_heal') return `营火恢复：${(value as RestHealResult).healed} 生命`;
+  if (request.kind === 'rest_action') return (value as CampfireResult).summary;
   if (request.kind === 'rest_upgrade_card') return `营火升级：${(value as RestUpgradeResult).cardName}`;
   if (request.kind === 'rest_duplicate_card') return `营火复制：${(value as { cardName: string }).cardName}`;
   if (request.kind === 'rest_transform_card') return `营火变形：${(value as { cardName: string }).cardName}`;
@@ -407,6 +404,7 @@ function clearTowerNodePayload(stat: Record<string, any>): void {
   stat.run_node = null;
   stat.run_node_reward = null;
   stat.run_event = null;
+  stat.run_event_state = null;
   stat.run_shop = null;
   stat.run_treasure = null;
   stat.run_rest = null;
@@ -447,7 +445,11 @@ export function settleRestUpgradeInStat(statValue: unknown): RestUpgradeResult {
   const knownResourceIds = normalizeMvuList<Record<string, any>>(battle.core?.resources)
     .map(resource => String(resource?.id || ''))
     .filter(Boolean);
-  const upgraded = applyCardUpgradeToDeck(cards, stat.run_upgrade, { statusDefinitions, knownResourceIds });
+  const upgraded = applyCardUpgradeToDeck(cards, stat.run_upgrade, {
+    playerDesireEffect: battle.player_lust_effect,
+    statusDefinitions,
+    knownResourceIds,
+  });
   if (!upgraded.ok) throw new Error(`卡牌升级失败：${upgraded.message}`);
   if (!upgraded.cards) throw new Error('卡牌升级失败：升级牌组未生成');
   const nextRun = completeRunNode(run, { outcome: 'cleared' });
@@ -464,8 +466,8 @@ function stripShopPrices(reward: Record<string, any>): void {
   }
 }
 
-/** Validate on a clone, then commit rewards, gold, and route completion together. */
-export function settleShopSelectionsInStat(statValue: unknown, selections: RewardSelections): ShopSettlementResult {
+/** Validate on a clone, then commit the purchase while keeping the shop open. */
+export function settleShopSelectionsInStat(statValue: unknown, selections: RewardSelections, acquisitionAnswers?: Record<string, NonCombatAnswers>, acquisitionPreview?: RewardApplicationOptions['acquisitionPreview']): ShopSettlementResult {
   const stat = requireRecord(statValue, 'stat_data 不存在');
   const run = requireActiveNode(stat, 'shop');
   const reward = requireRecord(stat.reward, 'reward 数据不存在');
@@ -480,36 +482,50 @@ export function settleShopSelectionsInStat(statValue: unknown, selections: Rewar
     },
   });
   const draft = clone(stat);
+  draft.run = purchase.run;
   stripShopPrices(requireRecord(draft.reward, 'reward 数据不存在'));
-  const summary = applyRewardSelectionsToStat(draft, purchase.selections);
+  const summary = applyRewardSelectionsToStat(draft, purchase.selections, { acquisitionAnswers, acquisitionPreview });
+  {
+    for (const [key, category] of [['card','cards'],['artifact','artifacts'],['item','items']] as const)
+      draft.reward[key] = normalizeMvuList(reward[key]).filter((_, index) => !purchase.selections[category].includes(index));
+    draft.reward.limits = {cards:draft.reward.card.length, artifacts:draft.reward.artifact.length, items:draft.reward.item.length};
+    draft.reward.pool_revision = Number(reward.pool_revision || 0) + 1;
+  }
   stat.battle = draft.battle;
   stat.reward = draft.reward;
-  stat.run = purchase.run;
+  stat.run = draft.run;
   stat.run_upgrade = null;
-  return { ...summary, spentGold: purchase.spentGold, remainingGold: purchase.remainingGold, run: purchase.run };
+  return { ...summary, spentGold: purchase.spentGold, remainingGold: stat.run.gold, run: stat.run };
 }
 
 /** Commit an event outcome and its optional reward selection as one MUV transaction. */
 export function settleEventRewardSelectionsInStat(
   statValue: unknown,
   selections: RewardSelections,
+  acquisitionAnswers?: Record<string, NonCombatAnswers>,
+  acquisitionPreview?: RewardApplicationOptions['acquisitionPreview'],
 ): EventRewardSettlementResult {
   const stat = requireRecord(statValue, 'stat_data 不存在');
   requireActiveNode(stat, 'event');
   if (stat.run_result == null) throw new Error('事件结果尚未生成');
 
   const draft = clone(stat);
-  const summary = applyRewardSelectionsToStat(draft, selections);
-  const settlement = consumePendingRunResultInStat(draft);
-  if (!settlement) throw new Error('事件结果尚未生成');
-
-  stat.battle = draft.battle;
-  stat.reward = draft.reward;
-  stat.run = draft.run;
-  stat.run_result = draft.run_result;
-  stat.run_upgrade = draft.run_upgrade;
-  clearTowerNodePayload(stat);
-  return { ...summary, run: settlement.run };
+  const summary = applyRewardSelectionsToStat(draft, selections, { acquisitionAnswers, acquisitionPreview });
+  if (Array.isArray(draft.run_event?.choices)) {
+    const offers = draft.run_event.choices.flatMap((choice: any) => { const r = choice?.outcome?.reward; return r?.cards || r?.card || []; });
+    draft.run = rememberTowerCardOffer(draft.run, offers, normalizeMvuList<Record<string, any>>(draft.battle?.cards).map(card => card.id));
+  }
+  const state = draft.run_event_state as TowerEventFlowState | undefined;
+  if (state?.phase === 'reward' && state.next_stage) {
+    draft.run_result = null;
+    materializeTowerEventStageInStat(draft, state.next_stage, state.revision + 1);
+  } else {
+    const settlement = consumePendingRunResultInStat(draft);
+    if (!settlement) throw new Error('事件结果尚未生成');
+    clearTowerNodePayload(draft);
+  }
+  replaceRecord(stat, draft);
+  return { ...summary, run: draft.run };
 }
 
 /**
@@ -517,46 +533,62 @@ export function settleEventRewardSelectionsInStat(
  * to repeat the event. Scalar costs are applied to a draft, while optional
  * reward candidates continue through the established event reward transaction.
  */
-export function settleTowerEventChoiceInStat(statValue: unknown, choiceId: string): TowerEventChoiceSettlementResult {
+export function settleTowerEventChoiceInStat(statValue: unknown, choiceId: string, options: {
+  stageId?: string; expectedEventRevision?: number; answers?: NonCombatAnswers;
+} = {}): TowerEventChoiceSettlementResult {
   const stat = requireRecord(statValue, 'stat_data 不存在');
   const run = requireActiveNode(stat, 'event');
   if (run.routeMode !== 'map' || run.schemaVersion !== 3) throw new Error('当前事件不是爬塔预生成事件');
   if (stat.run_result != null) throw new Error('当前事件选项已经选择，请先完成结算');
   const event = requireRecord(stat.run_event, '事件内容不存在');
-  if (!Array.isArray(event.choices)) throw new Error('事件选项无效');
-  const matches = event.choices.filter(
-    (choice: unknown) =>
-      choice &&
-      typeof choice === 'object' &&
-      !Array.isArray(choice) &&
-      (choice as Record<string, unknown>).id === choiceId,
-  );
+  const flow = parseTowerEventFlow(event, planTowerEventOutcome);
+  if (flow.version === 2 && (typeof options.stageId !== 'string' || !Number.isInteger(options.expectedEventRevision))) {
+    throw new Error('分阶段事件缺少当前阶段身份，请重新打开选择');
+  }
+  const draft = clone(stat);
+  const state: TowerEventFlowState = draft.run_event_state ?? materializeTowerEventStageInStat(draft);
+  if (state.node_id !== run.currentNode!.id || state.phase !== 'choosing'
+    || (options.stageId !== undefined && state.stage_id !== options.stageId)
+    || (options.expectedEventRevision !== undefined && state.revision !== options.expectedEventRevision)) {
+    throw new Error('事件阶段已变化，请重新选择');
+  }
+  const stage = requireTowerEventStage(flow, state.stage_id);
+  const matches = stage.choices.filter(choice => choice.id === choiceId);
   if (matches.length !== 1) throw new Error(matches.length ? '事件选项重复' : '事件选项不存在');
   const selected = requireRecord(matches[0], '事件选项无效');
   const outcome = requireRecord(selected.outcome, '事件结果无效');
   const outcomePlan = planTowerEventOutcome(outcome);
 
-  const draft = clone(stat);
-  const battle = requireRecord(draft.battle, '事件结算失败：battle 数据不存在');
-  const core = requireRecord(battle.core, '事件结算失败：battle.core 数据不存在');
-  const oldMaxHp = Number(core.max_hp);
-  const oldHp = Number(core.hp);
-  const oldRemovalCount = Number(core.card_removal_count ?? 0);
-  if (!Number.isFinite(oldMaxHp) || oldMaxHp <= 0 || !Number.isFinite(oldHp) || oldHp < 0 || oldHp > oldMaxHp) {
-    throw new Error('事件结算失败：玩家生命数据无效');
+  const before = requireRecord(stat.battle?.core, '事件结算失败：玩家状态不存在');
+  const settlement = { ...outcome };
+  delete settlement.outcome;
+  delete settlement.reward;
+  const randomTargets = Object.fromEntries(outcomePlan.deckActions.filter(action => action.pick === 'random')
+    .map(action => [action.id, state.random_targets[towerEventRandomKey(choiceId, action.id)]]));
+  const randomSeeds = Object.fromEntries(outcomePlan.deckActions.filter(action => action.pick === 'random')
+    .flatMap(action => {
+      const seed = state.random_seeds?.[towerEventRandomKey(choiceId, action.id)];
+      return seed === undefined ? [] : [[action.id, seed]];
+    }));
+  applyNonCombatSettlementInStat(draft, settlement, options.answers ?? {}, {
+    seed: JSON.stringify([run.seed, run.currentNode!.id, stage.id, choiceId]),
+    randomTargets, randomSeeds, requireFrozenRandom: true, grant: applyFixedRewardGrant,
+  });
+  const core = draft.battle.core;
+  if (outcomePlan.routeOutcome === 'failed') {
+    core.hp = Math.min(core.max_hp, Math.max(0, Number(before.hp) - outcomePlan.cost.hp + outcomePlan.hpDelta));
   }
-  if (!Number.isInteger(oldRemovalCount) || oldRemovalCount < 0) {
-    throw new Error('事件结算失败：删卡次数无效');
-  }
-  const maxHp = Math.max(1, oldMaxHp + outcomePlan.maxHpDelta);
-  const hpFloor = outcomePlan.routeOutcome === 'failed' ? 0 : 1;
-  const hp = Math.min(maxHp, Math.max(hpFloor, oldHp + outcomePlan.hpDelta));
-  const cardRemovalCount = Math.max(0, oldRemovalCount + outcomePlan.cardRemovalDelta);
-  const gold = Math.min(999999, Math.max(0, run.gold + outcomePlan.goldDelta));
-  core.max_hp = maxHp;
-  core.hp = hp;
-  core.card_removal_count = cardRemovalCount;
-  draft.run = { ...run, gold };
+  const hp = core.hp, maxHp = core.max_hp, gold = draft.run.gold;
+  const cardRemovalCount = Number(core.card_removal_count ?? 0);
+  const beforeResources = new Map(normalizeMvuList<Record<string, any>>(before.resources).map(entry => [entry.id, entry]));
+  const resourceChanges = normalizeMvuList<Record<string, any>>(core.resources).flatMap(entry => {
+    const old = beforeResources.get(entry.id);
+    const oldValue = Number(old?.current ?? old?.start ?? 0), nextValue = Number(entry.current ?? entry.start ?? 0);
+    return oldValue === nextValue ? [] : [{ id: String(entry.id), name: String(entry.name || entry.id),
+      delta: nextValue - oldValue, before: oldValue, after: nextValue }];
+  });
+  const offers = stage.choices.flatMap((choice: any) => choice.outcome?.reward?.card || choice.outcome?.reward?.cards || []);
+  draft.run = rememberTowerCardOffer(draft.run, offers, normalizeMvuList<Record<string, any>>(draft.battle?.cards).map(card=>card.id));
 
   const reward =
     outcomePlan.reward === null
@@ -564,24 +596,49 @@ export function settleTowerEventChoiceInStat(statValue: unknown, choiceId: strin
       : requireRecord(outcome.reward, '事件奖励无效');
   draft.reward = clone(reward);
   draft.run_result = { node_id: run.currentNode!.id, outcome: outcomePlan.routeOutcome };
-  draft.run_event = { ...clone(event), selected_choice_id: choiceId };
+  if (flow.version === 1) draft.run_event = { ...clone(event), selected_choice_id: choiceId };
+  draft.run_event_reveal = { node_id: run.currentNode!.id, choice_id: choiceId,
+    label: String(selected.label || ''), outcome: { ...clone(outcome),
+      hp: hp - Number(before.hp), max_hp: maxHp - Number(before.max_hp), gold: gold - run.gold,
+      lust: Number(core.lust ?? 0) - Number(stat.battle.core.lust ?? 0),
+      card_removals: cardRemovalCount - Number(before.card_removal_count ?? 0),
+      resources: Object.fromEntries(resourceChanges.map(change => [change.id, change.delta])),
+    } };
 
   let settledRun = draft.run as RunState;
   const pendingReward = hasRewardCandidates(reward);
-  if (!pendingReward) {
+  const nextStage = outcomePlan.routeOutcome === 'failed' ? undefined : selected.next_stage;
+  if (pendingReward) {
+    draft.run_event_state = { ...state, phase: 'reward', revision: state.revision + 1,
+      ...(nextStage ? { next_stage: nextStage } : {}) };
+  } else if (nextStage) {
+    draft.run_result = null;
+    materializeTowerEventStageInStat(draft, nextStage, state.revision + 1);
+  } else {
     const settlement = consumePendingRunResultInStat(draft);
     if (!settlement) throw new Error('事件结算失败：路线结果未生成');
     settledRun = settlement.run;
     clearTowerNodePayload(draft);
   }
   replaceRecord(stat, draft);
-  return { choiceId, pendingReward, hp, maxHp, gold, cardRemovalCount, run: clone(settledRun) };
+  return {
+    choiceId,
+    pendingReward,
+    stageAdvanced: Boolean(nextStage && !pendingReward),
+    hp,
+    maxHp,
+    gold,
+    cardRemovalCount,
+    resourceChanges,
+    run: clone(settledRun),
+  };
 }
 
 export function leaveShopInStat(statValue: unknown): RunState {
   const stat = requireRecord(statValue, 'stat_data 不存在');
   const run = requireActiveNode(stat, 'shop');
-  const nextRun = completeRunNode(run, { outcome: 'cleared' });
+  let nextRun = completeRunNode(run, { outcome: 'cleared' });
+  nextRun = rememberTowerCardOffer(nextRun, normalizeMvuList(stat.reward?.card), []);
   let reward: Record<string, any> | null = null;
   try {
     reward = requireRecord(stat.reward, '');
@@ -593,6 +650,7 @@ export function leaveShopInStat(statValue: unknown): RunState {
     reward.artifact = [];
     reward.item = [];
     reward.limits = {};
+    delete reward.card_choice_groups;
   }
   stat.run = nextRun;
   stat.run_upgrade = null;
@@ -605,8 +663,9 @@ export function leaveShopInStat(statValue: unknown): RunState {
  * whole choice is committed once; malformed cards, relics, items, or scalar
  * costs leave both the player and the opening state untouched.
  */
-export function settleTowerOpeningChoiceInStat(statValue: unknown, choiceId: string): TowerOpeningSettlementResult {
+export function settleTowerOpeningChoiceInStat(statValue: unknown, choiceId: string, acquisitionAnswers?: Record<string, NonCombatAnswers>, acquisitionPreview?: RewardApplicationOptions['acquisitionPreview']): TowerOpeningSettlementResult {
   const stat = requireRecord(statValue, 'stat_data 不存在');
+  if (hasPendingInitialArtifactAcquisition(stat)) throw new Error('请先完成初始遗物的选择');
   const run = readRunState(stat);
   if (
     !run ||
@@ -630,6 +689,7 @@ export function settleTowerOpeningChoiceInStat(statValue: unknown, choiceId: str
   if (matches.length !== 1) throw new Error(matches.length ? '开局馈赠选项重复' : '开局馈赠选项不存在');
   const selected = requireRecord(matches[0], '开局馈赠选项无效');
   const plan = planTowerOpeningOutcome(selected.outcome);
+  if (plan.deckTransforms.length) validateTowerOpeningRewardCandidates([selected], stat.battle);
 
   const draft = clone(stat);
   const battle = requireRecord(draft.battle, '开局馈赠结算失败：battle 数据不存在');
@@ -653,13 +713,26 @@ export function settleTowerOpeningChoiceInStat(statValue: unknown, choiceId: str
     throw new Error('开局馈赠结算失败：删卡次数无效');
   }
   const maxHp = Math.max(1, oldMaxHp + plan.maxHpDelta);
-  const hp = Math.min(maxHp, Math.max(1, oldHp + plan.hpDelta));
+  // A gift opens every act.  Its restorative transition is program-owned and
+  // cannot be skipped by choosing a different authored reward bundle.
+  const hp = maxHp;
+  if (plan.lustDelta !== 0 || plan.maxLustDelta !== 0) {
+    const oldMaxLust = Number(core.max_lust);
+    const oldLust = Number(core.lust);
+    if (!Number.isFinite(oldMaxLust) || oldMaxLust <= 0 || !Number.isFinite(oldLust) || oldLust < 0 || oldLust > oldMaxLust) {
+      throw new Error('开局馈赠结算失败：玩家欲望数据无效');
+    }
+    core.max_lust = Math.max(1, oldMaxLust + plan.maxLustDelta);
+    core.lust = Math.min(core.max_lust, Math.max(0, oldLust + plan.lustDelta));
+  }
   const cardRemovalCount = Math.max(0, oldRemovalCount + plan.cardRemovalDelta);
   const gold = Math.min(999999, Math.max(0, run.gold + plan.goldDelta));
   core.max_hp = maxHp;
   core.hp = hp;
   core.card_removal_count = cardRemovalCount;
 
+  if (plan.deckTransforms.length) battle.cards = applyOpeningDeckTransforms(normalizeMvuList(battle.cards), plan.deckTransforms,
+    (replacement, cards, source) => preparePersistentReplacement(draft, cards, source, replacement));
   const openingItems = fitTowerRewardItems(plan.reward.items, battle);
 
   reward.card = plan.reward.cards;
@@ -671,37 +744,42 @@ export function settleTowerOpeningChoiceInStat(statValue: unknown, choiceId: str
     items: openingItems.length,
   };
   reward.disabled_categories = [];
+  draft.run.gold = gold;
   const summary = applyRewardSelectionsToStat(draft, {
     cards: plan.reward.cards.map((_entry, index) => index),
     artifacts: plan.reward.artifacts.map((_entry, index) => index),
     items: openingItems.map((_entry, index) => index),
-  });
+  }, { acquisitionAnswers, acquisitionPreview });
   persistentDeck(draft);
 
   const consumed = consumeTowerOpening(run.opening);
+  const allOpeningCards = content.choices.flatMap((entry: Record<string, any>) => {
+    const reward = entry.outcome?.reward;
+    return Array.isArray(reward?.cards) ? reward.cards.filter((card: Record<string, any>) => card.id) : [];
+  });
+  const rememberedRun = rememberTowerCardOffer(draft.run, allOpeningCards, plan.reward.cards.map(card => String(card.id)));
   const openingRun: RunState = {
-    ...run,
-    gold,
+    ...rememberedRun,
+    gold: draft.run.gold,
     opening: consumed.opening,
     stateRevision: run.stateRevision + 1,
   };
-  const start = openingRun.choices.length === 1 ? openingRun.choices[0] : null;
-  if (!start || start.kind !== 'treasure' || start.floor !== 1) {
-    throw new Error('开局馈赠结算失败：地图没有唯一的奖励起点');
-  }
-  // The benefactor is the map's sole start/reward node. Resolve it in this
-  // same transaction so the next visible choices are the three main routes,
-  // rather than forcing the player to enter a duplicate treasure room.
-  const nextRun = completeRunNode(enterRunNode(openingRun, start.id), { outcome: 'cleared' });
+  const start = getOpeningTreasureNode(openingRun);
+  // New maps begin with an ordinary battle and the opening is not a map room.
+  // Preserve old floor-one treasure maps: their already-saved start node still
+  // resolves here exactly once, without changing its generated content.
+  const nextRun = start
+    ? completeRunNode(enterRunNode(openingRun, start.id), { outcome: 'cleared' })
+    : openingRun;
   draft.run = nextRun;
   replaceRecord(stat, draft);
   return {
     choiceId,
     ...summary,
-    hp,
-    maxHp,
-    gold,
-    cardRemovalCount,
+    hp: draft.battle.core.hp,
+    maxHp: draft.battle.core.max_hp,
+    gold: nextRun.gold,
+    cardRemovalCount: draft.battle.core.card_removal_count,
     run: clone(nextRun),
   };
 }
@@ -729,19 +807,39 @@ export function executeUnifiedRunTransactionInStat(
   const cardRunInstanceIds: string[] = [];
   let value: UnifiedRunTransactionResult['value'];
 
-  if (request.kind === 'reward_claim') {
-    value = applyRewardSelectionsToStat(draft, request.selections);
+  if (request.kind === 'initial_artifact_acquisition') {
+    if (draft.initial_artifact_acquisition?.generationId !== request.generationId) throw new Error('初始遗物来源已变化，请重新打开');
+    const receipt = settleInitialArtifactAcquisitionInStat(draft, request.answers);
+    if (!receipt) throw new Error('初始遗物已处理，无需重复领取');
+    value = { artifactNames: receipt.artifacts.map(artifact => String(artifact.name || artifact.id)) };
+    persistentDeck(draft);
+  } else if (request.kind === 'reward_claim') {
+    value = applyRewardSelectionsToStat(draft, request.selections, { partial: request.partial === true, cardGroupId: request.cardGroupId, acquisitionAnswers: request.acquisitionAnswers, acquisitionPreview: request.acquisitionPreview });
+    if (request.claimGold || request.discardGold) {
+      if (request.claimGold && request.discardGold) throw new Error('金币奖励不能同时领取和放弃');
+      const reward = requireRecord(draft.reward, 'reward 数据不存在');
+      const amount = Number(reward.gold);
+      if (request.claimGold && (!Number.isInteger(amount) || amount <= 0 || reward.gold_claimed === true)) throw new Error('金币奖励不可领取');
+      if (request.claimGold) {
+        if (!draft.run) throw new Error('金币奖励需要远征状态');
+        draft.run = { ...draft.run, gold: Math.min(999999, draft.run.gold + amount) };
+      }
+      reward.gold_claimed = true;
+    }
     persistentDeck(draft);
   } else if (request.kind === 'treasure_reward_claim') {
     const run = requireActiveNode(draft, 'treasure');
-    const summary = applyRewardSelectionsToStat(draft, request.selections);
+    const summary = applyRewardSelectionsToStat(draft, request.selections, { acquisitionAnswers: request.acquisitionAnswers, acquisitionPreview: request.acquisitionPreview });
     persistentDeck(draft);
-    const nextRun = completeRunNode(run, { outcome: 'cleared' });
+    const nextRun = completeRunNode(draft.run, { outcome: 'cleared' });
     draft.run = nextRun;
     clearTowerNodePayload(draft);
     value = { ...summary, run: nextRun };
   } else if (request.kind === 'event_reward_claim') {
-    value = settleEventRewardSelectionsInStat(draft, request.selections);
+    value = settleEventRewardSelectionsInStat(draft, request.selections, request.acquisitionAnswers, request.acquisitionPreview);
+    persistentDeck(draft);
+  } else if (request.kind === 'event_step') {
+    value = settleTowerEventChoiceInStat(draft, request.choiceId, request);
     persistentDeck(draft);
   } else if (request.kind === 'reward_pool') {
     if (request.goldCost !== undefined) {
@@ -753,14 +851,65 @@ export function executeUnifiedRunTransactionInStat(
     }
     value = mutateRewardPoolInStat(draft, request.mutation);
   } else if (request.kind === 'shop_purchase') {
-    value = settleShopSelectionsInStat(draft, request.selections);
+    value = settleShopSelectionsInStat(draft, request.selections, request.acquisitionAnswers, request.acquisitionPreview);
     persistentDeck(draft);
+  } else if (request.kind === 'allowance_remove_card') {
+    const core = requireRecord(draft.battle?.core, '删卡缺少玩家状态');
+    const count = Number(core.card_removal_count ?? 0);
+    if (!Number.isInteger(count) || count <= 0) throw new Error('删卡次数不足');
+    const cards = persistentDeck(draft);
+    const card = selectedRunCard(cards, request.runInstanceId);
+    const result = applyPersistentDeckMutation(cards, { kind: 'remove', runInstanceId: card.runInstanceId });
+    replaceMvuList(draft.battle, 'cards', result.cards);
+    core.card_removal_count = count - 1;
+    cardRunInstanceIds.push(card.runInstanceId);
+    value = { runInstanceId: card.runInstanceId, cardName: String(card.name || card.id) };
+  } else if (request.kind === 'shop_remove_card') {
+    const run = requireActiveNode(draft, 'shop');
+    if (draft.run_shop?.removal_used) throw new Error('本次商店已经删过一张牌');
+    const cards = persistentDeck(draft);
+    const card = selectedRunCard(cards, request.runInstanceId);
+    const paid = spendRunGold(run, towerShopRemovalPrice(run));
+    const result = applyPersistentDeckMutation(cards, {kind:'remove',runInstanceId:request.runInstanceId});
+    replaceMvuList(draft.battle, 'cards', result.cards);
+    draft.run = {...paid, shopRemovalCount:(run.shopRemovalCount || 0) + 1};
+    draft.run_shop = {...draft.run_shop, removal_used:true};
+    cardRunInstanceIds.push(request.runInstanceId);
+    value = {runInstanceId:request.runInstanceId, cardName:String(card.name || card.id)};
   } else if (request.kind === 'shop_leave') {
     value = leaveShopInStat(draft);
   } else if (request.kind === 'rest_heal') {
     value = settleRestHealInStat(draft, request.ratio);
+  } else if (request.kind === 'rest_action') {
+    const run = requireActiveNode(draft, 'rest');
+    if (!['train', 'scavenge', 'recall'].includes(request.action)) throw new Error('营火行动无效');
+    const core = requireRecord(draft.battle?.core, 'battle.core 数据不存在');
+    let summary: string;
+    if (request.action === 'train') {
+      const maxHp = Number(core.max_hp);
+      if (!Number.isFinite(maxHp) || maxHp <= 0) throw new Error('生命上限无效');
+      core.max_hp = maxHp + CAMPFIRE_RULES.maxHpGain;
+      summary = `营火锻炼：生命上限增加 ${CAMPFIRE_RULES.maxHpGain}`;
+    } else if (request.action === 'scavenge') {
+      const gold = campfireGold(run.seed, run.currentNode!.id);
+      draft.run = { ...run, gold: Math.min(999999, run.gold + gold) };
+      summary = `营火搜刮：获得 ${gold} 金币`;
+    } else {
+      const candidates = availableTowerMemoryCards(draft, run.currentNode!.id, 'recall');
+      const card = candidates.find(card => card.id === request.cardId);
+      if (!card) throw new Error('这张牌不在本次可回忆的候选中');
+      draft.reward = { card: [card], artifact: [], item: [], limits: { cards: 1, artifacts: 0, items: 0 } };
+      applyRewardSelectionsToStat(draft, { cards: [0], artifacts: [], items: [] });
+      persistentDeck(draft);
+      summary = `营火回忆：获得 ${String(card.name || card.id)}`;
+    }
+    draft.run = completeRunNode(draft.run, { outcome: 'cleared' });
+    draft.run_upgrade = null;
+    clearTowerNodePayload(draft);
+    value = { action: request.action, summary, run: draft.run } satisfies CampfireResult;
   } else {
     const run = requireActiveNode(draft, 'rest');
+    if (run.routeMode === 'map') throw new Error('营火只支持休息、锻炼、搜刮和回忆');
     const battle = requireRecord(draft.battle, 'battle 数据不存在');
     const cards = persistentDeck(draft);
     const source = selectedRunCard(cards, request.runInstanceId);
@@ -780,6 +929,7 @@ export function executeUnifiedRunTransactionInStat(
         source,
         { ...clone(request.patch), node_id: run.currentNode!.id, card_id: source.id },
         {
+          playerDesireEffect: battle.player_lust_effect,
           statusDefinitions: normalizeMvuStatusDefinitions(battle.statuses),
           knownResourceIds: normalizeMvuList<Record<string, any>>(battle.core?.resources)
             .map(resource => String(resource?.id || ''))
@@ -873,7 +1023,7 @@ export function executeUnifiedRunTransactionInStat(
     cardRunInstanceIds,
     source,
     eventId: event.id,
-    summary: logSummary(request, value),
+    summary: logSummary(request, value, primaryGoldAfter === null || goldBefore === null ? 0 : primaryGoldAfter - goldBefore),
   };
   const logs = transactionLog(draft);
   const events = transactionEvents(draft);

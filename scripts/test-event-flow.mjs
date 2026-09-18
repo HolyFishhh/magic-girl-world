@@ -95,10 +95,10 @@ const handleLustOverflow = readClassMethod(
   'UnifiedEffectExecutor',
   'handleLustOverflow',
 );
-assert.match(executorSource, /activeLustOverflows = new Set<'player' \| 'enemy'>\(\)/);
-assert.match(handleLustOverflow, /activeLustOverflows\.has\(target\)/);
-assert.match(handleLustOverflow, /activeLustOverflows\.add\(target\)/);
-assert.match(handleLustOverflow, /finally[\s\S]*currentLust: 0[\s\S]*activeLustOverflows\.delete\(target\)/);
+assert.match(executorSource, /activeLustOverflows = new Set<string>\(\)/);
+assert.match(handleLustOverflow, /activeLustOverflows\.has\(lockKey\)/);
+assert.match(handleLustOverflow, /activeLustOverflows\.add\(lockKey\)/);
+assert.match(handleLustOverflow, /finally[\s\S]*currentLust: 0[\s\S]*activeLustOverflows\.delete\(lockKey\)/);
 
 const showBattleEndDialog = readClassMethod(
   presenterSource,
@@ -203,14 +203,17 @@ assert.doesNotMatch(battleManagerSource, /private async (?:executeEnemyTurn|star
 
 for (const methodName of ['playCard', 'showItemModal']) {
   const method = readClassMethod(coordinatorSource, coordinatorPath, 'FishRPGCoordinator', methodName);
-  assert.match(method, /if \(!this\.battleManager\.canPlayerAct\(\)\) return/);
+  assert.match(method, /if \((?:this\.destroyed \|\| !this\.canMutateCurrentMessage\(\) \|\| )?!this\.battleManager\.canPlayerAct\(\)\) return/);
 }
 assert.doesNotMatch(coordinatorSource, /private async drawCards\(/, 'effect-owned draws must stay in CardSystem');
 assert.match(cardSystemSource, /public async drawCards\(count: number\)/);
 assert.match(coordinatorSource, /shellPresenter\.showItems/);
 assert.match(coordinatorSource, /shellPresenter\.logPlayerAction/);
 assert.match(shellPresenterSource, /root\.on\('click\.mwgBattleShell', '\.end-turn-button'/);
-assert.doesNotMatch(coordinatorSource, /document\.|\$\(|location\.|triggerSlash|BattleLog|AnimationManager/);
+assert.doesNotMatch(coordinatorSource, /document\.|\$\(|location\.|triggerSlash|BattleLog/);
+assert.match(coordinatorSource, /await AnimationManager\.getInstance\(\)\.waitForActionPresentation\(\)/);
+assert.doesNotMatch(coordinatorSource.replaceAll('AnimationManager.getInstance().waitForActionPresentation()', ''), /AnimationManager\.getInstance\(/,
+  'the coordinator may await presentation completion, but animation work remains in presenters');
 const useItem = readClassMethod(coordinatorSource, coordinatorPath, 'FishRPGCoordinator', 'useItem');
 assert.match(useItem, /await runBattleSessionAtomicAction\(/);
 assert.match(useItem, /'use_item'/);

@@ -22,11 +22,11 @@ const valid = {
   },
 };
 const normalized = definitions.normalizeRuntimeStatusDefinition(valid);
-assert.match(normalized.description, /首次获得时/);
+assert.match(normalized.description, /首次被赋予时/);
 assert.match(normalized.description, /最多叠加8层/);
 assert.equal(normalized.maxStacks, 8);
 assert.deepEqual(normalized.triggers.tick[0].steps, [
-  { op: 'damage', target: 'self', amount: { op: 'var', path: 'context.status_stacks' } },
+  { op: 'damage', target: 'self', amount: { op: 'var', path: 'context.status_stacks' }, hitGroup: '$[0]:damage' },
   { op: 'heal', target: 'opponent', amount: 1 },
 ]);
 assert.equal(normalized.triggers.hold[0].steps[0].op, 'modify');
@@ -37,10 +37,14 @@ for (const invalid of [
   { ...valid, stacks_change: 'halve' },
   { ...valid, maxStacks: 0 },
   { ...valid, max_stacks: 8 },
-  { ...valid, triggers: { turn_end: { damage: 1 } } },
+  { ...valid, triggers: { unregistered_timing: { damage: 1 } } },
   { ...valid, triggers: { tick: 'ME.hp - stacks' } },
   { ...valid, stun: 'yes' },
 ]) assert.equal(definitions.normalizeRuntimeStatusDefinition(invalid), null);
+
+const legacyTurnEnd = definitions.normalizeRuntimeStatusDefinition({ ...valid, triggers: { turn_end: { damage: 1 } } });
+assert.ok(legacyTurnEnd, 'legacy turn_end timing remains a supported status alias');
+assert.equal(legacyTurnEnd.triggers.turn_end[0].steps[0].op, 'damage');
 
 const managerSource = readFileSync(resolve('src/fish/combat/dynamicStatusManager.ts'), 'utf8');
 assert.match(managerSource, /new StatusDefinitionRegistry\(\)/);

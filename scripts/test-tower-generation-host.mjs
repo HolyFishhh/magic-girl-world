@@ -16,9 +16,170 @@ const {
   createGlobalTowerGenerationPorts,
   TOWER_GENERATION_COMPLETED_EVENT,
   TowerGenerationHost,
+  TowerGenerationHostError,
 } = require(resolve('src/sillytavern-extension/towerGenerationHost.ts'));
 
 const tick = () => new Promise(resolvePromise => setTimeout(resolvePromise, 0));
+
+// Public metadata separates Helper attempts from node-envelope retries and
+// contract repairs, without retaining any content or serializing exceptions.
+{
+  let currentChat = 'diagnostics-chat';
+  const replies = ['', '{"final":true}', '   '];
+  const lifecycle = [];
+  const host = new TowerGenerationHost({
+    currentChatId: () => currentChat, createChatMessages: async () => assert.fail('no chat write'),
+    generate: async () => replies.shift(), generateNarrative: async () => '',
+    stopGenerationById: () => true, emitInternalEvent: async () => assert.fail('no publication'),
+  }, { onAttemptLifecycle: event => lifecycle.push({
+    phase: event.phase, attempt: event.attempt, outcome: event.outcome,
+    generationId: event.generationId,
+  }) });
+  const request = { chatId: currentChat, nodeId: 'node', requestId: 'diagnostics', prompt: 'PRIVATE_PROMPT',
+    generation: { json_schema: { name: 'mwg_tower_event_result', value: { type: 'object' } } }, maxAttempts: 2 };
+  const delivered = await host.generateNode(request);
+  assert.equal(delivered.additionalRequestsUsed,1,'actual empty retry is reported to the controller budget');
+  await assert.rejects(host.generateNode({ ...request, requestId: 'repair', maxAttempts: 1,
+    userExtra: { mwg_tower_batch_structure_repair: true } }), /结构修正，第 1 次请求，文本长度 3/);
+  await assert.rejects(host.generateNarrative({ ...request, requestId: 'story', maxAttempts: 1 }), /剧情模型/);
+  const diagnostics = host.getDiagnostics();
+  assert.deepEqual(diagnostics.map(d => [d.stage, d.attempt, d.outcome, d.finalCharacters, d.emptyJsonFallbackRequested]), [
+    ['structured', 1, 'empty_final', 0, false], ['structured', 2, 'returned', 14, true],
+    ['structure-repair', 1, 'empty_final', 3, false], ['narrative', 1, 'empty_final', 0, false],
+  ]);
+  assert.deepEqual(lifecycle.slice(0, 4).map(event => [event.phase, event.attempt, event.outcome]), [
+    ['transport_invoked', 1, undefined], ['settled', 1, 'empty_final'],
+    ['transport_invoked', 2, undefined], ['settled', 2, 'returned'],
+  ], 'diagnostics distinguish queue retry from Helper handoff and settled promise');
+  assert.ok(lifecycle.every(event => !JSON.stringify(event).includes('PRIVATE_PROMPT')));
+  assert.ok(diagnostics.every(d => d.finishedAt >= d.startedAt));
+  assert.doesNotMatch(JSON.stringify(diagnostics), /PRIVATE_PROMPT|actual_final|json_schema/);
+  diagnostics[0].outcome = 'corrupted';
+  assert.equal(host.getDiagnostics()[0].outcome, 'empty_final', 'snapshots cannot mutate history');
+  assert.deepEqual(await host.generateNode(request),delivered,'cached result preserves spent budget without a new invocation');
+  assert.equal(host.getDiagnostics().length, 4, 'deduplicated responses do not count as new requests');
+  currentChat = 'other-chat';
+  assert.deepEqual(host.getDiagnostics(), [], 'old-chat diagnostics never leak through current-chat API');
+  host.activateChat(currentChat);
+  currentChat = 'diagnostics-chat';
+  assert.deepEqual(host.getDiagnostics(), [], 'switch releases the old chat history');
+}
+{
+  const { TowerGenerationDiagnostics } = require(resolve('src/sillytavern-extension/towerGenerationDiagnostics.ts'));
+  let time = 1;
+  const diagnostics = new TowerGenerationDiagnostics(() => time++);
+  for (let index = 0; index < 70; index++) {
+    const pending = diagnostics.begin({ chatId: 'chat', nodeId: 'node', requestId: String(index) }, 'structured', 1, String(index), false);
+    pending.failed({ name: 'TypeError', message: 'Bearer PRIVATE_TOKEN', status: 503, body: 'PRIVATE_BODY' });
+  }
+  const entries = diagnostics.snapshot('chat');
+  assert.equal(entries.length, 64);
+  assert.equal(entries[0].requestId, '6');
+  assert.equal(entries[0].errorType, 'TypeError');
+  assert.equal(entries[0].httpStatus, 503);
+  assert.doesNotMatch(JSON.stringify(entries), /PRIVATE|Bearer|message|body/);
+  const pending = diagnostics.begin({ chatId: 'chat', nodeId: 'node', requestId: 'cancel' }, 'structured', 1, 'cancel', false);
+  pending.failed({ code: 'timeout' }, true);
+  pending.returned('late result');
+  assert.equal(diagnostics.snapshot('chat').at(-1).outcome, 'timeout', 'late returns cannot overwrite an abort');
+  const hostile = diagnostics.begin({ chatId: 'chat', nodeId: 'node', requestId: 'hostile' }, 'structured', 1, 'hostile', false);
+  assert.doesNotThrow(() => hostile.failed(new Proxy({}, { get() { throw new Error('getter'); } })));
+}
+
+// Empty finals may change transport on the existing next attempt, never add a
+// nested request or manufacture content from a non-text/reasoning envelope.
+for (const first of ['', ' \n', { reasoning_content: 'not final content' }, new Error('network')]) {
+  const calls = [];
+  const request = { chatId: 'empty-chat', nodeId: 'event', requestId: 'empty-retry', prompt: 'same complete prompt',
+    generation: { json_schema: { name: 'mwg_tower_event_result', value: { type: 'object' } } }, maxAttempts: 2 };
+  const original = structuredClone(request);
+  const host = new TowerGenerationHost({
+    currentChatId: () => 'empty-chat', createChatMessages: async () => assert.fail('no chat write'),
+    generate: async config => {
+      calls.push(config);
+      if (calls.length === 1) { if (first instanceof Error) throw first; return first; }
+      return '{"actual_final":true}';
+    },
+    stopGenerationById: () => true, emitInternalEvent: async () => assert.fail('no unvalidated publication'),
+  });
+  const generatedResult = await host.generateNode(request);
+  assert.equal(generatedResult.response, '{"actual_final":true}');
+  assert.equal(generatedResult.emptyJsonFallbackUsed,typeof first === 'string' ? true : undefined);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].empty_json_fallback, false);
+  assert.equal(calls[1].empty_json_fallback, typeof first === 'string');
+  assert.deepEqual(calls[0].json_schema, calls[1].json_schema);
+  assert.equal(calls[0].user_input, calls[1].user_input);
+  assert.notEqual(calls[0].generation_id, calls[1].generation_id);
+  assert.deepEqual(request, original, 'request not mutated by retry');
+  assert.deepEqual(await host.generateNode(request),generatedResult,'cached result retains successful transport provenance');
+  assert.equal(calls.length, 2, 'successful retry remains deduplicated');
+}
+for (const repairFlag of [undefined,'mwg_tower_structure_repair','mwg_tower_batch_structure_repair','mwg_tower_opening_structure_repair']) {
+  for(const hasSchema of [false,true]) {
+    const calls=[];
+    const host=new TowerGenerationHost({
+      currentChatId:()=> 'repair-provenance',createChatMessages:async()=>assert.fail('no write'),
+      generate:async config=>{calls.push(config);return '{}';},stopGenerationById:()=>true,
+      emitInternalEvent:async()=>assert.fail('no unvalidated publication'),
+    });
+    const request={chatId:'repair-provenance',nodeId:'event',requestId:'one',prompt:'unchanged repair facts',
+      maxAttempts:1,continueEmptyFinalRecovery:true,
+      ...(hasSchema?{generation:{json_schema:{name:'mwg_tower_event_result',value:{type:'object'}}}}:{}),
+      ...(repairFlag?{userExtra:{[repairFlag]:true}}:{}),
+    };
+    const result=await host.generateNode(request);
+    const expected=Boolean(repairFlag)&&hasSchema;
+    assert.equal(calls.length,1,'continuation consumes the existing single repair request');
+    assert.equal(calls[0].empty_json_fallback,expected);
+    assert.equal(result.emptyJsonFallbackUsed,expected?true:undefined);
+    assert.equal(calls[0].user_input,request.prompt);
+    assert.equal(Object.hasOwn(calls[0],'continueEmptyFinalRecovery'),false,'private provenance never reaches Helper');
+    assert.deepEqual(await host.generateNode(request),result);assert.equal(calls.length,1);
+  }
+}
+for (const maxAttempts of [1, 2]) {
+  const calls = [];
+  const host = new TowerGenerationHost({
+    currentChatId: () => 'empty-chat', createChatMessages: async () => assert.fail('no chat write'),
+    generate: async config => { calls.push(config); return ''; },
+    stopGenerationById: () => true, emitInternalEvent: async () => assert.fail('no completion'),
+  });
+  await assert.rejects(host.generateNode({ chatId: 'empty-chat', nodeId: 'node', requestId: 'empty', prompt: 'complete',
+    generation: { json_schema: { name: 'mwg_tower_event_result', value: { type: 'object' } } }, maxAttempts,
+  }), error => error instanceof TowerGenerationHostError && error.code === 'invalid_response');
+  assert.equal(calls.length, maxAttempts, 'no added retry after exhaustion');
+  assert.deepEqual(host.exportPendingArchiveRecords('empty-chat'), [], 'empty results cannot enter archive');
+}
+
+{
+  let chatId = 'fallback-before-switch';
+  let rejectFallback;
+  const generatedIds = [];
+  const stoppedIds = [];
+  const host = new TowerGenerationHost({
+    currentChatId: () => chatId, createChatMessages: async () => assert.fail('no stale chat write'),
+    generate: config => {
+      generatedIds.push(config.generation_id);
+      if (generatedIds.length === 1) return Promise.resolve('');
+      assert.equal(config.empty_json_fallback, true);
+      return new Promise((_resolve, reject) => { rejectFallback = reject; });
+    },
+    stopGenerationById: id => { stoppedIds.push(id); rejectFallback?.(new TowerGenerationCancelledError()); return true; },
+    emitInternalEvent: async () => assert.fail('no stale publication'),
+  });
+  const pending = host.generateNode({ chatId, nodeId: 'event', requestId: 'switch-on-fallback', prompt: 'same facts',
+    generation: { json_schema: { name: 'mwg_tower_event_result', value: { type: 'object' } } },
+  }).catch(error => error);
+  await tick();
+  assert.equal(generatedIds.length, 2);
+  chatId = 'fallback-after-switch';
+  host.activateChat(chatId);
+  assert.ok(await pending instanceof TowerGenerationCancelledError);
+  assert.deepEqual(stoppedIds, [generatedIds[1]], 'cancel the exact fallback generation, not the completed first request');
+  assert.equal(host.getDiagnostics().at(-1)?.outcome, undefined, 'current-chat read hides cancelled old-chat records');
+  assert.deepEqual(host.exportPendingArchiveRecords('fallback-before-switch'), []);
+}
 
 // Production tower requests use Tavern Helper's raw prompt path so the normal
 // roleplay preset and worldbook cannot override the background JSON contract.
@@ -31,7 +192,7 @@ const tick = () => new Promise(resolvePromise => setTimeout(resolvePromise, 0));
     stopGenerationById: () => true,
   }, () => ({
     chatId: 'raw-chat',
-    eventSource: { emit: async () => undefined },
+    chatCompletionSettings: { chat_completion_source: 'deepseek' },
   }));
   await ports.generate({
     generation_id: 'raw-test',
@@ -43,8 +204,24 @@ const tick = () => new Promise(resolvePromise => setTimeout(resolvePromise, 0));
   assert.equal(calls[0][0], 'raw');
   assert.equal(calls[0][1].max_chat_history, 0);
   assert.equal(calls[0][1].ordered_prompts.at(-2), 'user_input');
-  assert.match(calls[0][1].ordered_prompts[0].content, /后台结构化内容生成器/);
+  assert.match(calls[0][1].ordered_prompts[0].content, /MWG_TOWER_STRUCTURED_REQUEST:raw-test/);
+  assert.match(calls[0][1].ordered_prompts[1].content, /后台结构化内容生成器/);
   assert.match(calls[0][1].ordered_prompts.at(-1).content, /最终输出契约/);
+  assert.equal('include_reasoning' in calls[0][1], false);
+  assert.equal('reasoning_effort' in calls[0][1], false);
+  assert.equal('enable_thinking' in calls[0][1], false);
+  assert.equal('thinking' in calls[0][1], false);
+  assert.equal('temperature' in calls[0][1], false);
+  await ports.generate({ generation_id: 'empty-second', user_input: 'same contract',
+    should_stream: false, should_silence: true, empty_json_fallback: true,
+    json_schema: { name: 'mwg_tower_event_result', value: { type: 'object' } },
+  });
+  assert.equal(calls[1][0], 'raw');
+  assert.equal(calls[1][1].ordered_prompts[0].content, 'MWG_TOWER_STRUCTURED_REQUEST:empty-second');
+  assert.equal('json_schema' in calls[1][1], false, 'Helper must never receive the schema option to re-inject later');
+  assert.match(calls[1][1].ordered_prompts.at(-1).content, /^JSON schema for the response:/);
+  assert.equal('empty_json_fallback' in calls[1][1], false, 'private transport option not forwarded to Helper');
+  calls.splice(1, 1);
   await ports.generateNarrative({
     generation_id: 'story-test',
     user_input: '进入当前节点',
@@ -53,6 +230,7 @@ const tick = () => new Promise(resolvePromise => setTimeout(resolvePromise, 0));
   });
   assert.equal(calls[1][0], 'narrative');
   assert.equal(calls[1][1].preset_name, 'in_use');
+  assert.equal(calls[1][1].user_input, '[MWG_TOWER_NARRATIVE_REQUEST]\n进入当前节点');
   assert.equal(calls[1][1].max_chat_history, 'all');
   assert.equal(calls[1][1].should_stream, true);
   assert.equal('ordered_prompts' in calls[1][1], false);
@@ -61,6 +239,40 @@ const tick = () => new Promise(resolvePromise => setTimeout(resolvePromise, 0));
 
 // Same chat + node + request is one idempotent job, and the queue invokes only
 // one executor at a time.
+// Reproduce Helper's actual late optionsInjector, including custom API
+// conservatism. An event-time delete would fail this regression.
+for (const schemaName of ['mwg_tower_event_result', 'mwg_initial_draft'])
+for (const [provider, customApi, fallbackExpected] of [
+  ['deepseek', undefined, true], ['openai', undefined, false],
+  ['custom', undefined, false], [undefined, undefined, false],
+  ['deepseek', { source: 'openai' }, false], ['deepseek', { source: 'deepseek' }, false],
+]) {
+  let emitted;
+  const ports = createGlobalTowerGenerationPorts({
+    generateRaw: async config => {
+      const prompts = config.ordered_prompts.map(entry => entry === 'user_input'
+        ? { role: 'user', content: config.user_input } : entry);
+      emitted = { messages: prompts };
+      // Generic extension listeners run first, then Helper's late injector.
+      if (config.json_schema) emitted.json_schema = config.json_schema;
+      assert.equal('empty_json_fallback' in config, false);
+      return '{}';
+    },
+  }, () => ({ chatCompletionSettings: { chat_completion_source: provider } }));
+  const schema = { name: schemaName, value: { type: 'object', properties: { spec: { const: 'result' } }, required: ['spec'], additionalProperties: false } };
+  const config = { generation_id: 'late-injector', user_input: 'same complete gameplay contract',
+    should_stream: false, should_silence: true, json_schema: schema, empty_json_fallback: true,
+    ...(customApi ? { custom_api: customApi } : {}),
+  };
+  const before = structuredClone(config);
+  await ports.generate(config);
+  assert.deepEqual(config, before);
+  assert.equal('json_schema' in emitted, !fallbackExpected);
+  const schemaMessages = emitted.messages.filter(message => message.content?.startsWith('JSON schema for the response:'));
+  assert.equal(schemaMessages.length, fallbackExpected ? 1 : 0);
+  if (fallbackExpected) assert.deepEqual(JSON.parse(schemaMessages[0].content.split('\n').slice(1).join('\n')), schema.value);
+}
+
 {
   let releaseFirst;
   const firstGate = new Promise(resolvePromise => { releaseFirst = resolvePromise; });
@@ -178,7 +390,7 @@ const tick = () => new Promise(resolvePromise => setTimeout(resolvePromise, 0));
 {
   const statuses = [];
   let attempts = 0;
-  const queue = new TowerGenerationQueue({ onStatus: status => statuses.push(status.phase) });
+  const queue = new TowerGenerationQueue({ onStatus: status => statuses.push(status) });
   const value = await queue.enqueue({
     chatId: 'chat-timeout', nodeId: 'node', requestId: 'retry-success',
     timeoutMs: 15,
@@ -193,7 +405,9 @@ const tick = () => new Promise(resolvePromise => setTimeout(resolvePromise, 0));
   });
   assert.equal(value, 'recovered');
   assert.equal(attempts, 2);
-  assert.ok(statuses.includes('retrying'));
+  const retryStatus = statuses.find(status => status.phase === 'retrying');
+  assert.equal(retryStatus.retryReason.kind, 'timeout');
+  assert.equal(retryStatus.retryReason.retryable, true);
 
   const exhaustedQueue = new TowerGenerationQueue();
   let exhaustedAttempts = 0;

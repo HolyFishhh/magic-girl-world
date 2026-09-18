@@ -63,6 +63,17 @@ const multiHit = core.analyzeContentDefinition({ effects: { damage: 3, hits: 4 }
 assert.equal(multiHit.metrics.attack, 12, 'multi-hit damage contributes every independently resolved hit');
 assert.equal(multiHit.damage, 12);
 
+const replayedCurrentCard = core.analyzeContentDefinition({
+  type: 'Attack',
+  effects: [{ damage: 5 }, { replay_current: 1 }],
+});
+assert.equal(
+  replayedCurrentCard.metrics.attack,
+  10,
+  'current-card replay scores the complete card resolution instead of only the replay marker or one damage field',
+);
+assert.equal(replayedCurrentCard.damage, 10);
+
 const turnCombo = core.analyzeContentDefinition(
   { effects: { damage: 'turn_number + attacks_played_this_turn * 2 + skills_played_this_turn' } },
   { currentTurn: 3, attacksPlayedThisTurn: 2, skillsPlayedThisTurn: 1 },
@@ -271,6 +282,16 @@ assert.deepEqual(
   'passive modifiers apply to cards once and are not counted as direct damage a second time',
 );
 
+const structuredModifierPack = core.createContentPack({
+  cards: [{ id: 'strike', quantity: 5, effects: [{ damage: 8 }] }],
+  relics: [{ id: 'rage', trigger: { on: 'passive', effects: [{ modify: 'damage', add: 2 }] } }],
+});
+assert.deepEqual(
+  core.summarizeBuildBudget(structuredModifierPack, { hp: 80, maxHp: 80 }),
+  { deck: 5, attack: 50, defense: 0, sustain: 0, draw: 0, energy: 0, hp: 80, maxHp: 80 },
+  'the AI-facing structured passive trigger contributes to scoring exactly like a restored legacy trigger',
+);
+
 const noPhantomAttack = core.createContentPack({
   cards: [{ id: 'guard', quantity: 5, effects: [{ block: 6 }] }],
   relics: [{ id: 'rage', trigger: 'passive', effects: [{ modify: 'damage', add: 2 }] }],
@@ -307,8 +328,8 @@ const desireEffectPack = core.createContentPack({
 });
 assert.equal(
   core.summarizeBuildBudget(desireEffectPack, { hp: 80, maxHp: 80 }).attack,
-  10,
-  'player desire overflow contributes a bounded support value without becoming a card-hand estimate',
+  0,
+  'an overflow payoff contributes no attack when the deck cannot generate desire',
 );
 
 const splitModifierPack = core.createContentPack({

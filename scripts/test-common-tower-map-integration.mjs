@@ -69,11 +69,13 @@ assert.match(commonSource, /runActionHost\.activateTowerRunNode\(node\.id\)/);
 assert.doesNotMatch(commonSource, /enterTowerRunNode\(node, routePrompt\(node\)\)/);
 assert.match(commonSource, /runActionHost\.retryTowerNodeGeneration\(nodeId\)/);
 assert.match(commonSource, /capabilities\.singleFloorStart !== true/);
-assert.match(commonSource, /至少需要 0\.3\.2/);
+assert.match(commonSource, /至少需要 0\.3\.5/);
 assert.match(html, /id="tower-player-energy"/);
 assert.match(html, /class="tower-player-deck-section"/);
-assert.match(commonSource, /class="tower-player-card-cost"/);
-assert.match(commonSource, /class="tower-player-card-rules"/);
+const collectionCardRenderer = commonSource.match(/function renderCollectionCard\([\s\S]*?(?=\nfunction )/)?.[0] || '';
+assert.match(collectionCardRenderer, /renderCardFace\(/, 'tower inventory uses the shared complete card-face renderer');
+assert.match(collectionCardRenderer, /rulesHtml:\s*contentRulesHtml\(card\)/, 'tower inventory forwards structural rule groups to the shared card face');
+assert.doesNotMatch(collectionCardRenderer, /tower-player-card-(?:cost|rules)/, 'tower inventory must not restore divergent hand-written card markup');
 assert.match(
   commonSource,
   /run\.act === 1 && run\.floor === 0 && run\.phase === 'awaiting_choice'/,

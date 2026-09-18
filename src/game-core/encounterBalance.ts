@@ -18,6 +18,7 @@ export interface EnemyTurnPressureBudget {
 }
 
 export interface EnemyBudgetEnvelope {
+  numericAuthority?: 'runtime-reference' | 'maintained-prior';
   spec: typeof ENEMY_BUDGET_ENVELOPE_SPEC;
   requestedRatio: number;
   effectiveRatio: number;

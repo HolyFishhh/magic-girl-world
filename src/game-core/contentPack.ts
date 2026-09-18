@@ -1,18 +1,34 @@
+import { readSummonGrowth, type PersistentGrowthOperation } from './persistentGrowth';
+import { validateCardPatch, type CardPatch } from './cardPatch';
 import { stableHash32, stableSerialize } from './deterministicRandom';
 import {
   analyzeContentDefinition,
+  analyzeDesireOverflowPayload,
+  desireOverflowActivationRate,
   analyzeStatusDefinition,
   getContentAnalysisScenarios,
   type ContentAnalysis,
   type ContentAnalysisOptions,
   type ContentMetric,
   type ContentModifier,
-  CONTENT_DESIRE_EFFECT_WEIGHT,
 } from './contentAnalysis';
 import { applyModifierOperation, MODIFIER_SYMBOL_BY_OPERATOR } from './modifierMath';
 import { normalizeCardCost, normalizeCombatResourceStates, type CardCost } from './combatResource';
+import { resolveTriggerInput } from './triggerInput';
 
 export const CONTENT_PACK_SCHEMA_VERSION = 1 as const;
+
+function persistentCardPatches(value: unknown): CardPatch[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error('persistent card patches must be an array');
+  const patches = structuredClone(value) as CardPatch[];
+  for (const patch of patches) {
+    validateCardPatch(patch);
+    if (!['run', 'permanent'].includes(patch.scope) || !patch.target
+      || !['template', 'filter'].includes(patch.target.match)) throw new Error('invalid persistent future-card patch');
+  }
+  return patches;
+}
 
 export type ContentDefinition = Readonly<Record<string, any>>;
 
@@ -26,6 +42,12 @@ export interface ContentPack {
   activeStatuses: ContentDefinition[];
   /** Player-owned custom combat resources used by budgets and shadow simulation. */
   playerResources?: ContentDefinition[];
+  playerCardPatches?: import('./cardPatch').CardPatch[];
+  playerSummonGrowth?: PersistentGrowthOperation[];
+  /** Player-owned special combat containers retained for authoring validation. */
+  playerStance?: ContentDefinition | null;
+  playerOrbSlots?: number;
+  playerOrbs?: ContentDefinition[];
   enemy: ContentDefinition | null;
   /** Ordered enemy party. enemy remains the first-entry compatibility alias. */
   enemies?: ContentDefinition[];
@@ -43,6 +65,11 @@ export interface CreateContentPackInput {
   abilities?: unknown;
   activeStatuses?: unknown;
   playerResources?: unknown;
+  playerCardPatches?: unknown;
+  playerSummonGrowth?: unknown;
+  playerStance?: unknown;
+  playerOrbSlots?: unknown;
+  playerOrbs?: unknown;
   enemy?: unknown;
   enemies?: unknown;
   playerDesireEffect?: unknown;
@@ -88,6 +115,7 @@ export function createContentPack(input: CreateContentPackInput): ContentPack {
     if (enemies.length === 0) enemies = [explicitEnemy];
     else if (stableSerialize(enemies[0]) !== stableSerialize(explicitEnemy)) enemies = [explicitEnemy, ...enemies.slice(1)];
   }
+  enemies = expandEnemyQuantities(enemies);
   const enemy = enemies[0] || null;
   return {
     schemaVersion: CONTENT_PACK_SCHEMA_VERSION,
@@ -98,6 +126,13 @@ export function createContentPack(input: CreateContentPackInput): ContentPack {
     abilities: definitionList(input.abilities),
     activeStatuses: definitionList(input.activeStatuses),
     playerResources: definitionList(input.playerResources),
+    ...(input.playerCardPatches === undefined ? {} : { playerCardPatches: persistentCardPatches(input.playerCardPatches) }),
+    ...(input.playerSummonGrowth === undefined ? {} : { playerSummonGrowth: readSummonGrowth(input.playerSummonGrowth) }),
+    ...(input.playerStance === undefined
+      ? {}
+      : { playerStance: input.playerStance === null ? null : cloneDefinition(input.playerStance) || (input.playerStance as ContentDefinition) }),
+    ...(input.playerOrbSlots === undefined ? {} : { playerOrbSlots: Number(input.playerOrbSlots) }),
+    ...(input.playerOrbs === undefined ? {} : { playerOrbs: definitionList(input.playerOrbs) }),
     enemy,
     enemies,
     desireEffects: {
@@ -114,6 +149,9 @@ export function isContentPack(value: unknown): value is ContentPack {
     pack.schemaVersion === CONTENT_PACK_SCHEMA_VERSION &&
     ['cards', 'statuses', 'relics', 'items', 'abilities', 'activeStatuses'].every(key => Array.isArray(pack[key])) &&
     (pack.playerResources === undefined || Array.isArray(pack.playerResources)) &&
+    (pack.playerStance === undefined || pack.playerStance === null || (!!pack.playerStance && typeof pack.playerStance === 'object' && !Array.isArray(pack.playerStance))) &&
+    (pack.playerOrbSlots === undefined || typeof pack.playerOrbSlots === 'number') &&
+    (pack.playerOrbs === undefined || Array.isArray(pack.playerOrbs)) &&
     (pack.enemy === null || (!!pack.enemy && typeof pack.enemy === 'object' && !Array.isArray(pack.enemy))) &&
     (pack.enemies === undefined || Array.isArray(pack.enemies)) &&
     !!pack.desireEffects &&
@@ -213,6 +251,7 @@ interface BudgetCardEntry {
   quantity: number;
   cost: CardCost;
   metrics: Record<ContentMetric, number>;
+  lust: number;
 }
 
 const BASE_HAND_SIZE = 5;
@@ -264,6 +303,26 @@ function estimatePlayableCardMetrics(
   return result;
 }
 
+function estimatePlayableLust(
+  entries: readonly BudgetCardEntry[],
+  deck: number,
+  handSize: number,
+  availableResources: Readonly<Record<string, number>>,
+): number {
+  // Use the same shared-resource allocator as normal card metrics.  Testing
+  // each card in isolation would incorrectly spend the same three energy on
+  // every costly desire card in a hand.
+  return estimatePlayableCardMetrics(
+    entries.map(entry => ({
+      ...entry,
+      metrics: { attack: Math.max(0, entry.lust), defense: 0, sustain: 0, draw: 0, energy: 0 },
+    })),
+    deck,
+    handSize,
+    availableResources,
+  ).attack;
+}
+
 function rawBuildBudgetAtScenario(
   pack: ContentPack,
   player: { hp: number; maxHp: number },
@@ -305,7 +364,7 @@ function rawBuildBudgetAtScenario(
   });
   const persistentModifiers = [
     ...supportAnalyses
-      .filter(({ definition }) => definition.trigger === 'passive')
+      .filter(({ definition }) => resolveTriggerInput(definition as Record<string, unknown>).trigger === 'passive')
       .flatMap(({ analysis }) => analysis.modifiers),
     ...activeStatusAnalyses.flatMap(analysis => analysis.modifiers),
   ];
@@ -316,10 +375,17 @@ function rawBuildBudgetAtScenario(
     deck += quantity;
     if (card.type === 'Curse') continue;
     const cost = (card.cost ?? 0) as CardCost;
+    const analysis = analyzeContentDefinition(card, options);
+    const lustModifiers = persistentModifiers.filter(
+      modifier =>
+        (modifier.target === 'self' && modifier.stat === 'lust') ||
+        (modifier.target === 'opponent' && modifier.stat === 'lust_taken'),
+    );
     cardEntries.push({
       quantity,
       cost,
-      metrics: adjustedMetrics(analyzeContentDefinition(card, options), persistentModifiers),
+      metrics: adjustedMetrics(analysis, persistentModifiers),
+      lust: applyModifiers(analysis.lust, lustModifiers),
     });
   }
   const support = { attack: 0, defense: 0, sustain: 0, draw: 0, energy: 0 };
@@ -330,10 +396,6 @@ function rawBuildBudgetAtScenario(
   for (const analysis of activeStatusAnalyses) {
     const metrics = adjustedMetrics(analysis, persistentModifiers);
     for (const key of Object.keys(support) as ContentMetric[]) support[key] += metrics[key];
-  }
-  if (pack.desireEffects.player) {
-    const desire = adjustedMetrics(analyzeContentDefinition(pack.desireEffects.player, options), persistentModifiers);
-    for (const key of Object.keys(support) as ContentMetric[]) support[key] += desire[key] * CONTENT_DESIRE_EFFECT_WEIGHT;
   }
   const baseEnergy =
     typeof analysisOptions.selfMaxEnergy === 'number' && Number.isFinite(analysisOptions.selfMaxEnergy)
@@ -358,6 +420,20 @@ function rawBuildBudgetAtScenario(
     ...baseResources,
     energy: effectiveEnergy,
   });
+  if (pack.desireEffects.player) {
+    const lustPerTurn = estimatePlayableLust(cardEntries, deck, effectiveHandSize, {
+      ...baseResources,
+      energy: effectiveEnergy,
+    });
+    const payload = analyzeDesireOverflowPayload(pack.desireEffects.player, {
+      ...options,
+      opponentMaxHp: 100,
+    }, pack.statuses);
+    // Card lust retains its existing 0.5 ordinary-pressure value in card
+    // metrics. This adds only the separate cap-triggered executable payout;
+    // draw/block/heal fields in that payload have unknown timing and get zero.
+    support.attack += payload.attackValue * desireOverflowActivationRate(lustPerTurn, 100);
+  }
   return {
     deck,
     attack: playable.attack + support.attack,
@@ -439,3 +515,4 @@ export function summarizeBuildBudgetScenarios(
 export function formatBuildBudget(budget: BuildBudget): string {
   return `deck=${budget.deck} atk=${budget.attack} def=${budget.defense} heal=${budget.sustain} draw=${budget.draw} energy=${budget.energy} hp=${budget.hp}/${budget.maxHp}`;
 }
+import { expandEnemyQuantities } from './enemyQuantity';

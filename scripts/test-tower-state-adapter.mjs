@@ -36,8 +36,8 @@ const initialRunReference = initial.run;
 const lookahead = adapter.collectTowerLookahead(initial.run);
 assert.ok(lookahead.length >= 1 && lookahead.length <= 3);
 assert.equal(lookahead.length, 3);
-assert.deepEqual([...new Set(lookahead.map(node => node.depth))], [1, 2]);
-assert.equal(lookahead.filter(node => node.depth === 1).length, 1, 'the unique reward start is the only depth-one node');
+assert.ok(lookahead.every(node => node.depth >= 1 && node.depth <= 3));
+assert.deepEqual(lookahead.filter(node => node.depth === 1).map(node => node.nodeId), initial.run.choices.slice(0, 3).map(node => node.id));
 assert.ok(lookahead.every(node => node.act === 1 && node.floor >= 1 && node.floor <= 3));
 assert.ok(lookahead.every(node => node.difficultyMultiplier === 1));
 assert.ok(initial.run.map.nodes.filter(node => node.act === 1).length > lookahead.length);
@@ -53,6 +53,57 @@ for (const request of queued.queued) {
   assert.equal(typeof request.rewardSeed, 'number');
   assert.notEqual(request.contentSeed, request.rewardSeed);
   assert.equal(request.revision, 0);
+}
+
+// A visible opening gift is independent of the map. It must not consume or
+// suppress the first battle's background preparation.
+{
+  const stat = towerStat(20260830);
+  stat.run.opening = {...stat.run.opening, phase:'ready', requestId:'opening-test', content:{choices:[{id:'gift'}]}};
+  const before = structuredClone(stat.run);
+  const start = stat.run.choices[0].id;
+  const readyWindow = adapter.collectTowerLookahead(stat.run);
+  assert.equal(readyWindow[0].nodeId, start);
+  assert.equal(readyWindow[0].floor, 1);
+  assert.equal(readyWindow[0].depth, 1);
+  assert.deepEqual(adapter.collectTowerLookahead(stat.run,1).map(x=>x.nodeId),stat.run.choices.slice(0,3).map(x=>x.id));
+  assert.deepEqual(stat.run,before,'planning must not choose the gift, enter or settle a node');
+  adapter.queueTowerLookaheadInStat(stat);
+  assert.equal(stat.run.nodeContent[start].phase,'queued','the independent first battle remains prepared');
+  const {nodeContent: _afterStore,...afterPosition}=stat.run;
+  const {nodeContent: _beforeStore,...beforePosition}=before;
+  assert.deepEqual(afterPosition,beforePosition,'queue updates only content envelopes');
+
+  // Pending/failed/skipped gifts and subsequent acts must not lose their real
+  // treasure rooms; this is not a blanket filter for floor-one treasure nodes.
+  for(const phase of ['pending','generating','failed','skipped','consumed']) {
+    const changed={...before,opening:{...before.opening,phase}};
+    assert.equal(adapter.collectTowerLookahead(changed)[0].nodeId,start);
+  }
+  assert.equal(adapter.collectTowerLookahead({...before,opening:{...before.opening,content:undefined}})[0].nodeId,start);
+}
+
+// Opening visibility does not retire the independent first-battle request.
+// Its request and ready cache remain valid across refreshes.
+{
+  const stat=towerStat(20260830), start=stat.run.choices[0].id;
+  const oldRequest=adapter.queueTowerLookaheadInStat(stat).queued.find(x=>x.nodeId===start);
+  adapter.claimTowerGenerationInStat(stat,start,oldRequest.requestId);
+  stat.run.opening={...stat.run.opening,phase:'ready',requestId:'opening-test',content:{choices:[{id:'gift'}]}};
+  const prepared=adapter.queueTowerLookaheadInStat(stat);
+  assert.ok(!prepared.expiredNodeIds.includes(start));
+  assert.equal(stat.run.nodeContent[start].requestId,oldRequest.requestId);
+  assert.equal(stat.run.nodeContent[start].phase,'generating');
+  adapter.commitTowerGenerationInStat(stat,{...oldRequest,content:{late:true}});
+  assert.equal(stat.run.nodeContent[start].phase,'ready');
+  const ready = towerStat(20260830);
+  const request=adapter.queueTowerLookaheadInStat(ready).queued.find(x=>x.nodeId===start);
+  adapter.claimTowerGenerationInStat(ready,start,request.requestId);
+  adapter.commitTowerGenerationInStat(ready,{...request,content:{oldReady:true}});
+  const cached=ready.run.nodeContent[start];
+  ready.run.opening={...ready.run.opening,phase:'ready',requestId:'opening-test',content:{choices:[{id:'gift'}]}};
+  adapter.queueTowerLookaheadInStat(ready);
+  assert.equal(ready.run.nodeContent[start],cached,'do not destroy an existing authored ready cache');
 }
 
 // Requeueing is deduplicated, and batch claims return complete worker metadata.
@@ -165,10 +216,12 @@ routeStat.run = {
   ...routeStat.run,
   opening: { ...routeStat.run.opening, phase: 'skipped' },
 };
-routeStat.run = runCore.completeRunNode(
-  runCore.enterRunNode(routeStat.run, routeStat.run.choices[0].id),
-  { outcome: 'cleared' },
-);
+while (routeStat.run.choices.length === 1) {
+  routeStat.run = runCore.completeRunNode(
+    runCore.enterRunNode(routeStat.run, routeStat.run.choices[0].id),
+    { outcome: 'cleared' },
+  );
+}
 const routeQueue = adapter.queueTowerLookaheadInStat(routeStat);
 const chosen = routeStat.run.choices[0];
 const sibling = routeStat.run.choices.find(choice => choice.id !== chosen.id);

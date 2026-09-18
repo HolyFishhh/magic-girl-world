@@ -20,6 +20,16 @@ export interface AttributeTriggerContext {
   eventContext?: BattleTriggerEventContext;
 }
 
+function enemyOwnerContext(
+  context: Readonly<Record<string, unknown>>,
+  side: BattleSide,
+  entityId: unknown,
+): Readonly<Record<string, unknown>> {
+  return side === 'enemy' && typeof entityId === 'string' && entityId !== 'player'
+    ? { ...context, enemyId: entityId }
+    : context;
+}
+
 const ATTRIBUTE_TRIGGERS: Readonly<
   Record<TriggeredAttribute, Readonly<Record<'increase' | 'decrease', readonly [AbilityTrigger, AbilityTrigger | null]>>>
 > = {
@@ -64,12 +74,27 @@ export function resolveAttributeTriggerDispatch(context: AttributeTriggerContext
     ...(context.eventContext || {}),
     ...(context.attribute === 'hp' && direction === 'decrease' ? { damage: amount } : { amount }),
   };
+  const receiverContext = enemyOwnerContext(
+    triggerContext,
+    context.target,
+    context.eventContext?.targetId,
+  );
+  const sourceContext = enemyOwnerContext(
+    triggerContext,
+    context.source,
+    context.eventContext?.actorId,
+  );
   const dispatches: BattleTriggerDispatch[] = [
-    { consumer: 'ability', target: context.target, trigger: receiverTrigger, context: triggerContext },
+    { consumer: 'ability', target: context.target, trigger: receiverTrigger, context: receiverContext },
   ];
 
-  if (sourceTrigger && context.source !== context.target) {
-    dispatches.push({ consumer: 'ability', target: context.source, trigger: sourceTrigger, context: triggerContext });
+  const differentEntity = context.source !== context.target || (
+    typeof context.eventContext?.actorId === 'string' &&
+    typeof context.eventContext?.targetId === 'string' &&
+    context.eventContext.actorId !== context.eventContext.targetId
+  );
+  if (sourceTrigger && differentEntity) {
+    dispatches.push({ consumer: 'ability', target: context.source, trigger: sourceTrigger, context: sourceContext });
   }
 
   if (context.target === 'player') {
@@ -83,8 +108,11 @@ export function resolveAttributeTriggerDispatch(context: AttributeTriggerContext
 
 export interface StatusOwnershipDispatchContext {
   target: BattleSide;
+  /** Exact status holder. Required for enemy-owned status transitions in multi-enemy encounters. */
+  targetId?: string;
   statusType: string;
   change: StatusOwnershipChange;
+  eventContext?: BattleTriggerEventContext;
 }
 
 /** Resolve holder, opposing observer, and player-relic events for one status ownership transition. */
@@ -94,10 +122,21 @@ export function resolveStatusOwnershipTriggerDispatch(
   const triggers = resolveStatusOwnershipTriggers(context.statusType, context.change);
   if (!triggers) return [];
   const observer = otherSide(context.target);
-  const triggerContext = { targetType: context.target, statusType: context.statusType };
+  const triggerContext = {
+    ...(context.eventContext || {}),
+    targetType: context.target,
+    ...(context.targetId ? { targetId: context.targetId } : {}),
+    statusType: context.statusType,
+  };
+  const ownerContext = enemyOwnerContext(triggerContext, context.target, context.targetId);
+  // When the player changes status, every living enemy is an opposing observer.
+  // The Tavern host expands this marker to stable per-enemy dispatches.
+  const observerContext = observer === 'enemy'
+    ? { ...triggerContext, enemyScope: 'all_living' }
+    : triggerContext;
   return [
-    { consumer: 'ability', target: context.target, trigger: triggers.owner, context: triggerContext },
-    { consumer: 'ability', target: observer, trigger: triggers.observer, context: triggerContext },
+    { consumer: 'ability', target: context.target, trigger: triggers.owner, context: ownerContext },
+    { consumer: 'ability', target: observer, trigger: triggers.observer, context: observerContext },
     {
       consumer: 'relic',
       target: 'player',

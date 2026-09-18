@@ -13,6 +13,9 @@ import {
 import { TavernContinuationError, TavernContinuationHost } from '../../runtime/tavernContinuation';
 import { lockGameModeInStat, normalizeGameMode, type GameMode } from '../../game-core/towerMode';
 import { createCharacterStartMessage } from './promptGenerator';
+import { bindTowerArchetypePicker } from '../../shared/towerArchetypePicker';
+import { buildTowerArchetypePrompt } from '../../game-core/towerArchetypePrompt';
+import { TOWER_ARCHETYPE_PRESETS } from '../../game-core/towerArchetypeCatalog';
 
 const CONFIG_FIELDS: Array<[keyof CharacterConfig, string]> = [
   ['name', 'name'],
@@ -32,6 +35,8 @@ export class CharacterCreator {
   private openingMode: GameMode | null = null;
   private readonly continuationHost = TavernContinuationHost.getInstance();
   private currentConfig: Partial<CharacterConfig> = { mode: 'story' };
+  private refreshArchetypePicker: () => void = () => {};
+  private selectedMechanicIds: string[] = [];
 
   constructor() {
     this.container = document.getElementById('character-creator-container') as HTMLElement;
@@ -41,6 +46,14 @@ export class CharacterCreator {
     }
 
     this.initializeEventListeners();
+    this.refreshArchetypePicker = bindTowerArchetypePicker(
+      this.container.querySelector('#start-archetype-picker'),
+      this.container.querySelector<HTMLTextAreaElement>('[data-config-field="card"]'),
+      {
+        getSelectedMechanics: () => this.selectedMechanicIds,
+        onSelectionChange: ids => { this.selectedMechanicIds = ids; this.syncAdvancedFields(); },
+      },
+    );
     this.renderDefaultState();
     this.fetchUserName();
     watchCurrentMessageUntilHistorical(() => {
@@ -108,7 +121,7 @@ export class CharacterCreator {
       const visible = section.dataset.modeOnly === canonicalMode;
       section.hidden = !visible;
       section.setAttribute('aria-hidden', String(!visible));
-      section.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input, textarea, select')
+      section.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | HTMLButtonElement>('input, textarea, select, button')
         .forEach(control => {
           control.disabled = !visible || this.isHistorical;
         });
@@ -135,6 +148,8 @@ export class CharacterCreator {
       const value = values.get(String(key));
       if (value) (nextConfig as Record<string, unknown>)[key] = value;
     }
+    const selected = buildTowerArchetypePrompt(TOWER_ARCHETYPE_PRESETS.filter(preset => this.selectedMechanicIds.includes(preset.id)));
+    if (selected) nextConfig.selectedMechanics = selected;
     this.currentConfig = nextConfig;
     this.updatePreview();
   }
@@ -187,6 +202,7 @@ export class CharacterCreator {
       const persistStartMode = (variables: Record<string, any>): Record<string, any> => {
         if (!variables.stat_data || typeof variables.stat_data !== 'object') variables.stat_data = {};
         lockGameModeInStat(variables.stat_data, config.mode);
+        variables.stat_data.selected_mechanics = config.selectedMechanics?.trim() || '';
         if (normalizeGameMode(config.mode) === 'tower' && config.towerRequirements?.trim()) {
           variables.stat_data.tower_requirements = config.towerRequirements.trim();
         } else {
@@ -214,6 +230,7 @@ export class CharacterCreator {
       }
     } catch (error) {
       console.error('❌ 创建角色失败:', error);
+      (globalThis as any).MagicGirlWorld?.reportMvuValidationFailure?.(error);
       this.showMessage(
         error instanceof TavernContinuationError && error.messageSent
           ? '角色已提交，但生成请求失败，请在当前消息重试生成。'
@@ -229,6 +246,10 @@ export class CharacterCreator {
 
   private setCreatingState(active: boolean): void {
     this.isCreating = active;
+    this.container.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | HTMLButtonElement>('input, textarea, select, button').forEach(control => {
+      control.disabled = active || this.isHistorical || !!control.closest('[data-mode-only][hidden]')
+        || (!!this.openingMode && control.classList.contains('mode-card'));
+    });
     this.updateStartButtonText();
     this.validateForm();
   }
@@ -245,7 +266,7 @@ export class CharacterCreator {
     if (this.isHistorical) return;
     this.isHistorical = true;
     this.container
-      .querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLButtonElement>('input, textarea, button')
+      .querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | HTMLButtonElement>('input, textarea, select, button')
       .forEach(control => {
         control.disabled = true;
       });
@@ -275,6 +296,7 @@ export class CharacterCreator {
 
   private resetForm(): void {
     this.currentConfig = { mode: this.openingMode ?? 'story' };
+    this.selectedMechanicIds = [];
     this.container.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('[data-config-field]').forEach(field => {
       field.value = '';
     });
@@ -284,6 +306,7 @@ export class CharacterCreator {
       .forEach(card => card.classList.remove('selected'));
 
     for (const field of ['world', 'card']) {
+      if (field === 'card' && this.openingMode === 'tower') continue;
       const first = this.container.querySelector<HTMLButtonElement>(`.preset-card[data-preset-field="${field}"]`);
       const target = this.container.querySelector<HTMLTextAreaElement>(`[data-config-field="${field}"]`);
       if (first && target) {
@@ -292,6 +315,7 @@ export class CharacterCreator {
       }
     }
     this.syncAdvancedFields();
+    this.refreshArchetypePicker();
     this.showMessage('表单已重置。', 'info');
   }
 
@@ -304,6 +328,7 @@ export class CharacterCreator {
       this.openingMode = null;
     }
     for (const field of ['world', 'card']) {
+      if (field === 'card' && this.openingMode === 'tower') continue;
       const target = this.container.querySelector<HTMLTextAreaElement>(`[data-config-field="${field}"]`);
       const selected = this.container.querySelector<HTMLButtonElement>(
         `.preset-card[data-preset-field="${field}"].selected`,

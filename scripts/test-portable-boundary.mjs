@@ -4,7 +4,7 @@ import { dirname, extname, join, relative, resolve } from 'node:path';
 import ts from 'typescript';
 
 const roots = [
-  { path: resolve('src/game-core'), allowed: /^\.\//, packages: new Set(['jsep']) },
+  { path: resolve('src/game-core'), allowed: /^\.\/|^\.\.\/\.\.\/schemas\/mwg-card-effects-v1\.schema\.json$/, packages: new Set(['jsep', 'jsonrepair']) },
   { path: resolve('src/adapters'), allowed: /^(?:\.\/|\.\.\/game-core(?:\/|$))/, packages: new Set() },
   { path: resolve('src/portable'), allowed: /^\.\.?\/(?:game-core|adapters|portable)(?:\/|$)|^\.\//, packages: new Set() },
 ];
@@ -76,6 +76,7 @@ function runtimeModuleRequests(source, file) {
 async function resolveLocalModule(importer, request) {
   if (!request.startsWith('.')) return null;
   const candidate = resolve(dirname(importer), request);
+  if (extname(candidate) === '.json') return null; // Static protocol data, never a host module.
   for (const path of [`${candidate}.ts`, join(candidate, 'index.ts')]) {
     try {
       await readFile(path, 'utf8');

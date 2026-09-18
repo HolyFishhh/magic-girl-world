@@ -11,6 +11,7 @@ export interface EnemyActionQueueSource {
     _sequenceDoneOnce?: boolean;
     actionMode?: string;
     actionConfig?: Record<string, unknown>;
+    escapePending?: boolean;
 }
 export interface EnemyActionQueueEntry {
     id: string;

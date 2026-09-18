@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { readFile } from 'node:fs/promises';
+const require = createRequire(import.meta.url);
+process.env.TS_NODE_COMPILER_OPTIONS = JSON.stringify({ module: 'CommonJS', moduleResolution: 'node' });
+require('ts-node/register/transpile-only');
+const { shouldAutoConfirmTowerVictory } = require('../src/fish/ui/battleEffectPresenter.ts');
+assert.equal(shouldAutoConfirmTowerVictory({ mode: 'tower', result: 'victory' }), true);
+assert.equal(shouldAutoConfirmTowerVictory({ mode: 'tower', result: 'defeat' }), false);
+assert.equal(shouldAutoConfirmTowerVictory({ mode: 'story', result: 'victory' }), false);
+const presenterSource = await readFile(new URL('../src/fish/ui/battleEffectPresenter.ts', import.meta.url), 'utf8');
+assert.match(presenterSource, /if \(autoReward\) void confirm\(\);/);
+assert.match(presenterSource, /正在准备战利品/);
+assert.match(presenterSource, /if \(confirming\) return;/);
+console.log('Tower victory auto-confirms rewards only; story and defeat keep their existing dialog flow.');

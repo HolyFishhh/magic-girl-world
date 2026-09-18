@@ -11,7 +11,13 @@ import {
 export type CardZoneOperationRequest =
   | { type: 'scry_cards'; amount: number }
   | { type: 'discard_cards' | 'exhaust_cards'; selector: CardSelector; amount: number }
-  | { type: 'recover_cards'; source: RecoverCardZone; pick: 'random' | 'choose' | 'all'; amount: number };
+  | {
+      type: 'recover_cards';
+      source: RecoverCardZone;
+      pick: 'random' | 'choose' | 'all';
+      amount: number;
+      filter?: CardSelector['filter'];
+    };
 
 export type CardZoneOperationFailureCode =
   | 'DUPLICATE_CARD_ID'
@@ -91,14 +97,6 @@ function recoverSource(source: RecoverCardZone): CardPileZone {
   return 'exhaustPile';
 }
 
-function cardsFromSources<TCard extends CardZoneCard>(
-  zones: CardZoneState<TCard>,
-  sources: readonly CardPileZone[],
-  destination: CardPileZone,
-): TCard[] {
-  return sources.filter(source => source !== destination).flatMap(source => zones[source]);
-}
-
 function buildSelection(
   candidateCardIds: readonly string[],
   pick: CardSelector['pick'],
@@ -150,9 +148,14 @@ export function planCardZoneOperation<TCard extends SelectableCard>(
       : 10;
     destinationLimit = handLimit;
     const availableSlots = Math.max(0, handLimit - zones.hand.length);
-    candidateCardIds = cardsFromSources(zones, sources, destination)
-      .map(card => card.id)
-      .filter(id => !options.excludeCardIds?.has(id));
+    candidateCardIds = orderedCardsForSelector(zones, {
+      zone: request.source,
+      pick: request.pick,
+      ...(request.filter ? { filter: request.filter } : {}),
+    }, {
+      destination,
+      excludeCardIds: options.excludeCardIds,
+    }).map(card => card.id);
     const requested = request.pick === 'all' ? availableSlots : Math.min(normalizedCount(request.amount), availableSlots);
     selection = buildSelection(candidateCardIds, request.pick, requested, options.random);
   } else {

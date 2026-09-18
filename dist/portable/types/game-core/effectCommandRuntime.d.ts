@@ -1,4 +1,4 @@
-import { type CardSelector, type CardPlayRuleKind, type CardValueOperator, type CardValueStat, type CoreEffectState, type EffectExecutionContext, type EffectCardPatch, type EffectCardAttachmentDefinition, type EffectCardUpgradeChange, type EffectSchedulePhase, type EffectStanceDefinition, type EffectOrbDefinition, type EffectOrbSelector, type EffectCardPileZone, type EffectModifierOperator, type EffectNode, type EffectTarget, type EffectTrigger, type GeneratedCardDefinition, type ModifierStat, type RecoverCardZone, type EffectSummonDefinition, type EffectEnemySpawnDefinition, type SummonValueOperator, type SummonValueStat } from './effectDsl';
+import { type CardSelector, type CardPlayRuleKind, type CardValueOperator, type CardValueStat, type CoreEffectState, type EffectExecutionContext, type EffectCardPatch, type EffectCardAttachmentDefinition, type EffectCardUpgradeChange, type EffectSchedulePhase, type EffectStanceDefinition, type EffectOrbDefinition, type EffectOrbSelector, type EffectCardPileZone, type EffectModifierOperator, type EffectNode, type EffectProgram, type EffectTarget, type EffectTrigger, type GeneratedCardDefinition, type ModifierStat, type RecoverCardZone, type EffectSummonDefinition, type EffectEnemySpawnDefinition, type SummonValueOperator, type SummonValueStat } from './effectDsl';
 import type { EnemyTargetSelector } from './combatantCollection';
 import type { SummonOverflowPolicy, SummonSelector } from './summonUnit';
 import type { CardAttachmentChange } from './cardAttachment';
@@ -51,6 +51,12 @@ export type EffectCommand = {
     stat: 'hp' | 'lust' | 'energy' | 'block';
     value: number;
 } | {
+    type: 'persistent_growth';
+    stat: 'max_hp' | 'max_lust' | 'damage' | 'lust';
+    summonTemplateId?: string;
+    operator: 'add' | 'subtract' | 'set';
+    value: number;
+} | {
     type: 'apply_status';
     target: EffectTarget;
     targetSelector?: EnemyTargetSelector;
@@ -80,6 +86,7 @@ export type EffectCommand = {
     source: RecoverCardZone;
     pick: 'random' | 'choose' | 'all';
     amount: number;
+    filter?: CardSelector['filter'];
 } | {
     type: 'reduce_card_cost';
     selector: CardSelector;
@@ -100,6 +107,9 @@ export type EffectCommand = {
     type: 'auto_play_cards';
     selector: CardSelector;
     free: boolean;
+} | {
+    type: 'replay_current';
+    count: number;
 } | {
     type: 'set_card_destination';
     destination: import('./cardRules').PlayedCardDestination;
@@ -134,7 +144,7 @@ export type EffectCommand = {
     changes: EffectCardUpgradeChange[];
 } | {
     type: 'add_card';
-    zone: 'hand' | 'draw';
+    zone: 'hand' | 'draw' | 'discard';
     card: GeneratedCardDefinition;
     count: number;
 } | {
@@ -148,8 +158,16 @@ export type EffectCommand = {
     target: EffectTarget;
     summon: EffectSummonDefinition;
     count: number;
-    capacity: number;
+    capacity?: number;
     overflow: SummonOverflowPolicy;
+} | {
+    type: 'wait';
+} | {
+    type: 'say';
+    text: string;
+} | {
+    type: 'enemy_intent';
+    actionId: string;
 } | {
     type: 'spawn_enemy';
     enemy: EffectEnemySpawnDefinition;
@@ -193,6 +211,15 @@ export type EffectCommand = {
 } | {
     type: 'activate_summons';
     selector: SummonSelector;
+    trigger?: 'defeated';
+    suppliedAction?: {
+        id: string;
+        name: string;
+        emoji?: string;
+        description?: string;
+        fixed?: boolean;
+        effectProgram: EffectProgram;
+    };
 } | {
     type: 'dismiss_summons';
     selector: SummonSelector;
@@ -201,7 +228,7 @@ export type EffectCommand = {
     type: 'copy_summons';
     selector: SummonSelector;
     targetOwner: 'same' | EffectTarget;
-    capacity: number;
+    capacity?: number;
     overflow: SummonOverflowPolicy;
 } | {
     type: 'summoner_effects';
@@ -281,12 +308,20 @@ export type EffectCommand = {
     text: string;
 };
 export interface EffectCommandRuntimePorts {
+    /** UI navigation boundary; hosts must roll back all branch mutations on error. */
+    runChoiceBranch?(execute: () => Promise<boolean>): Promise<boolean>;
     readState(): CoreEffectState;
-    execute(command: EffectCommand, path: string): void | Promise<void>;
+    execute(command: EffectCommand, path: string): void | EffectCommandOutcome | Promise<void | EffectCommandOutcome>;
     isTerminal?(): boolean;
     chooseEffectOption?(choice: Extract<EffectNode, {
         op: 'choose_one';
-    }>, path: string): string | null | Promise<string | null>;
+    }>, path: string): string | readonly string[] | null | Promise<string | readonly string[] | null>;
+}
+export declare class EffectChoiceBackRequested extends Error {
+    constructor();
+}
+export interface EffectCommandOutcome {
+    discardResult?: import('./cardEffectRuntime').DiscardCommandResult;
 }
 export interface EffectCommandRuntimeResult {
     completed: boolean;

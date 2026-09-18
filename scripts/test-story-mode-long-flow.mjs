@@ -232,7 +232,7 @@ variables.stat_data.status.permanent_status.push(
 );
 variables.stat_data.reward.request = null;
 
-assert.deepEqual(variables.stat_data.reward, { card: [], artifact: [], item: [], limits: {}, request: null });
+assert.deepEqual(variables.stat_data.reward, { card: [], artifact: [], item: [], limits: {}, request: null, card_choice_groups: null, pool_revision: 1 });
 assert.equal(variables.stat_data.battle.cards.some(card => card.id === 'defeat_curse'), true);
 assert.equal(variables.stat_data.battle.artifacts.some(artifact => artifact.id === 'negative_relic'), true);
 assert.deepEqual(

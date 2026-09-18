@@ -333,7 +333,7 @@
     },
     {
       "id": "reward_pool_program_state",
-      "paths": ["reward.disabled_categories", "reward.pool_revision", "reward.reroll_count"],
+      "paths": ["reward.disabled_categories", "reward.pool_revision", "reward.reroll_count", "reward.card_choice_groups"],
       "shape": "program-managed",
       "owner": "program",
       "lifecycle": "candidate",
@@ -356,6 +356,15 @@
       "owner": "program",
       "lifecycle": "optional-run",
       "writers": ["program:tower-runtime", "program:battle-settlement"],
+      "ai_operations": []
+    },
+    {
+      "id": "deferred_tower_program_state",
+      "paths": ["run_event_state", "initial_artifact_acquisition"],
+      "shape": "optional-program-fields",
+      "owner": "program",
+      "lifecycle": "optional-run",
+      "writers": ["program:tower-runtime"],
       "ai_operations": []
     },
     {
@@ -471,6 +480,15 @@
       "id": "game_mode_lock",
       "paths": ["game_mode_lock"],
       "shape": "nullable-object",
+      "owner": "program",
+      "lifecycle": "persistent",
+      "writers": ["program:start"],
+      "ai_operations": []
+    },
+    {
+      "id": "selected_mechanics",
+      "paths": ["selected_mechanics"],
+      "shape": "string",
       "owner": "program",
       "lifecycle": "persistent",
       "writers": ["program:start"],

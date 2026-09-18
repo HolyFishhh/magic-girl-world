@@ -1,0 +1,13 @@
+### **Proxy error (HTTP 504 Gateway Timeout)**
+
+The proxy encountered an error while trying to send your prompt to the API. Further details are provided below.
+
+----
+
+*Reverse proxy timed out while waiting for the upstream service to respond.*
+
+```
+{"error":{"message":"Reverse proxy timed out while waiting for the upstream service to respond.","type":"proxy_network_error","code":"ECONNRESET"}}
+```
+
+<!-- oai-proxy-error -->

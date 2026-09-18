@@ -1,0 +1,83 @@
+import fs from 'node:fs';
+import {spawn} from 'node:child_process';
+import {resolve} from 'node:path';
+import assert from 'node:assert/strict';
+import WebSocket from 'ws';
+process.env.MWG_PRESENTATION_HTML='tmp/mobile-rewards.html';
+await import('./test-unified-content-presentation.mjs');
+delete process.env.MWG_PRESENTATION_HTML;
+const port=18166;
+const child=spawn('C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',['--headless=new','--disable-gpu','--no-first-run','--no-default-browser-check',`--remote-debugging-port=${port}`,`--user-data-dir=${resolve('tmp/battle-browser-profile-v466')}`,'about:blank'],{windowsHide:true,stdio:'ignore'});
+let ws;
+try {
+  let targets;
+  for(let i=0;i<100;i++){try{targets=await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();if(targets.length)break;}catch{}await new Promise(r=>setTimeout(r,100));}
+  assert.ok(targets?.length,'isolated browser must start');
+  ws=new WebSocket(targets.find(t=>t.type==='page').webSocketDebuggerUrl);await new Promise((r,j)=>{ws.once('open',r);ws.once('error',j)});
+  ws.on('message',raw=>{const m=JSON.parse(raw);if(m.method==='Runtime.exceptionThrown')console.error(JSON.stringify(m.params));});
+  let seq=0;const pending=new Map();ws.on('message',raw=>{const m=JSON.parse(raw);if(m.id){const p=pending.get(m.id);pending.delete(m.id);m.error?p?.reject(m.error):p?.resolve(m.result)}});
+  const call=(method,params={})=>new Promise((resolve,reject)=>{const id=++seq;pending.set(id,{resolve,reject});ws.send(JSON.stringify({id,method,params}))});
+  const evaluate=async expression=>{const r=await call('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value;};
+  await call('Page.enable');await call('Runtime.enable');
+  const evidence=[];
+  const pause=ms=>new Promise(r=>setTimeout(r,ms));
+  const navigate=async file=>{await call('Page.navigate',{url:'file:///'+resolve(file).replaceAll('\\','/')});await pause(2500);};
+
+
+
+
+  for(const width of [320,360,390,430,540,1000]) {
+    await call('Emulation.setDeviceMetricsOverride',{width,height:844,deviceScaleFactor:1,mobile:false});
+    await call('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:1});
+    await navigate('tmp/ui-v466/index.html');
+    await evaluate("document.getElementById('fixture-controls').style.display='none';fixture.formation(5);enablePhoneCards()");
+    const dimensions=await evaluate(`(()=>{const rect=s=>{const r=document.querySelector(s).getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,bottom:r.bottom,right:r.right}};return {stage:rect('#battle-stage'),hand:rect('#hand-cards'),center:rect('.center-battle-area'),scene:rect('#battle-scene'),overflow:document.documentElement.scrollWidth,innerWidth:innerWidth,card:rect('#hand-cards .mwg-card'),touch:getComputedStyle(document.querySelector('#hand-cards .mwg-card')).touchAction,actors:[...document.querySelectorAll('#stage-enemy-party [data-enemy-id]')].map(e=>{const r=e.getBoundingClientRect();return {x:r.x,right:r.right,w:r.width}})};})()`);
+    assert.ok(dimensions.overflow<=width,JSON.stringify({width,dimensions}));
+    if(width<=760){
+      assert.ok(dimensions.stage.h<300,JSON.stringify({width,dimensions}));
+      assert.ok(dimensions.hand.y<520,JSON.stringify({width,dimensions}));
+      assert.ok(dimensions.card.w>=140);assert.equal(dimensions.touch,'pan-x');
+      const h=dimensions.hand;
+      await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:h.x+h.w-35,y:h.y+80}]});
+      for(let step=1;step<=8;step++){await call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:h.x+h.w-35-step*20,y:h.y+80}]});await pause(25);}
+      await call('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await pause(500);
+      const swipe=await evaluate(`({scroll:document.querySelector('#hand-cards').scrollLeft,count:document.querySelectorAll('#hand-cards>.mwg-card').length,flights:document.querySelectorAll('.card-cast-flight').length})`);
+      assert.ok(swipe.scroll>30,JSON.stringify({width,swipe}));assert.equal(swipe.count,5);assert.equal(swipe.flights,0);
+      evidence.push({width,dimensions,swipe});
+      await evaluate("document.querySelector('#hand-cards').scrollLeft=0");
+      await pause(250);
+      fs.writeFileSync('tmp/mobile-final-'+width+'.png',Buffer.from((await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true})).data,'base64'));
+      await evaluate('fixture.select()');await pause(150);
+      const modal=await evaluate(`(()=>{const e=document.querySelector('.card-selection-modal .modal-content'),r=e.getBoundingClientRect();return {x:r.x,w:r.width,h:r.height,scroll:e.scrollWidth,client:e.clientWidth,cards:document.querySelectorAll('.selection-card').length};})()`);
+      assert.ok(modal.x>=0 && modal.x+modal.w<=width);assert.ok(modal.h<=844*.89);assert.ok(modal.scroll<=modal.client+1);assert.equal(modal.cards,4);
+      await evaluate("document.querySelector('.cancel-selection').click()");await pause(350);
+      assert.equal(await evaluate("document.querySelectorAll('.card-selection-modal').length"),0,'selection cancel closes dialog');
+      await evaluate('fixture.appearance(true)');await pause(250);
+      const status=await evaluate(`(()=>{const el=document.querySelector('.status-detail-content'),r=el.getBoundingClientRect(),b=el.querySelector('.close-status-detail').getBoundingClientRect();return {x:r.x,w:r.width,h:r.height,scroll:el.scrollWidth,client:el.clientWidth,close:b.width};})()`);
+      assert.ok(status.x>=0&&status.x+status.w<=width);assert.ok(status.scroll<=status.client+1);assert.ok(status.close>=36);assert.ok(status.h<=844*.89);
+      await evaluate("document.querySelector('.close-status-detail').click()");await pause(250);
+      assert.equal(await evaluate("document.querySelectorAll('.status-detail-modal').length"),0);
+      evidence.push({width,modal,status});
+      if(width===390){
+        await evaluate("document.querySelector('#hand-cards').scrollLeft=0;window.phonePlays=0;$('#hand-cards>.mwg-card').on('mwg:play-card',()=>window.phonePlays++)");await pause(250);
+        const point=await evaluate(`(()=>{const r=document.querySelector('#hand-cards>.mwg-card').getBoundingClientRect(),s=document.querySelector('#battle-stage').getBoundingClientRect();return {x:r.x+60,y:r.y+60,end:s.y+s.height/2};})()`);
+        await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:point.x,y:point.y}]});
+        for(let i=1;i<=10;i++){await call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:point.x,y:point.y+(point.end-point.y)*i/10}]});await pause(25);}
+        await call('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await pause(350);
+        const drag=await evaluate(`({plays:window.phonePlays,flights:document.querySelectorAll('.card-cast-flight').length})`);
+        assert.equal(drag.plays,1,JSON.stringify(drag));assert.equal(drag.flights,1);evidence.push({width,drag});
+      }
+
+    } else evidence.push({width,dimensions});
+  }
+
+  for(const width of [320,390,430]){
+    await call('Emulation.setDeviceMetricsOverride',{width,height:844,deviceScaleFactor:1,mobile:false});
+    await navigate('tmp/mobile-rewards.html');
+    const rewards=await evaluate(`(()=>{const el=document.querySelector('.mwg-card-choice'),card=el.querySelector('.mwg-card');el.classList.add('is-selected');const e=getComputedStyle(el),c=getComputedStyle(card);return {page:document.documentElement.scrollWidth,width:innerWidth,outerShadow:e.boxShadow,outerBorder:e.borderWidth,cardShadow:c.boxShadow,cardWidth:card.getBoundingClientRect().width,count:document.querySelectorAll('.mwg-card-choice').length};})()`);
+    assert.ok(rewards.page<=width);assert.equal(rewards.count,3);assert.equal(rewards.outerShadow,'none');assert.equal(rewards.outerBorder,'0px');assert.notEqual(rewards.cardShadow,'none');assert.ok(rewards.cardWidth>=140);evidence.push({width,rewards});
+    fs.writeFileSync('tmp/mobile-reward-'+width+'.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  }
+  fs.writeFileSync('tmp/mobile-final.json',JSON.stringify(evidence,null,2));console.log(JSON.stringify(evidence));
+
+} finally {ws?.close();child.kill();}

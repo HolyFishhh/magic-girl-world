@@ -2,6 +2,13 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { parse } from 'parse5';
+import ts from 'typescript';
+import { runInNewContext } from 'node:vm';
+import { createRequire } from 'node:module';
+const requireRules = createRequire(import.meta.url);
+process.env.TS_NODE_COMPILER_OPTIONS = JSON.stringify({ module: 'CommonJS', moduleResolution: 'node' });
+requireRules('ts-node/register/transpile-only');
+const { collectStanceNames } = requireRules(resolve('src/game-core/stanceIdentityDisplay.ts'));
 
 const htmlSource = await readFile(resolve('src/common/index.html'), 'utf8');
 const scriptSource = await readFile(resolve('src/common/index.ts'), 'utf8');
@@ -14,6 +21,8 @@ const runPromptSource = await readFile(resolve('src/game-core/runPrompt.ts'), 'u
 const commonActionHostSource = await readFile(resolve('src/common/commonActionHost.ts'), 'utf8');
 const runActionHostSource = await readFile(resolve('src/common/runActionHost.ts'), 'utf8');
 const towerNodePanelSource = await readFile(resolve('src/common/towerNodePanel.ts'), 'utf8');
+const rewardSelectionSource = await readFile(resolve('src/shared/rewardSelectionInteraction.ts'), 'utf8');
+const battleRewardsMenuSource = await readFile(resolve('src/common/battleRewardsMenu.ts'), 'utf8');
 const document = parse(htmlSource);
 const nodes = [];
 const visit = node => {
@@ -21,6 +30,15 @@ const visit = node => {
   node.childNodes?.forEach(visit);
 };
 visit(document);
+
+assert.match(rewardSelectionSource, /createRewardPreviewPill/);
+assert.match(rewardSelectionSource, /summary\.textContent = options\.previewLabel \?\? options\.label/);
+assert.match(towerNodePanelSource, /append\('relic', value\.artifacts \?\? value\.artifact\)/);
+const { rewardPreviewLabel } = requireRules(resolve('src/shared/rewardSelectionInteraction.ts'));
+assert.equal(rewardPreviewLabel('relic', { emoji: '⚡', name: '雷符' }), '遗物：⚡');
+assert.equal(rewardPreviewLabel('card', { emoji: '🗡️', name: '打击' }), '卡牌：打击 ×1');
+assert.match(towerNodePanelSource, /append\('item', value\.items \?\? value\.item\)/);
+assert.doesNotMatch(towerNodePanelSource, /查看馈赠内容|查看馈赠详情|点击展开详情/);
 
 const classes = node =>
   (node.attrs?.find(attribute => attribute.name === 'class')?.value || '').split(/\s+/).filter(Boolean);
@@ -41,11 +59,10 @@ const requiredIds = [
   'run-opt-in',
   'run-repair-btn',
   'run-opt-in-error',
+  'tower-start-difficulty',
   'status-time',
   'status-location',
   'status-job-name',
-  'battle-level',
-  'battle-exp',
   'deck-archetype-profile',
   'deck-archetype-share-bar',
   'deck-archetype-legend',
@@ -59,6 +76,10 @@ const requiredIds = [
 
 assert.equal(new Set(ids).size, ids.length, 'common interface element IDs must be unique');
 for (const id of requiredIds) assert.ok(ids.includes(id), `common status bar must preserve #${id}`);
+assert.match(htmlSource, /id="tower-start-difficulty"/);
+assert.match(scriptSource, /readRuntimeContentDesignSettings\(\)\.difficultyPercent/);
+assert.match(scriptSource, /mwg:settings-center:v2/);
+assert.match(scriptSource, /MagicGirlDesignAssistant\?\.updateSettings\?\.\(\{ difficultyPercent \}\)/);
 assert.equal((htmlSource.match(/\$1/g) || []).length, 0, 'story capture must not enter the common iframe');
 assert.equal((htmlSource.match(/\$2/g) || []).length, 0, 'options must not be transported through the iframe shell');
 assert.ok(nodes.some(node => classes(node).includes('mwg-statusbar')));
@@ -66,24 +87,158 @@ assert.doesNotMatch(scriptSource, /THEME_STORAGE_KEY|data-theme|prefers-color-sc
 assert.doesNotMatch(htmlSource, /custom-battle-send|按当前行动进入战斗/);
 assert.doesNotMatch(htmlSource, /notify-section|changes-section|本次变化|状态更新/);
 assert.doesNotMatch(scriptSource, /handleBattleAction|battle:\s*true/);
-assert.doesNotMatch(styleSource, /\[data-theme='dark'\]|color-scheme:\s*dark/);
+assert.match(styleSource, /\.mwg-section-fold\s*\{\s*color-scheme:\s*dark/);
 assert.match(styleSource, /--surface:\s*#fffaf7/);
 assert.match(styleSource, /background-image:[\s\S]*repeating-linear-gradient/);
 assert.match(styleSource, /--bookmark-pink:\s*#ffd9e2/);
 assert.match(scriptSource, /compactContentToDisplayTags/);
+const battleBook = scriptSource.match(/function renderBattleBookContent\(\)[\s\S]*?(?=\n(?:async )?function )/)?.[0] || '';
+assert.match(battleBook, /description: generated/, 'status definitions use structural rules');
+assert.match(battleBook, /const description = definition\?\.description \|\|/, 'active-status prose cannot replace definition rules');
+assert.doesNotMatch(battleBook, /const description = status\.description/);
+assert.match(battleBook, /\$\{escapeHtml\(description\)\}/);
+assert.match(battleBook, /\$\{escapeHtml\(/, 'flavor is labeled and HTML escaped');
+assert.match(battleBook, /escapeHtml\(definition\.flavorText\)/, 'active-status flavor is HTML escaped');
+assert.match(battleBook, /\$\{escapeHtml\(status\.description\)\}/, 'status-book flavor is HTML escaped');
+const escapeSource = scriptSource.match(/function escapeHtml\(value: unknown\): string \{[\s\S]*?\n\}/)?.[0];
+assert.ok(escapeSource);
+const hostileFlavor = '<img src=x onerror="window.__mwgInjected=1">';
+const statusContainer = { innerHTML: '' };
+runInNewContext(ts.transpileModule(`${escapeSource}\n${battleBook}\nrenderBattleBookContent();`, {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+}).outputText, {
+  document: { getElementById: () => statusContainer },
+  __BATTLE_BOOK_DATA: {
+    playerStatusEffects: [{ id: 'test', name: '状态', stacks: 1, description: '旧实例说明' }],
+    statuses: [{ id: 'test', name: '状态', type: 'buff', description: hostileFlavor, triggers: {} }],
+  },
+  flattenMvuArray: value => value,
+  normalizeMvuStatusDefinitions: value => value,
+  canGenerateCompactStatusDescription: () => true,
+  contentDescriptionEnemyNames: () => ({ guard: '守护者' }),
+  describeCompactStatus: (_status, options) => { assert.equal(options.enemyNames.guard, '守护者'); return '实际机械规则'; },
+  compactStatusEffectTagsHtml: () => '',
+});
+assert.equal((statusContainer.innerHTML.match(/&lt;img src=x onerror=&quot;window\.__mwgInjected=1&quot;&gt;/g) || []).length, 2, 'both real status renderer branches escape hostile authored flavor');
+assert.doesNotMatch(statusContainer.innerHTML, /<img|旧实例说明/);
+const ruleSource = scriptSource.match(/function contentRuleDescription\([\s\S]*?(?=\n\/\*\*|\nfunction )/)?.[0];
+const flavorSource = 'function contentFlavorHtml(content) { return supportRenderer(content, { kind: "详情", rulesHtml: "" }); }';
+assert.ok(ruleSource && flavorSource);
+assert.doesNotMatch(ruleSource, /resolveCompact|content\.description/, 'rules never come from authored prose');
+const presentationProbe = {rules:'',flavor:''};
+runInNewContext(ts.transpileModule(`${escapeSource}\n${ruleSource}\n${flavorSource}\npresentationProbe.rules=contentRuleDescription(probe);presentationProbe.flavor=contentFlavorHtml(probe);`, {
+  compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None},
+}).outputText, {
+  presentationProbe,probe:{type:'Skill',effects:{block:5},description:hostileFlavor},
+  supportRenderer: requireRules(resolve('src/shared/supportPresentation.ts')).renderSupportDetails,
+  contentDescriptionStatusNames:()=>({}),contentDescriptionStatusDefinitions:()=>({}),contentDescriptionResourceNames:()=>({}),
+  collectStanceNames, collectStanceDefinitions:()=>({}), collectCardDisplayNames:()=>({}), collectSummonDisplayNames:()=>({}), contentDescriptionResourceDefinitions:()=>({}),__STAT__:{},
+  describeCompactCard:card=>`获得${card.effects.block}点格挡。`,describeCompactContent:()=>'',
+  normalizeChinesePlayerDescription:value=>value,
+});
+assert.equal(presentationProbe.rules,'获得5点格挡。');
+assert.match(presentationProbe.flavor,/&lt;img/); assert.doesNotMatch(presentationProbe.flavor,/<img/);
+// Actual shared formatter + actual common renderer: reward and inventory cards
+// have no separate keyword badges, so their rules must not hide lifecycle flags.
+const cardRules = requireRules(resolve('src/game-core/contentDescription.ts'));
+const statusDefinitionsSource = scriptSource.match(/function contentDescriptionStatusDefinitions\([\s\S]*?(?=\nfunction )/)?.[0];
+const statusNamesSource = scriptSource.match(/function contentDescriptionStatusNames\([\s\S]*?(?=\nfunction )/)?.[0];
+assert.ok(statusDefinitionsSource && statusNamesSource);
+const referenceProbe = {};
+runInNewContext(ts.transpileModule(`${statusDefinitionsSource}\n${statusNamesSource}\n${ruleSource}\nreferenceProbe.rules=contentRuleDescription(probe);`, {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+}).outputText, {
+  referenceProbe,
+  probe: { type:'Skill', effects:{apply_status:'delayed',to:'opponent'}, description:'本回合结束伤害' },
+  __STAT__: {battle:{statuses:[{id:'delayed',name:'延迟',triggers:{turn_start:{damage:6,to:'self'}}}]}},
+  contentDescriptionResourceNames:()=>({}),collectStanceNames, collectStanceDefinitions:()=>({}), collectCardDisplayNames:()=>({}), collectSummonDisplayNames:()=>({}), contentDescriptionResourceDefinitions:()=>({}),
+  describeCompactCard:cardRules.describeCompactCard,describeCompactContent:cardRules.describeCompactContent,
+});
+assert.match(referenceProbe.rules,/回合开始时/,'actual common renderer supplies exact status definitions');
+assert.doesNotMatch(referenceProbe.rules,/本回合结束伤害/);
+for (const [extra, keyword] of [
+  [{ exhaust: true }, '消耗'], [{ retain: true }, '保留'],
+  [{ innate: true }, '固有'], [{ ethereal: true }, '空灵'],
+  [{ type: 'Power', trigger: { on: 'turn_start', effects: { block: 1 } } }, '消耗'],
+  [{ type: 'Power', trigger: { on: 'passive', effects: { modify: 'summon_capacity', add: 1 } } }, '自身的召唤容量增加1'],
+]) {
+  const observed = {};
+  runInNewContext(ts.transpileModule(`${ruleSource}\nobserved.rules=contentRuleDescription(probe);`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+  }).outputText, {
+    observed, probe: { type: 'Attack', effects: { damage: 7 }, description: '没有写任何关键词', ...extra },
+    contentDescriptionStatusNames: () => ({}), contentDescriptionStatusDefinitions: () => ({}), contentDescriptionResourceNames: () => ({}),
+    collectStanceNames, collectStanceDefinitions:()=>({}), collectCardDisplayNames:()=>({}), collectSummonDisplayNames:()=>({}), contentDescriptionResourceDefinitions:()=>({}), __STAT__: {},
+    describeCompactCard: cardRules.describeCompactCard, describeCompactContent: cardRules.describeCompactContent,
+  });
+  assert.match(observed.rules, new RegExp(keyword), `actual common rules preserve ${keyword}`);
+  assert.match(observed.rules, /7点伤害/);
+  assert.doesNotMatch(observed.rules, /没有写任何关键词/);
+}
+// Execute the actual tower card renderer with the real shared cost formatter.
+const resourceSource = await readFile(resolve('src/game-core/combatResource.ts'), 'utf8');
+const resourceModule = ts.transpileModule(resourceSource, {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+}).outputText;
+const { describeCardCost } = await import(`data:text/javascript;base64,${Buffer.from(resourceModule).toString('base64')}`);
+const costLabelSource = scriptSource.match(/function contentCardCostLabel\([\s\S]*?(?=\nfunction )/)?.[0];
+const towerPlayerSource = scriptSource.match(/function renderTowerPlayerSummary\([\s\S]*?(?=\nfunction )/)?.[0];
+const collectionCardSource = scriptSource.match(/function renderCollectionCard\([\s\S]*?(?=\nfunction )/)?.[0];
+const collectionSupportSource = scriptSource.match(/function renderCollectionSupport\([\s\S]*?(?=\nfunction )/)?.[0];
+const { renderCardFace } = requireRules(resolve('src/shared/cardFace.ts'));
+const { renderSupportDetails } = requireRules(resolve('src/shared/supportPresentation.ts'));
+assert.ok(costLabelSource && towerPlayerSource);
+const costDeck = { innerHTML: '' };
+const lifetimeEffects = { innerHTML: '' };
+const lifetimeArtifacts = { innerHTML: '' };
+const lifetimeAbilities = [{ id: 'temporary', name: '<临时能力>' }];
+const costCards = [
+  { id: 'multi', type: 'Skill', name: '复合费用', cost: { energy: 1, prism: 2 } },
+  { id: 'all', type: 'Skill', name: '全部折光', cost: { prism: 'all' } },
+  { id: 'energy', type: 'Attack', name: '全部能量', cost: 'energy' },
+  { id: 'free', type: 'Skill', name: '免费', cost: 0 },
+  { id: 'curse', type: 'Curse', name: '诅咒', cost: 1 },
+];
+const beforeCosts = structuredClone(costCards);
+runInNewContext(ts.transpileModule(`${escapeSource}\n${costLabelSource}\n${collectionCardSource}\n${collectionSupportSource}\n${towerPlayerSource}\nrenderTowerPlayerSummary({battle:{cards:costCards,core:{resources:[{id:'prism',name:'折光'}]},artifacts:[{id:'permanent',name:'遗物'}],player_abilities:lifetimeAbilities,player_status_effects:[{id:'temporary_status'}]}},true);`, {
+  compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None},
+}).outputText, {
+  costCards, lifetimeAbilities, describeCardCost, renderCardFace, renderSupportDetails, CARD_RARITY_LABELS: { Common: '普通' },
+  contentDescriptionResourceDefinitions: () => ({ prism: { name: '<折光>', emoji: '🔷' } }),
+  document: { querySelector: () => null, getElementById: id => id === 'tower-player-panel' ? {style:{}} : id === 'tower-player-deck' ? costDeck : id === 'tower-player-effects' ? lifetimeEffects : id === 'tower-player-artifacts' ? lifetimeArtifacts : null },
+  readStatusProfession: () => ({}), migratePersistentRunDeck: value => value,
+  normalizeOptionsList: value => value || [], towerItemSlotsUsed: () => 0, MAX_TOWER_ITEM_SLOTS: 3,
+  towerRarity: () => 'Common', contentRulesHtml: () => '测试规则', contentRuleDescription: () => '测试规则', contentFlavorHtml: () => '',
+  translateCardType: value => value,
+});
+assert.match(costDeck.innerHTML, /1⚡能量 \+ 2🔷&lt;折光&gt;/);
+assert.match(costDeck.innerHTML, /X🔷&lt;折光&gt;/);
+assert.match(costDeck.innerHTML, /aria-label="X⚡能量">X⚡能量<\/div>/);
+assert.match(costDeck.innerHTML, /aria-label="0⚡能量">0⚡能量<\/div>/);
+assert.match(costDeck.innerHTML, /aria-label="—">—<\/div>/);
+assert.doesNotMatch(costDeck.innerHTML, /\[object Object\]|<折光>/);
+assert.deepEqual(costCards, beforeCosts);
+assert.equal((lifetimeEffects.innerHTML.match(/本场 · 战斗结算后移除/g) || []).length, 2, 'only encounter abilities and active statuses receive the cleanup label');
+assert.match(lifetimeEffects.innerHTML, /&lt;临时能力&gt;/);
+assert.doesNotMatch(lifetimeEffects.innerHTML, /<临时能力>/);
+assert.doesNotMatch(lifetimeArtifacts.innerHTML, /战斗结算后移除/);
+assert.deepEqual(lifetimeAbilities, [{ id: 'temporary', name: '<临时能力>' }], 'lifetime presentation cannot mutate authored content');
+assert.match(collectionCardSource, /contentCardCostLabel\(card\)/, 'all collection cards use the real resource cost formatter');
+assert.doesNotMatch(scriptSource,/normalizeChinesePlayerDescription\(card.description\)\s*\|\|/,'reward prose cannot replace structural rules');
+assert.doesNotMatch(scriptSource,/contentRuleDescription\([^\n]+\.description/,'caller cannot smuggle authored prose into the rules fallback');
 assert.match(scriptSource, /reward-effect-summary/);
 assert.match(scriptSource, /function renderDeckArchetypeProfile/);
 assert.match(scriptSource, /design_context\?\.archetypes/);
 assert.match(styleSource, /\.archetype-share-bar/);
 assert.match(scriptSource, /CARD_RARITY_LABELS/);
-assert.match(scriptSource, /class="card rarity-\$\{escapeHtml\(rarity\)\}"/);
-assert.match(scriptSource, /class="card-rarity-chip"/);
+assert.match(scriptSource, /renderCollectionCard\(card\)/);
+assert.match(collectionCardSource, /renderCardFace/);
 for (const rarity of ['Uncommon', 'Rare', 'Epic', 'Legendary', 'Corrupt']) {
   assert.match(styleSource, new RegExp(`\\.battle-deck \\.card\\.rarity-${rarity}`));
 }
 assert.match(styleSource, /--card-rarity:/);
-assert.match(towerNodePanelSource, /tower-node-narrative-archive/);
-assert.match(towerNodePanelSource, /查看本次事件剧情/);
+assert.doesNotMatch(towerNodePanelSource, /tower-node-narrative-archive/, 'story archive belongs to shared story panel');
+assert.match(await readFile(resolve('src/runtime/storyPanel.ts'),'utf8'), /预览过去剧情/);
 assert.match(styleSource, /\.tower-node-narrative-archive/);
 assert.ok(
   htmlSource.indexOf('id="run-opt-in"') < htmlSource.indexOf('id="battle-hp"'),
@@ -100,7 +255,16 @@ assert.ok(!htmlSource.includes('当前剧情'));
 assert.ok(!scriptSource.includes('setupTabSwitching'));
 assert.ok(!scriptSource.includes('applyTextHighlight'));
 assert.match(scriptSource, /choiceOverlay\.style\.display = 'flex'/);
-assert.match(scriptSource, /error\.id = 'reward-error'/);
+assert.match(scriptSource, /function renderBattleRewardMenu/);
+assert.match(scriptSource, /isOrdinaryBattleReward/);
+assert.match(scriptSource, /import \{ renderBattleRewardsMenu \} from '\.\/battleRewardsMenu';/);
+assert.match(scriptSource, /claimGold: request\.kind === 'gold'/);
+assert.match(scriptSource, /discardGold: request\.kind === 'discard'/);
+assert.match(battleRewardsMenuSource, /export function renderBattleRewardsMenu/);
+assert.match(battleRewardsMenuSource, /readRewardCardGroups/);
+assert.match(battleRewardsMenuSource, /battle-reward-card-flip/);
+assert.match(runActionHostSource, /gold: `\$\{Number\(stat\.reward\.gold\) \|\| 0\}:\$\{stat\.reward\.gold_claimed === true\}`/);
+assert.match(battleRewardsMenuSource, /alert\.className='reward-error'/);
 assert.match(scriptSource, /inspectRewardCandidates\(stat\)/);
 assert.match(scriptSource, /option-invalid/);
 assert.match(scriptSource, /不可领取：/);
@@ -128,7 +292,7 @@ assert.match(runActionHostSource, /rest_upgrade_card/);
 assert.match(runActionHostSource, /rest_transform_card/);
 assert.match(runActionHostSource, /rest_duplicate_card/);
 assert.match(runActionHostSource, /rest_remove_card/);
-assert.match(runActionHostSource, /reward_pool/);
+assert.doesNotMatch(runActionHostSource, /requestRewardReroll|retryRewardReroll/);
 assert.match(runActionHostSource, /pendingEventRewards/);
 assert.match(runActionHostSource, /stat\.run_result != null && !pendingEventRewards/);
 assert.doesNotMatch(
@@ -137,7 +301,7 @@ assert.doesNotMatch(
 );
 assert.match(scriptSource, /'事件奖励'/);
 assert.match(scriptSource, /已跳过本次奖励/);
-assert.match(scriptSource, /已离开商店/);
+assert.match(scriptSource, /离开了商店/);
 assert.match(scriptSource, /奖励已成功领取/);
 assert.match(scriptSource, /recommendShopPrice/);
 assert.match(runPromptSource, /formatRunNodeDirection/);
@@ -181,18 +345,17 @@ assert.match(scriptSource, /const selections = __REWARD_SELECTION_MEMORY\.select
 assert.match(scriptSource, /poolRevision: Number\(reward\.pool_revision \|\| 0\)/);
 assert.match(scriptSource, /input\.checked = restored\.includes\(index\)/);
 assert.match(scriptSource, /function contentDescriptionResourceNames/);
-assert.match(
-  scriptSource,
-  /describeCompactCard\(card, \{\s*statusNames: contentDescriptionStatusNames\(card\),\s*resourceNames: contentDescriptionResourceNames\(\),\s*\}\)/,
-);
+assert.match(ruleSource, /statusNames: contentDescriptionStatusNames\(content\)/);
+assert.match(ruleSource, /resourceNames: contentDescriptionResourceNames\(\)/);
 assert.match(scriptSource, /function contentRuleDescription/);
 assert.match(scriptSource, /canGenerateCompactStatusDescription\(status\)/);
-assert.match(scriptSource, /describeCompactStatus\(status, \{ statusNames \}\)/);
+assert.match(scriptSource, /describeCompactStatus\(status, \{ statusNames, enemyNames: contentDescriptionEnemyNames\(\) \}\)/);
 assert.match(scriptSource, /statusDefinitions\.get\(status\.id\)/);
-assert.match(scriptSource, /resolveCompactCardDescription\(content/);
-assert.match(scriptSource, /resolveCompactContentDescription\(content, options\)/);
-assert.match(scriptSource, /contentRuleDescription\(artifact, '效果见规则'\)/);
-assert.match(scriptSource, /contentRuleDescription\(item, '效果见规则'\)/);
+assert.match(ruleSource, /describeCompactCard\(content/);
+assert.match(ruleSource, /describeCompactContent\(content, options\)/);
+assert.match(scriptSource, /renderCollectionSupport\(artifact, '遗物'\)/);
+assert.match(scriptSource, /renderCollectionSupport\(item, '道具'\)/);
+assert.match(collectionSupportSource, /contentRulesHtml\(value\)/);
 assert.match(scriptSource, /value\.name \?\? value\.title \?\? value\.id/);
 assert.match(scriptSource, /name && description \? `\$\{name\}：\$\{description\}`/);
 assert.doesNotMatch(scriptSource, /let items: string\[\] = status/);
@@ -218,17 +381,30 @@ assert.match(scriptSource, /watchCurrentMessageDepth/);
 assert.match(scriptSource, /rerenderHistoricalMessageForDepth/);
 assert.match(scriptSource, /runActions\.replaceChildren\(\)/);
 assert.match(scriptSource, /TavernCommonActionHost/);
-assert.match(scriptSource, /runActionHost\.startRun\(\)/);
+const singleFloorStart = scriptSource.match(/async function startTowerFromPanel\(\)[\s\S]*?(?=\n(?:async )?function )/)?.[0] || '';
+assert.ok(singleFloorStart, 'common UI has a single-floor tower start handler');
+assert.match(scriptSource, /tower-start-button['"]\)\?\.addEventListener\('click', \(\) => void startTowerFromPanel\(\)/);
+assert.match(singleFloorStart, /await ensureMvuRuntimeReady\(/);
+assert.match(singleFloorStart, /await persistTowerMode\(config\)/);
+assert.match(singleFloorStart, /await runtime\.startTowerSingleFloor\(\{/);
+assert.match(singleFloorStart, /spec: 'mwg\.tower-single-floor-start\/v1'/);
+assert.ok(singleFloorStart.indexOf('await ensureMvuRuntimeReady(') < singleFloorStart.indexOf('await persistTowerMode(config)'));
+assert.ok(singleFloorStart.indexOf('await persistTowerMode(config)') < singleFloorStart.indexOf('await runtime.startTowerSingleFloor('));
+assert.doesNotMatch(scriptSource, /runActionHost\.startRun\(\)/, 'tower UI must not bypass single-floor initialization');
 assert.doesNotMatch(scriptSource, /target\.closest\('#run-start-btn'\)|startOptionalRun/);
 assert.match(scriptSource, /if \(typeof window !== 'undefined'\) \{\s*initializeCommonView\(\);\s*\}/);
-assert.match(
-  scriptSource,
-  /async function loadGameData\(\)[\s\S]{0,900}await ensureMvuRuntimeReady\(\);[\s\S]{0,500}variables = getCurrentMessageVariables\(\);/,
-  'a restored common view must wait for MVU message variables before its first render',
-);
+const loadGameData = scriptSource.match(/async function loadGameData\(\)[\s\S]*?(?=\n(?:async )?function )/)?.[0] || '';
+assert.ok(loadGameData.includes('await ensureMvuRuntimeReady('), 'restored view waits for MVU');
+assert.ok(loadGameData.indexOf('await ensureMvuRuntimeReady(') < loadGameData.indexOf('variables = getCurrentMessageVariables();'), 'MVU is ready before the first variable read');
 assert.doesNotMatch(scriptSource, /\$jq\(\(\) =>/);
 assert.match(scriptSource, /if \(readRunState\(__STAT__\)\) \{/);
-assert.doesNotMatch(scriptSource, /\btriggerSlash\b|updateCurrentMessageVariablesWith/);
+assert.doesNotMatch(scriptSource, /\btriggerSlash\b/);
+const persistTowerMode = scriptSource.match(/async function persistTowerMode\([\s\S]*?(?=\n(?:async )?function )/)?.[0] || '';
+assert.match(persistTowerMode, /await updateCurrentMessageVariablesWith\(update\)/);
+assert.doesNotMatch(persistTowerMode, /updateCurrentChatVariablesWith/,
+  'single-floor start must not create a chat-scope MVU mirror that disabled MVU compatibility removes on reload');
+assert.match(messageVariablesSource, /export function updateCurrentMessageVariablesWith\([\s\S]{0,250}assertCurrentMessageLatest\(\)/, 'mode persistence uses the guarded message writer');
+assert.equal((scriptSource.match(/updateCurrentMessageVariablesWith\(/g) || []).length, 1, 'direct message writes are confined to explicit mode persistence');
 assert.doesNotMatch(scriptSource, /\bgenerateRaw?\b/);
 assert.match(commonActionHostSource, /createChatMessages\(/);
 assert.match(commonActionHostSource, /triggerSlash\('\/trigger'\)/);
@@ -262,4 +438,4 @@ assert.match(
   'Tavern regex exports must tolerate the status placeholder appended by MUV',
 );
 
-console.log('Common messages keep native story text and append one user-driven interactive status bar.');
+console.log('Common view content, rewards and interactions passed; story presentation is covered by test-story-panel.');

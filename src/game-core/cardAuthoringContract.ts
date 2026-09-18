@@ -1,0 +1,14 @@
+/** Shared execution semantics; no registry/creates placement policy here. */
+export function cardExecutionContractClauses(): string[] {
+  return [
+    '需要开场铺设的引擎、形态变化、关键支援牌可主动使用 innate:true（固有），不要只在描述里写起手效果。固有牌战斗开始时优先全部进入手牌，可超过常规起手抽牌数但不能超过手牌上限；超出上限的固有牌留在抽牌堆顶部。是否使用由构筑需要决定，不要求固定数量。战斗中才生成的临时模板不能写 innate。',
+'卡牌可重复持有：名称、类型、费用与可执行规则完全相同的卡（例如同为“斩击”，造成 6 点伤害）优先复用同一稳定 ID、名称和完整定义，以 unique:false 与 quantity 表达份数；每份会成为独立持有实例。构思与已有卡相近、只差小幅数值或换名且不形成有意义玩法差异时，也优先直接选用已有卡的完整规则和名称作为副本，不为微差强造新卡。此条只指导生成选择：程序不会模糊合并已经合法但不同的内容。unique:true 才是单张持有限制，必须 quantity:1，不得改 ID 伪造额外副本；规则、费用或效果确有玩法差异时才必须使用新 ID。召唤物用稳定 slot 限同一召唤者一只，并设计 on_existing_effects 实现重复打出后的加强；群体召唤不设 slot。缺省唯一字段的旧牌保持原语义。',
+'强化须说明实际改变量，例如“使指定卡牌（王剑）造成的伤害增加 3（永久）”，不写“升级一级”。精确定位模板用选择器 id:"稳定卡牌ID"（等同 template_id）；精确定位某张持有卡用已有 run_instance_id，单场副本用 combat_instance_id，不凭空编造实例 ID。from:"combat" 扫描手牌、抽牌、弃牌和消耗区；pick:"all" 自动选中，无需弹窗；pick:"choose" 才手选。',
+'单卡成长示例 {patch_card:"damage",id:"royal_sword",from:"combat",pick:"all",add:3,scope:"permanent",match:"run_instance"}。同名牌包括今后生成的副本用 {patch_card:"damage",name:"小刀",from:"combat",pick:"all",add:2,scope:"combat",match:"filter",future_copies:true}；只限同模板则用 id 和 match:"template"。无需已存在副本也能登记未来强化；run/permanent 范围跨战斗保留。增加打击次数用 patch_card:"hits",add:1；使卡牌对敌方的伤害及欲望攻击变为群体用 patch_card:"area"，不配 add/set/targets。三种可组合，保留非攻击效果的原目标，不修改该卡召唤出的单位或生成牌模板。对召唤物另用 modify_summon_effect 或 persistent_growth,summon_template。',
+'生命周期写在卡牌/模板根部，不是 effects 操作：lifecycle.on_play 与 on_discard 各选 discard/exhaust/purge，turn_end 选 discard/retain/exhaust；仅写覆盖项。exhaust 为本场消耗，purge 为永久销毁本张持有卡；临时副本不销毁原卡。on_discard 只认手牌主动/效果弃置，不认打出后弃置或回合清理。保留且弃置消耗写 lifecycle:{turn_end:"retain",on_discard:"exhaust"}。旧 exhaust/retain/ethereal/innate 仍可用，显式 lifecycle 按时机覆盖；Curse 默认保留，Power 默认打出消耗。临时牌由 add_card/复制生成，不给持有卡伪造 temporary 字段。',
+'指定召唤在场才可打出的卡，在卡牌根部写 requires_summon:"召唤模板ID"。该字段在扣除能量或资源之前检查；缺失时不能打出，不能把这个门槛写成 effects.when。',
+'卡牌按实际执行方式选类型：Attack/Skill 使用非空根 effects，不写 trigger；已有 discard_effects 也不能代替可打出的根 effects。Event 专用于纯叙事卡，根 effects 必须且只能是一条 {narrate:"自然中文叙事"}，不写 when/on/trigger，也不能混入数值或强化。打出时执行 patch_card、persistent_growth、召唤强化等操作的功能牌通常是 Skill；scope:"permanent" 只表示效果跨战斗保留，不会把卡牌变成 Event 或 Power。Curse 必须省略整个 cost（null 不是省略）；纯不可打出占位牌可同时省略 effects，有实际后果则保留非空 effects/discard_effects，不用 narrate、空对象或虚假零值占位。只靠弃牌等被动后果的不可打出牌属于 Curse，保留真实 discard_effects。',
+'Power 的结构按实际时机三选一：①打出后持续修改规则：根 trigger:{on:"passive",effects:modify/card_rule}；②打出后监听事件：根 trigger:{on:公开事件,effects:即时效果,...事件筛选}；③打出时施加持续状态：根 effects 写 apply_status，已注册状态的 triggers.hold 承担持续规则。同时有根 effects 与 trigger 时，即时部分在打出当下结算，监听器登记后按时机触发。只有 trigger 时省略根 effects，不写空数组；不用 trigger 的 Power 仍需非空根 effects。只有即时伤害、格挡、抽牌、能量或召唤强化的牌应为 Attack/Skill，不能仅凭名称“强化”标成 Power。Power 不支持 battle_start。',
+'passive 只接受持续 modify/card_rule，不接受 apply_status/damage/block/energy/draw 等一次性操作，也不接受 scope/ordinal/n/event/phase/reason/source_kind 等事件筛选。每回合首次或指定事件收益使用对应非 passive trigger。trigger 位于内容根部，不嵌进 effects；modify 的值为属性字符串，不是对象。',
+  ];
+}

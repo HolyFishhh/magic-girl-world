@@ -1,0 +1,21 @@
+import assert from 'node:assert/strict';import {createRequire} from 'node:module';import fs from 'node:fs';import Ajv from 'webpack/node_modules/ajv/dist/2020.js';
+const require=createRequire(import.meta.url);process.env.TS_NODE_COMPILER_OPTIONS=JSON.stringify({module:'CommonJS',moduleResolution:'node'});require('ts-node/register/transpile-only');
+const {withAiContentDefinitions}=require('../src/game-core/aiContentJsonSchema.ts');const {createTowerInitialSlotRepairJsonSchema}=require('../src/game-core/towerRequest.ts');const {createProviderSafeJsonSchema}=require('../src/sillytavern-extension/towerGenerationHost.ts');const {normalizeAbilityDefinition}=require('../src/fish/core/battleContentAdapter.ts');const {compileCompactEffectList}=require('../src/game-core/compactEffectDsl.ts');const {validateStatusDefinition}=require('../src/game-core/statusDefinitionValidation.ts');
+const ability={id:'ward',name:'守护',trigger:{on:'passive',effects:{}},protection:{mode:'intercept',scope:'specific',target_id:'ally'}};
+const status={id:'ward',name:'守护',emoji:'🛡️',type:'buff',triggers:{},protection:ability.protection};
+const ajv=new Ajv({strict:false,allErrors:true});
+for(const [ref,value] of [['mwgEnemyAbility',ability],['mwgStatusDefinition',status]]){const schema=withAiContentDefinitions({$ref:'#/$defs/'+ref});const valid=ajv.compile(schema);assert.ok(valid(value),JSON.stringify(valid.errors));assert.ok(!valid({...value,protection:{mode:'intercept',scope:'specific'}}));}
+assert.deepEqual(normalizeAbilityDefinition(ability).protection,{mode:'intercept',scope:'specific',targetId:'ally'});
+assert.equal(normalizeAbilityDefinition({...ability,protection:undefined}),null,'empty passive without protection remains invalid');
+assert.equal(normalizeAbilityDefinition({...ability,trigger:{on:'passive',effects:{},scope:'battle'}}),null,'pure protection cannot bypass unsupported trigger filter validation');
+assert.equal(normalizeAbilityDefinition({...ability,trigger:{on:'passive',effects:{},typo:true}}),null,'pure protection cannot discard unknown trigger fields');
+const enemy={id:'guard',name:'守护者',emoji:'🛡️',max_hp:20,hp:20,max_lust:100,lust:0,actions:[{name:'攻击',effects:{damage:2}}],abilities:[ability]};
+const {preflightBattleContent}=require('../src/fish/core/battleContentPreflight.ts');
+const ready=preflightBattleContent({core:{emoji:'🧙',hp:80,max_hp:80,lust:0,max_lust:100},cards:[{id:'strike',name:'攻击',type:'Attack',rarity:'Common',cost:1,quantity:5,effects:{damage:8}}],artifacts:[],items:[],statuses:[status],player_status_effects:[],player_abilities:[],player_lust_effect:{name:'反噬',effects:{damage:5}},enemies:[enemy,{...enemy,id:'ally',abilities:[]}]});assert.ok(ready.ok,JSON.stringify(ready.issues));
+const compiled=compileCompactEffectList({spawn_enemy:enemy});assert.ok(compiled.ok,JSON.stringify(compiled.issues));assert.match(JSON.stringify(compiled.value),/target_id/);
+for(const path of ['schemas/mwg-effect-v1.schema.json','schemas/mwg-card-effects-v1.schema.json']){const schema=JSON.parse(fs.readFileSync(path,'utf8'));const ref=path.includes('card-effects')?'spawnEnemyEffect':'authoredEnemyAbility';const valid=ajv.compile({$defs:schema.$defs,$ref:'#/$defs/'+ref});assert.ok(valid(ref==='spawnEnemyEffect'?{spawn_enemy:enemy}:ability),JSON.stringify(valid.errors));}
+const repair=createTowerInitialSlotRepairJsonSchema([{token:'r0',slots:[{token:'s0',kind:'status_protection',action:'replace_value'}],allowSupportStatuses:true,supportStatusIds:['ward']}]);
+assert.match(JSON.stringify(repair),/target_id/);assert.match(JSON.stringify(repair),/protection/);
+const abilityProjection=createProviderSafeJsonSchema({name:'mwg_test',value:withAiContentDefinitions({type:'object',properties:{ability:{$ref:'#/$defs/mwgEnemyAbility'}}})});assert.match(JSON.stringify(abilityProjection),/target_id/);
+const projected=createProviderSafeJsonSchema({name:'mwg_test',value:withAiContentDefinitions({type:'object',properties:{status:{$ref:'#/$defs/mwgStatusDefinition'}}})});assert.match(JSON.stringify(projected),/protection/);assert.match(JSON.stringify(projected),/target_id/);
+console.log('PASS protection generation schemas, pure ability compilation, nested spawn_enemy, support-status repair and provider projection.');

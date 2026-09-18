@@ -45,17 +45,16 @@ const executeEnemyAction = readClassMethod(
   'BattleManager',
   'executeEnemyAction',
 );
-assert.match(executeEnemyAction, /executeEnemyEffect\(action\.effectProgram, action\.name, entry\.enemyId\)/);
+assert.match(executeEnemyAction, /executeEnemyEffect\(action\.effectProgram, action\.name, entry\.enemyId, action\)/);
 assert.doesNotMatch(executeEnemyAction, /catch \(error\)/, 'enemy action errors must reach the session coordinator');
 
-const executeDefaultEnemyAction = readClassMethod(
-  battleManagerSource,
-  battleManagerPath,
-  'BattleManager',
-  'executeDefaultEnemyAction',
-);
-assert.match(executeDefaultEnemyAction, /rollDefaultEnemyAttackDamage\(\(\) => this\.gameStateManager\.nextRandom\(\)\)/);
-assert.match(executeDefaultEnemyAction, /op: 'damage'[\s\S]*amount: damage/);
+assert.doesNotMatch(battleManagerSource, /executeDefaultEnemyAction/,
+  'missing authored actions must not become an invented fallback attack');
+assert.match(battleManagerSource, /prepareEnemyActionQueue\(/,
+  'the manager executes only actions prepared from the living enemy roster');
+const actionHost = await readFile(resolve('src/fish/core/enemyActionHost.ts'), 'utf8');
+assert.match(actionHost, /enemy\.actions\.length === 0\) return null/,
+  'an enemy with no authored actions remains actionless');
 
 assert.doesNotMatch(battleManagerSource, /executeEnemyEffectTransaction|enemy_action_\$\{Date\.now\(\)\}/);
 assert.doesNotMatch(battleManagerSource, /public updateEnemyAI|public adjustDifficulty|adjustActionEffect/);

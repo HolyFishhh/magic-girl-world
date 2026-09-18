@@ -1,0 +1,21 @@
+import assert from 'node:assert/strict';
+import {createRequire} from 'node:module';
+const require=createRequire(import.meta.url);
+process.env.TS_NODE_COMPILER_OPTIONS=JSON.stringify({module:'CommonJS',moduleResolution:'node'});
+require('ts-node/register/transpile-only');
+const {planInitialEnvelopeRepair:plan,applyInitialEnvelopeRepair:apply}=require('../src/game-core/initialEnvelopeRepair.ts');
+const original={spec:'mwg.initial-draft/v1',narrative:'locked preset',player:{core:{hp:7},cards:null,ability:{when:'x > 0'}},opening:{choices:'wrong'},registry:{statuses:[],resources:[],templates:[]}};
+const before=structuredClone(original),p=plan(original);
+assert.deepEqual(p.slots.map(s=>s.path),[['player','cards'],['opening','choices']]);
+const cards=[{id:'ai_card',effects:{when:'x > 0',damage:4}}],choices=[{id:'gift'}];
+const result=apply(p,{replacements:{e0:cards,e1:choices}});
+assert.deepEqual(result,{...original,player:{...original.player,cards},opening:{choices}});
+assert.deepEqual(original,before);
+assert.equal(plan(result),null);
+for(const invalid of [{replacements:{e0:cards}},{replacements:{e0:cards,e1:choices,e2:{}}},{replacements:{e0:{},e1:choices}},
+ {replacements:{e0:cards,e1:choices},narrative:'rewrite'},JSON.parse('{"replacements":{"__proto__":{},"e0":[],"e1":[]}}')])assert.throws(()=>apply(p,invalid));
+assert.throws(()=>apply({...p,slots:[{...p.slots[0],path:['player','core']},p.slots[1]]},{replacements:{e0:[],e1:[]}}));
+for(const patch of [{spec:'wrong'},{narrative:null}])assert.equal(plan({...original,...patch}),null);
+const parent=plan({...original,player:undefined});
+assert.deepEqual(parent.slots.map(s=>s.path),[['player'],['opening','choices']],'missing parent does not create fictitious children');
+console.log('PASS generic envelope repair: collects independent container faults, exact program-owned slots, valid siblings/narrative/conditions locked, no mutation, no forged paths, no acceptance shortcut.');

@@ -48,14 +48,27 @@ export interface DeckPowerProfile {
     victoryFrontiers: DeckVictoryFrontier[];
     totalScore: number;
     confidence: number;
+    /** Whether this score can be compared with another shadow profile as a shared baseline. */
+    assessmentKind: DeckPowerAssessmentKind;
+    /** Short UI/prompt label; a partial estimate must never be presented as measured combat power. */
+    scoreLabel: string;
+    /** Concrete reason for the assessment boundary, suitable for UI detail or an AI prompt. */
+    assessmentReason: string;
     unsupportedFeatures: string[];
+    /** Mechanisms represented by a conservative shadow estimate rather than full runtime simulation. */
+    approximatedFeatures: string[];
     archetypes: ArchetypeAffinity[];
     scatterShare: number;
     deckQuality: DeckQualityProfile;
     reasons: string[];
 }
+export type DeckPowerAssessmentKind = 'comparable-shadow-baseline' | 'partial-shadow-estimate';
 export interface DeckQualityProfile {
-    /** Multiplier applied after simulation so dead or inefficient draws cannot add power. */
+    /**
+     * Kept at 1 because the shadow run already places every physical copy in the
+     * draw pile and rejects unaffordable plays.  These counters are diagnostics,
+     * not a second deduction from the simulated result.
+     */
     multiplier: number;
     totalCopies: number;
     deadCopies: number;

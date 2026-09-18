@@ -1,0 +1,95 @@
+@use './unifiedCard';
+// Explicitly scoped tokens prevent common/story palettes bleeding into status.
+#mwg-status-fold.mwg-character-status {
+  color-scheme: dark; color: #edf3ff; background: linear-gradient(135deg,#24233d,#171e32); border: 1px solid #646080;
+  width: min(100%,1040px); box-sizing: border-box; margin: 12px auto; padding: 20px; border-radius: 14px;
+  --text: #edf3ff; --text-muted: #bed0e7; --ink: #edf3ff; --ink-muted: #bed0e7;
+  --surface: #1c253a; --surface-raised: #25324a; --surface-muted: #182237;
+  --border: #60718d; --border-strong: #8298b8; --action: #b4d9ff;
+  --mwg-ink: #edf3ff; --mwg-ink-muted: #bed0e7; --mwg-paper: #1c253a; --mwg-paper-raised: #25324a;
+  font: 14px/1.65 system-ui,sans-serif;
+  > summary { color: #c4e0ff; cursor: pointer; font-weight: 700; }
+  h3,h4,strong,b { color: #edf3ff; }
+  h3 { margin: 18px 0 8px; font-size: 17px; }
+  h4 { margin: 16px 0 8px; font-size: 15px; }
+  p,small,.battle-overview-empty { color: #bed0e7; }
+  .battle-overview-metrics { display:flex; flex-wrap:wrap; gap:8px 16px; margin:12px 0; }
+  .character-detail-container { border:1px solid #60718d; border-radius:10px; padding:14px; background:#182237; }
+  .character-detail-container > h3:first-child { margin-top:0; }
+  .battle-overview-detail { margin:8px 0; padding:10px; border:1px solid #60718d; border-radius:8px; background:#25324a; }
+  .battle-overview-detail summary { cursor:pointer; color:#edf3ff; overflow-wrap:anywhere; }
+  .support-details-description,.support-details-effects,.support-details-heading { color:#edf3ff; background:transparent; }
+  .mwg-rule-pill { color:#edf3ff; background:#263951; border-color:#7185a3; }
+  #status-build-details { display:grid; gap:6px; width:100%; padding:12px; text-align:left; font:inherit; color:#edf3ff; background:#253954; border:1px solid #819cbd; border-radius:8px; cursor:pointer; }
+  #status-build-details span { display:flex; flex-wrap:wrap; gap:8px; }
+  #status-build-details:hover,#status-build-details:focus-visible { outline:2px solid #b4d9ff; outline-offset:2px; }
+  @include unifiedCard.layout;
+  .tower-player-card-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr)); gap:12px; margin-top:12px; align-items:stretch;  }
+  .collection-card { min-width:0; width:100%; max-width:none; justify-self:stretch; }
+  .collection-card .mwg-card.enhanced-card { position:relative; inset:auto; transform:none; width:100%; height:auto; min-height:300px; max-height:none; margin:0; padding:0; overflow:visible; }
+  .collection-card .mwg-card.enhanced-card .card-rules { flex:0 0 auto; overflow:visible; max-height:none; font-size:13px; }
+  .collection-card .mwg-card.enhanced-card > .card-flavor-footer > .card-description.card-flavor-text { display:block; max-height:none; overflow:visible; -webkit-line-clamp:unset; font-size:12px; }
+  .collection-card .mwg-card.enhanced-card .card-name { color:#edf3ff; white-space:normal; font-size:16px; }
+  .collection-card .card-flavor-footer { color:#bed0e7; }
+  [hidden] { display:none !important; }
+}
+body:has(.mwg-character-status) #tower-player-panel,
+body:has(.mwg-character-status) #status-mechanics-help,
+body:has(.mwg-character-status) .statusbar-header,
+body:has(.mwg-character-status) .statusbar-panels { display:none !important; }
+
+#mwg-status-fold.mwg-character-status {
+  > summary { color:#d4ceef; padding-bottom:0; font-size:15px; }
+  &[open] > summary { padding-bottom:14px; border-bottom:1px solid #9693bb30; }
+  .character-status-header { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:18px 0; }
+  .character-identity { display:flex; align-items:center; gap:12px; min-width:0; }
+  .character-identity > div { display:grid; gap:3px; min-width:0; }
+  .character-identity strong { font-size:20px; overflow-wrap:anywhere; }
+  .character-identity small { font-size:11px; color:#b9b7d3; }
+  .character-portrait { display:grid; place-items:center; width:52px; height:52px; flex-shrink:0; border:1px solid #9489b861; border-radius:14px; background:#4b3a663b; font-size:30px; }
+  .character-help-button { flex-shrink:0; color:#d9d3ed; border:1px solid #817699; border-radius:8px; background:#3b3454; padding:8px 12px; font:inherit; cursor:pointer; }
+  .character-help-button:hover,.character-help-button:focus-visible { background:#514569; outline:2px solid #bdb2e5; outline-offset:2px; }
+  .character-vitals { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:8px; margin:0 0 22px; }
+  .character-metric { display:grid; gap:4px; padding:10px 12px; min-width:0; border:1px solid #69739655; border-radius:9px; background:#121a2b70; }
+  .character-metric small { color:#b6bfd9; font-size:11px; }
+  .character-metric strong { font-size:16px; font-variant-numeric:tabular-nums; }
+  .character-metric.is-health { border-color:#b577935c; }
+  .character-metric.is-health strong { color:#ffc4d3; }
+  .character-metric.is-desire strong { color:#e4bcf5; }
+  .character-detail-container { padding:0; border:0; background:transparent; }
+  h3 { display:flex; align-items:center; gap:10px; margin:0 0 14px; font-size:16px; }
+  h3::before { content:''; width:3px; height:15px; background:#bcacd9; border-radius:2px; }
+  .character-detail-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+  .character-detail-grid > section,.character-inventory > section { min-width:0; padding:16px; border:1px solid #6b6b9155; border-radius:10px; background:#192439a6; }
+  .character-detail-grid > .character-desire { background:#3a294054; border-color:#93618066; }
+  h4 { margin:0 0 10px; color:#d3d8ef; font-size:14px; }
+  p { margin:8px 0; font-size:12px; }
+  #status-build-details { border:0; background:#263049; padding:10px; gap:8px; }
+  #status-build-details span { justify-content:space-between; gap:10px; }
+  #status-build-details small { color:#b7d5ff; font-size:12px; }
+  .battle-overview-detail { padding:8px 10px; border-color:#6b749154; background:#141c2d55; }
+  .battle-overview-detail:last-child { margin-bottom:0; }
+  .battle-overview-detail summary { font-size:13px; }
+  .battle-overview-metrics { margin:0; gap:8px; }
+  .battle-overview-metrics > span { padding:5px 8px; border-radius:6px; background:#30395466; }
+  .character-inventory { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin:16px 0 22px; }
+  .character-deck-heading small { font-size:12px; font-weight:400; }
+}
+@media(max-width:540px) {
+  #mwg-status-fold.mwg-character-status {
+    padding:14px;
+    .character-identity strong { font-size:17px; }
+    .character-portrait { width:42px; height:42px; font-size:25px; }
+    .character-help-button { padding:8px; font-size:12px; }
+    .character-vitals { grid-template-columns:repeat(3,minmax(0,1fr)); }
+    .character-metric { padding:8px; }
+    .character-metric strong { font-size:14px; }
+    .character-detail-grid,.character-inventory { grid-template-columns:minmax(0,1fr); }
+    .character-detail-grid > section,.character-inventory > section { padding:12px; }
+  }
+}
+// The middle slot remains in document flow; only explicit fullscreen may float.
+html:not(.mwg-fullscreen-active):not(:fullscreen) body > .card-game-container { position:relative; inset:auto; transform:none; width:min(100%,1040px); margin:12px auto; box-shadow:none; }
+#tower-screen-host { max-width:1040px; }
+
+body[data-tower-screen]:not([data-tower-screen='setup']) > .mwg-statusbar { display:none; }

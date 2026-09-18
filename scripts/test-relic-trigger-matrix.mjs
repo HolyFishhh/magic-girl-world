@@ -75,12 +75,16 @@ assert.ok(
 const appPath = resolve('src/fish/index.ts');
 const appSource = await readFile(appPath, 'utf8');
 const initializeTriggers = readClassMethod(appSource, appPath, 'FishRPGCoordinator', 'triggerBattleStartEffects');
-const executeInitializationStep = readClassMethod(
+const delegateInitializationStep = readClassMethod(
   appSource,
   appPath,
   'FishRPGCoordinator',
   'executeBattleStartFlowStep',
 );
+assert.match(delegateInitializationStep, /this\.battleManager\.executeBattleStartFlowStep\(step\)/);
+const sharedStartPath = resolve('src/fish/combat/battleManager.ts');
+const executeInitializationStep = readClassMethod(await readFile(sharedStartPath, 'utf8'), sharedStartPath,
+  'BattleManager', 'executeBattleStartFlowStep');
 assert.match(initializeTriggers, /await startBattleSession\(\{/);
 assert.match(initializeTriggers, /gate: this\.sessionHost\.gate/);
 assert.match(initializeTriggers, /executeStartStep: step => this\.executeBattleStartFlowStep\(step\)/);
@@ -101,11 +105,11 @@ assert.match(statusOwnership, /this\.ports\.dispatch\(/);
 assert.doesNotMatch(triggerHostSource, /resolveStatusOwnershipTriggerDispatch|processStatusOwnershipTriggers/);
 
 const addAbility = readClassMethod(triggerHostSource, triggerHostPath, 'TavernBattleTriggerHost', 'registerAbility');
-assert.match(addAbility, /processAbilitiesByTrigger\(targetType, 'ability_gain'\)/);
+assert.match(addAbility, /processAbilitiesByTrigger\(targetType, 'ability_gain'/);
 assert.match(addAbility, /targetType === 'player'/);
 assert.match(addAbility, /ports\.runRelic\('ability_gain'/);
 assert.ok(
-  addAbility.indexOf("processAbilitiesByTrigger(targetType, 'ability_gain')") <
+  addAbility.indexOf("processAbilitiesByTrigger(targetType, 'ability_gain'") <
     addAbility.indexOf("ports.runRelic('ability_gain'"),
   'ability-gain abilities must run before player relics',
 );

@@ -658,7 +658,7 @@
 
 // 血条颜色动画
 .hp-fill {
-  transition: background-color 0.3s ease, width 0.5s ease;
+  transition: background-color 0.3s ease;
 
   &.hp-low {
     background-color: #ff9500 !important;

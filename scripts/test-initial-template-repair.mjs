@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import {createRequire} from 'node:module';
+import {readFileSync} from 'node:fs';
+import Ajv2020 from 'webpack/node_modules/ajv/dist/2020.js';
+const require=createRequire(import.meta.url);
+process.env.TS_NODE_COMPILER_OPTIONS=JSON.stringify({module:'CommonJS',moduleResolution:'node'});
+require('ts-node/register/transpile-only');
+const {planInitialTemplateRepair,applyInitialTemplateRepair,createInitialTemplateRepairSchema,INITIAL_TEMPLATE_REPAIR_SPEC}=require('../src/game-core/initialTemplateRepair.ts');
+const {compileInitialDraftToMvu}=require('../src/game-core/initialDraft.ts');
+const raw=JSON.parse(readFileSync('scripts/fixtures/initial-draft-malformed-template.json','utf8'));
+const draft={...raw,spec:'mwg.initial-draft/v1',narrative:'独立测试剧情'};
+const before=structuredClone(draft),plan=planInitialTemplateRepair(draft);
+assert.equal(plan.slots.length,1);assert.deepEqual(plan.slots[0].fields,['effects','cost']);
+const original=plan.original.registry.templates[0],fixed=structuredClone(original);delete fixed.effects;delete fixed.cost;
+const response={spec:INITIAL_TEMPLATE_REPAIR_SPEC,replacements:{t0:fixed}};
+const validate=new Ajv2020({strict:false}).compile(createInitialTemplateRepairSchema(plan).value);
+assert.equal(validate(response),true,JSON.stringify(validate.errors));
+const merged=applyInitialTemplateRepair(plan,response);assert.equal(compileInitialDraftToMvu(merged).ok,true);
+const expected=structuredClone(before);expected.registry.templates[0]=fixed;assert.deepEqual(merged,expected);assert.deepEqual(draft,before);
+for(const mutate of [r=>delete r.replacements.t0.discard_effects,r=>r.replacements.t0.description='changed',r=>r.replacements.t0.type='Skill',r=>r.replacements.t0.id='new',r=>r.replacements.t0.cost=null,r=>r.replacements.extra=fixed,r=>delete r.replacements.t0,r=>r.replacements.t0.trigger={on:'turn_start',effects:{draw:1}}]){
+ const bad=structuredClone(response);mutate(bad);assert.throws(()=>applyInitialTemplateRepair(plan,bad));
+}
+const stillBad=structuredClone(original);delete stillBad.cost;
+const unchanged=applyInitialTemplateRepair(plan,{spec:INITIAL_TEMPLATE_REPAIR_SPEC,replacements:{t0:stillBad}});
+assert.equal(compileInitialDraftToMvu(unchanged).ok,false,'merging is not acceptance');
+const mixed=structuredClone(draft);mixed.registry.templates[0].effects.draw=1;
+assert.equal(planInitialTemplateRepair(mixed),null,'mixed valid operations cannot be erased by a root repair');
+const missing=structuredClone(draft);missing.player.cards[0].effects={apply_status:'missing'};
+assert.equal(planInitialTemplateRepair(missing),null,'unrelated diagnostics cannot be hidden');
+console.log('Real46 malformed template replay: exact bounded slot, full schema and recompilation, no input mutation or unrelated rule erasure; not a new model sample.');

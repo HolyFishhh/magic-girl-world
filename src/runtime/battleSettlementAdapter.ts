@@ -5,14 +5,19 @@ import {
   migratePersistentRunDeck,
   planProgressionSettlement,
   profileDeckPower,
+  roundBattleValue,
   scoreEnemyPower,
   type BattleEndResult,
+  type BattleEventJournalState,
   type BattleRequest,
+  type PersistentGrowthEntry,
+  validPersistentGrowthTarget,
+  readSummonGrowth,
 } from '../game-core';
 import { readGameMode } from '../game-core/towerMode';
-import { settleBattleRunInStat } from './runStateAdapter';
-import { readRunState } from './runStateAdapter';
+import { archiveBattleEventJournalInStat, readRunState, settleBattleRunInStat } from './runStateAdapter';
 import { settleTowerBattleRewardInStat } from './towerBattleRewardSettlement';
+import type { TowerDefeatRewardReceipt } from './towerBattleRewardSettlement';
 import { updateCurrentMessageVariablesWith } from './messageVariables';
 import { refreshMvuContentDesignContext } from './contentDesignContextAdapter';
 
@@ -23,13 +28,54 @@ export interface TavernBattleSettlementInput {
     currentHp: number;
     currentLust: number;
     /** Final custom-resource values. Definitions remain in canonical MVU state across battles. */
-    resources?: Readonly<Record<string, { id: string; current: number; max: number; refresh: 'reset' | 'retain' }>>;
+    resources?: Readonly<Record<string, { id: string; current: number; max: number; refresh: 'reset' | 'retain'; end_of_battle?: 'retain' | 'reset'; start?: number }>>;
   };
   items?: ReadonlyArray<{ id: string; count: number }>;
   turns: number;
+  /** Current encounter's authoritative events; archived only for tower runs. */
+  eventJournal?: BattleEventJournalState;
   rewardRequest?: Record<string, unknown> | null;
   /** Canonical one-record-per-owned-card deck after runtime run/permanent write-back. */
   persistentCards?: ReadonlyArray<Record<string, any>>;
+  /** Dedicated runtime ledger; normal combat max-stat changes are deliberately absent. */
+  persistentGrowth?: ReadonlyArray<PersistentGrowthEntry>;
+  cardPatches?: ReadonlyArray<import('../game-core/cardPatch').CardPatch>;
+  /** Runtime receipts come only from enemies that actually reached defeatedEnemies. */
+  defeatRewards?: readonly TowerDefeatRewardReceipt[];
+  defeatedEnemyIds?: readonly string[];
+  rewardEligibleEnemyIds?: readonly string[];
+}
+
+function applyPersistentGrowth(core: Record<string, any>, growth: TavernBattleSettlementInput['persistentGrowth']): void {
+  if (!growth?.length) return;
+  const receipts = new Set(
+    Array.isArray(core.persistent_growth_receipts)
+      ? core.persistent_growth_receipts.filter((entry: unknown): entry is string => typeof entry === 'string')
+      : [],
+  );
+  const next = { ...core };
+  const nextReceipts = new Set(receipts);
+  const summonGrowth = readSummonGrowth(core.summon_growth);
+  for (const entry of growth) {
+    if (!entry || typeof entry.id !== 'string' || !entry.id || !validPersistentGrowthTarget(entry.stat, entry.summonTemplateId) || !['add', 'subtract', 'set'].includes(entry.operator) || !Number.isFinite(entry.value))
+      throw new Error('invalid persistent growth ledger entry');
+    if (nextReceipts.has(entry.id)) continue;
+    if (entry.summonTemplateId) {
+      summonGrowth.push({ stat: entry.stat, summonTemplateId: entry.summonTemplateId, operator: entry.operator, value: entry.value });
+      next.summon_growth = summonGrowth;
+      nextReceipts.add(entry.id);
+      continue;
+    }
+    const previous = Math.max(1, Number(next[entry.stat]) || 1);
+    const raw = entry.operator === 'add'
+      ? previous + entry.value
+      : entry.operator === 'subtract'
+        ? previous - entry.value
+        : entry.value;
+    next[entry.stat] = Math.max(1, roundBattleValue(raw));
+    nextReceipts.add(entry.id);
+  }
+  Object.assign(core, next, { persistent_growth_receipts: [...nextReceipts] });
 }
 
 function syncItemCounts(value: unknown, itemCounts: ReadonlyMap<string, number>): void {
@@ -62,7 +108,8 @@ function syncCombatResourceValues(value: unknown, resources: TavernBattleSettlem
       Number.isInteger(resource.max) && resource.max > 0
         ? resource.max
         : Math.max(1, Math.floor(Number(settled.max) || 1));
-    resource.current = Math.min(maximum, Math.max(0, Math.floor(settled.current)));
+    const finalValue = resource.end_of_battle === 'reset' ? Number(resource.start) || 0 : settled.current;
+    resource.current = Math.min(maximum, Math.max(0, Math.floor(finalValue)));
   });
 }
 
@@ -73,12 +120,15 @@ function settleBattleRoot(
   itemCounts: ReadonlyMap<string, number>,
   persistentCards: Record<string, any>[] | null,
   awardVictoryExperience = true,
+  settleProgression = true,
 ): void {
   const core = battleRoot.core;
   if (core && typeof core === 'object') {
+    applyPersistentGrowth(core, input.persistentGrowth);
+    if (input.cardPatches) core.card_patches = structuredClone(input.cardPatches.filter(patch => patch.scope === 'run' || patch.scope === 'permanent'));
     const vitals = result?.player || settleBattleOutcomeVitals(input.player, core);
-    core.hp = vitals.hp;
-    core.lust = vitals.lust;
+    core.hp = Math.min(Math.max(0, Number(core.max_hp) || 1), vitals.hp);
+    core.lust = Math.min(Math.max(0, Number(core.max_lust) || 1), vitals.lust);
     syncCombatResourceValues(core.resources, input.player.resources);
   }
   if (input.result === 'victory' && input.request && awardVictoryExperience) {
@@ -87,18 +137,20 @@ function settleBattleRoot(
     battleRoot.exp =
       (Number.isInteger(currentExperience) && currentExperience >= 0 ? currentExperience : 0) + experience;
   }
-  // Progression belongs to the battle settlement transaction, not to whichever
-  // status iframe happens to mount next.  The common page keeps the same
-  // idempotent settlement as a compatibility fallback for non-battle EXP.
-  const progression = planProgressionSettlement(battleRoot);
-  if (progression.changed) {
-    battleRoot.level = progression.after.level;
-    battleRoot.exp = progression.after.exp;
-    if (progression.promotions > 0) {
-      if (!battleRoot.core || typeof battleRoot.core !== 'object' || Array.isArray(battleRoot.core)) {
-        battleRoot.core = {};
+  if (settleProgression) {
+    // Progression belongs to the battle settlement transaction, not to whichever
+    // status iframe happens to mount next. The common page keeps the same
+    // idempotent settlement as a compatibility fallback for non-battle EXP.
+    const progression = planProgressionSettlement(battleRoot);
+    if (progression.changed) {
+      battleRoot.level = progression.after.level;
+      battleRoot.exp = progression.after.exp;
+      if (progression.promotions > 0) {
+        if (!battleRoot.core || typeof battleRoot.core !== 'object' || Array.isArray(battleRoot.core)) {
+          battleRoot.core = {};
+        }
+        battleRoot.core.card_removal_count = progression.nextCardRemovalCount;
       }
-      battleRoot.core.card_removal_count = progression.nextCardRemovalCount;
     }
   }
   battleRoot.player_abilities = [];
@@ -123,11 +175,7 @@ function clearEnemy(enemyRoot: Record<string, any>): void {
   enemyRoot.abilities = [];
   enemyRoot.status_effects = [];
   enemyRoot.resources = [];
-  enemyRoot.lust_effect =
-    enemyRoot.lust_effect && typeof enemyRoot.lust_effect === 'object' ? enemyRoot.lust_effect : {};
-  enemyRoot.lust_effect.name = '';
-  enemyRoot.lust_effect.description = '';
-  enemyRoot.lust_effect.effects = [];
+  delete enemyRoot.lust_effect;
   enemyRoot.action_mode = enemyRoot.action_mode || 'random';
   enemyRoot.action_config = {};
 }
@@ -151,6 +199,9 @@ function towerEncounterScoreSnapshot(
       enemyScore: Number(audited.finalEnemyScore),
     };
   }
+  // A balance audit may intentionally omit a precise runtime score for complex
+  // mechanics. The run still needs a comparable per-encounter score, so fall
+  // back to the shared conservative estimators instead of dropping the record.
   try {
     const profile = profileDeckPower({
       pack: request.content,
@@ -158,7 +209,7 @@ function towerEncounterScoreSnapshot(
       maxLust: Math.max(1, Number(request.player.maxLust) || 100),
       seeds: 8,
     });
-    const enemy = scoreEnemyPower(request.content);
+    const enemy = scoreEnemyPower(request.content, { maxHp: request.player.maxHp, maxLust: request.player.maxLust });
     if (!enemy || profile.totalScore <= 0) return undefined;
     return { playerDeckScore: profile.totalScore, enemyScore: enemy.currentEncounterScore };
   } catch (error) {
@@ -202,17 +253,25 @@ export function settleTavernBattleVariables(
   let workingVariables = variables;
   let statDraft: Record<string, any> | null = null;
   let awardVictoryExperience = true;
+  let settleProgression = true;
   if (variables.stat_data && typeof variables.stat_data === 'object') {
     const draft: Record<string, any> = structuredClone(variables.stat_data);
     statDraft = draft;
     workingVariables = { ...variables, stat_data: draft };
+    const isTowerRun = readGameMode(draft) === 'tower';
     // The reward transaction clears run_node, so retain the program-authored
     // balance receipt before promoting the reward pool.
     const encounterScoreSnapshot = towerEncounterScoreSnapshot(input.request, draft);
+    if (expectedTowerNodeId && input.eventJournal && isTowerRun) {
+      archiveBattleEventJournalInStat(draft, expectedTowerNodeId, input.eventJournal);
+    }
     const towerRewardSettlement = settleTowerBattleRewardInStat(
       draft,
       battleResult?.outcome || input.result,
       battleResult?.route?.nodeId,
+      input.defeatRewards,
+      input.defeatedEnemyIds,
+      input.rewardEligibleEnemyIds,
     );
     const runSettlement = settleBattleRunInStat(
       draft,
@@ -220,13 +279,20 @@ export function settleTavernBattleVariables(
       battleResult?.route?.nodeId,
       encounterScoreSnapshot,
     );
+    // Tower runs no longer use character experience or levels. Preserve legacy
+    // fields verbatim so existing saves remain recoverable, but never grant or
+    // consume EXP, promote levels, or create removal rewards from old EXP.
     // A tower node is the idempotency receipt for its battle. Once that route
     // has already settled, a duplicate callback may refresh vitals but must not
     // award victory EXP again. Story battles keep their established behavior.
-    if (towerRewardSettlement.previous) awardVictoryExperience = runSettlement !== null;
+    if (isTowerRun) {
+      awardVictoryExperience = false;
+      settleProgression = false;
+    } else if (towerRewardSettlement.previous) awardVictoryExperience = runSettlement !== null;
     const reward = draft.reward;
     if (reward && typeof reward === 'object' && !Array.isArray(reward)) {
       reward.request = input.rewardRequest ?? null;
+      if(!isTowerRun && input.rewardRequest) reward.card_choice_groups = null;
     }
   }
 
@@ -234,7 +300,7 @@ export function settleTavernBattleVariables(
     Boolean(value && typeof value === 'object' && !Array.isArray(value)),
   );
   for (const root of roots) {
-    settleBattleRoot(root, input, battleResult, itemCounts, persistentCards, awardVictoryExperience);
+    settleBattleRoot(root, input, battleResult, itemCounts, persistentCards, awardVictoryExperience, settleProgression);
     if (root.enemy && typeof root.enemy === 'object') clearEnemy(root.enemy);
     if (Array.isArray(root.enemies))
       root.enemies.forEach(enemy => {

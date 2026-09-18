@@ -51,6 +51,11 @@ export type CardPatch = (CardPatchBase & {
     kind: 'replay';
     extra: number;
 }) | (CardPatchBase & {
+    kind: 'hits';
+    add: number;
+}) | (CardPatchBase & {
+    kind: 'area';
+}) | (CardPatchBase & {
     kind: 'x_value';
     operator: Extract<CardCostOperator, 'add' | 'subtract' | 'multiply' | 'divide' | 'set' | 'min' | 'max'>;
     value: number;

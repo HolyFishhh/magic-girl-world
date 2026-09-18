@@ -84,6 +84,30 @@ const changed = journal.appendBattleEvent(state, {
 assert.equal(changed.ok, true);
 state = changed.state;
 
+const shuffled = journal.appendBattleEvent(state, {
+  turn: 1,
+  phase: 'resolve',
+  kind: 'draw_pile_shuffled',
+  cause: { source: { kind: 'system', id: 'draw' } },
+  actorId: 'player',
+  recycledCards: 4,
+});
+assert.equal(shuffled.ok, true);
+state = shuffled.state;
+const lustRaised = journal.appendBattleEvent(state, {
+  turn: 1,
+  phase: 'resolve',
+  kind: 'lust_increased',
+  cause: { source },
+  actorId: 'player',
+  targetId: 'enemy:a',
+  previousValue: 2,
+  nextValue: 7,
+  amount: 5,
+});
+assert.equal(lustRaised.ok, true);
+state = lustRaised.state;
+
 assert.equal(journal.countBattleEvents(state, { scope: 'turn', turn: 1, filter: { kind: 'card_played', cardType: 'Attack' } }), 2);
 assert.equal(journal.countBattleEvents(state, { scope: 'card_instance', cardInstanceId: 'strike__1', filter: { kind: 'card_played' } }), 2);
 assert.equal(journal.countBattleEvents(state, { scope: 'team', teamActorIds: ['player'], filter: { kind: 'damage_resolved', damageKind: 'attack' } }), 1);
@@ -94,9 +118,50 @@ assert.equal(state.lastDamage.hpLost, 5);
 assert.equal(state.lastActualHpLoss.hpLost, 5);
 assert.equal(journal.countBattleEvents(state, { scope: 'turn', turn: 1, filter: { kind: 'resource_spent' } }), 1);
 assert.equal(journal.countBattleEvents(state, { scope: 'combat', filter: { kind: 'resource_changed' } }), 1);
+assert.equal(journal.countBattleEvents(state, { scope: 'combat', filter: { kind: 'draw_pile_shuffled' } }), 1);
+assert.equal(journal.matchesEventTriggerQuery({
+  ...journal.battleTriggerContextFromEvent(lustRaised.event, state),
+  teamActorIds: ['player'],
+}, {
+  scope: 'team', ordinal: 'first', filter: { kind: 'lust_increased' },
+}), true, 'team scope derives its actor membership from the runtime trigger context');
 
 const restored = journal.createBattleEventJournal(JSON.parse(JSON.stringify(state.events)));
 assert.deepEqual(restored, state, 'journal restoration must not recount or reorder events differently');
+const archived = journal.archiveBattleJournalInRun(journal.createRunEventHistory(), 'encounter:a', state);
+assert.equal(archived.records.length, state.events.length);
+const archivedAgain = journal.archiveBattleJournalInRun(archived, 'encounter:a', state);
+assert.equal(
+  archivedAgain.records.length,
+  state.events.length,
+  're-settling the same encounter must replace rather than duplicate its run history',
+);
+assert.deepEqual(journal.readRunEventHistory(JSON.parse(JSON.stringify(archivedAgain))), archivedAgain);
+assert.equal(
+  journal.readRunEventHistory({ ...archivedAgain, records: [{ encounterId: 'bad', event: { kind: 'invented' } }] }),
+  null,
+  'host-written run history must reject events outside the executable event vocabulary',
+);
+let nextEncounter = journal.createBattleEventJournal();
+const nextPlayed = journal.appendBattleEvent(nextEncounter, {
+  turn: 1,
+  phase: 'after',
+  kind: 'card_played',
+  cause: { source, reason: 'player_choice' },
+  actorId: 'player',
+  cardInstanceId: 'guard__1',
+  templateId: 'guard',
+  cardType: 'Skill',
+  automatic: false,
+  replayIndex: 0,
+});
+assert.equal(nextPlayed.ok, true);
+nextEncounter = journal.attachRunEventHistory(nextPlayed.state, archivedAgain);
+assert.equal(
+  journal.countBattleEvents(nextEncounter, { scope: 'run', filter: { kind: 'card_played' } }),
+  3,
+  'run scope combines archived encounters with the current encounter exactly once',
+);
 const tooDeep = journal.appendBattleEvent(state, {
   turn: 1,
   phase: 'after',
@@ -134,5 +199,17 @@ const invalidResource = journal.appendBattleEvent(state, {
   change: 'gain',
 });
 assert.equal(invalidResource.code, 'INVALID_EVENT_VALUE');
+const invalidAttribute = journal.appendBattleEvent(state, {
+  turn: 1,
+  phase: 'resolve',
+  kind: 'block_gained',
+  cause: { source },
+  actorId: 'player',
+  targetId: 'player',
+  previousValue: 2,
+  nextValue: 2,
+  amount: 0,
+});
+assert.equal(invalidAttribute.code, 'INVALID_EVENT_VALUE');
 
 console.log('Causal battle journal preserves phases, reasons, scopes, ordinals, recursion guards, and deterministic restoration.');

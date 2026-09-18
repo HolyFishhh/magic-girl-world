@@ -13,6 +13,7 @@ export interface EnemyActionQueueSource {
   _sequenceDoneOnce?: boolean;
   actionMode?: string;
   actionConfig?: Record<string, unknown>;
+  escapePending?: boolean;
 }
 
 export interface EnemyActionQueueEntry {
@@ -52,7 +53,7 @@ export function prepareEnemyActionQueue<T extends EnemyActionQueueSource>(
   const entries: EnemyActionQueueEntry[] = [];
   for (let stableOrder = 0; stableOrder < updated.length; stableOrder += 1) {
     const enemy = updated[stableOrder];
-    if (enemy.currentHp <= 0) continue;
+    if (enemy.currentHp <= 0 || enemy.escapePending) continue;
     const selection = enemy.nextAction
       ? { action: structuredClone(enemy.nextAction), state: { sequenceIndex: enemy._sequenceIndex || 0, sequenceDoneOnce: enemy._sequenceDoneOnce === true } }
       : selectEnemyAction(enemy, rng.random);
@@ -69,9 +70,10 @@ export function prepareEnemyActionQueue<T extends EnemyActionQueueSource>(
       stableOrder,
     });
   }
-  entries.sort((left, right) =>
-    right.priority - left.priority || right.speed - left.speed || left.stableOrder - right.stableOrder || left.enemyId.localeCompare(right.enemyId),
-  );
+  // Automatic enemy turns follow the visible roster left-to-right. Priority
+  // and speed remain authored data for intent/UI and explicit systems, but do
+  // not reorder the deterministic turn queue.
+  entries.sort((left, right) => left.stableOrder - right.stableOrder || left.enemyId.localeCompare(right.enemyId));
   return { entries, enemies: updated, random: rng.read() };
 }
 

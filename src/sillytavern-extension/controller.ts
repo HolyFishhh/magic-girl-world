@@ -11,6 +11,7 @@ import { INITIAL_GENERATION_EVIDENCE_METADATA_KEY, InitialGenerationEvidence, ty
 import { TOWER_GENERATION_EVIDENCE_METADATA_KEY, TowerGenerationEvidence } from './towerGenerationEvidence';
 import { auditInitialSemanticStructure } from '../game-core/initialSemanticAudit';
 import { buildInitialPlayerBattle } from './initialPlayerBattle';
+import { expandInitialOpeningCardReferences } from '../game-core/initialCardReference';
 import {
   assessInitialPlayerContent,
   formatPlayerContentReadiness,
@@ -527,7 +528,7 @@ function unwrapTowerInitialContent(value: string | Record<string, any>): {
             narrative: String(candidate.narrative || '').trim(),
             status: isRecord(player.status) ? player.status : {},
             player: playerContent,
-            opening: isRecord(candidate.opening) ? candidate.opening : null,
+            opening: isRecord(candidate.opening) ? expandInitialOpeningCardReferences(candidate.opening, playerContent) : null,
           };
         }
       }
@@ -536,7 +537,7 @@ function unwrapTowerInitialContent(value: string | Record<string, any>): {
           narrative: String(candidate.narrative || '').trim(),
           status: isRecord(candidate.status) ? candidate.status : {},
           player: candidate.battle,
-          opening: isRecord(candidate.opening) ? candidate.opening : null,
+          opening: isRecord(candidate.opening) ? expandInitialOpeningCardReferences(candidate.opening, candidate.battle) : null,
         };
       }
       if (isRecord(candidate.core) && Array.isArray(candidate.cards)) {
@@ -4219,7 +4220,7 @@ export class DesignAssistantController {
   getCapabilities() {
     return {
       spec: 'mwg.design-assistant/v1' as const,
-      version: '1.0.1' as const,
+      version: '1.0.2' as const,
       towerGeneration: true as const,
       towerCoordinator: true as const,
       towerArchive: true as const,
@@ -4461,11 +4462,12 @@ export class DesignAssistantController {
           should_silence: true,
           max_chat_history: 0,
           json_schema: attempt === 0
-            ? createTowerInitialContentJsonSchema()
+            ? createTowerInitialContentJsonSchema({ allowCardReferences: true })
             : createTowerInitialSlotRepairJsonSchema(initialRepairTargets),
         });
         assertUnchanged();
         lastRawOutput = typeof generated === 'string' ? generated : JSON.stringify(generated, null, 2);
+        if (attempt === 0 && !registryContent) this.captureInitialGenerationEvidence(input.chatId, generationId, 'provider-final', lastRawOutput);
         if (attempt > 0) this.captureInitialGenerationEvidence(input.chatId, generationId, 'repair-final', lastRawOutput);
         this.onStructuredRepairProgress({
           phase: 'applying',

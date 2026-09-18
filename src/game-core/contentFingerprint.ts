@@ -33,7 +33,7 @@ const STRUCTURAL_ENUMS = new Set([
   'card_played', 'attack_played', 'skill_played', 'power_played',
   'on_discard', 'on_exhaust', 'on_draw', 'on_shuffle', 'take_damage', 'deal_damage',
   'apply', 'stack', 'tick', 'remove', 'hold', 'passive',
-  'replay', 'free', 'retain_hand', 'retain_block', 'limit_draw', 'limit_block_gain',
+  'replay', 'replay_current', 'free', 'retain_hand', 'retain_block', 'limit_draw', 'limit_block_gain',
   'limit_energy_gain', 'deny_card_play', 'allow_card_play', 'limit_card_play', 'card_destination',
   'resolution', 'turn', 'until_played', 'run', 'permanent',
   'instance', 'run_instance', 'template', 'filter',

@@ -103,6 +103,36 @@ assert.deepEqual(
 );
 assert.equal(firstRandom.getGameState().random.cursor, 3);
 
+store.recordPersistentGrowth({ stat: 'max_hp', operator: 'add', value: 6 });
+assert.equal(store.getGameState().persistentGrowth?.[0]?.stat, 'max_hp');
+assert.equal(typeof store.getGameState().persistentGrowth?.[0]?.id, 'string');
+const growthReload = JSON.parse(JSON.stringify(store.getGameState()));
+store.replaceState(growthReload);
+assert.deepEqual(store.getGameState().persistentGrowth, growthReload.persistentGrowth, 'the explicit growth ledger survives a runtime reload');
+
+const growthEntry = { stat: 'max_hp', operator: 'add', value: 2 };
+const replayA = new core.BattleStateStore(growthReload);
+const replayB = new core.BattleStateStore(JSON.parse(JSON.stringify(growthReload)));
+const randomBeforeGrowth = structuredClone(replayA.getGameState().random);
+replayA.createSnapshot('before_growth');
+replayA.recordPersistentGrowth(growthEntry);
+replayB.recordPersistentGrowth(growthEntry);
+const expectedGrowth = structuredClone(replayA.getGameState().persistentGrowth);
+assert.deepEqual(replayB.getGameState().persistentGrowth, expectedGrowth, 'the same saved state and operation produce identical receipt IDs');
+assert.equal(new Set(expectedGrowth.map(entry => entry.id)).size, expectedGrowth.length, 'new growth never reuses a restored receipt');
+assert.deepEqual(replayA.getGameState().random, randomBeforeGrowth, 'receipt allocation never consumes gameplay randomness');
+assert.equal(replayA.restoreSnapshot('before_growth'), true);
+replayA.recordPersistentGrowth(growthEntry);
+assert.deepEqual(replayA.getGameState().persistentGrowth, expectedGrowth, 'rolling back and retrying growth preserves deterministic receipts');
+
+const encounterA = new core.BattleStateStore(undefined, { persistentGrowthNonce: () => 'encounter_a' });
+const encounterB = new core.BattleStateStore(undefined, { persistentGrowthNonce: () => 'encounter_b' });
+encounterA.recordPersistentGrowth(growthEntry);
+encounterB.recordPersistentGrowth(growthEntry);
+assert.notEqual(encounterA.getGameState().persistentGrowth[0].id, encounterB.getGameState().persistentGrowth[0].id, 'the host can distinguish independent encounters even with the same battle seed');
+const hostReload = new core.BattleStateStore(JSON.parse(JSON.stringify(encounterA.getGameState())), { persistentGrowthNonce: () => 'encounter_b' });
+assert.deepEqual(hostReload.getGameState().persistentGrowth, encounterA.getGameState().persistentGrowth, 'a changed host namespace never rewrites saved receipts');
+
 store.setCardPlayCounters({ cardsPlayedThisTurn: 4, attacksPlayedThisTurn: 2, skillsPlayedThisTurn: 2 });
 const summonProgram = { spec: 'mwg.effect/v1', steps: [{ op: 'damage', target: 'opponent', amount: 2 }] };
 const summoned = store.spawnSummons('player', {
@@ -138,6 +168,7 @@ const changeCount = changed.length;
 store.resetGame();
 assert.equal(changed.length, changeCount);
 assert.equal(store.getCurrentPhase(), 'setup');
+assert.deepEqual(store.getGameState().persistentGrowth, [], 'a new combat never inherits the prior combat growth ledger');
 
 const source = core.createEmptyBattleState();
 const replaced = new core.BattleStateStore();

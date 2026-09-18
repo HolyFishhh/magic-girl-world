@@ -170,3 +170,18 @@ assert.equal(variables.stat_data.battle.design_context.lastBattle.turns, 2);
 assert.match(variables.stat_data.battle.design_context.brief, /降低首轮爆发/);
 
 console.log('MVU design context persists build, encounter history, and post-battle feedback without duplicate growth.');
+
+const committedOpening = { stat_data: { battle: structuredClone(battle), run: {
+  seed: 17, stateRevision: 0, act: 1, floor: 0, currentNode: null,
+  opening: { requestId: 'initial', phase: 'ready' },
+} }, mwg_tower_initial_commit: {
+  spec: 'mwg.tower-initial-commit/v1', runSeed: 17, revision: 0, openingRequestId: 'initial',
+} };
+committedOpening.stat_data.battle.design_context = null;
+committedOpening.stat_data.battle.lineage_memory = null;
+const openingBefore = structuredClone(committedOpening);
+assert.deepEqual(adapter.refreshMvuContentDesignContext(committedOpening), { changed: false, assessment: null });
+assert.deepEqual(committedOpening, openingBefore, 'mount/reload cannot change an unadvanced committed opening');
+committedOpening.stat_data.run.opening.phase = 'consumed';
+committedOpening.stat_data.run.stateRevision++;
+assert.equal(adapter.refreshMvuContentDesignContext(committedOpening).changed, true, 'normal play resumes analysis updates');

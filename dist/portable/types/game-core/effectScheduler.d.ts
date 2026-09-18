@@ -2,10 +2,30 @@ import type { EffectProgram } from './effectDsl';
 import { type CardEffectCommand } from './cardEffectRuntime';
 export type ScheduledPhase = 'turn_start' | 'before_draw' | 'after_draw' | 'turn_end';
 export type ScheduledOwner = 'player' | 'enemy' | 'system';
+/** Serializable formula and entity binding captured when a detached effect is scheduled. */
+export interface ScheduledEffectExecutionContext {
+    sourceEnemyId?: string;
+    boundEnemyTargetId?: string;
+    summonInstanceId?: string;
+    summonSelfTargetsOwner?: boolean;
+    statusContext?: {
+        id: string;
+        name?: string;
+        emoji?: string;
+        description?: string;
+        stacks?: number;
+    };
+    spentEnergy?: number;
+    spentResources?: Record<string, number>;
+    xValues?: Record<string, number>;
+    xValue?: number;
+    orbValue?: number;
+}
 export type ScheduledPayload = {
     type: 'effect_program';
     program: EffectProgram;
     sourceIsPlayer: boolean;
+    context?: ScheduledEffectExecutionContext;
 } | {
     type: 'remove_status';
     owner: ScheduledOwner;

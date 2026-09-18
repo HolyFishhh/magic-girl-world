@@ -9,6 +9,8 @@ require('ts-node/register/transpile-only');
 const originalMessage =
   '剧情正文\n\n<CHARACTER_INIT_PENDING>\n\n<CONTENT_PENDING>\n\n<BATTLE_PENDING>\n\n<UpdateVariable>old</UpdateVariable>\n\n<StatusPlaceHolderImpl/>\n\n<BATTLE_START>';
 let message = originalMessage;
+let selectedSwipe = 0;
+let replaceCalls = 0;
 const baselineVariables = {
   stat_data: {
     status: { time: '00年04月07日 14:00', location: '王都外环' },
@@ -34,7 +36,8 @@ const originalVariables = {
   schema: {},
 };
 let variables = structuredClone(originalVariables);
-let chatVariables = structuredClone(originalVariables);
+const freshChatVariables = () => ({ preset: { mode: 'story' }, user_owned: { counter: 17 } });
+let chatVariables = freshChatVariables();
 let emitted = '';
 let emitCalls = 0;
 let globalExtraAnalysis = false;
@@ -59,16 +62,19 @@ function getStringHash(value, seed = 0) {
 Object.assign(globalThis, {
   getCurrentMessageId: () => 3,
   getLastMessageId: () => 3,
-  getChatMessages: () => [{ message }],
+  getChatMessages: () => [{ message, swipe_id: selectedSwipe }],
   getVariables: options =>
     options?.type === 'global'
       ? { extra_analysis: globalExtraAnalysis }
-      : structuredClone(options?.type === 'message' && options?.message_id === 2 ? baselineVariables : variables),
+      : options?.type === 'chat'
+        ? structuredClone(chatVariables)
+        : structuredClone(options?.type === 'message' && options?.message_id === 2 ? baselineVariables : variables),
   updateVariablesWith: updater => {
     variables = updater(structuredClone(variables));
   },
   insertOrAssignVariables: value => Object.assign(variables, value),
   replaceVariables: (value, options) => {
+    replaceCalls += 1;
     if (options?.type === 'chat') chatVariables = structuredClone(value);
     else variables = structuredClone(value);
   },
@@ -149,12 +155,14 @@ Object.assign(globalThis, {
 
 const { retryCurrentMessageWithExtraModel } = require(resolve('src/runtime/mvuExtraModelRepair.ts'));
 let validated = false;
+let successEvidence = null;
 await retryCurrentMessageWithExtraModel('[战斗内容修复]\n问题=battle.cards(MISSING_VALUE)', {
   validateVariables: repaired => {
     validated = true;
     assert.equal(repaired.stat_data.battle.core.emoji, '🪓');
     assert.equal(repaired.stat_data.battle.player_lust_effect.name, '反面教材');
   },
+  onEvidence: evidence => { successEvidence = evidence; },
 });
 assert.equal(emitted, `${mvuScriptId}_${getStringHash('重试额外模型解析')}`);
 assert.equal(validated, true, 'the complete merged snapshot must be validated before commit');
@@ -180,11 +188,14 @@ assert.deepEqual(variables.stat_data.battle.enemy.lust_effect, {
   emoji: '🔥',
   effects: { damage: 8, lust: 5 },
 });
-assert.deepEqual(chatVariables, variables, 'latest chat variables must retain the repaired complete floor');
+assert.deepEqual(chatVariables, freshChatVariables(), 'message repair must preserve the separate chat dictionary');
+assert.equal(successEvidence?.outcome, 'success');
+assert.equal(successEvidence?.originalMessage, originalMessage);
+assert.match(successEvidence?.response || '', /<UpdateVariable>fixed<\/UpdateVariable>/);
 
 message = `${originalMessage}\n\n[MWG_REPAIR_REQUEST_BEGIN]\nstale\n[MWG_REPAIR_REQUEST_END]`;
 variables = structuredClone(originalVariables);
-chatVariables = structuredClone(originalVariables);
+chatVariables = freshChatVariables();
 emitMode = 'dropped-first';
 emitCalls = 0;
 await retryCurrentMessageWithExtraModel('[战斗内容修复]\n问题=battle.cards(DECK_TOO_SMALL)', {
@@ -198,7 +209,7 @@ assert.doesNotMatch(message, /MWG_REPAIR_REQUEST|stale/, 'successful repair must
 
 message = `${originalMessage}\n\n[MWG_REPAIR_REQUEST_BEGIN]\nstale\n[MWG_REPAIR_REQUEST_END]`;
 variables = structuredClone(originalVariables);
-chatVariables = structuredClone(originalVariables);
+chatVariables = freshChatVariables();
 emitMode = 'bare-block';
 emitCalls = 0;
 await assert.rejects(
@@ -210,13 +221,16 @@ await assert.rejects(
       throw new Error('still invalid');
     },
   }),
-  error => error?.name === 'ExtraModelCandidateRejectedError' && /缺少完整的 <UpdateVariable>/.test(error.message),
+  error => error?.name === 'ExtraModelCandidateRejectedError'
+    && /缺少完整的 <UpdateVariable>/.test(error.message)
+    && typeof error.mvuRepairEvidence?.response === 'string'
+    && error.mvuRepairEvidence.bareCommandObserved === true,
 );
 assert.equal(message, originalMessage, 'a rejected bare response must restore prose without the stale repair request');
 
 message = originalMessage;
 variables = structuredClone(baselineVariables);
-chatVariables = structuredClone(baselineVariables);
+chatVariables = freshChatVariables();
 emitMode = 'existing-ready';
 await retryCurrentMessageWithExtraModel('[战斗内容修复]\n问题=battle.cards(DECK_TOO_SMALL)', {
   acceptCurrentVariablesWhenValid: true,
@@ -227,11 +241,11 @@ await retryCurrentMessageWithExtraModel('[战斗内容修复]\n问题=battle.car
 });
 assert.equal(message, originalMessage, 'joining an in-flight valid write must keep the existing update block');
 assert.deepEqual(variables, originalVariables, 'the valid in-flight variable snapshot must be retained');
-assert.deepEqual(chatVariables, originalVariables, 'the joined snapshot must also become the chat snapshot');
+assert.deepEqual(chatVariables, freshChatVariables(), 'joining a first-pass result must preserve chat variables');
 
 message = originalMessage;
 variables = structuredClone(originalVariables);
-chatVariables = structuredClone(originalVariables);
+chatVariables = freshChatVariables();
 emitMode = 'new-block';
 await assert.rejects(
   retryCurrentMessageWithExtraModel('[战斗内容修复]\n问题=battle.cards[0].effects(INVALID_VALUE)', {
@@ -244,8 +258,61 @@ await assert.rejects(
 );
 assert.equal(message, originalMessage, 'failed post-repair validation must restore the untouched floor');
 assert.deepEqual(variables, originalVariables, 'failed validation must restore message variables');
-assert.deepEqual(chatVariables, originalVariables, 'failed validation must restore chat variables');
+assert.deepEqual(chatVariables, freshChatVariables(), 'failed validation must leave chat variables untouched');
 assert.equal(lastRefresh, 'none', 'bounded follow-up repairs must keep the owning iframe alive after rollback');
+
+// A tower writer can advance the same latest floor while a repair validation
+// fails. The repair must not restore its old full root over that newer state.
+message = originalMessage;
+variables = structuredClone(originalVariables);
+const writesBeforeConcurrentTower = replaceCalls;
+const towerOwnedVariables = {
+  stat_data: { run: { floor: 11, revision: 23, node: 'act-1-floor-12-col-1', phase: 'generating' } },
+  user_owned: { towerRequest: 'tower_18_1_18p9ku7' },
+};
+await assert.rejects(retryCurrentMessageWithExtraModel('[战斗内容修复]\n问题=concurrent', {
+  eventReadyGraceMs: 1,
+  resultTimeoutMs: 1_000,
+  eventEmitter: async () => {
+    variables = structuredClone(baselineVariables);
+    variables.stat_data.battle.repair_candidate = true;
+    message += '\n<UpdateVariable>repair candidate</UpdateVariable>';
+  },
+  validateVariables: () => {
+    variables = structuredClone(towerOwnedVariables);
+    message = '塔任务正在写入当前楼层';
+    throw new Error('修复候选无效');
+  },
+}), /修复候选无效/);
+assert.equal(replaceCalls, writesBeforeConcurrentTower, 'failed repair must not overwrite a concurrent tower write');
+assert.deepEqual(variables, towerOwnedVariables);
+assert.equal(message, '塔任务正在写入当前楼层');
+
+// A validation-successful candidate must also lose its commit right when the
+// tower advances the same variable root immediately before the final write.
+message = originalMessage;
+variables = structuredClone(originalVariables);
+const writesBeforeSuccessfulConcurrentTower = replaceCalls;
+const towerCommittedVariables = {
+  stat_data: { run: { floor: 11, revision: 23, node: 'act-1-floor-12-col-1', phase: 'ready' } },
+  user_owned: { towerRequest: 'tower_18_1_18p9ku7', preserved: true },
+};
+await assert.rejects(retryCurrentMessageWithExtraModel('[战斗内容修复]\n问题=successful-concurrent', {
+  eventReadyGraceMs: 1,
+  resultTimeoutMs: 1_000,
+  eventEmitter: async () => {
+    variables = structuredClone(baselineVariables);
+    variables.stat_data.battle.repair_candidate = true;
+    message += '\n<UpdateVariable>repair candidate</UpdateVariable>';
+  },
+  validateVariables: () => {
+    variables = structuredClone(towerCommittedVariables);
+    message = '塔任务已写入当前楼层';
+  },
+}), /修复提交前变量已被后台任务更新/);
+assert.equal(replaceCalls, writesBeforeSuccessfulConcurrentTower, 'successful repair candidate must not overwrite tower data');
+assert.deepEqual(variables, towerCommittedVariables);
+assert.equal(message, '塔任务已写入当前楼层');
 
 // Tavern Helper 4.9.3 may omit its old top-level eventEmit helper. The repair
 // transaction must use SillyTavern's official eventSource without weakening
@@ -259,7 +326,7 @@ globalThis.SillyTavern = {
 };
 message = originalMessage;
 variables = structuredClone(originalVariables);
-chatVariables = structuredClone(originalVariables);
+chatVariables = freshChatVariables();
 emitMode = 'new-block';
 emitCalls = 0;
 await retryCurrentMessageWithExtraModel('[战斗内容修复]\n问题=battle.cards(DECK_TOO_SMALL)', {
@@ -276,5 +343,24 @@ await assert.rejects(
   'only the absence of both event surfaces may stop an MVU retry',
 );
 globalThis.eventEmit = legacyEventEmit;
+
+// The legacy fallback also pins the selected reply, even though message_id
+// and chat remain identical. Its own commit/rollback must not touch the new one.
+message = originalMessage;
+variables = structuredClone(originalVariables);
+selectedSwipe = 0;
+const writesBeforeSwipe = replaceCalls;
+const newReply = { stat_data: { owner: 'new selected reply' }, user_owned: { keep: true } };
+await assert.rejects(retryCurrentMessageWithExtraModel('[战斗内容修复]\n问题=scope', {
+  eventReadyGraceMs: 1, resultTimeoutMs: 1_000,
+  eventEmitter: async () => {
+    selectedSwipe = 1;
+    message = 'new selected prose';
+    variables = structuredClone(newReply);
+  },
+}), /聊天已切换|回复已变化/);
+assert.equal(replaceCalls, writesBeforeSwipe);
+assert.deepEqual(variables, newReply);
+assert.equal(message, 'new selected prose');
 
 console.log('MVU repair isolates anchors, keeps one validated block, and rolls back invalid retries.');

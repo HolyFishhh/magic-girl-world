@@ -72,6 +72,7 @@ export type BattleEffectRuntimeEvent = {
     nextValue: number;
 } | {
     type: 'attribute_logged';
+    source: BattleSide;
     target: BattleSide;
     attribute: BattleEffectAttribute;
     previousValue: number;
@@ -101,8 +102,36 @@ export interface BattleEffectStatePort {
 }
 export interface BattleEffectRuntimePorts {
     readModifierSources(target: BattleSide, modifier: BattleModifierAttribute): readonly BattleModifierSource[];
+    /**
+     * Persist one resolved state transition before any trigger caused by that
+     * transition runs. The returned context binds ordinal/history filters to the
+     * exact stored event instead of predicting a future journal entry.
+     */
+    recordResolvedEvent?(event: Extract<BattleEffectRuntimeEvent, {
+        type: 'damage_resolved' | 'heal_resolved' | 'attribute_logged';
+    }>): BattleTriggerEventContext | undefined;
     dispatchTriggers(dispatches: readonly BattleTriggerDispatch[]): Promise<void>;
-    handleLustOverflow(target: BattleSide): Promise<void>;
+    handleLustOverflow(target: BattleSide, context: {
+        /** Stable enemy that caused a player overflow, when there is one. */
+        sourceEnemyId?: string;
+        /** Stable enemy whose own lust reached its maximum. */
+        targetEnemyId?: string;
+    }): Promise<void>;
+    protectDamage?(request: {
+        source: BattleSide;
+        target: BattleSide;
+        amount: number;
+        damageKind: import('./battleEventJournal').DamageKind;
+        sourceEnemyId?: string;
+        targetEnemyId?: string;
+        /** Preserve an independent attacker's outgoing modifier snapshot during redirects. */
+        sourceModifierSources?: Partial<Record<BattleModifierAttribute, readonly BattleModifierSource[]>>;
+        /** A bypass-block packet stays bypass-block while redirected to protectors. */
+        bypassBlock?: boolean;
+    }): Promise<{
+        remainingDamage: number;
+        redirectedHpLost?: number;
+    }>;
     interceptDamage?(request: {
         source: BattleSide;
         target: BattleSide;
@@ -138,17 +167,25 @@ export interface BattleEffectRuntimeContext {
      * passive outgoing modifiers.
      */
     sourceModifierSources?: Partial<Record<BattleModifierAttribute, readonly BattleModifierSource[]>>;
+    /** Damage has already received the original attacker's outgoing modifiers. */
+    skipSourceDamageModifiers?: boolean;
+    /** Actual HP lost by recipients of a redirected attack; used only for lifesteal. */
+    redirectedHpLost?: number;
 }
 export interface BattleEffectRuntimeResult {
     applied: boolean;
     target?: BattleSide;
     pendingDeath?: boolean;
     blocked?: number;
+    /** Damage after the actual recipient's modifiers and before that recipient's block. */
+    modified?: number;
     hpLost?: number;
     hpGained?: number;
     defeated?: boolean;
     fatal?: boolean;
     excludedBy?: string;
+    /** Journal identity of the health transition that caused this result. */
+    resolvedEventId?: string;
 }
 export declare function isBattleEffectCommand(command: EffectCommand): command is BattleEffectCommand;
 export declare function resolveBattleEffectTarget(target: 'self' | 'opponent', source: BattleSide): BattleSide;

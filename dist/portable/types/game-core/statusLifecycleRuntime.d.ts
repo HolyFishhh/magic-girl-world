@@ -1,18 +1,20 @@
 import type { BattleTriggerDispatch } from './battleEventDispatch';
 import type { BattleStateStore, StatusEffect } from './battleState';
-import type { StatusTrigger } from './battleTriggers';
-import type { RuntimeStatusDefinition, StatusRuntimeEffect } from './statusDefinitionRuntime';
+import type { BattleTriggerEventContext } from './battleEventJournal';
+import type { StatusEventTrigger, StatusLifecycleTrigger, StatusTrigger } from './battleTriggers';
+import type { RuntimeStatusDefinition, StatusRuntimeEffect, StatusTickTiming } from './statusDefinitionRuntime';
 import { type TriggerTransactionPorts } from './triggerTransaction';
 type MaybePromise<T> = T | Promise<T>;
 export type StatusLifecycleTarget = 'player' | 'enemy';
-export type StatusLifecycleActiveTrigger = Exclude<StatusTrigger, 'hold' | 'threshold_execute'>;
-export type StatusLifecycleState = Pick<BattleStateStore, 'getPlayer' | 'getEnemy' | 'addStatusEffect' | 'updateStatusEffect' | 'removeStatusEffect' | 'updatePlayer' | 'updateEnemy'>;
+export type StatusLifecycleActiveTrigger = Exclude<StatusLifecycleTrigger, 'hold' | 'threshold_execute'>;
+export type StatusExecutableTrigger = StatusLifecycleActiveTrigger | StatusEventTrigger;
+export type StatusLifecycleState = Pick<BattleStateStore, 'getPlayer' | 'getEnemy' | 'getEnemyById' | 'addStatusEffect' | 'updateStatusEffect' | 'removeStatusEffect' | 'updatePlayer' | 'updateEnemy'>;
 export interface StatusDefinitionReader {
     get(statusId: string): RuntimeStatusDefinition | undefined;
     getTriggerEffects(statusId: string, trigger: StatusTrigger): StatusRuntimeEffect[];
 }
 export interface StatusLifecycleExecutionContext extends Readonly<Record<string, unknown>> {
-    triggerType: StatusLifecycleActiveTrigger;
+    triggerType: StatusExecutableTrigger;
     statusContext: StatusEffect;
 }
 export type StatusLifecycleEvent = {
@@ -22,13 +24,19 @@ export type StatusLifecycleEvent = {
 } | {
     type: 'status_applied';
     target: StatusLifecycleTarget;
+    enemyId?: string;
     status: StatusEffect;
     trigger: 'apply' | 'stack';
 } | {
     type: 'trigger_started';
     target: StatusLifecycleTarget;
     status: StatusEffect;
-    trigger: 'apply' | 'stack';
+    trigger: StatusExecutableTrigger;
+} | {
+    type: 'trigger_completed';
+    target: StatusLifecycleTarget;
+    status: StatusEffect;
+    trigger: StatusExecutableTrigger;
 } | {
     type: 'status_removed';
     target: StatusLifecycleTarget;
@@ -38,7 +46,7 @@ export type StatusLifecycleEvent = {
     type: 'trigger_failed';
     target: StatusLifecycleTarget;
     status: StatusEffect;
-    trigger: 'tick' | 'remove';
+    trigger: StatusExecutableTrigger;
     cause: unknown;
 } | {
     type: 'selection_removed';
@@ -52,6 +60,9 @@ export interface StatusLifecycleRuntimePorts<TToken> {
     transactions: TriggerTransactionPorts<TToken>;
     execute(effect: StatusRuntimeEffect, source: StatusLifecycleTarget, context: StatusLifecycleExecutionContext): MaybePromise<void>;
     dispatch(dispatches: readonly BattleTriggerDispatch[]): MaybePromise<void>;
+    record?(event: Extract<StatusLifecycleEvent, {
+        type: 'status_applied' | 'trigger_completed' | 'status_removed';
+    }>): BattleTriggerEventContext | undefined;
     present?(event: StatusLifecycleEvent): void;
 }
 /**
@@ -63,7 +74,16 @@ export declare class StatusLifecycleRuntime<TToken> {
     constructor(ports: StatusLifecycleRuntimePorts<TToken>);
     apply(target: StatusLifecycleTarget, statusId: string, stacks: number): Promise<StatusEffect | null>;
     remove(target: StatusLifecycleTarget, selection: string): Promise<StatusEffect[]>;
+    /** Resolve tick effects for one exact holder at its declared action boundary. */
+    processActionTiming(target: StatusLifecycleTarget, timing: StatusTickTiming, enemyId?: string): Promise<void>;
+    /** Stack decay is independent of tick timing and occurs once at the holder's turn end. */
     processTurnEnd(target: StatusLifecycleTarget): Promise<void>;
+    /**
+     * Resolve one real battle event for statuses that were already active when
+     * the event began. The caller supplies the frozen ids so a status created by
+     * another listener cannot retroactively observe the event that created it.
+     */
+    processEvent(target: StatusLifecycleTarget, trigger: StatusEventTrigger, context?: Readonly<Record<string, unknown>>, activeStatusIds?: readonly string[]): Promise<void>;
     private removeOne;
     private applyStacksDecay;
     private executeIsolatedTrigger;

@@ -234,7 +234,12 @@ export class BattleSessionStore {
 
     const fingerprint = this.fingerprint;
     const generation = this.generation;
-    const snapshot = createBattleSessionSnapshot(fingerprint, state, Date.now());
+    // Cross-battle history is owned once by stat_data.run_event_history. Keeping
+    // another copy in every rapidly-written battle snapshot made late-run saves
+    // grow quadratically and could reintroduce the long-session slowdown.
+    const snapshotState = structuredClone(state);
+    if (snapshotState.eventJournal?.runHistory) delete snapshotState.eventJournal.runHistory;
+    const snapshot = createBattleSessionSnapshot(fingerprint, snapshotState, Date.now());
     this.queue = this.queue
       .catch(() => undefined)
       .then(async () => {

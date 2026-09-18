@@ -2,25 +2,92 @@ import { ABILITY_TRIGGER_SET } from './battleTriggers';
 import { compileCompactEffectList } from './compactEffectDsl';
 import { isCompactEffectList } from './compactEffectContract';
 import {
+  collectCompactStatusDefinitionIssues,
   collectCompactStatusDefinitionReferences,
   collectEffectProgramStatusReferences,
-  validateCompactStatusDefinition,
 } from './statusDefinitionValidation';
 import { CARD_RARITY_SET, CARD_TYPE_SET, RELIC_RARITY_SET } from './contentCatalog';
 import { validateEffectProgramPolicy } from './effectProgramPolicy';
 import { resolveTriggerInput } from './triggerInput';
 import type { EffectProgram } from './effectDsl';
 import { normalizeCardCost, validateCardCost } from './combatResource';
+import { createContentPack } from './contentPack';
+import { validateContentPackContract, type ContentContractIssue } from './contentContract';
+import { validateArtifactAcquisitionContract } from './artifactAcquisitionValidation';
 
 export type RewardCandidateCategory = 'cards' | 'artifacts' | 'items';
 
 export type RewardCandidateValidationResult = { ok: true } | { ok: false; message: string };
 
+export type RewardCandidateSupportStatusesResult =
+  | { ok: true; statuses: Record<string, unknown>[] }
+  | { ok: false; message: string };
+
 export interface RewardCandidateLibrary {
+  /** Owner-level overflow effect: a reward is not an independent character. */
+  playerDesireEffect?: unknown;
   existing?: readonly unknown[];
   knownStatusIds?: Iterable<string>;
   statusDefinitions?: readonly unknown[];
   knownResourceIds?: Iterable<string>;
+}
+
+/**
+ * Run the shared content contract against one reward candidate and return all
+ * independently discoverable structural issues. The ordinary validator below
+ * still owns library identity and cross-reference rules; this pass prevents a
+ * repair request from seeing only the first malformed field in the same card.
+ */
+export function collectRewardCandidateContractIssues(
+  category: RewardCandidateCategory,
+  value: unknown,
+  library: RewardCandidateLibrary = {},
+): string[] {
+  return collectRewardCandidateTypedContractIssues(category, value, library)
+    .map(issue => issue.code === 'INVALID_SUPPORT_STATUSES' ? issue.message : `${issue.path}: ${issue.message}`);
+}
+
+/** Structured counterpart for pre-repair source mapping; no message parsing. */
+export function collectRewardCandidateTypedContractIssues(
+  category: RewardCandidateCategory,
+  value: unknown,
+  library: RewardCandidateLibrary = {},
+): ContentContractIssue[] {
+  if (!isRecord(value)) return [];
+  const candidate = structuredClone(value);
+  const supportStatuses = readRewardCandidateSupportStatuses(candidate);
+  delete candidate.status;
+  delete candidate.statuses;
+  if (category === 'cards' && (candidate.quantity === undefined || candidate.quantity === 0)) candidate.quantity = 1;
+  if (category === 'items' && candidate.count === undefined) candidate.count = 1;
+  // Existing status definitions belong to the persistent library and are
+  // validated once by its ordinary content pass. Re-inserting all of them
+  // into every candidate pack duplicated one unrelated global error for each
+  // reward. Only the candidate-owned support status is validated here; all
+  // other definitions remain reference-resolution and traversal context.
+  const statuses = supportStatuses.ok ? supportStatuses.statuses : [];
+  const knownStatusIds = new Set([
+    ...(library.knownStatusIds || []),
+    ...(library.statusDefinitions || [])
+      .filter(isRecord)
+      .map(definition => definition.id)
+      .filter((id): id is string => typeof id === 'string'),
+  ]);
+  const pack = createContentPack({
+    playerDesireEffect: library.playerDesireEffect,
+    cards: category === 'cards' ? [candidate] : [],
+    statuses,
+    relics: category === 'artifacts' ? [candidate] : [],
+    items: category === 'items' ? [candidate] : [],
+  });
+  const result = validateContentPackContract(pack, {
+    requireExecutable: true, knownStatusIds,
+    knownResourceIds: library.knownResourceIds,
+    referenceStatusDefinitions: library.statusDefinitions,
+  });
+  const issues: ContentContractIssue[] = supportStatuses.ok ? [] : [{ path: 'statuses', code: 'INVALID_SUPPORT_STATUSES', message: supportStatuses.message }];
+  if (!result.ok) issues.push(...result.issues);
+  return issues;
 }
 
 /** Read the amount granted by one reward candidate. AI card candidates commonly use 0 to mean "not owned yet". */
@@ -42,6 +109,51 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function failure(message: string): RewardCandidateValidationResult {
   return { ok: false, message };
+}
+
+/**
+ * Read the candidate-owned status library. `status` remains accepted for old
+ * cards while new generators can close any finite status dependency graph in
+ * `statuses`. Equal duplicate ids are harmless and collapse to one definition;
+ * conflicting duplicates are rejected before anything reaches persistent MVU.
+ */
+export function readRewardCandidateSupportStatuses(value: unknown): RewardCandidateSupportStatusesResult {
+  if (!isRecord(value)) return { ok: true, statuses: [] };
+  const entries: Array<{ definition: Record<string, unknown>; path: string }> = [];
+  if (value.status !== undefined) {
+    if (!isRecord(value.status)) return { ok: false, message: '候选 status 必须是一个状态定义对象' };
+    entries.push({ definition: structuredClone(value.status), path: 'status' });
+  }
+  if (value.statuses !== undefined) {
+    if (!Array.isArray(value.statuses) || value.statuses.length < 1 || value.statuses.length > 16) {
+      return { ok: false, message: '候选 statuses 必须是包含 1..16 个状态定义对象的数组' };
+    }
+    for (let index = 0; index < value.statuses.length; index += 1) {
+      const status = value.statuses[index];
+      if (!isRecord(status)) return { ok: false, message: `候选 statuses[${index}] 必须是状态定义对象` };
+      entries.push({ definition: structuredClone(status), path: `statuses[${index}]` });
+    }
+  }
+  if (entries.length > 16) return { ok: false, message: '候选最多只能携带 16 个状态定义' };
+
+  const statuses = new Map<string, Record<string, unknown>>();
+  for (let index = 0; index < entries.length; index += 1) {
+    const { definition: status, path } = entries[index];
+    const validationIssues = collectCompactStatusDefinitionIssues(status);
+    if (validationIssues.length > 0) {
+      return {
+        ok: false,
+        message: validationIssues.map(message => `候选 ${path} 无效: ${message}`).join('；'),
+      };
+    }
+    const id = String(status.id);
+    const existing = statuses.get(id);
+    if (existing && !rewardStatusDefinitionsEqual(existing, status)) {
+      return { ok: false, message: `候选状态 ${id} 重复但规则不同` };
+    }
+    if (!existing) statuses.set(id, status);
+  }
+  return { ok: true, statuses: Array.from(statuses.values()) };
 }
 
 function compactPrograms(value: Record<string, unknown>): unknown[] {
@@ -79,6 +191,7 @@ function comparableDefinition(value: Record<string, unknown>): string {
     'count',
     'price',
     'status',
+    'statuses',
     'description',
     'upgrade_level',
     '$meta',
@@ -103,6 +216,23 @@ function comparableDefinition(value: Record<string, unknown>): string {
   return JSON.stringify(normalize(value));
 }
 
+export function rewardStatusDefinitionsEqual(
+  left: Record<string, unknown>,
+  right: Record<string, unknown>,
+): boolean {
+  const normalizeTriggerLists = (definition: Record<string, unknown>): Record<string, unknown> => {
+    if (!isRecord(definition.triggers)) return definition;
+    return {
+      ...definition,
+      triggers: Object.fromEntries(Object.entries(definition.triggers).map(([trigger, effects]) => [
+        trigger,
+        isRecord(effects) ? [effects] : effects,
+      ])),
+    };
+  };
+  return comparableDefinition(normalizeTriggerLists(left)) === comparableDefinition(normalizeTriggerLists(right));
+}
+
 function hasValidIdentity(value: Record<string, unknown>): boolean {
   return (
     typeof value.id === 'string' &&
@@ -121,8 +251,12 @@ function validateEffects(
     allowModifiers?: boolean;
     power?: boolean;
     allowSpentEnergy?: boolean;
+    allowXValue?: boolean;
     allowSpentResources?: ReadonlySet<string>;
     allowXResources?: ReadonlySet<string>;
+    allowCardDestination?: boolean;
+    allowCurrentCardReplay?: boolean;
+    allowMissing?: boolean;
   } = {},
 ): RewardCandidateValidationResult {
   for (const field of ['effect', 'effect_program', 'effectProgram']) {
@@ -132,6 +266,8 @@ function validateEffects(
   const sources = resolved.structured
     ? [
         [resolved.immediateEffects, undefined],
+        // A Power registers its trigger when played. Relics and abilities are
+        // already owned trigger sources, so their body is validated directly.
         [resolved.triggeredEffects, options.power ? resolved.trigger : undefined],
       ] as const
     : [[value.effects, options.trigger]] as const;
@@ -150,25 +286,44 @@ function validateEffects(
     }
     programs.push(compiled.value);
   }
-  if (programs.length === 0) return failure('必须提供浅层 effects');
+  if (programs.length === 0) return options.allowMissing ? { ok: true } : failure('必须提供浅层 effects');
   const combined: EffectProgram = { spec: 'mwg.effect/v1', steps: programs.flatMap(program => program.steps) };
   const encoded = JSON.stringify(combined);
   if (encoded.includes('context.status_stacks')) return failure('stacks 只允许用于状态 triggers');
-  if (
-    !options.allowModifiers &&
-    (encoded.includes('"op":"modify"') || encoded.includes('"op":"card_play_rule"'))
-  ) {
-    return failure('持续修饰或出牌规则只允许用于 passive 或状态 hold');
-  }
   const policy = validateEffectProgramPolicy(combined, {
+    // All reward candidates execute as player-owned content after acquisition.
+    allowPersistentGrowth: true,
     triggerPolicy: options.power ? 'require_root_or_status' : 'forbid',
-    modifierPolicy: options.allowModifiers ? 'only' : 'forbid',
+    // A passive trigger is compiled as a root register_trigger node. The
+    // shared policy automatically validates its nested program with the
+    // modifier-only grammar while immediate siblings remain modifier-free.
+    modifierPolicy: options.power ? 'forbid' : options.allowModifiers ? 'only' : 'forbid',
     allowSpentEnergy: options.allowSpentEnergy,
+    allowXValue: options.allowXValue,
     allowSpentResources: options.allowSpentResources,
     allowXResources: options.allowXResources,
+    allowCardDestination: options.allowCardDestination,
+    allowCurrentCardReplay: options.allowCurrentCardReplay,
   });
   if (!policy.ok) return failure(`${policy.issues[0].path}: ${policy.issues[0].message}`);
   return { ok: true };
+}
+
+function validateArtifactAcquisition(
+  value: Record<string, unknown>,
+  library?: RewardCandidateLibrary,
+): RewardCandidateValidationResult {
+  if (value.on_acquire === undefined) return { ok: true };
+  const message = validateArtifactAcquisitionContract(value, {
+    knownResourceIds: library?.knownResourceIds,
+    validateCandidate: (category, candidate) => {
+      const result = library
+        ? validateRewardCandidateAgainstLibrary(category, candidate, library)
+        : validateRewardCandidate(category, candidate);
+      return result.ok ? null : result.message;
+    },
+  });
+  return message ? failure(message) : { ok: true };
 }
 
 /** Validate an AI reward before it is committed to persistent MUV state. */
@@ -205,9 +360,14 @@ export function validateRewardCandidate(
       when: value.when,
       creates: value.creates,
       power: type === 'Power',
-      allowSpentEnergy: costComponents.energy === 'all',
+      allowModifiers: trigger === 'passive',
+      allowSpentEnergy: Object.prototype.hasOwnProperty.call(costComponents, 'energy'),
+      allowXValue: costComponents.energy === 'all',
       allowSpentResources: new Set(Object.keys(costComponents)),
       allowXResources: new Set(Object.entries(costComponents).filter(([, component]) => component === 'all').map(([id]) => id)),
+      allowCardDestination: type !== 'Event',
+      allowCurrentCardReplay: type !== 'Power' && type !== 'Event',
+      allowMissing: type === 'Curse',
     });
     if (!main.ok) return main;
     if (Object.prototype.hasOwnProperty.call(value, 'discard_effect')) {
@@ -226,18 +386,25 @@ export function validateRewardCandidate(
   if (category === 'artifacts') {
     if (!RELIC_RARITY_SET.has(String(value.rarity ?? 'Common'))) return failure('遗物 rarity 无效');
     const triggerInput = resolveTriggerInput(value);
-    if (typeof triggerInput.trigger !== 'string' || !ABILITY_TRIGGER_SET.has(triggerInput.trigger)) {
-      return failure('浅层遗物必须提供合法 trigger');
+    const hasTrigger = typeof triggerInput.trigger === 'string' && ABILITY_TRIGGER_SET.has(triggerInput.trigger);
+    if (value.trigger !== undefined && !hasTrigger) return failure('浅层遗物 trigger 无效');
+    if (!hasTrigger && value.on_acquire === undefined) {
+      return failure('浅层遗物必须提供合法 trigger 或 on_acquire');
     }
-    return validateEffects(value, {
-      when: value.when,
-      allowModifiers: triggerInput.trigger === 'passive',
-    });
+    if (hasTrigger) {
+      const effects = validateEffects(value, {
+        when: value.when,
+        creates: value.creates,
+        allowModifiers: triggerInput.trigger === 'passive',
+      });
+      if (!effects.ok) return effects;
+    }
+    return validateArtifactAcquisition(value);
   }
 
   if (readRewardCandidateQuantity(category, value) === null) return failure('道具 count 必须是 1..999');
   if (value.trigger !== undefined) return failure('道具不得包含 trigger');
-  return validateEffects(value, { when: value.when });
+  return validateEffects(value, { when: value.when, creates: value.creates });
 }
 
 /** Validate references and identity against the persistent content library. */
@@ -246,8 +413,18 @@ export function validateRewardCandidateAgainstLibrary(
   value: unknown,
   library: RewardCandidateLibrary,
 ): RewardCandidateValidationResult {
+  const contractIssues = collectRewardCandidateContractIssues(category, value, library);
+  if (contractIssues.length > 0) return failure(contractIssues.join('；'));
   const base = validateRewardCandidate(category, value);
   if (!base.ok || !isRecord(value)) return base;
+  if (category === 'artifacts') {
+    const acquisition = validateArtifactAcquisition(value, library);
+    if (!acquisition.ok) return acquisition;
+  }
+  if (category === 'cards' && (library.existing || []).some(entry => isRecord(entry)
+    && entry.id === value.id && (entry.unique === true || value.unique === true))) {
+    return failure(`唯一卡牌“${value.name || value.id}”已持有，请提供其他奖励或明确强化原牌`);
+  }
 
   if (library.knownResourceIds) {
     const knownResources = new Set(['energy', ...library.knownResourceIds]);
@@ -257,62 +434,108 @@ export function validateRewardCandidateAgainstLibrary(
       if (missingCostResources.length > 0)
         return failure(`费用引用了未注册资源: ${missingCostResources.sort().join(', ')}`);
     }
-    const references = new Set<string>();
-    const visit = (entry: unknown): void => {
+    const missing = new Set<string>();
+    type ResourceScope = { ids: ReadonlySet<string> | null; summoner?: ResourceScope; summon?: boolean };
+    const playerScope: ResourceScope = { ids: knownResources };
+    const requireResource = (id: string, scope: ResourceScope): void => {
+      if (id !== 'energy' && scope.ids && !scope.ids.has(id)) missing.add(id);
+    };
+    const definitionIds = (resources: unknown): Set<string> => new Set(Array.isArray(resources)
+      ? resources.filter(isRecord).map(resource => resource.id).filter((id): id is string => typeof id === 'string')
+      : isRecord(resources) ? Object.keys(resources) : []);
+    const visit = (entry: unknown, scope: ResourceScope): void => {
       if (typeof entry === 'string') {
-        for (const match of entry.matchAll(/(?:self|opponent)\.resource\.([A-Za-z_][A-Za-z0-9_]*)\.(?:current|max)/g)) {
-          references.add(match[1]);
+        // Opponent resources are runtime identities. Nested actors resolve
+        // self against their own pool, never the reward recipient's pool.
+        for (const match of entry.matchAll(/\bself\.resource\.([A-Za-z_][A-Za-z0-9_]*)\.(?:current|max)/g)) {
+          requireResource(match[1], scope);
         }
         return;
       }
       if (Array.isArray(entry)) {
-        entry.forEach(visit);
+        entry.forEach(value => visit(value, scope));
         return;
       }
       if (!isRecord(entry)) return;
-      if ((entry.op === 'gain_resource' || entry.op === 'set_resource') && typeof entry.resource === 'string') {
-        references.add(entry.resource);
+      if ((entry.op === 'gain_resource' || entry.op === 'set_resource')
+        && entry.target !== 'opponent' && typeof entry.resource === 'string') {
+        requireResource(entry.resource, scope);
       }
-      Object.values(entry).forEach(visit);
+      if ((entry.op === 'gain_summon_resource' || entry.op === 'set_summon_resource')
+        && scope.summon && isRecord(entry.selector) && entry.selector.pick === 'source'
+        && typeof entry.resource === 'string') requireResource(entry.resource, scope);
+      // Spawned enemies carry authored effects, while summons carry compiled
+      // programs. Both forms must retain their actor ownership boundary.
+      for (const key of ['resource', 'set_resource'] as const) {
+        const resource = entry[key];
+        if (isRecord(resource) && typeof resource.id === 'string' && entry.to !== 'opponent')
+          requireResource(resource.id, scope);
+      }
+      for (const [key, child] of Object.entries(entry)) {
+        if (['name', 'description', 'emoji', 'id', 'resources'].includes(key)) continue;
+        if (((entry.op === 'spawn_summon' && key === 'summon') || key === 'spawn_summon') && isRecord(child)) {
+          visit(child, { ids: definitionIds(child.resources), summon: true,
+            summoner: entry.target === 'opponent' || entry.to === 'opponent' ? { ids: null } : scope });
+        } else if (((entry.op === 'spawn_enemy' && key === 'enemy') || key === 'spawn_enemy') && isRecord(child)) {
+          visit(child, { ids: definitionIds(child.resources) });
+        } else if ((entry.op === 'summoner_effects' && key === 'effects') || key === 'summoner_effects') {
+          visit(child, scope.summoner ?? { ids: null });
+        } else if ((['add_card', 'ensure_card'].includes(String(entry.op)) && key === 'card')
+          || (entry.op === 'transform_cards' && key === 'replacement')) {
+          visit(child, playerScope);
+        } else {
+          visit(child, scope);
+        }
+      }
     };
-    compactPrograms(value).forEach(visit);
-    const missing = [...references].filter(id => !knownResources.has(id)).sort();
-    if (missing.length > 0) return failure(`引用了未注册资源: ${missing.join(', ')}`);
+    compactPrograms(value).forEach(program => visit(program, playerScope));
+    if (missing.size > 0) return failure(`引用了未注册资源: ${[...missing].sort().join(', ')}`);
   }
 
-  const supportStatus = value.status;
-  if (supportStatus !== undefined && !isRecord(supportStatus)) return failure('候选 status 必须是一个状态定义对象');
-  if (isRecord(supportStatus)) {
-    const validation = validateCompactStatusDefinition(supportStatus);
-    if (!validation.ok) return failure(`候选 status 无效: ${validation.message}`);
-  }
+  const supportStatusesResult = readRewardCandidateSupportStatuses(value);
+  if (!supportStatusesResult.ok) return failure(supportStatusesResult.message);
+  const supportStatuses = supportStatusesResult.statuses;
 
-  if (library.knownStatusIds || library.statusDefinitions || isRecord(supportStatus)) {
-    const definitions = [
-      ...(library.statusDefinitions || []).filter(isRecord),
-      ...(isRecord(supportStatus) ? [supportStatus] : []),
-    ];
+  if (library.knownStatusIds || library.statusDefinitions || supportStatuses.length > 0) {
+    const libraryDefinitions = (library.statusDefinitions || []).filter(isRecord);
+    const localDefinitions = new Map(supportStatuses.map(definition => [String(definition.id), definition]));
     const known = new Set([
       ...(library.knownStatusIds || []),
-      ...definitions.map(definition => definition.id).filter((id): id is string => typeof id === 'string'),
+      ...libraryDefinitions.map(definition => definition.id).filter((id): id is string => typeof id === 'string'),
+      ...localDefinitions.keys(),
     ]);
-    const references = new Set<string>();
+    const directReferences = new Set<string>();
     compactPrograms(value).forEach(program => {
-      collectEffectProgramStatusReferences(program as import('./effectDsl').EffectProgram).forEach(id => references.add(id));
+      collectEffectProgramStatusReferences(program as import('./effectDsl').EffectProgram).forEach(id => directReferences.add(id));
     });
-    if (isRecord(supportStatus)) {
-      const supportId = String(supportStatus.id);
-      if (!references.has(supportId)) return failure(`候选 status ${supportId} 未被该候选引用`);
-      collectCompactStatusDefinitionReferences(supportStatus).forEach(id => references.add(id));
+    const definitionReferences = new Map<string, Set<string>>();
+    const references = new Set(directReferences);
+    for (const [id, definition] of localDefinitions) {
+      const dependencies = collectCompactStatusDefinitionReferences(definition);
+      definitionReferences.set(id, dependencies);
+      dependencies.forEach(dependency => references.add(dependency));
     }
     const missing = [...references].filter(id => !known.has(id)).sort();
     if (missing.length > 0) return failure(`引用了未注册状态: ${missing.join(', ')}`);
-    for (const id of references) {
-      const matches = definitions.filter(definition => definition.id === id);
-      if (matches.length > 1) return failure(`状态定义 ID 重复: ${id}`);
-      if (matches.length === 1) {
-        const validation = validateCompactStatusDefinition(matches[0]);
-        if (!validation.ok) return failure(`状态 ${id} 无效: ${validation.message}`);
+
+    const reachable = new Set<string>();
+    const pending = [...directReferences];
+    while (pending.length > 0) {
+      const id = pending.pop()!;
+      if (!localDefinitions.has(id) || reachable.has(id)) continue;
+      reachable.add(id);
+      definitionReferences.get(id)?.forEach(dependency => pending.push(dependency));
+    }
+    const unused = [...localDefinitions.keys()].filter(id => !reachable.has(id)).sort();
+    if (unused.length > 0) return failure(`候选 statuses 未被该候选引用: ${unused.join(', ')}`);
+
+    for (const [supportId, supportStatus] of localDefinitions) {
+      const existingDefinition = libraryDefinitions.find(definition => definition.id === supportId);
+      if (
+        existingDefinition &&
+        !rewardStatusDefinitionsEqual(existingDefinition, supportStatus)
+      ) {
+        return failure(`状态定义 ID 已存在但规则不同: ${supportId}`);
       }
     }
   }

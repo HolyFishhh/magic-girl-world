@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+process.env.TS_NODE_COMPILER_OPTIONS = JSON.stringify({module:'CommonJS',moduleResolution:'node'});
+require('ts-node/register/transpile-only');
+const {hasCardValueTarget, transformCardEffectProgram} = require('../src/game-core/cardValueTransform.ts');
+const damage={op:'damage',target:'opponent',amount:3};
+const summon={op:'spawn_summon',target:'self',count:1,capacity:3,overflow:'replace_oldest',summon:{id:'s',name:'召唤物',maxHp:5,actionProgram:{spec:'mwg.effect/v1',steps:[damage]}}};
+const program=steps=>({spec:'mwg.effect/v1',steps});
+assert.equal(hasCardValueTarget(program([summon]),'damage'),false);
+assert.equal(hasCardValueTarget(program([summon,damage]),'damage'),true);
+assert.equal(hasCardValueTarget(program([{op:'if',condition:true,then:[damage]}]),'damage'),true);
+const result=transformCardEffectProgram(program([summon,damage]),{stat:'damage',operator:'add',value:2});
+assert.equal(result.steps[1].amount,5);
+assert.equal(result.steps[0].summon.actionProgram.steps[0].amount,3);
+console.log('Card upgrades target their own effects; summon actions remain unchanged.');

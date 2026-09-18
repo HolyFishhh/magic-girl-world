@@ -1,10 +1,14 @@
 import { absorbDamageWithBlock, applyNumericOperator, roundBattleValue } from './battleMath';
 import type { CombatResourceState } from './combatResource';
 import type { EventTriggerQuery } from './battleEventJournal';
+import type { BattleTriggerDispatch } from './battleEventDispatch';
+import { resolveStatusOwnershipTriggerDispatch } from './battleEventDispatch';
+import type { BattleTriggerEventContext } from './battleEventJournal';
 import type { CardValueOperator, CardValueStat, EffectProgram } from './effectDsl';
 import { transformCardEffectProgram } from './cardValueTransform';
 import { resolveStatusApplication, resolveStatusStacksChange } from './statusApplication';
-import type { RuntimeStatusDefinition, StatusRuntimeEffect } from './statusDefinitionRuntime';
+import type { RuntimeStatusDefinition, StatusRuntimeEffect, StatusTickTiming } from './statusDefinitionRuntime';
+import type { StatusEventTrigger, StatusTrigger } from './battleTriggers';
 import { runTriggerTransaction, type TriggerTransactionPorts } from './triggerTransaction';
 
 export type BattleOwner = 'player' | 'enemy';
@@ -13,7 +17,7 @@ export type SummonPick =
   | 'left' | 'right' | 'choose'
   /** Compatibility aliases retained for already-authored content. */
   | 'first' | 'last'
-  | 'random' | 'random_n' | 'all' | 'lowest_hp' | 'highest_hp' | 'by_id';
+  | 'random' | 'random_n' | 'all' | 'lowest_hp' | 'highest_hp' | 'by_id' | 'source';
 
 export interface SummonStatusState {
   id: string;
@@ -26,7 +30,7 @@ export interface SummonStatusState {
 }
 
 export interface SummonInterceptRule {
-  /** Only damage left after the protected combatant's block can be intercepted. */
+  /** Intercept after the protected combatant's vulnerability, before recipient mitigation/block. */
   mode: 'unblocked_attack';
   priority?: number;
   maxPerTurn?: number;
@@ -38,6 +42,7 @@ export interface SummonActionDefinition {
   name: string;
   emoji?: string;
   description?: string;
+  dialogue?: string;
   weight?: number;
   /** Fixed entries ignore summon effect-value amplification. */
   fixed?: boolean;
@@ -81,6 +86,7 @@ export interface SummonUnitDefinition {
   /** Optional owner-local slot. A slot can model a persistent companion without constraining ordinary summons. */
   slot?: string;
   onExisting?: 'add_instance' | 'reinforce' | 'replace';
+  onExistingProgram?: EffectProgram;
   onDefeated?: 'new_instance' | 'revive_reset' | 'revive_reinforce';
   retainCorpse?: boolean;
   capabilities?: {
@@ -96,11 +102,20 @@ export interface SummonUnit extends Omit<SummonUnitDefinition, 'id' | 'maxHp'> {
   templateId: string;
   instanceId: string;
   owner: BattleOwner;
+  /** Program-owned combatant identity, never authored in a summon definition.
+   * Missing legacy enemy identity is unknown, not the currently selected enemy. */
+  summonerId?: string | null;
   maxHp: number;
   currentHp: number;
   createdTurn: number;
   createdSequence: number;
   interceptionsThisTurn: number;
+  /**
+   * Chosen before this unit's next activation.  This records the behaviour
+   * identity only: effect programs still come from the current runtime unit,
+   * so buffs, statuses and formula inputs remain live when it resolves.
+   */
+  plannedActionIds?: string[];
 }
 
 export interface SummonCollectionState {
@@ -131,6 +146,7 @@ export interface SummonActionQueueEntry {
 }
 
 export interface ResolvedSummonAction {
+  dialogue?: string;
   id: string;
   name: string;
   emoji: string;
@@ -141,7 +157,7 @@ export interface ResolvedSummonAction {
 
 export interface SummonDamageResult {
   state: SummonCollectionState;
-  hits: Array<{ summonId: string; requested: number; blocked: number; hpLost: number; defeated: boolean }>;
+  hits: Array<{ summonId: string; requested: number; modified?: number; blocked: number; hpLost: number; defeated: boolean }>;
 }
 
 export interface SummonCopyResult {
@@ -152,9 +168,10 @@ export interface SummonCopyResult {
 
 type MaybePromise<T> = T | Promise<T>;
 export type SummonStatusLifecycleTrigger = 'apply' | 'stack' | 'tick' | 'remove';
+export type SummonStatusExecutableTrigger = SummonStatusLifecycleTrigger | StatusEventTrigger;
 
 export interface SummonStatusLifecycleExecutionContext extends Readonly<Record<string, unknown>> {
-  triggerType: SummonStatusLifecycleTrigger;
+  triggerType: SummonStatusExecutableTrigger;
   statusContext: SummonStatusState;
   /** The exact holder. Hosts must keep ordinary `self` effects bound to this unit. */
   summonContext: SummonUnit;
@@ -169,11 +186,11 @@ export type SummonStatusLifecycleEvent =
     }
   | {
       type: 'trigger_started'; summon: SummonUnit; status: SummonStatusState;
-      trigger: SummonStatusLifecycleTrigger;
+      trigger: SummonStatusExecutableTrigger;
     }
   | {
       type: 'trigger_completed'; summon: SummonUnit; status: SummonStatusState;
-      trigger: SummonStatusLifecycleTrigger;
+      trigger: SummonStatusExecutableTrigger;
     }
   | {
       type: 'status_removed'; summon: SummonUnit; status: SummonStatusState;
@@ -181,12 +198,12 @@ export type SummonStatusLifecycleEvent =
     }
   | {
       type: 'trigger_failed'; summon: SummonUnit; status: SummonStatusState;
-      trigger: 'tick' | 'remove'; cause: unknown;
+      trigger: SummonStatusExecutableTrigger; cause: unknown;
     };
 
 export interface SummonStatusDefinitionReader {
   get(statusId: string): RuntimeStatusDefinition | undefined;
-  getTriggerEffects(statusId: string, trigger: SummonStatusLifecycleTrigger): StatusRuntimeEffect[];
+  getTriggerEffects(statusId: string, trigger: StatusTrigger): StatusRuntimeEffect[];
 }
 
 export interface SummonStatusLifecycleState {
@@ -204,6 +221,10 @@ export interface SummonStatusLifecycleRuntimePorts<TToken> {
     owner: BattleOwner,
     context: SummonStatusLifecycleExecutionContext,
   ): MaybePromise<void>;
+  record?(event: Extract<SummonStatusLifecycleEvent, {
+    type: 'status_applied' | 'trigger_completed' | 'status_removed';
+  }>): BattleTriggerEventContext | undefined;
+  dispatch?(dispatches: readonly BattleTriggerDispatch[]): MaybePromise<void>;
   present?(event: SummonStatusLifecycleEvent): void;
 }
 
@@ -231,6 +252,11 @@ export function isSummonAlive(unit: Pick<SummonUnit, 'hasHp' | 'currentHp'>): bo
   return unit.hasHp === false || unit.currentHp > 0;
 }
 
+function storedSummonerId(unit: Pick<SummonUnit, 'owner' | 'summonerId'>): string | null {
+  // Only a missing legacy player field is unambiguous. Explicit null stays unknown.
+  return unit.summonerId === undefined ? (unit.owner === 'player' ? 'player' : null) : unit.summonerId;
+}
+
 export function createSummonCollectionState(
   living: readonly SummonUnit[] = [],
   defeated: readonly SummonUnit[] = [],
@@ -252,6 +278,7 @@ export function createSummonCollectionState(
         actionsPerActivation: count(unit.actionsPerActivation ?? 1, 0, 20),
         createdSequence: count(unit.createdSequence, 1, Number.MAX_SAFE_INTEGER),
         interceptionsThisTurn: count(unit.interceptionsThisTurn, 0, 100),
+        plannedActionIds: (unit.plannedActionIds || []).filter(id => typeof id === 'string' && id.length > 0),
       };
     });
   const normalizedLiving = normalize(living.filter(isSummonAlive), true);
@@ -272,6 +299,13 @@ export function validateSummonDefinition(definition: SummonUnitDefinition): stri
   if (definition.hasHp !== false && (!Number.isFinite(definition.maxHp) || Number(definition.maxHp) <= 0)) issues.push('maxHp');
   if (definition.hasHp === false && definition.maxHp !== undefined && definition.maxHp !== 0) issues.push('maxHp');
   if (definition.block !== undefined && (!Number.isFinite(definition.block) || definition.block < 0)) issues.push('block');
+  if (definition.actionProgram && definition.actions !== undefined) issues.push('actions');
+  if (definition.modifiers !== undefined && Object.entries(definition.modifiers).some(([key, value]) =>
+    ![
+      'damage_modifier', 'damage_taken_modifier', 'lust_damage_modifier',
+      'lust_damage_taken_modifier', 'heal_modifier', 'block_modifier',
+    ].includes(key) || typeof value !== 'number' || !Number.isFinite(value)
+  )) issues.push('modifiers');
   if (!Number.isInteger(definition.actionsPerActivation ?? 1) || (definition.actionsPerActivation ?? 1) < 0 || (definition.actionsPerActivation ?? 1) > 20)
     issues.push('actionsPerActivation');
   if (definition.actionProgram && (definition.actionProgram.spec !== 'mwg.effect/v1' || !Array.isArray(definition.actionProgram.steps)))
@@ -294,6 +328,8 @@ export function validateSummonDefinition(definition: SummonUnitDefinition): stri
   if (definition.intercept?.maxPerTurn !== undefined && (!Number.isInteger(definition.intercept.maxPerTurn) || definition.intercept.maxPerTurn < 1))
     issues.push('intercept.maxPerTurn');
   if (definition.slot !== undefined && (!ID.test(definition.slot) || definition.onExisting === 'add_instance')) issues.push('slot');
+  if (definition.onExistingProgram && (!definition.slot || definition.onExisting === 'replace' ||
+    definition.onExistingProgram.spec !== 'mwg.effect/v1' || !definition.onExistingProgram.steps?.length)) issues.push('onExistingProgram');
   return [...new Set(issues)];
 }
 
@@ -302,9 +338,10 @@ export function spawnSummonUnits(
   owner: BattleOwner,
   definition: SummonUnitDefinition,
   requestedCount: number,
-  capacity = 3,
+  capacity = owner === 'enemy' ? Number.MAX_SAFE_INTEGER : 3,
   overflow: SummonOverflowPolicy = 'replace_oldest',
   createdTurn = 0,
+  summonerId: string | null = owner === 'player' ? 'player' : null,
 ): { state: SummonCollectionState; spawned: SummonUnit[]; replaced: SummonUnit[] } {
   const issues = validateSummonDefinition(definition);
   if (issues.length > 0) throw new Error(`invalid summon definition: ${issues.join(',')}`);
@@ -315,13 +352,14 @@ export function spawnSummonUnits(
   const limit = count(capacity, 1, Number.MAX_SAFE_INTEGER);
   for (let index = 0; index < count(requestedCount, 0, 32); index += 1) {
     const slotMatch = definition.slot
-      ? state.living.find(unit => unit.owner === owner && unit.slot === definition.slot)
+      ? state.living.find(unit => unit.owner === owner && unit.slot === definition.slot &&
+        storedSummonerId(unit) === summonerId)
       : undefined;
     if (slotMatch) {
       const existingPolicy = definition.onExisting || 'reinforce';
       if (existingPolicy === 'reinforce') {
         const existingIndex = state.living.findIndex(unit => unit.instanceId === slotMatch.instanceId);
-        const addedHp = definition.hasHp === false ? 0 : roundBattleValue(Number(definition.maxHp));
+        const addedHp = definition.hasHp === false || definition.onExistingProgram ? 0 : roundBattleValue(Number(definition.maxHp));
         state.living[existingIndex] = {
           ...slotMatch,
           maxHp: slotMatch.hasHp === false ? 0 : roundBattleValue(slotMatch.maxHp + addedHp),
@@ -336,7 +374,8 @@ export function spawnSummonUnits(
       replaced.push(clone(defeated));
     }
     const corpseIndex = definition.slot
-      ? state.defeated.findIndex(unit => unit.owner === owner && unit.slot === definition.slot)
+      ? state.defeated.findIndex(unit => unit.owner === owner && unit.slot === definition.slot &&
+        storedSummonerId(unit) === summonerId)
       : -1;
     if (corpseIndex >= 0 && definition.onDefeated && definition.onDefeated !== 'new_instance') {
       const corpse = state.defeated.splice(corpseIndex, 1)[0];
@@ -351,6 +390,7 @@ export function spawnSummonUnits(
         templateId: corpse.templateId,
         instanceId: corpse.instanceId,
         owner,
+        summonerId,
         hasHp,
         maxHp,
         currentHp: hasHp ? maxHp : 0,
@@ -382,6 +422,7 @@ export function spawnSummonUnits(
       templateId: definition.id,
       instanceId: `${definition.id}__summon__${sequence}`,
       owner,
+      summonerId,
       hasHp,
       maxHp,
       currentHp: maxHp,
@@ -412,6 +453,8 @@ export function resolveSummonTargets(
   source: BattleOwner,
   random: () => number = Math.random,
 ): SummonUnit[] {
+  // Source is bound by the execution host; never randomly choose without context.
+  if (selector.pick === 'source') return [];
   let candidates = state.living.filter(unit => isSummonAlive(unit) && ownerMatches(unit, selector, source));
   if (!selector.includeUntargetable) candidates = candidates.filter(unit => unit.capabilities?.selectable !== false);
   if (selector.id) candidates = candidates.filter(unit => unit.instanceId === selector.id);
@@ -454,9 +497,10 @@ export function copySummonUnits(
   current: SummonCollectionState,
   targetIds: readonly string[],
   owner: BattleOwner,
-  capacity = 3,
+  capacity = owner === 'enemy' ? Number.MAX_SAFE_INTEGER : 3,
   overflow: SummonOverflowPolicy = 'replace_oldest',
   createdTurn = 0,
+  binding: { summonerId: string | null } | 'preserve' = 'preserve',
 ): SummonCopyResult {
   const state = createSummonCollectionState(current.living, current.defeated);
   state.nextSequence = Math.max(state.nextSequence, count(current.nextSequence, 1, Number.MAX_SAFE_INTEGER));
@@ -487,6 +531,9 @@ export function copySummonUnits(
       id: instanceId,
       instanceId,
       owner,
+      summonerId: binding === 'preserve'
+        ? (source.owner === owner ? storedSummonerId(source) : owner === 'player' ? 'player' : null)
+        : binding.summonerId,
       // A copied runtime unit is an independent instance, not a second owner
       // of the source's unique companion slot.
       slot: undefined,
@@ -544,6 +591,9 @@ export function interceptUnblockedAttack(
   current: SummonCollectionState,
   owner: BattleOwner,
   requestedDamage: number,
+  mitigate: (unit: SummonUnit, incoming: number) => number = (_unit, incoming) => incoming,
+  /** Exact enemy holder being damaged. Enemy summons never fall back to active aliases. */
+  protectedEnemyId?: string,
 ): SummonInterceptResult {
   let state = createSummonCollectionState(current.living, current.defeated);
   state.nextSequence = Math.max(state.nextSequence, current.nextSequence || 1);
@@ -551,6 +601,7 @@ export function interceptUnblockedAttack(
   const hits: SummonDamageResult['hits'] = [];
   const eligible = state.living
     .filter(unit => unit.owner === owner && unit.hasHp !== false && unit.currentHp > 0)
+    .filter(unit => owner !== 'enemy' || (protectedEnemyId !== undefined && unit.summonerId === protectedEnemyId))
     .filter(unit => unit.capabilities?.intercepts !== false)
     .filter(unit => unit.intercept?.maxPerTurn === undefined || unit.interceptionsThisTurn < unit.intercept.maxPerTurn)
     .sort((left, right) => {
@@ -565,7 +616,9 @@ export function interceptUnblockedAttack(
     if (index < 0) continue;
     const unit = state.living[index];
     if (unit.hasHp === false) continue;
-    const absorbed = absorbDamageWithBlock(remainingDamage, unit.block || 0);
+    const incoming = remainingDamage;
+    const mitigated = Math.max(0, roundBattleValue(mitigate(unit, incoming)));
+    const absorbed = absorbDamageWithBlock(mitigated, unit.block || 0);
     const hpLost = Math.min(unit.currentHp, absorbed.damage);
     const nextHp = Math.max(0, roundBattleValue(unit.currentHp - hpLost));
     state.living[index] = {
@@ -574,9 +627,9 @@ export function interceptUnblockedAttack(
       currentHp: nextHp,
       interceptionsThisTurn: unit.interceptionsThisTurn + 1,
     };
-    const intercepted = roundBattleValue(absorbed.blockUsed + hpLost);
-    remainingDamage = Math.max(0, roundBattleValue(remainingDamage - intercepted));
-    hits.push({ summonId: unit.instanceId, requested: intercepted, blocked: absorbed.blockUsed, hpLost, defeated: nextHp <= 0 });
+    // Reduction belongs to this recipient. Only actual post-mitigation overkill spills over.
+    remainingDamage = Math.max(0, roundBattleValue(absorbed.damage - hpLost));
+    hits.push({ summonId: unit.instanceId, requested: incoming, modified: mitigated, blocked: absorbed.blockUsed, hpLost, defeated: nextHp <= 0 });
   }
   state = moveDefeated(state);
   return {
@@ -755,22 +808,29 @@ export class SummonStatusLifecycleRuntime<TToken> {
       const activeSummon = this.getLiving(summonId);
       const activeStatus = activeSummon?.statusEffects?.find(status => status.id === statusId);
       if (!activeSummon || !activeStatus) continue;
-      this.present({
+      const appliedEvent = {
         type: 'status_applied', summon: clone(activeSummon), status: clone(activeStatus),
         trigger: application.trigger,
-      });
+      } as const;
+      const recordedApplication = this.ports.record?.(appliedEvent);
+      this.present(appliedEvent);
       const effects = this.ports.definitions.getTriggerEffects(statusId, application.trigger);
       if (effects.length > 0) this.present({
         type: 'trigger_started', summon: clone(activeSummon), status: clone(activeStatus),
         trigger: application.trigger,
       });
       for (const effect of effects) {
-        await this.execute(effect, activeSummon, activeStatus, application.trigger);
+        await this.execute(effect, activeSummon, activeStatus, application.trigger, { ...recordedApplication });
       }
-      if (effects.length > 0) this.present({
+      if (effects.length > 0) {
+        const completed = {
         type: 'trigger_completed', summon: clone(activeSummon), status: clone(activeStatus),
         trigger: application.trigger,
-      });
+        } as const;
+        this.ports.record?.(completed);
+        this.present(completed);
+      }
+      await this.dispatchOwnership(activeSummon, activeStatus.type, 'gain', recordedApplication);
       applied.push({ summon: clone(activeSummon), status: clone(activeStatus) });
     }
     return applied;
@@ -797,30 +857,56 @@ export class SummonStatusLifecycleRuntime<TToken> {
     return removed;
   }
 
-  /** Tick and then decay a stable owner-local summon/status snapshot. */
-  public async processTurnEnd(owner: BattleOwner): Promise<void> {
-    const snapshot = this.ports.state.readSummons().living
-      .filter(unit => unit.owner === owner && isSummonAlive(unit))
-      .sort((left, right) => left.createdSequence - right.createdSequence)
-      .flatMap(unit => (unit.statusEffects || []).map(status => ({
-        summonId: unit.instanceId,
-        status: clone(status),
-      })));
-
-    for (const entry of snapshot) {
-      const summon = this.getLiving(entry.summonId);
-      const status = summon?.statusEffects?.find(candidate => candidate.id === entry.status.id);
-      if (!summon || !status) continue;
+  /** Resolve tick effects for one exact summon at its declared action boundary. */
+  public async processActionTiming(summonId: string, timing: StatusTickTiming): Promise<void> {
+    const summon = this.getLiving(summonId);
+    if (!summon) return;
+    for (const snapshot of [...(summon.statusEffects || [])]) {
+      const holder = this.getLiving(summonId);
+      const status = holder?.statusEffects?.find(candidate => candidate.id === snapshot.id);
+      if (!holder || !status || (this.ports.definitions.get(status.id)?.tick_timing ?? 'before_action') !== timing) continue;
       await this.executeIsolatedTrigger(
-        summon,
-        status,
+        holder,
+        clone(status),
         'tick',
         this.ports.definitions.getTriggerEffects(status.id, 'tick'),
       );
     }
+  }
 
-    const holderIds = [...new Set(snapshot.map(entry => entry.summonId))];
+  /** Stack decay is independent of tick timing and occurs once at each owner's turn end. */
+  public async processTurnEnd(owner: BattleOwner): Promise<void> {
+    const holderIds = this.ports.state.readSummons().living
+      .filter(unit => unit.owner === owner && isSummonAlive(unit))
+      .sort((left, right) => left.createdSequence - right.createdSequence)
+      .map(unit => unit.instanceId);
     for (const summonId of holderIds) await this.applyStacksDecay(summonId);
+  }
+
+  /** Resolve a concrete battle event for statuses present before that event began. */
+  public async processEvent(
+    summon: SummonUnit,
+    trigger: StatusEventTrigger,
+    context: Readonly<Record<string, unknown>> = {},
+    activeStatusIds?: readonly string[],
+  ): Promise<void> {
+    const current = this.getLiving(summon.instanceId) || (trigger === 'defeated' ? summon : null);
+    if (!current) return;
+    const snapshot = activeStatusIds
+      ? [...new Set(activeStatusIds)]
+      : (current.statusEffects || []).map(status => status.id);
+    for (const statusId of snapshot) {
+      const holder = this.getLiving(summon.instanceId) || (trigger === 'defeated' ? current : null);
+      const status = holder?.statusEffects?.find(candidate => candidate.id === statusId);
+      if (!holder || !status) continue;
+      await this.executeIsolatedTrigger(
+        holder,
+        clone(status),
+        trigger,
+        this.ports.definitions.getTriggerEffects(statusId, trigger),
+        context,
+      );
+    }
   }
 
   private async applyStacksDecay(summonId: string): Promise<void> {
@@ -838,13 +924,17 @@ export class SummonStatusLifecycleRuntime<TToken> {
     for (const status of removed) {
       const summon = this.getLiving(summonId);
       if (!summon) break;
-      this.present({ type: 'status_removed', summon: clone(summon), status: clone(status), reason: 'decay' });
+      const removedEvent = { type: 'status_removed', summon: clone(summon), status: clone(status), reason: 'decay' } as const;
+      const recordedRemoval = this.ports.record?.(removedEvent);
+      this.present(removedEvent);
       await this.executeIsolatedTrigger(
         summon,
         status,
         'remove',
         this.ports.definitions.getTriggerEffects(status.id, 'remove'),
+        { ...recordedRemoval },
       );
+      await this.dispatchOwnership(summon, status.type, 'lose', recordedRemoval);
     }
   }
 
@@ -858,20 +948,27 @@ export class SummonStatusLifecycleRuntime<TToken> {
       statusEffects: (unit.statusEffects || []).filter(candidate => candidate.id !== status.id),
     }), 'summon_status_removed');
     const currentHolder = this.getLiving(summon.instanceId) || summon;
-    this.present({ type: 'status_removed', summon: clone(currentHolder), status: clone(status), reason });
+    const removedEvent = {
+      type: 'status_removed', summon: clone(currentHolder), status: clone(status), reason,
+    } as const;
+    const recordedRemoval = this.ports.record?.(removedEvent);
+    this.present(removedEvent);
     await this.executeIsolatedTrigger(
       currentHolder,
       status,
       'remove',
       this.ports.definitions.getTriggerEffects(status.id, 'remove'),
+      { ...recordedRemoval },
     );
+    await this.dispatchOwnership(currentHolder, status.type, 'lose', recordedRemoval);
   }
 
   private async executeIsolatedTrigger(
     summon: SummonUnit,
     status: SummonStatusState,
-    trigger: 'tick' | 'remove',
+    trigger: SummonStatusExecutableTrigger,
     effects: readonly StatusRuntimeEffect[],
+    context: Readonly<Record<string, unknown>> = {},
   ): Promise<void> {
     if (effects.length === 0) return;
     this.present({ type: 'trigger_started', summon: clone(summon), status: clone(status), trigger });
@@ -879,23 +976,47 @@ export class SummonStatusLifecycleRuntime<TToken> {
       `summon_status_${trigger}_${summon.instanceId}_${status.id}`,
       this.ports.transactions,
       async () => {
-        for (const effect of effects) await this.execute(effect, summon, status, trigger);
+        for (const effect of effects) await this.execute(effect, summon, status, trigger, context);
       },
       'recover-and-continue',
     );
     if (result.status === 'rolled_back') this.present({
       type: 'trigger_failed', summon: clone(summon), status: clone(status), trigger, cause: result.cause,
     });
-    else this.present({ type: 'trigger_completed', summon: clone(summon), status: clone(status), trigger });
+    else {
+      const completed = {
+        type: 'trigger_completed', summon: clone(summon), status: clone(status), trigger,
+      } as const;
+      this.ports.record?.(completed);
+      this.present(completed);
+    }
+  }
+
+  private async dispatchOwnership(
+    summon: SummonUnit,
+    statusType: string,
+    change: 'gain' | 'lose',
+    eventContext?: BattleTriggerEventContext,
+  ): Promise<void> {
+    if (!this.ports.dispatch) return;
+    await this.ports.dispatch(resolveStatusOwnershipTriggerDispatch({
+      target: summon.owner,
+      targetId: summon.instanceId,
+      statusType,
+      change,
+      ...(eventContext ? { eventContext } : {}),
+    }));
   }
 
   private async execute(
     effect: StatusRuntimeEffect,
     summon: SummonUnit,
     status: SummonStatusState,
-    trigger: SummonStatusLifecycleTrigger,
+    trigger: SummonStatusExecutableTrigger,
+    context: Readonly<Record<string, unknown>> = {},
   ): Promise<void> {
     await this.ports.execute(effect, summon.owner, {
+      ...context,
       triggerType: trigger,
       statusContext: clone(status),
       summonContext: clone(summon),
@@ -1007,7 +1128,64 @@ export function buildSummonActionQueue(
       speed: Math.trunc(unit.speed || 0),
       createdSequence: unit.createdSequence,
     })))
-    .sort((left, right) => right.priority - left.priority || right.speed - left.speed || left.createdSequence - right.createdSequence || left.actionIndex - right.actionIndex);
+    // Autonomous turns use summon arrival order. Explicit command resolution
+    // retains its own priority/speed policy at the caller boundary.
+    .sort((left, right) => left.createdSequence - right.createdSequence || left.actionIndex - right.actionIndex);
+}
+
+/** Select the action identities for an upcoming activation and persist them on the units. */
+export function planSummonActions(
+  current: SummonCollectionState,
+  targetIds: readonly string[],
+  random: () => number,
+  replace = true,
+): SummonCollectionState {
+  const state = createSummonCollectionState(current.living, current.defeated);
+  state.nextSequence = Math.max(state.nextSequence, current.nextSequence || 1);
+  const targets = new Set(targetIds);
+  state.living = state.living.map(unit => {
+    if (!targets.has(unit.instanceId) || unit.capabilities?.acts === false) return unit;
+    const count = Math.max(0, Math.trunc(unit.actionsPerActivation ?? 1));
+    const availableIds = new Set((unit.actions || []).map(action => action.id));
+    const planned: string[] = replace ? [] : (unit.plannedActionIds || []).filter(id =>
+      id === `${unit.templateId}_action` || availableIds.has(id),
+    ).slice(0, count);
+    for (let index = planned.length; index < count; index += 1) {
+      const action = resolveSummonAction(unit, random);
+      if (!action) break;
+      planned.push(action.id);
+    }
+    return { ...unit, plannedActionIds: planned };
+  });
+  return state;
+}
+
+/** Resolve a previously selected action without drawing RNG. */
+export function resolvePlannedSummonAction(unit: SummonUnit, actionIndex: number): ResolvedSummonAction | null {
+  // A legacy save with exactly one legal action has an implicit plan and does
+  // not need a random draw during migration/display.
+  const soleAction = (unit.actions || []).filter(action => action.effectProgram?.steps?.length).length === 1
+    ? unit.actions!.find(action => action.effectProgram?.steps?.length)! : undefined;
+  const plannedId = unit.plannedActionIds?.[actionIndex]
+    || (soleAction
+      ? soleAction.id || '__implicit_single_action__'
+      : unit.actionProgram?.steps?.length ? `${unit.templateId}_action` : undefined);
+  if (!plannedId) return null;
+  const selected = plannedId === '__implicit_single_action__' ? soleAction : (unit.actions || []).find(action => action.id === plannedId);
+  if (selected?.effectProgram?.steps?.length) return {
+    id: selected.id || `${unit.templateId || 'summon'}_action`,
+    name: selected.name,
+    emoji: selected.emoji || unit.emoji,
+    ...(selected.description ? { description: selected.description } : {}),
+      ...(selected.dialogue ? { dialogue: selected.dialogue } : {}),
+    ...(selected.fixed === true ? { fixed: true } : {}),
+    effectProgram: clone(selected.effectProgram),
+  };
+  if (plannedId === `${unit.templateId}_action` && unit.actionProgram?.steps?.length) return {
+    id: plannedId, name: unit.name, emoji: unit.emoji,
+    ...(unit.description ? { description: unit.description } : {}), effectProgram: clone(unit.actionProgram),
+  };
+  return null;
 }
 
 /** Select one autonomous behaviour without coupling summon design to a fixed content preset. */
@@ -1032,6 +1210,7 @@ export function resolveSummonAction(
       name: selected.name,
       emoji: selected.emoji || unit.emoji,
       ...(selected.description ? { description: selected.description } : {}),
+      ...(selected.dialogue ? { dialogue: selected.dialogue } : {}),
       ...(selected.fixed === true ? { fixed: true } : {}),
       effectProgram: clone(selected.effectProgram),
     };
@@ -1045,3 +1224,5 @@ export function resolveSummonAction(
     effectProgram: clone(unit.actionProgram),
   };
 }
+
+

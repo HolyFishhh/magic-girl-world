@@ -1,10 +1,12 @@
 import { BattleSessionActionGate, type BattleSessionAction, type TriggerTransactionPorts } from '../../game-core';
 import { GameStateManager } from './gameStateManager';
+import type { TriggerTransactionRecoveryObserver } from '../../game-core/triggerTransaction';
 
 /** Tavern-side transaction adapter for the portable battle-session coordinator. */
 export class BattleSessionHost {
   private static instance: BattleSessionHost;
   private transactionSequence = 0;
+  private recoveryObserver?: TriggerTransactionRecoveryObserver;
   public readonly gate = new BattleSessionActionGate();
 
   private constructor(private readonly gameStateManager = GameStateManager.getInstance()) {}
@@ -38,6 +40,11 @@ export class BattleSessionHost {
       beginTransaction: scope => this.beginScopedTransaction(scope),
       commitTransaction: token => this.commitTransaction(token),
       rollbackTransaction: token => this.rollbackTransaction(token),
+      onRecoveredFailure: failure => this.recoveryObserver?.(failure),
     };
+  }
+
+  public observeRecoveredTriggerFailures(observer?: TriggerTransactionRecoveryObserver): void {
+    this.recoveryObserver = observer;
   }
 }

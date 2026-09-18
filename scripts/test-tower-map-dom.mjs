@@ -208,6 +208,8 @@ const controller = mountTowerApp({
   root,
   snapshot,
   difficultyPercent: 80,
+  playerHp: 55,
+  playerMaxHp: 80,
   callbacks: {
     onNodeSelect: node => {
       selectedNode = node.id;
@@ -226,10 +228,56 @@ assert.equal(root.children[0].dataset.selectedAct, '1');
 assert.equal(withClass(root, 'tower-act-tab').length, 3);
 assert.equal(withClass(root, 'tower-map-status').length, 1);
 assert.ok(root.textContent.includes('浅蓝路线代表当前可达'));
+assert.ok(root.textContent.includes('55/80'), 'the header renders the host-provided live HP alongside route metrics');
 assert.equal(withDataset(root, 'nodeId').length, snapshot.map.acts[0].nodes.length);
 assert.equal(withClass(root, 'tower-route-line').length, snapshot.map.acts[0].edges.length);
 assert.equal(withDataset(root, 'contentState', 'failed').length, 1);
 assert.ok(root.textContent.includes('测试错误'), 'node generation errors should be rendered as text');
+
+const idleDocument = new FakeDocument();
+const idleRoot = idleDocument.createElement('main');
+const idleController = mountTowerApp({ root: idleRoot, snapshot: createRunState({ seed: 0x70de57, startingGold: 77 }) });
+assert.ok(idleRoot.textContent.includes('待准备'), 'only nodes in the preparation window expose the idle status');
+assert.equal(withClass(idleRoot, 'tower-map-narrative-bubble').length, 0, 'unprepared nodes must not expose narrative text');
+idleController.destroy();
+
+const bubbleDocument = new FakeDocument();
+const bubbleRoot = bubbleDocument.createElement('main');
+const bubbleSnapshot = structuredClone(cleanSnapshot);
+const bubbleNode = bubbleSnapshot.choices[0].id;
+bubbleSnapshot.nodeContent[bubbleNode].content = { narrative: '边缘列剧情气泡' };
+const bubbleController = mountTowerApp({ root: bubbleRoot, snapshot: bubbleSnapshot });
+const bubble = withClass(bubbleRoot, 'tower-map-narrative-bubble')[0];
+assert.ok(bubble, 'ready preparation-window narrative must render a bubble');
+assert.equal(withDataset(bubbleRoot, 'nodeId', bubbleNode)[0].dataset.column, String(bubbleSnapshot.map.nodes.find(node => node.id === bubbleNode).column));
+bubbleController.destroy();
+
+const routeBoundaryDocument = new FakeDocument();
+const routeBoundaryRoot = routeBoundaryDocument.createElement('main');
+const routeBoundarySnapshot = structuredClone(cleanSnapshot);
+const immediateId = routeBoundarySnapshot.choices[0].id;
+const laterNode = routeBoundarySnapshot.map.nodes.find(node => node.act === routeBoundarySnapshot.act && node.floor === 2);
+assert.ok(laterNode, 'fixture includes a room after the immediate route choices');
+routeBoundarySnapshot.nodeContent[immediateId].phase = 'generating';
+routeBoundarySnapshot.nodeContent[laterNode.id].phase = 'ready';
+routeBoundarySnapshot.nodeContent[laterNode.id].content = { narrative: '后方篝火的预生成剧情' };
+let boundarySelections = 0;
+const routeBoundaryController = mountTowerApp({
+  root: routeBoundaryRoot,
+  snapshot: routeBoundarySnapshot,
+  callbacks: { onNodeSelect: () => { boundarySelections += 1; } },
+});
+const immediateButton = withDataset(routeBoundaryRoot, 'nodeId', immediateId)[0];
+const laterButton = withDataset(routeBoundaryRoot, 'nodeId', laterNode.id)[0];
+assert.ok(immediateButton.textContent.includes('准备中'), 'the direct next node distinguishes preparation from entry');
+assert.equal(immediateButton.classList.contains('can-enter'), false, 'a direct node remains non-enterable while preparing');
+assert.ok(laterButton.textContent.includes('已备好·路线未到'), 'a future ready node states that its route has not arrived');
+assert.equal(laterButton.classList.contains('is-locked'), true);
+assert.equal(laterButton.classList.contains('can-enter'), false, 'a future ready node cannot skip its predecessor');
+assert.equal(laterButton.disabled, true);
+laterButton.click();
+assert.equal(boundarySelections, 0, 'a locked prepared node never invokes route entry');
+routeBoundaryController.destroy();
 
 withDataset(root, 'nodeId', failedId)[0].click();
 assert.equal(retriedNode, failedId);
@@ -291,6 +339,11 @@ for (const sourceFile of sourceFiles) {
 const styleSource = readFileSync('src/tower/index.scss', 'utf8');
 assert.match(styleSource, /\.mwg-tower-host[\s\S]*overflow-x:\s*clip/);
 assert.match(styleSource, /\.tower-map-viewport[\s\S]*touch-action:\s*pan-y/);
+assert.match(styleSource, /data-column='0'[\s\S]*tower-map-narrative-bubble/);
+assert.match(styleSource, /data-column='4'[\s\S]*tower-map-narrative-bubble/);
+assert.match(styleSource, /is-locked\.has-narrative[\s\S]*opacity:\s*0\.44/);
+assert.match(styleSource, /content-ready:not\(\.is-locked\)[\s\S]*tower-node-phase/);
+assert.match(styleSource, /is-locked\.content-ready[\s\S]*tower-node-phase/);
 assert.match(styleSource, /@media \(max-width:\s*430px\)/);
 assert.match(styleSource, /\.mwg-tower-app:fullscreen[\s\S]*flex-direction:\s*column/);
 

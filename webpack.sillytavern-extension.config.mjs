@@ -10,6 +10,7 @@ export default {
   target: ['web', 'es2020'],
   entry: {
     index: path.resolve(root, 'src/sillytavern-extension/index.ts'),
+    'encounter-worker': path.resolve(root, 'src/sillytavern-extension/encounterWorker.ts'),
     'design-worker': path.resolve(root, 'src/sillytavern-extension/designWorker.ts'),
   },
   experiments: { outputModule: true },

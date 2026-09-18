@@ -59,7 +59,16 @@ assert.deepEqual(normalizedTowerReward, {
   artifact: [],
   item: [{ id: 'potion' }],
   limits: { cards: 1, artifacts: 0, items: 1 },
+  gold: normalTowerBudget.gold,
+  gold_claimed: false,
 });
+assert.deepEqual(core.enforceBattleRewardBudget(normalizedTowerReward, normalTowerBudget, {allowProgramCurrency:true}), normalizedTowerReward,
+  'program parsing and activation may enforce the same unclaimed reward without rejecting program currency');
+assert.throws(
+  () => core.enforceBattleRewardBudget({ card: [{ id: 'a' }, { id: 'b' }, { id: 'c' }], artifact: [], item: [{ id: 'potion' }], gold: 999 }, normalTowerBudget),
+  /unsupported field: gold/,
+  'the model cannot author tower currency',
+);
 assert.throws(
   () => core.enforceBattleRewardBudget({ card: [{ id: 'a' }], artifact: [], item: [{ id: 'potion' }] }, normalTowerBudget),
   /requires 3 candidates/,
@@ -85,15 +94,15 @@ assert.deepEqual(
 
 const standardShop = { act: 2, floor: 4, kind: 'shop', danger: 0, floorsPerAct: 10, actCount: 3 };
 assert.deepEqual(core.recommendShopBudget(standardShop), {
-  cards: 3,
-  artifacts: 1,
-  items: 1,
+  cards: 5,
+  artifacts: 2,
+  items: 2,
 });
-assert.equal(core.formatShopBudget(core.recommendShopBudget(standardShop)), 'cards=3 artifacts=1 items=1');
+assert.equal(core.formatShopBudget(core.recommendShopBudget(standardShop)), 'cards=5 artifacts=2 items=2');
 const earlyShop = { act: 1, floor: 2, kind: 'shop', danger: 0, floorsPerAct: 10 };
 const lateShop = { act: 3, floor: 8, kind: 'shop', danger: 0, floorsPerAct: 10 };
-assert.deepEqual(core.recommendShopBudget(earlyShop), { cards: 2, artifacts: 1, items: 1 });
-assert.deepEqual(core.recommendShopBudget(lateShop), { cards: 3, artifacts: 2, items: 1 });
+assert.deepEqual(core.recommendShopBudget(earlyShop), { cards: 5, artifacts: 2, items: 2 });
+assert.deepEqual(core.recommendShopBudget(lateShop), { cards: 5, artifacts: 2, items: 2 });
 assert.equal(core.recommendRunNodePacing(earlyShop).shopTier, 'basic');
 assert.equal(core.recommendRunNodePacing(lateShop).shopTier, 'premium');
 assert.equal(core.normalizeRunAct('2', 3), 2);

@@ -7,6 +7,7 @@ import { scoreDeckPower } from './deckPowerScore';
 import {
   simulateEncounterShadow,
   type EncounterShadowSimulation,
+  type ShadowSimulationCoverage,
   type ShadowDistribution,
   type ShadowHorizonSummary,
   type ShadowHorizonTurn,
@@ -65,15 +66,29 @@ export interface DeckPowerProfile {
   victoryFrontiers: DeckVictoryFrontier[];
   totalScore: number;
   confidence: number;
+  /** Whether this score can be compared with another shadow profile as a shared baseline. */
+  assessmentKind: DeckPowerAssessmentKind;
+  /** Short UI/prompt label; a partial estimate must never be presented as measured combat power. */
+  scoreLabel: string;
+  /** Concrete reason for the assessment boundary, suitable for UI detail or an AI prompt. */
+  assessmentReason: string;
   unsupportedFeatures: string[];
+  /** Mechanisms represented by a conservative shadow estimate rather than full runtime simulation. */
+  approximatedFeatures: string[];
   archetypes: ArchetypeAffinity[];
   scatterShare: number;
   deckQuality: DeckQualityProfile;
   reasons: string[];
 }
 
+export type DeckPowerAssessmentKind = 'comparable-shadow-baseline' | 'partial-shadow-estimate';
+
 export interface DeckQualityProfile {
-  /** Multiplier applied after simulation so dead or inefficient draws cannot add power. */
+  /**
+   * Kept at 1 because the shadow run already places every physical copy in the
+   * draw pile and rejects unaffordable plays.  These counters are diagnostics,
+   * not a second deduction from the simulated result.
+   */
   multiplier: number;
   totalCopies: number;
   deadCopies: number;
@@ -121,7 +136,7 @@ function assessDeckQuality(
 ): DeckQualityProfile {
   const totalCopies = pack.cards.reduce((sum, card) => sum + cardQuantity(card), 0);
   if (totalCopies <= 0) {
-    return { multiplier: 0.55, totalCopies: 0, deadCopies: 0, hardToPlayCopies: 0, inefficientCopies: 0, offPlanCopies: 0 };
+    return { multiplier: 1, totalCopies: 0, deadCopies: 0, hardToPlayCopies: 0, inefficientCopies: 0, offPlanCopies: 0 };
   }
   const available: Record<string, number> = {
     energy: 3 + Math.min(3, Math.max(0, Math.floor(energyGain))),
@@ -169,17 +184,13 @@ function assessDeckQuality(
     if (offPlan && (inefficient || hardToPlay)) offPlanCopies += copies;
   }
 
-  const deadShare = deadCopies / totalCopies;
-  const hardShare = hardToPlayCopies / totalCopies;
-  const inefficientShare = inefficientCopies / totalCopies;
-  const offPlanShare = offPlanCopies / totalCopies;
-  const multiplier = clamp(
-    1 - deadShare * 0.65 - hardShare * 0.4 - inefficientShare * 0.22 - offPlanShare * 0.12,
-    0.55,
-    1,
-  );
   return {
-    multiplier: round(multiplier, 3),
+    // The simulator has already observed curses and unaffordable cards as
+    // dead draws.  Charging them again here made removing a plain starter
+    // change both reachability and an unrelated post-simulation multiplier.
+    // Archetype affinity is descriptive, so an uncertain affinity must never
+    // reduce executable combat power either.
+    multiplier: 1,
     totalCopies,
     deadCopies: round(deadCopies, 1),
     hardToPlayCopies,
@@ -212,7 +223,7 @@ function probeEnemy(input: {
     lust: 0,
     max_lust: 100,
     actions,
-    lust_effect: input.lustEffect || { id: `${input.id}_overflow`, effects: { damage: 8 } },
+    ...(input.lustEffect ? { lust_effect: input.lustEffect } : {}),
     action_mode: input.actionMode || 'sequence_loop',
     action_config: input.actionConfig || {},
   };
@@ -328,7 +339,7 @@ function probeFrontier(
   maxHp: number,
   maxLust: number,
   seeds: number,
-): { frontier: DeckProbeFrontier; unsupportedFeatures: string[] } {
+): { frontier: DeckProbeFrontier; unsupportedFeatures: string[]; approximatedFeatures: string[] } {
   let low = 0.12;
   let high = 3.2;
   let bestSimulation: EncounterShadowSimulation | null = null;
@@ -368,6 +379,7 @@ function probeFrontier(
       medianHpRatio: engine?.medianHpRatio || 0,
     },
     unsupportedFeatures: simulation?.coverage.unsupportedFeatures || [],
+    approximatedFeatures: simulation?.coverage.approximatedFeatures || [],
   };
 }
 
@@ -403,7 +415,10 @@ function normalizeFrontiers(frontiers: DeckProbeFrontier[], maxHp: number, maxLu
   return round(100 * raw / Math.max(0.01, referenceFrontier) * hpReserveAdjustment * lustReserveAdjustment, 1);
 }
 
-function benchmarkHorizons(pack: ContentPack, maxHp: number, maxLust: number, seeds: number): Record<ShadowHorizonTurn, DeckPowerHorizon> {
+function benchmarkHorizons(pack: ContentPack, maxHp: number, maxLust: number, seeds: number): {
+  horizons: Record<ShadowHorizonTurn, DeckPowerHorizon>;
+  coverage: Pick<ShadowSimulationCoverage, 'unsupportedFeatures' | 'approximatedFeatures'>;
+} {
   const outputDummy = probeEnemy({
     id: 'probe_output_dummy', hp: 999999,
     actions: [{ id: 'wait', name: '等待', effects: { block: 0 } }],
@@ -412,7 +427,7 @@ function benchmarkHorizons(pack: ContentPack, maxHp: number, maxLust: number, se
     id: 'probe_survival_dummy', hp: 999999,
     actions: [{ id: 'pressure', name: '压力', effects: { damage: 12 } }],
   });
-  const output = engineResult(simulateEncounterShadow({
+  const outputSimulation = simulateEncounterShadow({
     pack: createContentPack({
       cards: pack.cards, statuses: pack.statuses, relics: pack.relics, items: pack.items,
       abilities: pack.abilities, activeStatuses: pack.activeStatuses, playerResources: pack.playerResources,
@@ -420,8 +435,9 @@ function benchmarkHorizons(pack: ContentPack, maxHp: number, maxLust: number, se
     }),
     player: { hp: maxHp, maxHp, lust: 0, maxLust }, seeds,
     strategies: ['engine'],
-  }));
-  const pressure = engineResult(simulateEncounterShadow({
+  });
+  const output = engineResult(outputSimulation);
+  const pressureSimulation = simulateEncounterShadow({
     pack: createContentPack({
       cards: pack.cards, statuses: pack.statuses, relics: pack.relics, items: pack.items,
       abilities: pack.abilities, activeStatuses: pack.activeStatuses, playerResources: pack.playerResources,
@@ -429,9 +445,10 @@ function benchmarkHorizons(pack: ContentPack, maxHp: number, maxLust: number, se
     }),
     player: { hp: maxHp, maxHp, lust: 0, maxLust }, seeds,
     strategies: ['engine'],
-  }));
+  });
+  const pressure = engineResult(pressureSimulation);
   const zero: ShadowDistribution = { mean: 0, p10: 0, p50: 0, p90: 0 };
-  return Object.fromEntries(PROFILE_HORIZONS.map(turn => {
+  const horizons = Object.fromEntries(PROFILE_HORIZONS.map(turn => {
     const offense = output?.horizons[turn];
     const defense = pressure?.horizons[turn];
     return [turn, {
@@ -444,6 +461,23 @@ function benchmarkHorizons(pack: ContentPack, maxHp: number, maxLust: number, se
       deadDrawRate: round(Math.max(offense?.deadDrawRate || 0, defense?.deadDrawRate || 0), 3),
     } satisfies DeckPowerHorizon];
   })) as Record<ShadowHorizonTurn, DeckPowerHorizon>;
+  return {
+    horizons,
+    // Probe enemies deliberately include mechanics such as the control tax.
+    // They must affect the frontier but must not make a plain player deck look
+    // partially simulated. The benchmark foes only use wait/pressure actions,
+    // so this coverage describes the player's authored build.
+    coverage: {
+      unsupportedFeatures: [...new Set([
+        ...(outputSimulation?.coverage.unsupportedFeatures || []),
+        ...(pressureSimulation?.coverage.unsupportedFeatures || []),
+      ])].sort(),
+      approximatedFeatures: [...new Set([
+        ...(outputSimulation?.coverage.approximatedFeatures || []),
+        ...(pressureSimulation?.coverage.approximatedFeatures || []),
+      ])].sort(),
+    },
+  };
 }
 
 function dimensions(
@@ -522,14 +556,25 @@ export function profileDeckPower(input: {
 
   const staticScore = scoreDeckPower({ pack: input.pack, maxHp });
   const archetypeProfile = profileDeckArchetypes(input.pack);
-  const horizons = benchmarkHorizons(input.pack, maxHp, maxLust, seeds);
+  const benchmark = benchmarkHorizons(input.pack, maxHp, maxLust, seeds);
+  const horizons = benchmark.horizons;
   const frontierResults = STANDARD_PROBES.map(probe => probeFrontier(input.pack, probe, maxHp, maxLust, seeds));
   const frontiers = frontierResults.map(result => result.frontier);
   const simulatedScore = normalizeFrontiers(frontiers, maxHp, maxLust, seeds);
   const deckQuality = assessDeckQuality(input.pack, archetypeProfile, staticScore.budget.energy);
-  const totalScore = round(simulatedScore * deckQuality.multiplier, 1);
+  const totalScore = round(simulatedScore, 1);
   frontiers.forEach(frontier => { frontier.score = round(totalScore * frontier.scale / Math.max(0.01, harmonicMean(frontiers.map((entry, index) => ({ value: entry.scale, weight: STANDARD_PROBES[index].weight })))), 1); });
-  const unsupportedFeatures = [...new Set(frontierResults.flatMap(result => result.unsupportedFeatures))].sort();
+  const unsupportedFeatures = benchmark.coverage.unsupportedFeatures;
+  const approximatedFeatures = benchmark.coverage.approximatedFeatures;
+  const assessmentKind: DeckPowerAssessmentKind = unsupportedFeatures.length
+    ? 'partial-shadow-estimate'
+    : 'comparable-shadow-baseline';
+  const scoreLabel = assessmentKind === 'comparable-shadow-baseline'
+    ? '可比较的影子基线'
+    : '部分影子估计，不代表实战强度';
+  const assessmentReason = assessmentKind === 'comparable-shadow-baseline'
+    ? '当前构筑的可观测机制已由影子模型覆盖，可作为同模型下的基线比较。'
+    : `未完整模拟 ${unsupportedFeatures.length} 项、保守近似 ${approximatedFeatures.length} 项机制；不能与实战表现或支持度不同的构筑横向比较。`;
   const confidence = confidenceFrom(frontiers, unsupportedFeatures);
   const hpOutput = horizons[5].hpDamage.p50;
   const lustOutput = horizons[5].lustPressure.p50;
@@ -547,22 +592,26 @@ export function profileDeckPower(input: {
     horizons,
     dimensions: (() => {
       const result = dimensions(horizons, maxHp, staticScore.dimensions.control, archetypeProfile);
-      result.consistency = round(result.consistency * deckQuality.multiplier, 1);
       return result;
     })(),
     probeFrontiers: frontiers,
     victoryFrontiers,
     totalScore,
     confidence,
+    assessmentKind,
+    scoreLabel,
+    assessmentReason,
     unsupportedFeatures,
+    approximatedFeatures,
     archetypes: archetypeProfile.affinities,
     scatterShare: archetypeProfile.scatterShare,
     deckQuality,
     reasons: [
-      `标准探针模拟 ${simulatedScore} 分，牌库质量系数 ${round(deckQuality.multiplier * 100, 1)}%，综合强度 ${totalScore}；最大生命 ${round(maxHp, 1)} 已计入，当前生命未计入。`,
-      `牌库污染：不可主动使用 ${deckQuality.deadCopies} 张、常规资源难以打出 ${deckQuality.hardToPlayCopies} 张、低费用效率 ${deckQuality.inefficientCopies} 张、偏离主构筑且低效 ${deckQuality.offPlanCopies} 张。`,
+      `标准探针模拟 ${simulatedScore} 分，综合强度 ${totalScore}；最大生命 ${round(maxHp, 1)} 已计入，当前生命未计入。`,
+      `牌库诊断：不可主动使用 ${deckQuality.deadCopies} 张、常规资源难以打出 ${deckQuality.hardToPlayCopies} 张、低即时收益 ${deckQuality.inefficientCopies} 张、偏离主构筑且低效 ${deckQuality.offPlanCopies} 张；这些实体牌已在影子抽牌中计入，不再二次扣分。`,
       `5回合中位生命输出 ${round(horizons[5].hpDamage.p50, 1)}，欲望压力 ${round(horizons[5].lustPressure.p50, 1)}。`,
-      `估算置信度 ${Math.round(confidence * 100)}%；未完整覆盖机制 ${unsupportedFeatures.length} 项。`,
+      `评分性质：${scoreLabel}。${assessmentReason}`,
+      `估算置信度 ${Math.round(confidence * 100)}%；未支持机制 ${unsupportedFeatures.length} 项，保守近似机制 ${approximatedFeatures.length} 项。`,
     ],
   };
   profileCache.set(fingerprint, result);

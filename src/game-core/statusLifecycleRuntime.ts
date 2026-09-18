@@ -1,19 +1,22 @@
 import type { BattleTriggerDispatch } from './battleEventDispatch';
 import { resolveStatusOwnershipTriggerDispatch } from './battleEventDispatch';
 import type { BattleStateStore, Enemy, Player, StatusEffect } from './battleState';
-import type { StatusTrigger } from './battleTriggers';
+import type { BattleTriggerEventContext } from './battleEventJournal';
+import type { StatusEventTrigger, StatusLifecycleTrigger, StatusTrigger } from './battleTriggers';
 import { resolveStatusApplication, resolveStatusStacksChange } from './statusApplication';
-import type { RuntimeStatusDefinition, StatusRuntimeEffect } from './statusDefinitionRuntime';
+import type { RuntimeStatusDefinition, StatusRuntimeEffect, StatusTickTiming } from './statusDefinitionRuntime';
 import { runTriggerTransaction, type TriggerTransactionPorts } from './triggerTransaction';
 
 type MaybePromise<T> = T | Promise<T>;
 export type StatusLifecycleTarget = 'player' | 'enemy';
-export type StatusLifecycleActiveTrigger = Exclude<StatusTrigger, 'hold' | 'threshold_execute'>;
+export type StatusLifecycleActiveTrigger = Exclude<StatusLifecycleTrigger, 'hold' | 'threshold_execute'>;
+export type StatusExecutableTrigger = StatusLifecycleActiveTrigger | StatusEventTrigger;
 
 export type StatusLifecycleState = Pick<
   BattleStateStore,
   | 'getPlayer'
   | 'getEnemy'
+  | 'getEnemyById'
   | 'addStatusEffect'
   | 'updateStatusEffect'
   | 'removeStatusEffect'
@@ -27,7 +30,7 @@ export interface StatusDefinitionReader {
 }
 
 export interface StatusLifecycleExecutionContext extends Readonly<Record<string, unknown>> {
-  triggerType: StatusLifecycleActiveTrigger;
+  triggerType: StatusExecutableTrigger;
   statusContext: StatusEffect;
 }
 
@@ -36,6 +39,7 @@ export type StatusLifecycleEvent =
   | {
       type: 'status_applied';
       target: StatusLifecycleTarget;
+      enemyId?: string;
       status: StatusEffect;
       trigger: 'apply' | 'stack';
     }
@@ -43,7 +47,13 @@ export type StatusLifecycleEvent =
       type: 'trigger_started';
       target: StatusLifecycleTarget;
       status: StatusEffect;
-      trigger: 'apply' | 'stack';
+      trigger: StatusExecutableTrigger;
+    }
+  | {
+      type: 'trigger_completed';
+      target: StatusLifecycleTarget;
+      status: StatusEffect;
+      trigger: StatusExecutableTrigger;
     }
   | {
       type: 'status_removed';
@@ -55,7 +65,7 @@ export type StatusLifecycleEvent =
       type: 'trigger_failed';
       target: StatusLifecycleTarget;
       status: StatusEffect;
-      trigger: 'tick' | 'remove';
+      trigger: StatusExecutableTrigger;
       cause: unknown;
     }
   | {
@@ -75,6 +85,9 @@ export interface StatusLifecycleRuntimePorts<TToken> {
     context: StatusLifecycleExecutionContext,
   ): MaybePromise<void>;
   dispatch(dispatches: readonly BattleTriggerDispatch[]): MaybePromise<void>;
+  record?(event: Extract<StatusLifecycleEvent, {
+    type: 'status_applied' | 'trigger_completed' | 'status_removed';
+  }>): BattleTriggerEventContext | undefined;
   present?(event: StatusLifecycleEvent): void;
 }
 
@@ -112,16 +125,23 @@ export class StatusLifecycleRuntime<TToken> {
     else this.ports.state.addStatusEffect(target, status);
 
     const active = this.getEntity(target)?.statusEffects.find(candidate => candidate.id === statusId) || status;
-    this.present({ type: 'status_applied', target, status: { ...active }, trigger: application.trigger });
+    const appliedEvent = { type: 'status_applied', target, ...(target === 'enemy' ? { enemyId: this.ports.state.getEnemy()?.id } : {}), status: { ...active }, trigger: application.trigger } as const;
+    const recordedApplication = this.ports.record?.(appliedEvent);
+    this.present(appliedEvent);
 
     const effects = this.ports.definitions.getTriggerEffects(statusId, application.trigger);
     if (effects.length > 0) {
       this.present({ type: 'trigger_started', target, status: { ...active }, trigger: application.trigger });
     }
     for (const effect of effects) {
-      await this.execute(effect, target, application.trigger, active);
+      await this.execute(effect, target, application.trigger, active, { ...recordedApplication });
     }
-    await this.dispatchOwnership(target, definition.type, 'gain');
+    if (effects.length > 0) {
+      const completed = { type: 'trigger_completed', target, status: { ...active }, trigger: application.trigger } as const;
+      this.ports.record?.(completed);
+      this.present(completed);
+    }
+    await this.dispatchOwnership(target, definition.type, 'gain', recordedApplication);
     return { ...active };
   }
 
@@ -136,18 +156,65 @@ export class StatusLifecycleRuntime<TToken> {
     return selected.map(status => ({ ...status }));
   }
 
-  public async processTurnEnd(target: StatusLifecycleTarget): Promise<void> {
-    const entity = this.getEntity(target);
-    if (!entity) return;
-    for (const status of [...entity.statusEffects]) {
+  /** Resolve tick effects for one exact holder at its declared action boundary. */
+  public async processActionTiming(
+    target: StatusLifecycleTarget,
+    timing: StatusTickTiming,
+    enemyId?: string,
+  ): Promise<void> {
+    const entity = this.getEntity(target, enemyId);
+    if (!entity || (target === 'enemy' && entity.currentHp <= 0)) return;
+    // Do not resolve a side alias twice: a lethal tick may remove this enemy and
+    // cause the legacy active-enemy alias to point at a later queue entry.
+    const holderId = target === 'enemy' ? (entity as Enemy).id : undefined;
+    for (const snapshot of [...entity.statusEffects]) {
+      const holder = this.getEntity(target, holderId);
+      if (!holder || (target === 'enemy' && holder.currentHp <= 0)) break;
+      const status = holder.statusEffects.find(candidate => candidate.id === snapshot.id);
+      if (!status || (this.ports.definitions.get(status.id)?.tick_timing ?? 'before_action') !== timing) continue;
       await this.executeIsolatedTrigger(
         target,
-        status,
+        { ...status },
         'tick',
         this.ports.definitions.getTriggerEffects(status.id, 'tick'),
+        {},
+        holderId,
       );
     }
+  }
+
+  /** Stack decay is independent of tick timing and occurs once at the holder's turn end. */
+  public async processTurnEnd(target: StatusLifecycleTarget): Promise<void> {
     await this.applyStacksDecay(target);
+  }
+
+  /**
+   * Resolve one real battle event for statuses that were already active when
+   * the event began. The caller supplies the frozen ids so a status created by
+   * another listener cannot retroactively observe the event that created it.
+   */
+  public async processEvent(
+    target: StatusLifecycleTarget,
+    trigger: StatusEventTrigger,
+    context: Readonly<Record<string, unknown>> = {},
+    activeStatusIds?: readonly string[],
+  ): Promise<void> {
+    const entity = this.getEntity(target);
+    if (!entity) return;
+    const snapshot = activeStatusIds
+      ? [...new Set(activeStatusIds)]
+      : entity.statusEffects.map(status => status.id);
+    for (const statusId of snapshot) {
+      const active = this.getEntity(target)?.statusEffects.find(status => status.id === statusId);
+      if (!active) continue;
+      await this.executeIsolatedTrigger(
+        target,
+        { ...active },
+        trigger,
+        this.ports.definitions.getTriggerEffects(statusId, trigger),
+        context,
+      );
+    }
   }
 
   private async removeOne(
@@ -158,15 +225,18 @@ export class StatusLifecycleRuntime<TToken> {
     const removed = this.getEntity(target)?.statusEffects.find(status => status.id === statusId);
     if (!removed) return;
     this.ports.state.removeStatusEffect(target, statusId);
-    this.present({ type: 'status_removed', target, status: { ...removed }, reason });
+    const removedEvent = { type: 'status_removed', target, status: { ...removed }, reason } as const;
+    const recordedRemoval = this.ports.record?.(removedEvent);
+    this.present(removedEvent);
     await this.executeIsolatedTrigger(
       target,
       removed,
       'remove',
       this.ports.definitions.getTriggerEffects(statusId, 'remove'),
+      { ...recordedRemoval },
     );
     const statusType = this.ports.definitions.get(statusId)?.type || removed.type;
-    await this.dispatchOwnership(target, statusType, 'lose');
+    await this.dispatchOwnership(target, statusType, 'lose', recordedRemoval);
   }
 
   private async applyStacksDecay(target: StatusLifecycleTarget): Promise<void> {
@@ -184,45 +254,69 @@ export class StatusLifecycleRuntime<TToken> {
     else this.ports.state.updateEnemy({ statusEffects: updated });
 
     for (const status of removed) {
-      this.present({ type: 'status_removed', target, status: { ...status }, reason: 'decay' });
+      const removedEvent = { type: 'status_removed', target, status: { ...status }, reason: 'decay' } as const;
+      const recordedRemoval = this.ports.record?.(removedEvent);
+      this.present(removedEvent);
       await this.executeIsolatedTrigger(
         target,
         status,
         'remove',
         this.ports.definitions.getTriggerEffects(status.id, 'remove'),
+        { ...recordedRemoval },
       );
       const statusType = this.ports.definitions.get(status.id)?.type || status.type;
-      await this.dispatchOwnership(target, statusType, 'lose');
+      await this.dispatchOwnership(target, statusType, 'lose', recordedRemoval);
     }
   }
 
   private async executeIsolatedTrigger(
     target: StatusLifecycleTarget,
     status: StatusEffect,
-    trigger: 'tick' | 'remove',
+    trigger: StatusExecutableTrigger,
     effects: readonly StatusRuntimeEffect[],
+    context: Readonly<Record<string, unknown>> = {},
+    enemyId?: string,
   ): Promise<void> {
     if (effects.length === 0) return;
+    this.present({ type: 'trigger_started', target, status: { ...status }, trigger });
     const result = await runTriggerTransaction(
-      `status_${trigger}`,
+      `status_${trigger}_${target}_${status.id}`,
       this.ports.transactions,
       async () => {
-        for (const effect of effects) await this.execute(effect, target, trigger, status);
+        for (const effect of effects) {
+          // A later enemy may become active after this holder dies. Never let a
+          // remaining effect in this trigger migrate to that incidental alias.
+          const holder = this.getEntity(target, enemyId);
+          if (!holder || (target === 'enemy' && holder.currentHp <= 0)) break;
+          await this.execute(effect, target, trigger, status, context, enemyId);
+        }
       },
       'recover-and-continue',
     );
     if (result.status === 'rolled_back') {
       this.present({ type: 'trigger_failed', target, status: { ...status }, trigger, cause: result.cause });
+    } else {
+      const completed = { type: 'trigger_completed', target, status: { ...status }, trigger } as const;
+      this.ports.record?.(completed);
+      this.present(completed);
     }
   }
 
   private async execute(
     effect: StatusRuntimeEffect,
     target: StatusLifecycleTarget,
-    trigger: StatusLifecycleActiveTrigger,
+    trigger: StatusExecutableTrigger,
     status: StatusEffect,
+    context: Readonly<Record<string, unknown>> = {},
+    enemyId?: string,
   ): Promise<void> {
+    // Apply/remove can run under a selected recipient scope without an explicit
+    // enemyId argument. Snapshot that holder before entering its nested effects.
+    const holder = target === 'enemy' ? this.getEntity(target) : null;
+    const holderId = target === 'enemy' ? enemyId || (holder && 'id' in holder ? holder.id : undefined) : undefined;
     await this.ports.execute(effect, target, {
+      ...context,
+      ...(holderId ? { enemyId: holderId } : {}),
       triggerType: trigger,
       statusContext: { ...status },
     });
@@ -232,8 +326,16 @@ export class StatusLifecycleRuntime<TToken> {
     target: StatusLifecycleTarget,
     statusType: string,
     change: 'gain' | 'lose',
+    eventContext?: BattleTriggerEventContext,
   ): Promise<void> {
-    await this.ports.dispatch(resolveStatusOwnershipTriggerDispatch({ target, statusType, change }));
+    const targetId = target === 'enemy' ? this.ports.state.getEnemy()?.id : undefined;
+    await this.ports.dispatch(resolveStatusOwnershipTriggerDispatch({
+      target,
+      ...(targetId ? { targetId } : {}),
+      statusType,
+      change,
+      ...(eventContext ? { eventContext } : {}),
+    }));
   }
 
   private matchesSelection(status: StatusEffect, selection: string): boolean {
@@ -248,8 +350,10 @@ export class StatusLifecycleRuntime<TToken> {
     return selection === 'all_buffs' || selection === 'buffs' || selection === 'debuffs';
   }
 
-  private getEntity(target: StatusLifecycleTarget): Player | Enemy | null {
-    return target === 'player' ? this.ports.state.getPlayer() : this.ports.state.getEnemy();
+  private getEntity(target: StatusLifecycleTarget, enemyId?: string): Player | Enemy | null {
+    if (target === 'player') return this.ports.state.getPlayer();
+    // Supplying an id intentionally disables the mutable active-enemy fallback.
+    return enemyId ? this.ports.state.getEnemyById(enemyId) : this.ports.state.getEnemy();
   }
 
   private present(event: StatusLifecycleEvent): void {

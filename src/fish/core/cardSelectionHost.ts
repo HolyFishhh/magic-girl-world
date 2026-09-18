@@ -1,6 +1,7 @@
 import {
   planCardSelection,
   resolveCardSelection,
+  EffectChoiceBackRequested,
   type CardSelectionFailureCode,
   type CardSelectionMode,
 } from '../../game-core';
@@ -25,6 +26,11 @@ export type TavernCardSelectionResult =
 
 /** Maps Tavern card objects to the portable ID selection protocol and the single modal presenter. */
 export class TavernCardSelectionHost {
+  private choiceDepth = 0;
+  public async withChoiceBranch<T>(execute: () => Promise<T>): Promise<T> {
+    this.choiceDepth++;
+    try { return await execute(); } finally { this.choiceDepth--; }
+  }
   private static instance: TavernCardSelectionHost;
   private readonly presentation = TavernCardInteractionPresenter.getInstance();
 
@@ -43,7 +49,7 @@ export class TavernCardSelectionHost {
         mode: request.mode,
         minimum: request.minimum,
         maximum: request.maximum,
-        allowCancel: request.allowCancel !== false,
+        allowCancel: request.allowCancel !== false && this.choiceDepth > 0,
       },
       request.random,
     );
@@ -60,6 +66,7 @@ export class TavernCardSelectionHost {
           })
         : undefined;
     const resolved = resolveCardSelection(plan, response);
+    if (resolved.status === 'cancelled' && this.choiceDepth > 0) throw new EffectChoiceBackRequested();
     if (resolved.status !== 'selected') return resolved;
 
     const cardsById = new Map(candidates.map(card => [card.id, card]));

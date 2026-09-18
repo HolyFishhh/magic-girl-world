@@ -4,6 +4,7 @@ import { getSillyTavernContext, initializeSillyTavernHost } from './sillyTavernH
 import { createGlobalTowerGenerationPorts } from './towerGenerationHost';
 import { activateRuntimeFrameHeightBridge } from './runtimeFrameHeightBridge';
 import { activateRuntimeFullscreenBridge } from './runtimeFullscreenBridge';
+import { verifyTowerInitialPersistence } from './initialPersistence';
 import type { DesignAssistantHost, MvuHost } from './types';
 
 function globals() {
@@ -26,12 +27,15 @@ function setBootstrapStatus(
   globals().MagicGirlDesignAssistantBootstrap = { phase, message, updatedAt: Date.now() };
 }
 
-setBootstrapStatus('loading', '正在连接 SillyTavern 官方扩展接口');
+if (!globals().MagicGirlDesignAssistant) {
+  setBootstrapStatus('loading', '正在连接 SillyTavern 官方扩展接口');
+}
 
 const browserHost: DesignAssistantHost = {
   context: getSillyTavernContext,
   mvu: () => globals().Mvu || null,
   now: () => Date.now(),
+  verifyTowerInitialPersistence: expected => verifyTowerInitialPersistence(getSillyTavernContext(), expected),
   notify: (level, message, title) => {
     const toast = globals().toastr?.[level];
     if (typeof toast === 'function') toast(message, title);
@@ -47,11 +51,15 @@ let deactivateRuntimeFullscreenBridge: (() => void) | null = null;
 
 export function activate(): Promise<void> {
   if (controller) return Promise.resolve();
+  // A second installed directory imports a distinct module, so module-local
+  // activationPromise/controller alone cannot prevent duplicate listeners.
+  if (globals().MagicGirlDesignAssistant) return Promise.resolve();
   if (activationPromise) return activationPromise;
   const generation = activationGeneration;
   activationPromise = (async () => {
     await initializeSillyTavernHost();
     if (controller || generation !== activationGeneration) return;
+    if (globals().MagicGirlDesignAssistant) return;
     const next = new DesignAssistantController(
       browserHost,
       undefined,
@@ -76,6 +84,10 @@ export function activate(): Promise<void> {
     }
     setBootstrapStatus('ready', '设计辅助器已启动');
   })().catch(error => {
+    // A failed partial activation must release its singleton reservation, or
+    // every later attempt (including another bundle) would skip initialization.
+    if (generation === activationGeneration && controller) disable();
+    if (globals().MagicGirlDesignAssistant) return;
     const message = error instanceof Error ? error.message : String(error);
     setBootstrapStatus('error', message);
     console.error('[MagicGirlDesignAssistant] 启动失败', error);
@@ -88,18 +100,22 @@ export function activate(): Promise<void> {
 
 export function disable(): void {
   activationGeneration += 1;
+  const ownedController = controller;
   controller?.deactivate();
   controller = null;
   deactivateRuntimeFrameHeightBridge?.();
   deactivateRuntimeFrameHeightBridge = null;
   deactivateRuntimeFullscreenBridge?.();
   deactivateRuntimeFullscreenBridge = null;
-  delete globals().MagicGirlDesignAssistant;
-  setBootstrapStatus('disabled', '设计辅助器已停用');
+  // Disabling a skipped duplicate must not tear down the actual owner.
+  if (ownedController && globals().MagicGirlDesignAssistant === ownedController) {
+    delete globals().MagicGirlDesignAssistant;
+  }
+  if (!globals().MagicGirlDesignAssistant) setBootstrapStatus('disabled', '设计辅助器已停用');
 }
 
 export function getController(): DesignAssistantController | null {
-  return controller;
+  return controller || globals().MagicGirlDesignAssistant || null;
 }
 
 // SillyTavern 1.18 loads third-party extension entry modules directly. The

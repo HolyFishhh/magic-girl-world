@@ -7,6 +7,9 @@ process.env.TS_NODE_COMPILER_OPTIONS = JSON.stringify({ module: 'CommonJS', modu
 require('ts-node/register/transpile-only');
 
 const { PersistentMvuRepairHost } = require(resolve('src/sillytavern-extension/persistentMvuRepairHost.ts'));
+const { createGlobalTowerGenerationPorts } = require(resolve('src/sillytavern-extension/towerGenerationHost.ts'));
+const { formatCompactEffectAuthoringContract } = require(resolve('src/game-core/towerRequest.ts'));
+const { createRunState } = require(resolve('src/game-core/runState.ts'));
 
 const MESSAGE_ID = 3;
 const PREVIOUS_MESSAGE_ID = 2;
@@ -70,6 +73,7 @@ function readyBattle(cardName = '斩击') {
 
 function incompleteBattle() {
   const battle = readyBattle();
+  delete battle.cards[0].effects;
   battle.artifacts = [];
   battle.items = [];
   battle.player_lust_effect = null;
@@ -83,6 +87,7 @@ function request(scope, prompt = `测试修复：${scope}`) {
 function createRepairHelper({
   originalMessage = ORIGINAL_PROSE,
   originalVariables,
+  originalChatVariables = { preset: { mode: 'story' }, user_owned: { counter: 17 } },
   baselineVariables = wrapBattle({ core: {}, cards: [] }),
   repairedVariables,
   eventDelayMs = 10,
@@ -90,21 +95,24 @@ function createRepairHelper({
 }) {
   const state = {
     message: originalMessage,
+    swipeId: 0,
     variables: clone(originalVariables),
-    chatVariables: clone(originalVariables),
+    chatVariables: clone(originalChatVariables),
     extraAnalysis: false,
     eventCalls: 0,
     iframeRebuilds: 0,
     replaceCalls: 0,
+    chatReplaceCalls: 0,
     refreshes: [],
   };
 
   const helper = {
     getLastMessageId: () => MESSAGE_ID,
-    getChatMessages: () => [{ message: state.message }],
+    getChatMessages: () => [{ message: state.message, swipe_id: state.swipeId }],
     setChatMessages: async (updates, options) => {
       const next = updates[0]?.message;
       if (typeof next === 'string') state.message = next;
+      if (updates[0]?.data !== undefined) state.variables = clone(updates[0].data);
       state.refreshes.push(options?.refresh || '');
       if (state.message.includes('[MWG_REPAIR_REQUEST_BEGIN]')) {
         // Simulate the message iframe being destroyed and rebuilt. The
@@ -122,7 +130,10 @@ function createRepairHelper({
     },
     replaceVariables: async (value, options) => {
       state.replaceCalls += 1;
-      if (options?.type === 'chat') state.chatVariables = clone(value);
+      if (options?.type === 'chat') {
+        state.chatReplaceCalls += 1;
+        state.chatVariables = clone(value);
+      }
       else state.variables = clone(value);
     },
     getAllEnabledScriptButtons: () => ({
@@ -147,8 +158,247 @@ function createRepairHelper({
   return { helper, state };
 }
 
+if (!process.argv.includes('--desire-growth-only')) {
+for (const scope of ['initial-content', 'battle-settlement']) {
+  for (const change of ['variables', 'prose', 'swipe', 'chat', 'render-edit', 'render-switch', 'render-silent-edit']) {
+    const originalVariables = wrapBattle(scope === 'initial-content' ? incompleteBattle() : readyBattle());
+    if (scope === 'battle-settlement') originalVariables.stat_data.reward = {
+      card: [], artifact: [], item: [], limits: {},
+      request: { marker: '[MVU_BATTLE_SETTLEMENT]', result: 'defeat', penalty: false },
+    };
+    const { helper, state } = createRepairHelper({ originalVariables });
+    let current = true;
+    let preserved;
+    let commits = 0;
+    const progress = [];
+    const render = helper.setChatMessages;
+    const remember = () => preserved = { message: state.message, variables: clone(state.variables) };
+    helper.setChatMessages = async (...args) => {
+      commits += 1;
+      await render(...args);
+      if (change.startsWith('render-')) {
+        state.variables.concurrent_owner = { value: 73 };
+        if (change === 'render-switch') { state.swipeId = 1; state.message = 'another selected reply'; }
+        remember();
+        if (change !== 'render-silent-edit') throw new Error('concurrent render failure');
+      }
+    };
+    const host = new PersistentMvuRepairHost({ onStructuredProgress: event => progress.push(event.phase), generate: async () => {
+      if (change === 'variables') state.variables.concurrent_owner = { value: 73 };
+      if (change === 'prose') state.message = 'new player-authored prose';
+      if (change === 'swipe') { state.swipeId = 1; state.variables = wrapBattle(readyBattle('other reply')); }
+      if (change === 'chat') { current = false; state.variables = wrapBattle(readyBattle('other chat')); }
+      remember();
+      return scope === 'initial-content' ? { battle: readyBattle('repair candidate') }
+        : { reward: { card: [], artifact: [], item: [], limits: {} }, add_cards: [], add_artifacts: [], add_permanent_status: [] };
+    } });
+    await assert.rejects(host.request(helper, `conflict-${scope}-${change}`, request(scope), () => current));
+    assert.deepEqual({ message: state.message, variables: state.variables }, preserved,
+      `${scope}/${change}: stale commit and rollback cannot overwrite the new owner`);
+    assert.equal(commits, change.startsWith('render-') ? 1 : 0);
+    assert.equal(state.replaceCalls, 0, 'direct transaction uses paired Helper data/message update, never split variable writes');
+    if (change === 'chat' || change === 'swipe' || change === 'render-switch') {
+      assert.equal(progress.includes('error'), false, 'old repair must not publish an error into the newly selected view');
+    }
+  }
+}
+
+// A renderer can reject after the paired write. Roll back the exact owned
+// pair, but only once; the separate concurrent-edit cases above cannot roll back.
+{
+  const originalVariables = wrapBattle(incompleteBattle());
+  const { helper, state } = createRepairHelper({ originalVariables });
+  const render = helper.setChatMessages;
+  let calls = 0;
+  helper.setChatMessages = async (...args) => {
+    await render(...args);
+    if (++calls === 1) throw new Error('after paired write failure');
+  };
+  await assert.rejects(new PersistentMvuRepairHost({ generate: async () => ({ battle: readyBattle() }) })
+    .request(helper, 'owned-paired-rollback', request('initial-content')), /after paired write failure/);
+  assert.equal(calls, 2);
+  assert.equal(state.message, ORIGINAL_PROSE);
+  assert.deepEqual(state.variables, originalVariables);
+  assert.equal(state.replaceCalls, 0);
+}
+
+// Distinct selected replies cannot share an in-flight repair or clear each
+// other's de-duplication entry when the old response finally arrives.
+{
+  const { helper, state } = createRepairHelper({ originalVariables: wrapBattle(incompleteBattle()) });
+  const completions = [];
+  const host = new PersistentMvuRepairHost({ generate: () => new Promise(resolve => completions.push(resolve)) });
+  const input = request('initial-content');
+  const old = host.request(helper, 'reply-dedupe', input);
+  const oldRejected = assert.rejects(old, /聊天已切换|回复已变化/);
+  state.swipeId = 1;
+  state.variables = wrapBattle(incompleteBattle());
+  const current = host.request(helper, 'reply-dedupe', input);
+  assert.notEqual(old, current);
+  completions[0]({ battle: readyBattle('old reply candidate') });
+  await oldRejected;
+  assert.equal(host.request(helper, 'reply-dedupe', input), current);
+  completions[1]({ battle: readyBattle('current reply candidate') });
+  await current;
+  assert.equal(state.variables.stat_data.battle.cards[0].name, 'current reply candidate');
+}
+
+// Real Helper chat replacement replaces the entire user/preset dictionary.
+// Direct repair may own the message MVU, never that separate dictionary.
+{
+  const { helper, state } = createRepairHelper({ originalVariables: wrapBattle(incompleteBattle()) });
+  let owner = {};
+  const firstOwner = owner;
+  const completions = [];
+  const host = new PersistentMvuRepairHost({ generate: () => new Promise(resolve => completions.push(resolve)) });
+  const input = request('initial-content');
+  const old = host.request(helper, 'same-id-reload', input, () => owner === firstOwner);
+  const oldRejected = assert.rejects(old, /聊天已切换|回复已变化/);
+  owner = {};
+  const nextOwner = owner;
+  const next = host.request(helper, 'same-id-reload', input, () => owner === nextOwner);
+  assert.notEqual(next, old, 'same IDs after rematerialization cannot dedupe to an invalid owner');
+  completions[0]({ battle: readyBattle('stale reloaded result') });
+  await oldRejected;
+  assert.equal(host.request(helper, 'same-id-reload', input, () => owner === nextOwner), next);
+  completions[1]({ battle: readyBattle('new loaded result') });
+  await next;
+  assert.equal(state.variables.stat_data.battle.cards[0].name, 'new loaded result');
+}
+
+for (const scope of ['generic', 'cards-only', 'initial-content']) {
+  const { helper, state } = createRepairHelper({ originalVariables: wrapBattle(incompleteBattle()) });
+  const progress = [];
+  const newVariables = { stat_data: { owner: 'new selected reply' } };
+  helper.eventEmit = async () => {
+    state.eventCalls += 1;
+    state.swipeId = 1;
+    state.message = 'new selected prose';
+    state.variables = clone(newVariables);
+  };
+  const read = helper.getVariables;
+  helper.getVariables = options => {
+    assert.ok(state.swipeId === 0 || options.type !== 'message', 'no reconciliation reads of the new selected reply');
+    return read(options);
+  };
+  await assert.rejects(new PersistentMvuRepairHost({ onStructuredProgress: event => progress.push(event.phase) })
+    .request(helper, `legacy-swipe-${scope}`, request(scope)), /聊天已切换|回复已变化/);
+  assert.equal(state.eventCalls, 1);
+  assert.equal(state.replaceCalls, 0);
+  assert.equal(state.refreshes.length, 1, 'only the pre-switch marker injection is allowed');
+  assert.equal(state.message, 'new selected prose');
+  assert.deepEqual(state.variables, newVariables);
+  assert.equal(progress.includes('error'), false);
+}
+
+for (const missingSwipe of [undefined, -1, '0', NaN]) {
+  const { helper, state } = createRepairHelper({ originalVariables: wrapBattle(incompleteBattle()) });
+  state.swipeId = missingSwipe;
+  let generated = 0;
+  await assert.rejects(new PersistentMvuRepairHost({ generate: async () => { generated += 1; return {}; } })
+    .request(helper, 'missing-reply-identity', request('initial-content')), /无法确定待修复楼层的当前回复/);
+  assert.equal(generated, 0);
+  assert.equal(state.replaceCalls, 0);
+  assert.equal(state.refreshes.length, 0);
+}
+
+for (const scope of ['initial-content', 'battle-settlement']) {
+  for (const outcome of ['success', 'model-reject', 'render-reject']) {
+    const originalVariables = wrapBattle(scope === 'initial-content' ? incompleteBattle() : readyBattle());
+    if (scope === 'battle-settlement') {
+      originalVariables.stat_data.reward = {
+        card: [], artifact: [], item: [], limits: {},
+        request: { marker: '[MVU_BATTLE_SETTLEMENT]', result: 'defeat', penalty: false },
+      };
+    }
+    const originalChatVariables = {
+      preset: { mode: 'story', version: 1 }, user_owned: { counter: 17 },
+      stat_data: { legacy_cache_owned_by_mvu: true },
+    };
+    const { helper, state } = createRepairHelper({ originalVariables, originalChatVariables });
+    const expectedChat = clone(originalChatVariables);
+    let generations = 0;
+    let renderFailurePending = outcome === 'render-reject';
+    const render = helper.setChatMessages;
+    helper.setChatMessages = async (...args) => {
+      state.chatVariables.during_render = 'preserve';
+      expectedChat.during_render = 'preserve';
+      if (renderFailurePending) {
+        renderFailurePending = false;
+        throw new Error('owned test render failure');
+      }
+      return render(...args);
+    };
+    const host = new PersistentMvuRepairHost({
+      generate: async () => {
+        generations += 1;
+        state.chatVariables.user_owned.counter += 1;
+        expectedChat.user_owned.counter += 1;
+        state.chatVariables.created_during_model = { retained: true };
+        expectedChat.created_during_model = { retained: true };
+        if (outcome === 'model-reject') throw new Error('owned test model failure');
+        return scope === 'initial-content'
+          ? { battle: readyBattle('AI authored repair') }
+          : { reward: { card: [], artifact: [], item: [], limits: {} }, add_cards: [], add_artifacts: [], add_permanent_status: [] };
+      },
+    });
+    const pending = host.request(helper, `${scope}-${outcome}-ownership`, request(scope));
+    if (outcome === 'success') await pending;
+    else await assert.rejects(pending, /owned test (?:model|render) failure/);
+    assert.equal(generations, 1);
+    assert.deepEqual(state.chatVariables, expectedChat, `${scope}/${outcome}: retain concurrent preset/user changes`);
+    assert.equal(state.chatReplaceCalls, 0, `${scope}/${outcome}: no chat commit or rollback`);
+    if (outcome !== 'success') assert.deepEqual(state.variables, originalVariables);
+    else if (scope === 'initial-content') assert.equal(state.variables.stat_data.battle.cards[0].name, 'AI authored repair');
+    else assert.equal(state.variables.stat_data.reward.request, null);
+  }
+}
+
 // The persistent extension, not the disposable message iframe, owns the full
 // asynchronous transaction. A simulated iframe rebuild must not interrupt it.
+for (const scope of ['generic', 'cards-only', 'initial-content']) {
+  for (const outcome of ['success', 'event-reject']) {
+    const originalVariables = wrapBattle(scope === 'initial-content' ? incompleteBattle() : readyBattle());
+    const expectedChat = { preset: { mode: 'story' }, user_owned: { counter: 18 }, during_event: 'preserve' };
+    const { helper, state } = createRepairHelper({
+      originalVariables, repairedVariables: wrapBattle(readyBattle('MVU authored repair')),
+      onEventStarted: () => {
+        state.chatVariables.user_owned.counter = 18;
+        state.chatVariables.during_event = 'preserve';
+        if (outcome === 'event-reject') throw new Error('owned test event failure');
+      },
+    });
+    const host = new PersistentMvuRepairHost();
+    const pending = host.request(helper, `event-${scope}-${outcome}`, request(scope));
+    if (outcome === 'success') await pending;
+    else await assert.rejects(pending, /owned test event failure/);
+    assert.deepEqual(state.chatVariables, expectedChat, `event/${scope}/${outcome}: no chat erasure or stale rollback`);
+    assert.equal(state.chatReplaceCalls, 0);
+    if (outcome === 'success') assert.equal(state.variables.stat_data.battle.cards[0].name, 'MVU authored repair');
+    else assert.deepEqual(state.variables, originalVariables);
+  }
+}
+
+// Joining a first-pass MVU write while waiting for its listener is a separate
+// commit path: it must not mirror or roll back the chat dictionary either.
+{
+  const originalVariables = wrapBattle(incompleteBattle());
+  const { helper, state } = createRepairHelper({ originalVariables });
+  const setMessage = helper.setChatMessages;
+  helper.setChatMessages = async (...args) => {
+    await setMessage(...args);
+    if (state.message.includes('[MWG_REPAIR_REQUEST_BEGIN]')) {
+      state.variables = wrapBattle(readyBattle('first pass finished'));
+      state.chatVariables.user_owned.counter = 19;
+    }
+  };
+  await new PersistentMvuRepairHost().request(helper, 'joined-first-pass-ownership', request('initial-content'));
+  assert.equal(state.eventCalls, 0);
+  assert.equal(state.variables.stat_data.battle.cards[0].name, 'first pass finished');
+  assert.deepEqual(state.chatVariables, { preset: { mode: 'story' }, user_owned: { counter: 19 } });
+  assert.equal(state.chatReplaceCalls, 0);
+}
+
 {
   const originalVariables = wrapBattle({ core: { emoji: '旧' }, cards: [] });
   const repairedVariables = wrapBattle({ core: { emoji: '新' }, cards: [{ id: 'new-card' }] });
@@ -177,8 +427,8 @@ function createRepairHelper({
   assert.equal(state.eventCalls, 1, 'same request must emit the MVU retry event once');
 }
 
-// Initial-content repair is accepted only when the complete player package is
-// ready, including resources outside battle.cards.
+// Initial-content repair is accepted only when the card package is structurally
+// executable. Optional relics, items and lust effects do not create fake gates.
 {
   const originalVariables = wrapBattle(incompleteBattle());
   const repairedBattle = readyBattle('direct-structured-repair');
@@ -202,8 +452,9 @@ function createRepairHelper({
   assert.equal(generationConfig.max_chat_history, 0);
   assert.equal(generationConfig.should_silence, true);
   assert.equal(generationConfig.json_schema.name, 'mwg_initial_battle_repair');
-  assert.match(generationConfig.user_input, /\[浅层 effects 精确语法\]/);
-  assert.match(generationConfig.user_input, /不存在通用 amount\/value\/target\/operation\/source 字段/);
+  assert.equal(generationConfig.structured_delivery, 'text-json');
+  assert.ok(generationConfig.user_input.includes(formatCompactEffectAuthoringContract()), 'complete shared authoring contract is delivered');
+  assert.ok(generationConfig.user_input.includes('不使用通用 operation/target/condition/operator/value/amount/source 包装'), 'retain root-field restriction without incorrectly banning valid nested amount/value');
   assert.match(state.message, /_\.set\('battle',/);
   assert.doesNotMatch(state.message, /MWG_REPAIR_REQUEST/);
   assert.equal(state.refreshes.at(-1), 'affected');
@@ -239,7 +490,8 @@ function createRepairHelper({
   assert.equal(state.variables.stat_data.battle.core.hp, 80);
   assert.equal(state.variables.stat_data.battle.artifacts[0].id, 'stone');
   assert.deepEqual(state.variables.stat_data.status, { time: '原时间', location: '原地点' });
-  assert.deepEqual(state.chatVariables, state.variables, 'chat snapshot must receive the same scoped commit');
+  assert.deepEqual(state.chatVariables, { preset: { mode: 'story' }, user_owned: { counter: 17 } });
+  assert.equal(state.chatReplaceCalls, 0, 'scoped message commit cannot replace the chat dictionary');
 }
 
 // Failed complete validation rolls variables and prose back to the sanitized
@@ -260,12 +512,12 @@ function createRepairHelper({
     error =>
       error?.name === 'ExtraModelCandidateRejectedError' &&
       /初始战斗内容仍未修复/.test(error.message) &&
-      /battle\.artifacts/.test(error.message),
+      /battle\.cards\[0\]/.test(error.message),
   );
   assert.equal(state.message, ORIGINAL_PROSE, 'failed repair must restore the original prose without stale markers');
   assert.doesNotMatch(state.message, /MWG_REPAIR_REQUEST|旧的中断请求/);
   assert.deepEqual(state.variables, originalVariables);
-  assert.deepEqual(state.chatVariables, originalVariables);
+  assert.deepEqual(state.chatVariables, { preset: { mode: 'story' }, user_owned: { counter: 17 } });
   assert.equal(state.refreshes.at(-1), 'affected');
 }
 
@@ -321,6 +573,8 @@ function createRepairHelper({
   };
   originalVariables.stat_data.battle.level = 6;
   originalVariables.stat_data.battle.exp = 225;
+  const settlementContextTailMarker = 'COMPLETE_SETTLEMENT_CONTEXT_TAIL';
+  originalVariables.stat_data.battle.design_context = `${'x'.repeat(45_000)}${settlementContextTailMarker}`;
   originalVariables.stat_data.reward = {
     card: [{ id: 'stale-card' }],
     artifact: [{ id: 'stale-artifact' }],
@@ -339,6 +593,7 @@ function createRepairHelper({
   });
   const generationConfigs = [];
   const progress = [];
+  const rejectedCandidateTailMarker = 'COMPLETE_REJECTED_CANDIDATE_TAIL';
   const host = new PersistentMvuRepairHost({
     now: () => 456,
     onStructuredProgress: event => progress.push(structuredClone(event)),
@@ -350,6 +605,7 @@ function createRepairHelper({
           add_cards: [],
           add_artifacts: [],
           add_permanent_status: [],
+          diagnostic: `${'y'.repeat(13_000)}${rejectedCandidateTailMarker}`,
         });
       }
       return JSON.stringify({
@@ -357,8 +613,10 @@ function createRepairHelper({
         add_cards: [{
           id: 'reload_eclipse_scar',
           name: '重启蚀痕',
+          type: 'Curse',
+          rarity: 'Corrupt',
+          quantity: 1,
           description: '星蚀力量在战败后留下持续反噬。',
-          cost: 1,
           effects: [
             { damage: 3, to: 'self' },
             { apply_status: 'star_marrow_siphon', stacks: 1, to: 'self' },
@@ -368,8 +626,12 @@ function createRepairHelper({
         add_artifacts: [{
           id: 'star_marrow_stain',
           name: '星髓污染',
+          rarity: 'Rare',
           description: '星髓留下的持久污染。',
-          effects: { apply_status: 'star_marrow_siphon', stacks: 1, to: 'self' },
+          trigger: {
+            on: 'battle_start',
+            effects: { apply_status: 'star_marrow_siphon', stacks: 1, to: 'self' },
+          },
         }],
         add_permanent_status: [{
           id: 'star_marrow_siphon',
@@ -387,6 +649,10 @@ function createRepairHelper({
   assert.equal(generationConfigs[0].max_chat_history, 0);
   assert.equal(generationConfigs[0].should_silence, true);
   assert.equal(generationConfigs[0].json_schema.name, 'mwg_battle_settlement_repair');
+  assert.equal(generationConfigs[0].structured_delivery, 'text-json');
+  assert.match(generationConfigs[0].user_input, new RegExp(settlementContextTailMarker));
+  assert.ok(generationConfigs[0].user_input.includes(formatCompactEffectAuthoringContract()), 'complete shared authoring contract is delivered');
+  assert.match(generationConfigs[1].user_input, new RegExp(rejectedCandidateTailMarker));
   assert.equal(state.variables.stat_data.reward.request, null);
   assert.deepEqual(state.variables.stat_data.reward.card, []);
   assert.deepEqual(state.variables.stat_data.reward.artifact, []);
@@ -464,6 +730,210 @@ function createRepairHelper({
   assert.equal(state.variables.stat_data.reward.request.marker, '[MVU_BATTLE_SETTLEMENT]');
   assert.deepEqual(state.variables, originalVariables);
   assert.equal(state.replaceCalls, 0);
+}
+
+}
+
+// Optional victory growth is persisted atomically, survives repair serialization,
+// and never consumes or replaces ordinary rewards.
+for (const scenario of ['grow', 'omit', 'missing-owner', 'defeat', 'invalid', 'new-status', 'conflicting-status']) {
+  const originalVariables = wrapBattle(readyBattle());
+  originalVariables.stat_data.battle.cards[0].effects = { lust: 25 };
+  if (scenario === 'missing-owner') delete originalVariables.stat_data.battle.player_lust_effect;
+  if (scenario === 'conflicting-status') originalVariables.stat_data.battle.statuses = [{
+    id: 'desire_mark', name: '原印记', type: 'debuff', triggers: { tick: { damage: 2 } },
+  }];
+  originalVariables.stat_data.reward = {
+    request: { marker: '[MVU_BATTLE_SETTLEMENT]', result: scenario === 'defeat' ? 'defeat' : 'victory',
+      cards: { candidates: 0 }, limits: {} },
+  };
+  const { helper, state } = createRepairHelper({ originalVariables, repairedVariables: originalVariables });
+  const grown = { name: '星蚀觉醒', effects: [{ damage: 50, to: 'opponent' }] };
+  const payload = { reward: { card: [], artifact: [], item: [], limits: {} },
+    add_cards: [], add_artifacts: [], add_permanent_status: [],
+    ...(scenario === 'omit' ? {} : { player_lust_effect: scenario === 'invalid' ? { name: '空壳', effects: [] } : grown }),
+  };
+  if (scenario === 'new-status' || scenario === 'conflicting-status') {
+    payload.player_lust_effect = { name: '星蚀印记', effects: [{ apply_status: 'desire_mark', stacks: 1, to: 'opponent' }] };
+    payload.desire_statuses = [{ id: 'desire_mark', name: '星蚀印记', type: 'debuff', triggers: { tick: { damage: 30 } } }];
+  }
+  const host = new PersistentMvuRepairHost({ now: () => 999, generate: async () => JSON.stringify(payload) });
+  const run = () => host.request(helper, `desire-growth-${scenario}`, request('battle-settlement', '[MVU_BATTLE_SETTLEMENT]'));
+  if (['missing-owner', 'defeat', 'invalid', 'conflicting-status'].includes(scenario)) {
+    await assert.rejects(run);
+    assert.deepEqual(state.variables, originalVariables, 'rejected growth must not partially commit');
+  } else {
+    await run();
+    assert.deepEqual(state.variables.stat_data.battle.player_lust_effect,
+      scenario === 'omit' ? originalVariables.stat_data.battle.player_lust_effect : payload.player_lust_effect);
+    assert.deepEqual(state.variables.stat_data.battle.cards, originalVariables.stat_data.battle.cards);
+    assert.equal(state.variables.stat_data.reward.request, null);
+    if (scenario !== 'omit') assert.match(state.message, /_\.set\('battle\.player_lust_effect'/);
+    if (scenario === 'new-status') assert.equal(state.variables.stat_data.battle.statuses[0].id, 'desire_mark');
+  }
+}
+
+// Player variable edits use the persistent structured endpoint rather than an
+// un-attributable MVU current-message write. Only requested paths are changed.
+{
+  const originalVariables = wrapBattle(readyBattle());
+  const { helper, state } = createRepairHelper({ originalVariables, repairedVariables: originalVariables });
+  let config;
+  const progress = [];
+  const host = new PersistentMvuRepairHost({
+    now: () => 777,
+    generate: async value => {
+      config = structuredClone(value);
+      return { operations: [{ op: 'set', path: ['status', 'time'], value: '第二天' }] };
+    },
+    onStructuredProgress: event => progress.push(structuredClone(event)),
+  });
+  await host.request(helper, 'chat-stat-data', request('stat-data', '把时间改为第二天'));
+  assert.equal(state.variables.stat_data.status.time, '第二天');
+  assert.deepEqual(state.variables.stat_data.battle, originalVariables.stat_data.battle);
+  assert.equal(state.replaceCalls, 0, 'structured stat-data commit uses one guarded message snapshot');
+  assert.equal(config.json_schema.name, 'mwg_stat_data_patch');
+  assert.equal(config.structured_delivery, 'text-json');
+  assert.match(state.message, /Apply player variable patch/);
+  assert.match(progress.find(event => event.phase === 'complete').rawOutput, /"operations"/);
+}
+
+// A tower-only write during the structured request rebases with the disjoint
+// player patch. The completed node survives without replaying any updater.
+{
+  const originalVariables = wrapBattle(readyBattle());
+  const { helper, state } = createRepairHelper({ originalVariables, repairedVariables: originalVariables });
+  const towerVariables = structuredClone(originalVariables);
+  towerVariables.stat_data.run = { floor: 11, revision: 23, phase: 'ready', requestId: 'tower_18_1_18p9ku7' };
+  const recorded = [];
+  const host = new PersistentMvuRepairHost({
+    onEvidence: e => recorded.push(e),
+    generate: async () => {
+      state.variables = structuredClone(towerVariables);
+      return { operations: [{ op: 'set', path: ['status', 'time'], value: '第二天' }] };
+    },
+  });
+  await host.request(helper, 'chat-stat-data-concurrent', request('stat-data', '把时间改为第二天'));
+  assert.deepEqual(recorded.map(e=>e.stage),['request','response','outcome']);
+  assert.match(recorded[0].prompt,/把时间改为第二天/);
+  assert.match(recorded[1].response,/第二天/);
+  assert.equal(state.variables.stat_data.status.time, '第二天');
+  assert.deepEqual(state.variables.stat_data.run, towerVariables.stat_data.run);
+  assert.equal(state.replaceCalls, 0, 'rebased stat-data commit must not replay a variable updater');
+  assert.match(state.message, /Apply player variable patch/);
+}
+
+// A conflicting leaf is never rebased. The raw structured candidate remains
+// available through the progress callback for local diagnostic export.
+{
+  const originalVariables = wrapBattle(readyBattle());
+  const { helper, state } = createRepairHelper({ originalVariables, repairedVariables: originalVariables });
+  const towerVariables = structuredClone(originalVariables);
+  towerVariables.stat_data.status.time = '塔任务时间';
+  const progress = [];
+  const host = new PersistentMvuRepairHost({
+    generate: async () => {
+      state.variables = structuredClone(towerVariables);
+      return { operations: [{ op: 'set', path: ['status', 'time'], value: '第二天' }] };
+    },
+    onStructuredProgress: event => progress.push(structuredClone(event)),
+  });
+  await assert.rejects(
+    host.request(helper, 'chat-stat-data-conflict', request('stat-data', '把时间改为第二天')),
+    /后台已更新.*status.*time/,
+  );
+  assert.deepEqual(state.variables, towerVariables);
+  assert.equal(state.replaceCalls, 0);
+  assert.equal(state.message, ORIGINAL_PROSE);
+  const failure = progress.find(event => event.phase === 'error');
+  assert.match(failure.rawOutput, /"operations"/);
+}
+
+// Runtime validation is stricter than schema transport: malformed paths get
+// one bounded correction, then expose the final raw candidate as error evidence.
+{
+  const originalVariables = wrapBattle(readyBattle());
+  const { helper, state } = createRepairHelper({ originalVariables, repairedVariables: originalVariables });
+  let calls = 0;
+  const host = new PersistentMvuRepairHost({
+    generate: async () => {
+      calls += 1;
+      return { operations: [{ op: 'remove', path: ['battle', 'cards', 0] }] };
+    },
+  });
+  await assert.rejects(
+    host.request(helper, 'chat-stat-data-invalid-path', request('stat-data', '移除第一张卡')),
+    error => error?.mvuRepairEvidence?.response?.includes('operations'),
+  );
+  assert.equal(calls, 2, 'invalid structured patch gets exactly one bounded correction');
+  assert.deepEqual(state.variables, originalVariables);
+}
+
+// Array removal is compacted, not serialized as a sparse JSON hole.
+{
+  const originalVariables = wrapBattle(readyBattle());
+  const { helper, state } = createRepairHelper({ originalVariables, repairedVariables: originalVariables });
+  const host = new PersistentMvuRepairHost({
+    generate: async () => ({ operations: [{ op: 'remove', path: ['battle', 'cards', '0'] }] }),
+  });
+  await host.request(helper, 'chat-stat-data-array-remove', request('stat-data', '移除第一张卡'));
+  assert.equal(state.variables.stat_data.battle.cards.length, 1);
+  assert.equal(state.variables.stat_data.battle.cards[0].id, 'guard');
+  assert.doesNotMatch(JSON.stringify(state.variables), /null/);
+}
+
+// A changed run must remain valid, while an unrelated story patch still works
+// when an old save already carries an invalid run snapshot.
+{
+  const originalVariables = wrapBattle(readyBattle());
+  originalVariables.stat_data.run = createRunState({ seed: 99 });
+  const { helper, state } = createRepairHelper({ originalVariables, repairedVariables: originalVariables });
+  const host = new PersistentMvuRepairHost({
+    generate: async () => ({ operations: [{ op: 'set', path: ['run', 'seed'], value: -1 }] }),
+  });
+  await assert.rejects(host.request(helper, 'chat-stat-data-invalid-run', request('stat-data', '修改爬塔种子')), /无效爬塔状态/);
+  assert.deepEqual(state.variables, originalVariables);
+}
+{
+  const originalVariables = wrapBattle(readyBattle());
+  originalVariables.stat_data.run = { broken: true };
+  const { helper, state } = createRepairHelper({ originalVariables, repairedVariables: originalVariables });
+  const host = new PersistentMvuRepairHost({
+    generate: async () => ({ operations: [{ op: 'set', path: ['status', 'time'], value: '第二天' }] }),
+  });
+  await host.request(helper, 'chat-stat-data-old-invalid-run', request('stat-data', '把时间改为第二天'));
+  assert.equal(state.variables.stat_data.status.time, '第二天');
+  assert.deepEqual(state.variables.stat_data.run, { broken: true });
+}
+{
+  const originalVariables = wrapBattle(readyBattle());
+  const { helper, state } = createRepairHelper({ originalVariables, repairedVariables: originalVariables });
+  const host = new PersistentMvuRepairHost({
+    generate: async () => ({ operations: [{ op: 'set', path: ['game_mode'], value: 'unsupported' }] }),
+  });
+  await assert.rejects(host.request(helper, 'chat-stat-data-invalid-mode', request('stat-data', '改模式')), /无效游戏模式/);
+  assert.deepEqual(state.variables, originalVariables);
+}
+
+// Exercise the actual ordinary-text transport, not just a direct model stub.
+for (const provider of ['openai', 'deepseek', 'custom']) {
+  const originalVariables = wrapBattle(readyBattle());
+  const { helper, state } = createRepairHelper({ originalVariables, repairedVariables: originalVariables });
+  const calls = [], progress = [];
+  const raw = JSON.stringify({ operations: [{ op: 'set', path: ['status', 'time'], value: '第二天' }] });
+  const ports = createGlobalTowerGenerationPorts({
+    generateRaw: async config => { calls.push(config); return raw; },
+  }, () => ({ chatCompletionSettings: { chat_completion_source: provider } }));
+  const host = new PersistentMvuRepairHost({ generate: ports.generate, onStructuredProgress: e => progress.push(e) });
+  await host.request(helper, `transport-${provider}`, request('stat-data', '把时间改为第二天'));
+  assert.equal(calls.length, 1);
+  assert.equal('json_schema' in calls[0], false, 'ordinary text transport cannot be overridden by Helper schema injection');
+  const contract = calls[0].ordered_prompts.find(p => p.content?.startsWith('[MWG_SCHEMA_COMPATIBILITY/v1]'));
+  assert.ok(contract, 'actual model request must include the patch output contract');
+  assert.match(contract.content, /operations/);
+  assert.equal(state.variables.stat_data.status.time, '第二天');
+  assert.deepEqual(state.variables.stat_data.battle, originalVariables.stat_data.battle);
+  assert.ok(progress.some(e => e.rawOutput?.includes('operations')), 'raw output survives diagnostic export callback');
 }
 
 console.log(

@@ -1,4 +1,9 @@
-import { analyzeContentScenarios, type ContentAnalysis } from './contentAnalysis';
+import {
+  analyzeContentScenarios,
+  analyzeDesireOverflowPayload,
+  type ContentAnalysis,
+} from './contentAnalysis';
+import { resolveCardLifecycle, type LifecycleCard } from './cardLifecycle';
 import { type ContentDefinition, type ContentPack } from './contentPack';
 import { createContentMechanicsFingerprint } from './contentFingerprint';
 import { extractContentMechanicFeatures, mergeContentMechanicFeatures } from './contentMechanicFeatures';
@@ -121,6 +126,8 @@ type CompiledEncounter = {
   cards: SimCard[];
   enemies: CompiledEnemy[];
   playerDesire: ContentAnalysis | null;
+  playerDesireDefinition: ContentDefinition | null;
+  statuses: ContentDefinition[];
   playerResources: Record<string, CombatResourceState>;
 };
 
@@ -270,7 +277,7 @@ function simCards(pack: ContentPack, playerResources: Readonly<Record<string, Co
         raw: definition,
         analysis,
         engineScore,
-        exhaust: definition.exhaust === true,
+        exhaust: resolveCardLifecycle(definition as LifecycleCard).on_play !== 'discard',
       });
     }
   }
@@ -304,6 +311,8 @@ function compileEncounter(pack: ContentPack): CompiledEncounter | null {
     cards,
     enemies,
     playerDesire: pack.desireEffects.player ? analyzeContentScenarios(pack.desireEffects.player) : null,
+    playerDesireDefinition: pack.desireEffects.player,
+    statuses: pack.statuses,
     playerResources,
   };
 }
@@ -538,8 +547,13 @@ function runOne(
 
   for (let turn = 1; turn <= MAX_TURNS; turn += 1) {
     playerBlock = 0;
-    discardPile.push(...hand.splice(0));
-    cardsSeen += drawCards(5, hand, drawPile, discardPile, reshuffle);
+    const previousHand = hand.splice(0);
+    for (const card of previousHand) {
+      const destination = resolveCardLifecycle(card.raw as LifecycleCard).turn_end;
+      if (destination === 'retain') hand.push(card);
+      else if (destination === 'discard') discardPile.push(card);
+    }
+    cardsSeen += drawCards(Math.min(5, Math.max(0, 10 - hand.length)), hand, drawPile, discardPile, reshuffle);
     customResources = refreshCombatResourceStates(customResources);
     let resourcePool = resourcePoolFromCombatant(3, customResources);
     const selectedEnemyActions = enemies.filter(enemy => enemy.hp > 0).map((enemy, stableOrder) => {
@@ -617,6 +631,22 @@ function runOne(
             target.block = overflowDamage.block;
             target.hp = Math.max(0, target.hp - overflowDamage.hpLoss);
             hpDamage += overflowDamage.hpLoss;
+            // Direct damage was just resolved above.  The shared payload only
+            // contributes executable effects the shadow runtime cannot model
+            // (one discounted status tick and conservative execute/kill value).
+            const payload = compiled.playerDesireDefinition
+              ? analyzeDesireOverflowPayload(compiled.playerDesireDefinition, {
+                  opponentHp: target.hp,
+                  opponentMaxHp: target.maxHp,
+                }, compiled.statuses)
+              : null;
+            const extraOverflowDamage = Math.max(0, (payload?.statusDamage || 0) + (payload?.executeValue || 0));
+            if (extraOverflowDamage > 0) {
+              const extra = applyDamage(extraOverflowDamage, target.block);
+              target.block = extra.block;
+              target.hp = Math.max(0, target.hp - extra.hpLoss);
+              hpDamage += extra.hpLoss;
+            }
             playerBlock += Math.max(0, compiled.playerDesire.metrics.defense);
             const previousOverflowHp = playerHp;
             playerHp = clamp(playerHp + Math.max(0, compiled.playerDesire.metrics.sustain), 0, playerMaxHp);
@@ -646,6 +676,22 @@ function runOne(
           mitigation += Math.max(0, playerBlock - overflow.block);
           playerBlock = overflow.block;
           playerHp = Math.max(0, playerHp - overflow.hpLoss);
+          const desireDefinition = isRecord(enemy.compiled.definition.lust_effect)
+            ? enemy.compiled.definition.lust_effect
+            : null;
+          const payload = desireDefinition
+            ? analyzeDesireOverflowPayload(desireDefinition, {
+                opponentHp: playerHp,
+                opponentMaxHp: playerMaxHp,
+              }, compiled.statuses)
+            : null;
+          const extraOverflowDamage = Math.max(0, (payload?.statusDamage || 0) + (payload?.executeValue || 0));
+          if (extraOverflowDamage > 0) {
+            const extra = applyDamage(extraOverflowDamage, playerBlock);
+            mitigation += Math.max(0, playerBlock - extra.block);
+            playerBlock = extra.block;
+            playerHp = Math.max(0, playerHp - extra.hpLoss);
+          }
         }
       }
       if (playerHp <= 0) return finish(false, turn);
@@ -693,6 +739,18 @@ function simulationCoverage(pack: ContentPack): ShadowSimulationCoverage {
   const supportedFeatures = observed.filter(operation => supported.has(operation));
   const approximatedFeatures = observed.filter(operation => approximated.has(operation));
   const unsupportedFeatures = observed.filter(operation => unsupported.has(operation) || (!supported.has(operation) && !approximated.has(operation)));
+  if (pack.cards.some(card => resolveCardLifecycle(card as LifecycleCard).on_discard !== 'discard')) {
+    unsupportedFeatures.push('discard_lifecycle');
+  }
+  const overflowDefinitions = [
+    ...(pack.desireEffects.player ? [pack.desireEffects.player] : []),
+    ...enemies.flatMap(enemy => isRecord(enemy.lust_effect) ? [enemy.lust_effect] : []),
+  ];
+  for (const definition of overflowDefinitions) {
+    const payload = analyzeDesireOverflowPayload(definition, { opponentMaxHp: 100 }, pack.statuses);
+    if (payload.attackValue > payload.damage) approximatedFeatures.push('desire_overflow_payload');
+    if (payload.uncertain) unsupportedFeatures.push('desire_overflow_dynamic_payload');
+  }
   if (enemies.length > 1) supportedFeatures.push('multi_enemy_order');
   if (features.targets.some(target => ['all', 'random', 'random_n', 'lowest_hp', 'highest_hp', 'by_id'].includes(target))) {
     supportedFeatures.push('enemy_target_selector');

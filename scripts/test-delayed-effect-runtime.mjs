@@ -86,11 +86,27 @@ schedulerExecutor.gameStateManager = store;
 schedulerExecutor.executionContext = {
   sourceIsPlayer: true,
   cardContext: { id: 'future_guard', name: '未来防御', type: 'Skill' },
+  spentEnergy: 3,
+  spentResources: { charge: 2 },
+  xValues: { energy: 3, charge: 2 },
+  xValue: 3,
+  orbValue: 7,
+  statusContext: { id: 'future_mark', name: 'Future mark', stacks: 4 },
+  boundEnemyTargetId: 'bound_enemy',
 };
 await schedulerExecutor.scheduleEffectCommand(commands[0], true);
 assert.equal(store.readEffectScheduler().queue.length, 1);
 assert.equal(store.readEffectScheduler().queue[0].dueTurn, 3);
 assert.equal(store.readEffectScheduler().queue[0].source.id, 'future_guard');
+assert.deepEqual(store.readEffectScheduler().queue[0].payload.context, {
+  boundEnemyTargetId: 'bound_enemy',
+  statusContext: { id: 'future_mark', name: 'Future mark', stacks: 4 },
+  spentEnergy: 3,
+  spentResources: { charge: 2 },
+  xValues: { energy: 3, charge: 2 },
+  xValue: 3,
+  orbValue: 7,
+});
 
 const manager = Object.create(BattleManager.prototype);
 manager.gameStateManager = store;
@@ -106,6 +122,13 @@ try {
   store.createSnapshot('before-first-due');
   await manager.executeScheduledPhase('turn_start');
   assert.equal(executed.length, 1);
+  assert.equal(executed[0].context.scheduledSource.kind, 'card');
+  assert.equal(executed[0].context.boundEnemyTargetId, 'bound_enemy');
+  assert.equal(executed[0].context.statusContext.stacks, 4);
+  assert.deepEqual(executed[0].context.spentResources, { charge: 2 });
+  assert.deepEqual(executed[0].context.xValues, { energy: 3, charge: 2 });
+  assert.equal(executed[0].context.xValue, 3);
+  assert.equal(executed[0].context.orbValue, 7);
   assert.equal(store.readEffectScheduler().queue[0].dueTurn, 4);
   assert.equal(store.restoreSnapshot('before-first-due'), true);
   await manager.executeScheduledPhase('turn_start');

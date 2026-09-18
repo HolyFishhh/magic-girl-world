@@ -11,26 +11,34 @@ export interface CombatantCollection<T extends IdentifiedCombatant> {
     byId: Record<string, T>;
     activeId: string | null;
 }
+/** `team` is deliberately optional: absent remains the historical concrete-enemy roster. */
 export type EnemyTargetSelector = {
     mode: 'active';
+    team?: 'self' | 'opponent' | 'enemies';
 } | {
     mode: 'by_id';
     id: string;
+    team?: 'self' | 'opponent' | 'enemies';
 } | {
     mode: 'all';
+    team?: 'self' | 'opponent' | 'enemies';
 } | {
     mode: 'random';
     allowRepeat?: boolean;
     retarget?: 'locked' | 'each_hit';
+    team?: 'self' | 'opponent' | 'enemies';
 } | {
     mode: 'random_n';
     count: number;
     allowRepeat?: boolean;
     retarget?: 'locked' | 'each_hit';
+    team?: 'self' | 'opponent' | 'enemies';
 } | {
     mode: 'lowest_hp';
+    team?: 'self' | 'opponent' | 'enemies';
 } | {
     mode: 'highest_hp';
+    team?: 'self' | 'opponent' | 'enemies';
 };
 export interface ResolvedCombatantTargets<T extends IdentifiedCombatant> {
     targets: T[];

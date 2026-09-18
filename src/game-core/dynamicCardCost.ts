@@ -34,6 +34,8 @@ export interface DynamicCostLifecycleCard extends PatchableCard {
   /** Evaluated once when this concrete instance is drawn; cleared after it leaves play. */
   drawCostOverride?: CardCost;
   dynamicCostDrawTurn?: number;
+  /** Freeze evaluated draw-rule operands, never the ordinary card cost. */
+  drawnCostRules?: DynamicCardCostRule[];
 }
 
 function applyCost(value: number, operator: CardCostOperator, operand: number): number {
@@ -101,7 +103,7 @@ export function resolveDynamicCardCost(
   rules: readonly DynamicCardCostRule[],
   context: DynamicCardCostContext,
 ): CardCost | undefined {
-  const base = context.timing === 'on_draw' ? card.cost : card.drawCostOverride ?? card.cost;
+  const base = context.timing === 'on_draw' ? card.cost : drawnCostBase(card, rules, context);
   return resolveFromBase(card, base, rules, context, new Set([context.timing]));
 }
 
@@ -111,12 +113,30 @@ export function snapshotDynamicCardCostOnDraw<TCard extends DynamicCostLifecycle
   rules: readonly DynamicCardCostRule[],
   context: Omit<DynamicCardCostContext, 'timing'>,
 ): TCard {
-  const drawCostOverride = resolveDynamicCardCost(card, rules, { ...context, timing: 'on_draw' });
+  const drawnCostRules = activeRules(card, rules, new Set(['on_draw'])).map(rule => ({
+    ...structuredClone(rule), filter: undefined,
+    value: evaluateNumericExpression(rule.value, context.state, context.effect, `dynamic_cost.${rule.id}`),
+  }));
+  const drawCostOverride = drawnCostRules.length
+    ? resolveFromBase({ ...card, patches: [] }, card.cost, drawnCostRules, { ...context, timing: 'on_draw' }, new Set(['on_draw']))
+    : undefined;
+  const { drawCostOverride: _old, ...clean } = card;
   return {
-    ...card,
+    ...clean,
+    drawnCostRules,
     ...(drawCostOverride !== undefined ? { drawCostOverride } : {}),
     dynamicCostDrawTurn: context.state.currentTurn,
-  };
+  } as TCard;
+}
+
+function drawnCostBase(card: DynamicCostLifecycleCard, rules: readonly DynamicCardCostRule[], context: Omit<DynamicCardCostContext, 'timing'>): CardCost | undefined {
+  if (card.drawnCostRules) {
+    const frozen = card.drawnCostRules.filter(rule => rule.scope !== 'turn' || card.dynamicCostDrawTurn === context.state.currentTurn);
+    return resolveFromBase({ ...card, patches: [] }, card.cost, frozen, { ...context, timing: 'on_draw' }, new Set(['on_draw']));
+  }
+  // Older snapshots also froze fixed-cost cards. Ignore that stale mirror;
+  // retain genuine draw-time snapshots until their next normal draw.
+  return activeRules(card, rules, new Set(['on_draw'])).length ? card.drawCostOverride ?? card.cost : card.cost;
 }
 
 /** Re-evaluate every live hand and play rule from the frozen draw cost without accumulating. */
@@ -127,7 +147,7 @@ export function resolveDynamicCardCostAtPlay(
 ): CardCost | undefined {
   return resolveFromBase(
     card,
-    card.drawCostOverride ?? card.cost,
+    drawnCostBase(card, rules, context),
     rules,
     { ...context, timing: 'on_play' },
     new Set(['while_in_hand', 'on_play']),
@@ -135,6 +155,6 @@ export function resolveDynamicCardCostAtPlay(
 }
 
 export function clearDynamicCardCostAfterPlay<TCard extends DynamicCostLifecycleCard>(card: TCard): TCard {
-  const { drawCostOverride: _drawCostOverride, dynamicCostDrawTurn: _dynamicCostDrawTurn, ...rest } = card;
+  const { drawCostOverride: _drawCostOverride, dynamicCostDrawTurn: _dynamicCostDrawTurn, drawnCostRules: _drawnCostRules, ...rest } = card;
   return rest as TCard;
 }

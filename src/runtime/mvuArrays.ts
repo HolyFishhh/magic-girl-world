@@ -42,10 +42,13 @@ export function flattenMvuArray<T = unknown>(value: unknown, options: MvuArrayOp
 /** Normalize the two frequent model variations at the single MVU boundary. */
 export function normalizeMvuStatusDefinitions(value: unknown): Record<string, any>[] {
   return flattenMvuArray<Record<string, any>>(value, { objectsOnly: true }).map(status => {
-    if (!isRecord(status.triggers)) return status;
+    const displayNormalized = typeof status.emoji === 'string' && status.emoji.trim()
+      ? status
+      : { ...status, emoji: '◆' };
+    if (!isRecord(displayNormalized.triggers)) return displayNormalized;
     let changed = false;
     const triggers = Object.fromEntries(
-      Object.entries(status.triggers).map(([trigger, definition]) => {
+      Object.entries(displayNormalized.triggers).map(([trigger, definition]) => {
         if (
           isRecord(definition) &&
           Object.keys(definition).length === 1 &&
@@ -57,6 +60,6 @@ export function normalizeMvuStatusDefinitions(value: unknown): Record<string, an
         return [trigger, definition];
       }),
     );
-    return changed ? { ...status, triggers } : status;
+    return changed ? { ...displayNormalized, triggers } : displayNormalized;
   });
 }

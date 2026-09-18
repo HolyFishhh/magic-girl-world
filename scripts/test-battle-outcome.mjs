@@ -21,3 +21,6 @@ assert.deepEqual(
 );
 
 console.log('Post-battle persistent vitals are deterministic and clamped.');
+for(const [hp,expected] of [[20.2,20],[20.5,21],[20.8,21],[0.2,0],[0.5,1]]){
+ const input={currentHp:hp,currentLust:1.25};assert.equal(settleBattleOutcomeVitals(input,{max_hp:50,max_lust:100}).hp,expected);assert.equal(input.currentHp,hp,'rounding does not mutate in-combat state');
+}

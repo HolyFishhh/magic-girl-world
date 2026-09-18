@@ -50,7 +50,7 @@ export function resolvePassiveModifierOperations(
 ): ResolvedPassiveModifier[] {
   const result: ResolvedPassiveModifier[] = [];
   for (const source of sources || []) {
-    if (normalizeAbilityTrigger(source.trigger || '') !== 'passive') continue;
+    if (normalizeAbilityTrigger(source.trigger || '') !== 'passive' || !source.effectProgram) continue;
     result.push(
       ...programOperations([source.effectProgram], ownerType, target, modifierType, state).map(operation => ({
         operation,

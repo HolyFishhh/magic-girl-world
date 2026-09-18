@@ -1,4 +1,5 @@
 import { resolveCardResourcePayment, type CardCost, type CardResourcePayment } from './combatResource';
+import { resolveCardLifecycle, type CardLifecycle } from './cardLifecycle';
 
 export interface CardRuleCard {
   id: string;
@@ -14,6 +15,7 @@ export interface CardRuleCard {
   exhaust?: boolean;
   ethereal?: boolean;
   innate?: boolean;
+  lifecycle?: CardLifecycle;
   /** Added after paying an X-cost card; does not consume extra energy. */
   xValueBonus?: number;
 }
@@ -83,14 +85,22 @@ export type { CardResourcePayment };
 
 /** Power cards are one-shot ability registrations even if generated content omits exhaust. */
 export function resolvePlayedCardDestination(
-  card: Pick<CardRuleCard, 'type' | 'exhaust'>,
+  card: Pick<CardRuleCard, 'type' | 'exhaust' | 'lifecycle'>,
 ): PlayedCardDestination {
-  return card.type === 'Power' || card.exhaust ? 'exhaust' : 'discard';
+  const destination = resolveCardLifecycle(card).on_play;
+  return destination === 'purge' ? 'remove' : destination;
 }
 
 /** Freeze the curses that were present when turn-end card processing began. */
 export function selectTurnEndCurseTriggers<TCard extends CardRuleCard>(hand: readonly TCard[]): TCard[] {
-  return hand.filter(card => card.type === 'Curse' && Boolean(card.effectProgram));
+  return hand.filter(card => {
+    const program = card.effectProgram;
+    return card.type === 'Curse'
+      && program !== null
+      && typeof program === 'object'
+      && Array.isArray((program as { steps?: unknown }).steps)
+      && ((program as { steps: unknown[] }).steps.length > 0);
+  });
 }
 
 /** Partition the current hand after curse effects have finished mutating it. */
@@ -103,8 +113,9 @@ export function resolveTurnEndHandDisposition<TCard extends CardRuleCard>(
   const keep: TCard[] = [];
 
   for (const card of hand) {
-    if (card.ethereal) exhaust.push(card);
-    else if (retainAll || card.retain || card.type === 'Curse') keep.push(card);
+    const destination = resolveCardLifecycle(card).turn_end;
+    if (destination === 'exhaust') exhaust.push(card);
+    else if (retainAll || destination === 'retain') keep.push(card);
     else discard.push(card);
   }
 

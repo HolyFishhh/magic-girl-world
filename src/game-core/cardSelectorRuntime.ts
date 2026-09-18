@@ -4,6 +4,7 @@ import type { CardCost } from './combatResource';
 import type { CardPileZone, CardZoneCard, CardZoneState } from './cardZoneReducer';
 
 export interface SelectableCard extends CardZoneCard {
+  unique?: boolean;
   name?: string;
   type?: string;
   rarity?: string;
@@ -16,6 +17,10 @@ export interface SelectableCard extends CardZoneCard {
   origin?: CardOrigin;
   upgraded?: boolean;
   upgradeLevel?: number;
+  retain?: boolean;
+  exhaust?: boolean;
+  ethereal?: boolean;
+  innate?: boolean;
 }
 
 function sameCost(left: CardCost | undefined, right: CardCost | undefined): boolean {
@@ -39,6 +44,7 @@ export function selectorZones(zone: CardSelector['zone']): CardPileZone[] {
 export function cardMatchesSelectorFilter(card: SelectableCard, filter?: CardSelectorFilter): boolean {
   if (!filter) return true;
   if (filter.name !== undefined && card.name !== filter.name) return false;
+  if (filter.nameContains !== undefined && !card.name?.includes(filter.nameContains)) return false;
   if (filter.types && !filter.types.includes(card.type as never)) return false;
   if (filter.rarities && !filter.rarities.includes(card.rarity as never)) return false;
   if (filter.cost !== undefined && !sameCost(card.cost, filter.cost)) return false;
@@ -50,6 +56,8 @@ export function cardMatchesSelectorFilter(card: SelectableCard, filter?: CardSel
   if (filter.combatInstanceId !== undefined && (card.combatInstanceId || card.id) !== filter.combatInstanceId) return false;
   if (filter.origin !== undefined && card.origin !== filter.origin) return false;
   if (filter.rootOnly === true && card.origin === 'copied') return false;
+  if (filter.keywords?.some(keyword => card[keyword] !== true)) return false;
+  if (filter.excludedKeywords?.some(keyword => card[keyword] === true)) return false;
   const upgraded = card.upgraded === true || (card.upgradeLevel ?? 0) > 0;
   if (filter.upgraded !== undefined && upgraded !== filter.upgraded) return false;
   return true;

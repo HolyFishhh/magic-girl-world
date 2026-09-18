@@ -12,6 +12,7 @@ const { convertMvuCards, convertMvuEnemies } = require(resolve('src/fish/core/mv
 const { GameStateManager } = require(resolve('src/fish/core/gameStateManager.ts'));
 const { BattleManager } = require(resolve('src/fish/combat/battleManager.ts'));
 const { UnifiedEffectExecutor } = require(resolve('src/fish/combat/unifiedEffectExecutor.ts'));
+const { TavernBattleTriggerHost } = require(resolve('src/fish/core/battleTriggerHost.ts'));
 
 const mvuEnemy = (id, hp = 12, extra = {}) => ({
   id,
@@ -99,11 +100,88 @@ assert.equal(converted[0].actionPriority, 2);
 assert.deepEqual(converted[0].tags, ['minion']);
 assert.equal(converted[1].speed, 4);
 
+// Prove the complete production path keeps the authored enemy-action identity:
+// MVU definition -> adapter -> BattleManager -> executor -> event journal.
+{
+  const [sourceEnemy] = convertMvuEnemies([mvuEnemy('source_enemy', 12, {
+    actions: [{ id: 'front_strike', name: '前锋斩击', emoji: '⚔️', weight: 1, effects: { damage: 4 } }],
+  })], () => 0);
+  const sourceAction = sourceEnemy.actions[0];
+  assert.equal(sourceAction.id, 'front_strike');
+  assert.equal(sourceAction.emoji, '⚔️');
+  const sourceState = core.createEmptyBattleState();
+  sourceState.player.currentHp = 30;
+  sourceState.player.maxHp = 30;
+  const sourceStore = GameStateManager.getInstance();
+  sourceStore.replaceState(sourceState);
+  sourceStore.setEnemies([sourceEnemy], sourceEnemy.id);
+  const sourceExecutor = UnifiedEffectExecutor.getInstance();
+  sourceExecutor.presentation = new Proxy({}, { get: () => () => undefined });
+  sourceExecutor.completeBattleEnd = async () => {};
+  const sourceManager = Object.create(BattleManager.prototype);
+  sourceManager.gameStateManager = sourceStore;
+  await sourceManager.executeEnemyEffect(sourceAction.effectProgram, sourceAction.name, sourceEnemy.id, sourceAction);
+  const damageEvent = sourceStore.getGameState().eventJournal.events.findLast(event => event.kind === 'damage_resolved');
+  assert.ok(damageEvent, 'enemy action damage must enter the authoritative event journal');
+  assert.equal(damageEvent.actorId, 'source_enemy');
+  assert.equal(damageEvent.targetId, 'player');
+  assert.equal(damageEvent.cause.source.kind, 'enemy_action');
+  assert.equal(damageEvent.cause.source.id, 'front_strike');
+  assert.equal(damageEvent.cause.source.name, '前锋斩击');
+}
+
 const state = core.createEmptyBattleState();
 state.player.currentHp = 30;
 state.player.maxHp = 30;
 const store = new core.BattleStateStore(state);
 store.setEnemies(converted, 'front');
+
+// Encounter-wide enemy auras all affect the player, while self passives stay
+// bound to their exact roster member instead of leaking through the enemy alias.
+{
+  const passive = (id, target, stat, value, rule) => ({
+    id,
+    name: id,
+    trigger: 'passive',
+    effectProgram: {
+      spec: core.EFFECT_PROGRAM_SPEC,
+      steps: rule
+        ? [{ op: 'card_play_rule', target, rule, limit: 1, priority: 0 }]
+        : [{ op: 'modify', target, stat, operator: 'add', value }],
+    },
+  });
+  const auraState = core.createEmptyBattleState();
+  const front = {
+    ...converted[0],
+    id: 'front_aura',
+    abilities: [
+      passive('front_pressure', 'opponent', 'damage_taken', 1),
+      passive('front_power', 'self', 'damage', 2),
+      passive('front_draw_lock', 'opponent', null, null, 'limit_draw'),
+    ],
+  };
+  const back = {
+    ...converted[1],
+    id: 'back_aura',
+    abilities: [
+      passive('back_pressure', 'opponent', 'damage_taken', 3),
+      passive('back_power', 'self', 'damage', 7),
+      passive('back_draw_lock', 'opponent', null, null, 'limit_draw'),
+    ],
+  };
+  const auraStore = new core.BattleStateStore(auraState);
+  auraStore.setEnemies([front, back], 'front_aura');
+  const auraExecutor = Object.create(UnifiedEffectExecutor.prototype);
+  auraExecutor.gameStateManager = auraStore;
+  auraExecutor.executionContext = { sourceIsPlayer: true };
+  auraExecutor.currentResolvedEnemyId = null;
+  auraExecutor.dynamicStatusManager = { getStatusDefinition: () => null };
+  assert.equal(auraExecutor.getModifierBreakdown('player', 'damage_taken_modifier').add, 4);
+  assert.equal(auraExecutor.getModifierBreakdown('enemy', 'damage_modifier').add, 2);
+  assert.equal(auraExecutor.getCardPlayRules('player').filter(entry => entry.rule === 'limit_draw').length, 2);
+  auraStore.setActiveEnemy('back_aura');
+  assert.equal(auraExecutor.getModifierBreakdown('enemy', 'damage_modifier').add, 7);
+}
 
 // Each enemy resolves continuous rules against its own active alias. Resetting
 // block must preserve one enemy without leaking that rule into its neighbors.
@@ -125,6 +203,81 @@ try {
 assert.equal(store.getEnemyById('front').block, 7);
 assert.equal(store.getEnemyById('back').block, 0);
 assert.equal(store.getEnemy().id, 'front', 'the active target is restored after per-enemy rule resolution');
+
+// Owner-relative definitions (notably shared statuses) are compiled before the
+// eventual holder side is known. A selector still denotes concrete enemy
+// roster members when such a program later runs from an enemy holder.
+{
+  const manager = GameStateManager.getInstance();
+  const relativeState = core.createEmptyBattleState();
+  relativeState.player.block = 0;
+  manager.replaceState(relativeState);
+  manager.setEnemies([
+    { ...converted[0], id: 'relative_front', block: 0 },
+    { ...converted[1], id: 'relative_back', block: 0 },
+  ], 'relative_front');
+  const ownerRelative = core.compileCompactEffectList({ block: 2, targets: { mode: 'all' } });
+  assert.equal(ownerRelative.ok, true, JSON.stringify(ownerRelative.issues));
+  assert.equal(ownerRelative.value.steps[0].target, 'opponent', 'shared source compiles without assuming an enemy holder');
+  const runtimeExecutor = UnifiedEffectExecutor.getInstance();
+  runtimeExecutor.presentation = new Proxy({}, { get: () => () => undefined });
+  runtimeExecutor.completeBattleEnd = async () => {};
+  await runtimeExecutor.executeEffectProgram(ownerRelative.value, false, {
+    battleContext: { enemyId: 'relative_front' },
+    statusContext: { id: 'relative_aura', name: '共享光环', stacks: 1 },
+  });
+  assert.equal(manager.getPlayer().block, 0);
+  assert.deepEqual(manager.getEnemies().map(enemy => enemy.block), [2, 2]);
+}
+
+// Enemy-authored schedules retain their recursive target perspective, exact
+// source enemy and queue after a JSON save/reload round trip.
+{
+  const manager = GameStateManager.getInstance();
+  const scheduledState = core.createEmptyBattleState();
+  scheduledState.currentTurn = 1;
+  scheduledState.phase = 'player_turn';
+  scheduledState.player.block = 0;
+  const scheduledEnemies = convertMvuEnemies([
+    mvuEnemy('scheduled_front', 12, {
+      actions: [{ id: 'wait', name: '等待', weight: 1, effects: { block: 1 } }],
+    }),
+    mvuEnemy('scheduled_back', 12, {
+      actions: [{
+        id: 'delayed_formation', name: '延迟阵型', weight: 1,
+        effects: {
+          schedule: 1, phase: 'turn_start',
+          effects: { block: 3, targets: { mode: 'all' } },
+        },
+      }],
+    }),
+  ], () => 0);
+  manager.replaceState(scheduledState);
+  manager.setEnemies(scheduledEnemies, 'scheduled_front');
+  const source = manager.getEnemyById('scheduled_back');
+  const action = source.actions[0];
+  assert.equal(action.effectProgram.steps[0].effects[0].target, 'self');
+  const runtimeExecutor = UnifiedEffectExecutor.getInstance();
+  runtimeExecutor.presentation = new Proxy({}, { get: () => () => undefined });
+  runtimeExecutor.completeBattleEnd = async () => {};
+  await runtimeExecutor.executeEffectProgram(action.effectProgram, false, {
+    battleContext: { enemyId: source.id, intent: action },
+  });
+  const queued = manager.readEffectScheduler().queue[0];
+  assert.equal(queued.payload.context.sourceEnemyId, 'scheduled_back');
+  manager.replaceState(JSON.parse(JSON.stringify(manager.getGameState())));
+  manager.setCurrentTurn(2);
+  const battleManager = BattleManager.getInstance();
+  await battleManager.executeScheduledPhase('turn_start');
+  assert.equal(manager.getPlayer().block, 0);
+  assert.deepEqual(manager.getEnemies().map(enemy => enemy.block), [3, 3]);
+  assert.deepEqual(
+    manager.getGameState().eventJournal.events
+      .filter(event => event.kind === 'block_gained')
+      .map(event => [event.actorId, event.targetId]),
+    [['scheduled_back', 'scheduled_front'], ['scheduled_back', 'scheduled_back']],
+  );
+}
 
 // Reset resources independently for each living enemy. Retained resources keep
 // their value, dead enemies are skipped, and every extra enemy cycle refreshes
@@ -224,7 +377,9 @@ assert.equal(store.getEnemy().id, 'front', 'the active target is restored after 
     handleLustOverflow: async () => {},
   });
   const gain = amount => ({ type: 'gain_resource', target: 'opponent', resource: 'charge', amount });
-  const runTargets = (selector, amount, afterWrite) => targetExecutor.forEachEnemyTarget(selector, async enemyId => {
+  const runTargets = (selector, amount, afterWrite) => targetExecutor.forEachTarget(selector, true, async target => {
+    assert.equal(target.kind, 'enemy', 'legacy enemy selectors resolve formal enemy identities');
+    const enemyId = target.id;
     targetStore.setActiveEnemy('anchor');
     await targetExecutor.executeModernBattleCommand(gain(amount), true, enemyId);
     afterWrite?.(enemyId);
@@ -263,7 +418,9 @@ assert.equal(store.getEnemy().id, 'front', 'the active target is restored after 
   );
 
   targetExecutor.executionContext = { sourceIsPlayer: false, battleContext: { enemyId: 'anchor' } };
-  await targetExecutor.forEachEnemyTarget({ mode: 'all' }, async enemyId => {
+  await targetExecutor.forEachTarget({ mode: 'all' }, false, async target => {
+    assert.equal(target.kind, 'enemy');
+    const enemyId = target.id;
     await targetExecutor.executeModernBattleCommand({ type: 'gain_block', target: 'self', amount: 2 }, false, enemyId);
   });
   assert.deepEqual(
@@ -299,12 +456,14 @@ store.setActiveEnemy('front');
 // the legacy active alias advance immediately, so the executor must retain the
 // original enemy ID for death processing and the event journal.
 const executor = Object.create(UnifiedEffectExecutor.prototype);
+executor.relicTriggerHost = { triggerRelics: async () => {} };
 executor.gameStateManager = store;
 executor.executionContext = {
   sourceIsPlayer: true,
   cardContext: { id: 'finisher', name: '终结', type: 'Attack' },
 };
 executor.pendingDeaths = new Set();
+executor.pendingDeathDetails = new Map();
 executor.currentResolvedEnemyId = null;
 executor.triggerHost = { processAbilitiesByTrigger: async () => {} };
 executor.presentation = {
@@ -319,7 +478,7 @@ executor.executionContext = {
   abilityContext: { id: 'retaliation_guard', name: '反击护体' },
 };
 executor.currentResolvedEnemyId = 'back';
-executor.presentBattleEffectRuntimeEvent({
+executor.recordResolvedBattleEffectEvent({
   type: 'damage_resolved', source: 'player', target: 'enemy', damageKind: 'retaliation',
   requested: 3, modified: 3, blocked: 0, hpLost: 3,
 });
@@ -340,7 +499,7 @@ executor.battleEffectRuntime = {
     const victim = store.getEnemy();
     assert.ok(victim);
     store.updateEnemyById(victim.id, { currentHp: 0 });
-    executor.presentBattleEffectRuntimeEvent({
+    const recorded = executor.recordResolvedBattleEffectEvent({
       type: 'damage_resolved',
       source: options.source,
       target: 'enemy',
@@ -350,7 +509,12 @@ executor.battleEffectRuntime = {
       blocked: 0,
       hpLost: victim.currentHp,
     });
-    return { applied: true, target: 'enemy', pendingDeath: true };
+    return {
+      applied: true,
+      target: 'enemy',
+      pendingDeath: true,
+      ...(recorded?.eventId ? { resolvedEventId: recorded.eventId } : {}),
+    };
   },
 };
 
@@ -358,7 +522,19 @@ await executor.executeModernBattleCommand({ type: 'damage', target: 'opponent', 
 assert.deepEqual([...executor.pendingDeaths], ['front']);
 assert.equal(store.getGameState().eventJournal.lastDamage.targetId, 'front');
 assert.equal(store.getGameState().eventJournal.lastDamage.fatal, true);
-await executor.processPendingDeaths();
+let finishDeparture;
+executor.presentation.showEnemyDefeat = async id => {
+  assert.equal(id, 'front');
+  assert.equal(store.getEnemies().find(enemy => enemy.id === id)?.currentHp, 0, 'dead unit remains addressable during departure');
+  await new Promise(resolve => { finishDeparture = resolve; });
+};
+const pendingDeparture = executor.processPendingDeaths();
+for (let spin = 0; spin < 20 && !finishDeparture; spin++) await Promise.resolve();
+assert.equal(typeof finishDeparture, 'function');
+assert.ok(store.getEnemies().some(enemy => enemy.id === 'front'), 'not removed before animation resolves');
+finishDeparture();
+await pendingDeparture;
+executor.presentation.showEnemyDefeat = undefined;
 assert.deepEqual(store.getEnemies().map(enemy => enemy.id), ['back']);
 assert.equal(store.getEnemy().id, 'back');
 assert.equal(defeated, null, 'the battle continues while another enemy lives');
@@ -396,14 +572,22 @@ assert.equal(defeated, 'victory', 'only the last enemy death ends the battle');
   const splitStore = new core.BattleStateStore(splitState);
   splitStore.setEnemies([{ ...convertedParent, currentHp: 0 }], 'split_parent');
   const splitExecutor = Object.create(UnifiedEffectExecutor.prototype);
+  splitExecutor.relicTriggerHost = { triggerRelics: async () => {} };
   splitExecutor.gameStateManager = splitStore;
   splitExecutor.pendingDeaths = new Set(['split_parent']);
   splitExecutor.executionContext = { sourceIsPlayer: false, battleContext: { enemyId: 'split_parent' } };
   splitExecutor.presentation = { addLog: () => {} };
   let splitOutcome = null;
+  const spawnedLifecycle = [];
   splitExecutor.completeBattleEnd = async result => { splitOutcome = result; };
   splitExecutor.triggerHost = {
     processAbilitiesByTrigger: async (_target, trigger, context) => {
+      if (trigger === 'battle_start' || trigger === 'ability_gain') {
+        spawnedLifecycle.push([trigger, context.enemyId]);
+        assert.match(context.enemyId, /^split_child/);
+        assert.equal(context.spawned, true);
+        return;
+      }
       assert.equal(trigger, 'defeated');
       assert.equal(context.enemyId, 'split_parent');
       const ability = splitStore.getEnemyById(context.enemyId).abilities[0];
@@ -429,6 +613,9 @@ assert.equal(defeated, 'victory', 'only the last enemy death ends the battle');
   assert.equal(children.every(enemy => enemy.abilities.length === 1), true);
   assert.equal(children.every(enemy => enemy.lustEffect?.name === '躁动'), true);
   assert.equal(children.every(enemy => enemy.block === 1), true);
+  assert.deepEqual(spawnedLifecycle.map(entry => entry[0]), [
+    'battle_start', 'ability_gain', 'battle_start', 'ability_gain',
+  ]);
   assert.deepEqual(splitStore.getGameState().defeatedEnemies.map(enemy => enemy.id), ['split_parent']);
 }
 
@@ -440,9 +627,19 @@ assert.equal(defeated, 'victory', 'only the last enemy death ends the battle');
     id: 'pipeline_child', name: 'Pipeline child', emoji: 'c', max_hp: 8, hp: 8,
     max_lust: 30, lust: 0,
     actions: [{ name: 'Bite', weight: 1, effects: { damage: 2 } }],
-    abilities: [], status_effects: [],
+    abilities: [
+      { id: 'arrival_shell', name: 'Arrival shell', trigger: { on: 'battle_start', effects: { block: 2 } } },
+      { id: 'arrival_charge', name: 'Arrival charge', trigger: { on: 'ability_gain', effects: { block: 1 } } },
+    ], status_effects: [],
     lust_effect: { name: 'Surge', effects: { damage: 3 } },
     action_mode: 'random', action_config: {}, count: 2, capacity: 6,
+    resources: [{ id: 'charge', name: 'Charge', emoji: '+', start: 2, max: 3, refresh: 'retain' }],
+    stance: {
+      id: 'arrival_stance', name: 'Arrival stance', enter: { block: 2 },
+      passive: { modify: 'damage', add: 1 },
+    },
+    orb_slots: 2,
+    orbs: [{ id: 'arrival_orb', name: 'Arrival Orb', value: 2, passive: { block: 1 }, evoke: { damage: 2 } }],
   };
   const [parent] = convertMvuEnemies([mvuEnemy('pipeline_parent', 5, {
     abilities: [
@@ -468,12 +665,116 @@ assert.equal(defeated, 'victory', 'only the last enemy death ends the battle');
   await runtimeExecutor.executeEffectProgram(finisher.effectProgram, true, { cardContext: finisher });
   assert.equal(pipelineOutcome, null);
   assert.deepEqual(manager.getEnemies({ livingOnly: true }).map(enemy => enemy.name), ['Pipeline child', 'Pipeline child']);
+  assert.deepEqual(
+    manager.getEnemies({ livingOnly: true }).map(enemy => enemy.block),
+    [5, 5],
+    'spawned enemies execute their own battle_start and ability_gain hooks on the exact instance',
+  );
+  assert.deepEqual(
+    manager.getEnemies({ livingOnly: true }).map(enemy => enemy.resources?.charge?.current),
+    [2, 2],
+    'spawned enemy resources use the same start/current normalization as initial enemies',
+  );
+  assert.deepEqual(
+    manager.getEnemies({ livingOnly: true }).map(enemy => enemy.stance?.id),
+    ['arrival_stance', 'arrival_stance'],
+    'spawned enemy stances survive compact compilation and runtime conversion',
+  );
+  assert.equal(
+    manager.getEnemies({ livingOnly: true }).every(enemy =>
+      enemy.stance?.passiveEffects?.[0]?.op === 'modify' &&
+      enemy.orbs.slots === 2 && enemy.orbs.orbs[0]?.id === 'arrival_orb' &&
+      enemy.orbs.orbs[0]?.passiveEffects?.[0]?.op === 'gain_block' &&
+      enemy.orbs.orbs[0]?.evokeEffects?.[0]?.op === 'damage'),
+    true,
+    'spawned enemy stance and Orb programs remain executable instead of degrading into display-only prose',
+  );
   assert.deepEqual(manager.getGameState().defeatedEnemies.map(enemy => enemy.id), ['pipeline_parent']);
 
   // Once combat has started, an empty roster is authoritative and must never
   // fall back to the immutable MVU battle.enemy definition.
   manager.setEnemies([], null);
   assert.equal(manager.getEnemy(), null, 'an active battle never resurrects an MVU enemy after the roster becomes empty');
+}
+
+// Side-wide enemy events execute every concrete enemy once and the summon team
+// once. Exact owner binding also remains valid for a defeated enemy while the
+// visible active target has already advanced to another living enemy.
+{
+  const manager = GameStateManager.getInstance();
+  const state = core.createEmptyBattleState();
+  const program = { spec: 'mwg.effect/v1', steps: [{ op: 'gain_block', target: 'self', amount: 1 }] };
+  const enemy = (id, hp, trigger) => ({
+    ...convertMvuEnemies([mvuEnemy(id, Math.max(1, hp))])[0],
+    currentHp: hp,
+    abilities: [{ id: `${id}_${trigger}`, name: `${id} ${trigger}`, trigger, effectProgram: program }],
+  });
+  manager.replaceState(state);
+  manager.setEnemies([
+    enemy('dead_owner', 0, 'defeated'),
+    enemy('front_owner', 10, 'turn_start'),
+    enemy('rear_owner', 10, 'turn_start'),
+  ], 'front_owner');
+  const summon = manager.spawnSummons('enemy', {
+    id: 'team_totem', name: 'Team Totem', emoji: 'T', maxHp: 5,
+    abilities: [{ id: 'totem_start', name: 'Totem Start', trigger: 'turn_start', effectProgram: program }],
+  }, 1).spawned[0];
+  const runs = [];
+  const host = new TavernBattleTriggerHost({
+    executeProgram: async (_effectProgram, sourceIsPlayer, context) => {
+      runs.push({
+        sourceIsPlayer,
+        abilityId: context.abilityContext?.id,
+        enemyId: context.battleContext?.enemyId,
+        summonId: context.summonContext?.instanceId,
+        boundEnemyId: context.summonContext ? undefined : manager.getEnemy()?.id,
+      });
+    },
+    runRelic: async () => {},
+    addLog: () => {},
+    logStatusEffect: () => {},
+  });
+  await host.processAllEnemyAbilitiesByTrigger('turn_start');
+  assert.deepEqual(runs.map(run => run.abilityId), ['front_owner_turn_start', 'rear_owner_turn_start', 'totem_start']);
+  assert.deepEqual(runs.slice(0, 2).map(run => [run.enemyId, run.boundEnemyId]), [
+    ['front_owner', 'front_owner'],
+    ['rear_owner', 'rear_owner'],
+  ]);
+  assert.equal(runs.filter(run => run.summonId === summon.instanceId).length, 1, 'enemy summons trigger once per side event');
+
+  runs.length = 0;
+  await host.processAbilitiesByTrigger('enemy', 'defeated', { enemyId: 'dead_owner' });
+  assert.deepEqual(runs.map(run => [run.abilityId, run.enemyId, run.boundEnemyId]), [
+    ['dead_owner_defeated', 'dead_owner', 'dead_owner'],
+  ]);
+  assert.equal(manager.getGameState().activeEnemyId, 'front_owner', 'resolution binding never changes the selected living enemy');
+}
+
+// If a player's enemy-lust payoff kills the overflowing target, roster
+// fallback must not reset the next enemy's unrelated lust value.
+{
+  const manager = GameStateManager.getInstance();
+  const state = core.createEmptyBattleState();
+  state.phase = 'player_turn';
+  state.currentTurn = 1;
+  state.battle = {
+    player_lust_effect: {
+      name: '满溢处决', description: '',
+      effectProgram: { spec: 'mwg.effect/v1', steps: [{ op: 'damage', target: 'opponent', amount: 99 }] },
+    },
+  };
+  manager.replaceState(state);
+  const first = convertMvuEnemies([mvuEnemy('overflow_first', 5, { lust: 9, max_lust: 10 })])[0];
+  const second = convertMvuEnemies([mvuEnemy('overflow_second', 20, { lust: 7, max_lust: 10 })])[0];
+  manager.setEnemies([first, second], first.id);
+  const runtimeExecutor = UnifiedEffectExecutor.getInstance();
+  runtimeExecutor.presentation = new Proxy({}, { get: () => () => undefined });
+  runtimeExecutor.completeBattleEnd = async () => {};
+  await runtimeExecutor.executeEffectProgram({
+    spec: 'mwg.effect/v1', steps: [{ op: 'gain_lust', target: 'opponent', amount: 1 }],
+  }, true);
+  assert.equal(manager.getEnemyById('overflow_first'), null);
+  assert.equal(manager.getEnemyById('overflow_second').currentLust, 7, 'overflow cleanup remains bound to the defeated target');
 }
 
 console.log('Multi-enemy MVU, preflight paths, conversion, lethal target identity, death removal, and final victory integrate correctly.');

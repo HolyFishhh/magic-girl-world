@@ -1,16 +1,21 @@
+import { validateStructuredTriggerInput } from '../../game-core/compactEffectDsl';
+import { isEmptyProtectionEffect } from '../../game-core/damageProtection';
 import {
   CARD_RARITY_SET,
   CARD_TYPE_SET,
   compileCompactEffectList,
+  normalizeCardCost,
   normalizeChinesePlayerDescription,
-  resolveCompactCardDescription,
+  parseNonCombatSettlement,
   resolveCompactContentDescription,
   normalizeAbilityTrigger,
+  normalizeDamageProtectionRule,
   normalizeCompactNamedEffectInput,
   restorePersistentCardProgression,
   resolveTriggerInput,
   RELIC_RARITY_SET,
   validateCardCost,
+  validateEffectProgramPolicy,
   type Ability,
   type Card,
   type CardCost,
@@ -62,8 +67,32 @@ function compileEffects(
 
 function compileCardEffects(
   value: Record<string, any>,
+  type: Card['type'],
+  cost: CardCost | undefined,
   options: { statusNames?: Readonly<Record<string, string>> } = {},
 ): EffectProgram | null {
+  const costComponents = normalizeCardCost(cost);
+  const validateProgram = (program: EffectProgram): EffectProgram | null => {
+    const policy = validateEffectProgramPolicy(program, {
+      triggerPolicy: type === 'Power' ? 'require_root_or_status' : 'forbid',
+      modifierPolicy: 'forbid',
+      allowPersistentGrowth: true,
+      allowSpentEnergy: Object.prototype.hasOwnProperty.call(costComponents, 'energy'),
+      allowXValue: costComponents.energy === 'all',
+      allowSpentResources: new Set(Object.keys(costComponents)),
+      allowXResources: new Set(
+        Object.entries(costComponents)
+          .filter(([, component]) => component === 'all')
+          .map(([id]) => id),
+      ),
+      allowNarrate: type === 'Event',
+      requireSingleNarrate: type === 'Event',
+      allowCardDestination: type !== 'Event',
+      allowCurrentCardReplay: type !== 'Power' && type !== 'Event',
+      ...(options.statusNames ? { knownStatusIds: new Set(Object.keys(options.statusNames)) } : {}),
+    });
+    return policy.ok ? policy.value : null;
+  };
   const resolved = resolveTriggerInput(value);
   if (!resolved.structured) {
     const compiled = compileCompactEffectList(value.effects, {
@@ -72,7 +101,7 @@ function compileCardEffects(
       creates: value.creates,
       statusNames: options.statusNames,
     });
-    return compiled.ok ? compiled.value : null;
+    return compiled.ok ? validateProgram(compiled.value) : null;
   }
   const programs: EffectProgram[] = [];
   if (resolved.immediateEffects !== undefined) {
@@ -95,7 +124,7 @@ function compileCardEffects(
     programs.push(triggered.value);
   }
   return programs.length > 0
-    ? { spec: 'mwg.effect/v1', steps: programs.flatMap(program => program.steps) }
+    ? validateProgram({ spec: 'mwg.effect/v1', steps: programs.flatMap(program => program.steps) })
     : null;
 }
 
@@ -111,12 +140,9 @@ export function normalizeCardDefinition(
   if (!isContentRecord(value) || hasRemovedEffectFields(value)) return null;
   const id = readText(value, 'id');
   const name = readText(value, 'name');
-  const effectProgram = compileCardEffects(value, options);
-  if (!hasValidId(id) || !name || !effectProgram) return null;
-
   const type = readText(value, 'type', 'Skill');
   const rarity = readText(value, 'rarity', 'Common');
-  if (!CARD_TYPE_SET.has(type) || !CARD_RARITY_SET.has(rarity)) return null;
+  if (!hasValidId(id) || !name || !CARD_TYPE_SET.has(type) || !CARD_RARITY_SET.has(rarity)) return null;
   const quantity = Number(value.quantity ?? 1);
   if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100) return null;
 
@@ -128,6 +154,16 @@ export function normalizeCardDefinition(
     cost = typeof candidate === 'object' ? structuredClone(candidate) as CardCost : candidate as CardCost;
   }
 
+  const compiledEffectProgram = compileCardEffects(value, type as Card['type'], cost, options);
+  const effectProgram = compiledEffectProgram || (
+    type === 'Curse'
+    && value.effects === undefined
+    && value.trigger === undefined
+      ? { spec: 'mwg.effect/v1' as const, steps: [] }
+      : null
+  );
+  if (!effectProgram) return null;
+
   if (['discard_effect', 'discardEffect', 'on_discard', 'onDiscard', 'discardEffectProgram'].some(key => key in value)) {
     return null;
   }
@@ -138,7 +174,14 @@ export function normalizeCardDefinition(
       statusNames: options.statusNames,
     });
     if (!discard.ok) return null;
-    discardEffectProgram = discard.value;
+    const discardPolicy = validateEffectProgramPolicy(discard.value, {
+      triggerPolicy: 'forbid',
+      modifierPolicy: 'forbid',
+      allowPersistentGrowth: true,
+      ...(options.statusNames ? { knownStatusIds: new Set(Object.keys(options.statusNames)) } : {}),
+    });
+    if (!discardPolicy.ok) return null;
+    discardEffectProgram = discardPolicy.value;
   }
   if (Object.prototype.hasOwnProperty.call(value, 'discard_requirement')) return null;
 
@@ -150,16 +193,21 @@ export function normalizeCardDefinition(
     rarity: rarity as Card['rarity'],
     cost,
     quantity,
-    description: resolveCompactCardDescription(value, {
-      includeKeywords: false,
-      statusNames: options.statusNames,
-    }),
+    // Description is authored prose only. Views render rules from the current
+    // effectProgram, including battle-time upgrades, instead of caching a
+    // mechanical sentence that becomes stale after a card patch.
+    description: normalizeChinesePlayerDescription(value.description),
+    ...(typeof value.dialogue === 'string' && value.dialogue.trim() ? { dialogue: value.dialogue.trim() } : {}),
     effectProgram,
     ...(discardEffectProgram ? { discardEffectProgram } : {}),
     retain: value.retain === true,
+    lifecycle: value.lifecycle ? structuredClone(value.lifecycle) : undefined,
     exhaust: type === 'Power' || value.exhaust === true,
     ethereal: value.ethereal === true,
     innate: value.innate === true,
+    unique: value.unique === true,
+    ...((value.requires_summon || value.requiresSummonTemplateId) ? { requiresSummonTemplateId: String(value.requires_summon || value.requiresSummonTemplateId) } : {}),
+    ...(Array.isArray(value.tags) ? { tags: [...value.tags] } : {}),
     ...(typeof value.templateId === 'string' && value.templateId.trim() ? { templateId: value.templateId.trim() } : {}),
     ...(typeof value.runInstanceId === 'string' && value.runInstanceId.trim()
       ? { runInstanceId: value.runInstanceId.trim() }
@@ -176,31 +224,40 @@ export function normalizeCardDefinition(
 
 export function normalizeRelicDefinition(
   value: unknown,
-  options: { statusNames?: Readonly<Record<string, string>> } = {},
+  _options: { statusNames?: Readonly<Record<string, string>> } = {},
 ): Relic | null {
   if (!isContentRecord(value)) return null;
   const id = readText(value, 'id');
   const name = readText(value, 'name');
   const resolvedTrigger = resolveTriggerInput(value);
   const trigger = normalizeAbilityTrigger(typeof resolvedTrigger.trigger === 'string' ? resolvedTrigger.trigger : '');
-  const effectProgram = compileEffects(value, { requireTrigger: true });
+  const effectProgram = trigger ? compileEffects(value, { requireTrigger: true }) : null;
   const rarity = readText(value, 'rarity', 'Common');
-  if (!hasValidId(id) || !name || !trigger || !effectProgram || !RELIC_RARITY_SET.has(rarity)) return null;
+  let onAcquire: Relic['onAcquire'];
+  if (value.on_acquire !== undefined) {
+    try {
+      onAcquire = parseNonCombatSettlement(value.on_acquire);
+    } catch {
+      return null;
+    }
+  }
+  if (!hasValidId(id) || !name || (!trigger && !onAcquire) || (trigger && !effectProgram) || !RELIC_RARITY_SET.has(rarity)) return null;
   return {
     id,
     name,
     emoji: readText(value, 'emoji', '🔮'),
-    description: resolveCompactContentDescription(value, { statusNames: options.statusNames }),
-    effectProgram,
+    description: resolveCompactContentDescription(value),
+    ...(effectProgram ? { effectProgram } : {}),
     rarity: rarity as Relic['rarity'],
-    trigger,
+    ...(trigger ? { trigger } : {}),
     ...(resolvedTrigger.eventQuery ? { eventQuery: resolvedTrigger.eventQuery } : {}),
+    ...(onAcquire ? { onAcquire } : {}),
   };
 }
 
 export function normalizeItemDefinition(
   value: unknown,
-  options: { statusNames?: Readonly<Record<string, string>> } = {},
+  _options: { statusNames?: Readonly<Record<string, string>> } = {},
 ): Item | null {
   if (!isContentRecord(value)) return null;
   const id = readText(value, 'id');
@@ -212,7 +269,7 @@ export function normalizeItemDefinition(
     id,
     name,
     emoji: readText(value, 'emoji', '🧪'),
-    description: resolveCompactContentDescription(value, { statusNames: options.statusNames }),
+    description: normalizeChinesePlayerDescription(value.description),
     effectProgram,
     count,
   };
@@ -229,20 +286,32 @@ export function normalizeAbilityDefinition(
   const id = readText(value, 'id');
   const resolvedTrigger = resolveTriggerInput(value);
   const trigger = normalizeAbilityTrigger(typeof resolvedTrigger.trigger === 'string' ? resolvedTrigger.trigger : '');
-  const effectProgram = compileEffects(value, {
+  const protection = normalizeDamageProtectionRule(value.protection);
+  const compiledEffectProgram = compileEffects(value, {
     requireTrigger: true,
     enemyCollectionTarget: options.enemyCollectionTarget,
   });
-  if (!hasValidId(id) || !trigger || !effectProgram) return null;
+  const protectionTriggerIssues: Parameters<typeof validateStructuredTriggerInput>[2] = [];
+  if (resolvedTrigger.structured) validateStructuredTriggerInput(value.trigger, 'trigger', protectionTriggerIssues);
+  const protectionOnlyPassive = Boolean(
+    protectionTriggerIssues.length === 0 &&
+    protection && trigger === 'passive' &&
+    isEmptyProtectionEffect(resolveTriggerInput(value).triggeredEffects) &&
+    resolveTriggerInput(value).immediateEffects === undefined &&
+    !hasRemovedEffectFields(value),
+  );
+  const effectProgram = compiledEffectProgram || (protectionOnlyPassive ? { spec: 'mwg.effect/v1' as const, steps: [] } : null);
+  if (!hasValidId(id) || !trigger || !effectProgram || (value.protection !== undefined && !protection)) return null;
   return {
     id,
     name: readText(value, 'name', id),
     emoji: readText(value, 'emoji', '⚡'),
-    description: resolveCompactContentDescription(value, { statusNames: options.statusNames }),
+    description: normalizeChinesePlayerDescription(value.description),
     source: readText(value, 'source', '剧情获得'),
     trigger,
     ...(resolvedTrigger.eventQuery ? { eventQuery: resolvedTrigger.eventQuery } : {}),
     effectProgram,
+    ...(protection ? { protection } : {}),
   };
 }
 
@@ -254,7 +323,9 @@ export function normalizeEnemyAction(
   } = {},
 ): EnemyAction | null {
   if (!isContentRecord(value)) return null;
+  const id = readText(value, 'id');
   const name = readText(value, 'name');
+  const emoji = readText(value, 'emoji');
   const effectProgram = compileEffects(value, {
     forbidTrigger: true,
     enemyCollectionTarget: options.enemyCollectionTarget ?? 'self',
@@ -262,15 +333,19 @@ export function normalizeEnemyAction(
   const weight = Number(value.weight ?? 1);
   if (!name || !effectProgram || !Number.isFinite(weight) || weight <= 0) return null;
   return {
+    ...(hasValidId(id) ? { id } : {}),
     name,
+    ...(emoji ? { emoji } : {}),
     effectProgram,
-    description: resolveCompactContentDescription(value, { statusNames: options.statusNames }),
+    description: normalizeChinesePlayerDescription(value.description),
+    ...(typeof value.dialogue === 'string' && value.dialogue.trim() ? { dialogue: value.dialogue.trim() } : {}),
     weight,
   };
 }
 
 export interface NormalizedNamedEffect {
   name: string;
+  emoji?: string;
   description: string;
   effectProgram: EffectProgram;
 }
@@ -293,7 +368,8 @@ export function normalizeNamedEffectDefinition(
   if (!name || !effectProgram) return null;
   return {
     name,
-    description: resolveCompactContentDescription(normalized, { statusNames: options.statusNames }),
+    ...(readText(normalized, 'emoji') ? { emoji: readText(normalized, 'emoji') } : {}),
+    description: normalizeChinesePlayerDescription(normalized.description),
     effectProgram,
   };
 }
@@ -322,3 +398,4 @@ export function normalizeActiveStatus(
     stacks: Math.floor(stacks),
   };
 }
+

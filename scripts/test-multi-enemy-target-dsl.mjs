@@ -101,6 +101,25 @@ await host.executeProgram({ spec: core.EFFECT_PROGRAM_SPEC, steps: [enemyAllyCol
 assert.deepEqual(selectors, [{ mode: 'all' }], 'enemy self-target collection fans out to its living allies');
 assert.equal(executed.length, 3);
 assert.equal(executed.every(entry => entry.command.target === 'self'), true);
+await assert.rejects(
+  host.executeProgram({
+    spec: core.EFFECT_PROGRAM_SPEC,
+    steps: [{ op: 'set_stance', target: 'self', targetSelector: { mode: 'random', team: 'self' }, stance: null }],
+  }, true),
+  /targets\.team only supports direct entity operations/,
+  'unsupported mixed-entity operations must reject before they can silently use a player/enemy target',
+);
+
+const mixedTeam = core.compileCompactEffectList([
+  { heal: 4, targets: { mode: 'random_n', count: 2, team: 'self' } },
+  { damage: 3, targets: { mode: 'random', team: 'opponent' } },
+]);
+assert.equal(mixedTeam.ok, true, mixedTeam.ok ? '' : JSON.stringify(mixedTeam.issues));
+assert.deepEqual(mixedTeam.value.steps[0].targetSelector, { mode: 'random_n', count: 2, team: 'self' });
+assert.deepEqual(mixedTeam.value.steps[1].targetSelector, { mode: 'random', team: 'opponent' });
+assert.match(core.effectProgramToDisplayTags(mixedTeam.value).map(tag => tag.text).join('；'), /随机我方实体（2次；含本体与召唤物）/);
+const incompatibleMixedTeam = core.compileCompactEffectList({ damage: 3, to: 'opponent', targets: { mode: 'random', team: 'self' } });
+assert.equal(incompatibleMixedTeam.ok, false, 'team:self may not silently redirect an opponent-targeting command');
 
 for (const path of ['schemas/mwg-effect-v1.schema.json', 'schemas/mwg-card-effects-v1.schema.json'])
   JSON.parse(await readFile(resolve(path), 'utf8'));

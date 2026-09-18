@@ -80,6 +80,7 @@ const PATH_LABELS: Readonly<Record<string, string>> = {
   'reward.artifact': '遗物奖励',
   'reward.item': '道具奖励',
   'reward.limits': '奖励选择上限',
+  'reward.card_choice_groups': '卡牌自选奖励',
 };
 
 const INTERNAL_PATHS = new Set(['reward.request', 'game_mode', 'game_mode_lock', 'run']);

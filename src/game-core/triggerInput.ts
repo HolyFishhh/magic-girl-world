@@ -6,6 +6,7 @@ import type {
   EventTriggerQuery,
   HistoryScope,
 } from './battleEventJournal';
+import { impliedTriggerEventFilter } from './triggerEventContract';
 
 export interface ResolvedTriggerInput {
   /** Raw trigger name. Validation remains the caller's responsibility. */
@@ -23,6 +24,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function omitEmptyOptionalEffectSource(value: unknown): unknown {
+  if (Array.isArray(value) && value.length === 0) return undefined;
+  if (isRecord(value) && Object.keys(value).length === 0) return undefined;
+  return value;
+}
+
 const EVENT_QUERY_KEYS = new Set([
   'scope', 'ordinal', 'n', 'event', 'phase', 'reason', 'source_kind', 'source_id', 'damage_type',
   'card_type', 'template_id', 'card_instance_id', 'actor_id', 'target_id',
@@ -33,6 +40,7 @@ export function resolveEventTriggerQueryInput(value: unknown): EventTriggerQuery
   const hasQuery = Object.keys(value).some(key => EVENT_QUERY_KEYS.has(key));
   if (!hasQuery) return undefined;
   const filter = {
+    ...impliedTriggerEventFilter(value.on),
     ...(value.event !== undefined ? { kind: value.event as BattleEventKind } : {}),
     ...(value.phase !== undefined ? { phase: value.phase as BattleEventPhase } : {}),
     ...(value.reason !== undefined ? { reason: String(value.reason) } : {}),
@@ -65,15 +73,24 @@ export function resolveTriggerInput(value: Record<string, unknown>): ResolvedTri
     return {
       trigger: value.trigger.on,
       triggeredEffects: value.trigger.effects,
-      immediateEffects: value.effects,
+      // A structured trigger owns the actual executable behavior. An empty
+      // optional root effect is therefore exactly equivalent to omission and
+      // should not force a model repair. Empty trigger.effects stays strict.
+      immediateEffects: omitEmptyOptionalEffectSource(value.effects),
       structured: true,
       ...(resolveEventTriggerQueryInput(value.trigger)
         ? { eventQuery: resolveEventTriggerQueryInput(value.trigger) }
         : {}),
     };
   }
+  // Some JSON-schema transports serialize an omitted optional property as
+  // `null`. A null trigger carries no timing or behavior and is therefore
+  // semantically identical to omission. Required-trigger consumers still
+  // reject it as missing, while ordinary cards and status-installing Powers
+  // do not need a model repair solely to delete this empty optional key.
+  const trigger = value.trigger === null ? undefined : value.trigger;
   return {
-    trigger: value.trigger,
+    trigger,
     triggeredEffects: value.effects,
     immediateEffects: undefined,
     structured: false,

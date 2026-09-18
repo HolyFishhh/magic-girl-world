@@ -36,6 +36,13 @@ export class DynamicStatusManager {
   /**
    * 手动刷新状态定义（从MVU变量重新加载）
    */
+  public replaceDefinitions(statuses: unknown): void {
+    const raw = normalizeMvuStatusDefinitions(statuses);
+    const statusNames = Object.fromEntries(raw.map(status => [status.id, status.name]));
+    const result = this.registry.replace(raw, { statusNames });
+    if (result.rejected.length) throw new Error('评估器拒绝未能编译的状态定义');
+  }
+
   public refreshFromMVU(): void {
     this.loadFromMVU();
   }
@@ -47,14 +54,18 @@ export class DynamicStatusManager {
     this.registry.replace([]);
     try {
       const variables = getCurrentMessageVariables();
-      const statusesRaw = readBattleDataContract(variables)?.data.statuses;
+      const battle = readBattleDataContract(variables)?.data;
+      const statusesRaw = battle?.statuses;
       const rawStatuses = normalizeMvuStatusDefinitions(statusesRaw);
       const statusNames = Object.fromEntries(
         rawStatuses
           .filter(status => typeof status.id === 'string' && typeof status.name === 'string' && status.name.trim())
           .map(status => [status.id, status.name.trim()]),
       );
-      const result = this.registry.replace(rawStatuses, { statusNames });
+      const resources = Array.isArray(battle?.core?.resources) ? battle.core.resources : [];
+      const resourceNames = Object.fromEntries(resources.map((resource: any) => [resource.id, resource.name]));
+      const resourceEmojis = Object.fromEntries(resources.map((resource: any) => [resource.id, resource.emoji]));
+      const result = this.registry.replace(rawStatuses, { statusNames, resourceNames, resourceEmojis });
       result.rejected.forEach(status => console.warn('忽略无效的状态定义:', status));
     } catch (error) {
       console.error('加载动态状态定义失败:', error);
@@ -66,6 +77,10 @@ export class DynamicStatusManager {
    */
   public getStatusDefinition(statusId: string): RuntimeStatusDefinition | undefined {
     return this.registry.get(statusId);
+  }
+
+  public getStatusDefinitions(): RuntimeStatusDefinition[] {
+    return [...this.registry.getAll().values()];
   }
 
   /**

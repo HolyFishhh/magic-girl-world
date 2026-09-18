@@ -1,11 +1,12 @@
 import {
-  extractContentMechanicFeatures,
+  isPlainLowValueStarterDefinition,
   mergeContentMechanicFeatures,
   type ContentMechanicFeatures,
   type ContentMechanicRole,
 } from './contentMechanicFeatures';
 import type { ContentDefinition, ContentPack } from './contentPack';
 import { createContentMechanicsFingerprint } from './contentFingerprint';
+import { extractArchetypeEvidence } from './archetypeEvidence';
 
 export const ARCHETYPE_GRAPH_SPEC = 'mwg.archetype-graph/v1' as const;
 
@@ -109,13 +110,13 @@ const weighted = (predicate: ArchetypeFeaturePredicate, weight: number): Weighte
 const RAW_ARCHETYPES: RawNode[] = [
   {
     id: 'direct-pressure', label: '直接压制', description: '用稳定的即时伤害缩短战斗。',
-    requiredFeatures: [op('damage')], optionalFeatures: [weighted(anyOp('draw', 'energy', 'resource'), 2)],
+    requiredFeatures: [op('exact_opponent_damage')], optionalFeatures: [weighted(anyOp('draw', 'energy', 'resource'), 2)],
     payoffFeatures: [op('damage')], genericRoles: ['收益', '终结'], antiSynergies: ['stall-only'],
     neighborHints: ['multi-hit', 'critical-scaling', 'execute-finish', 'tempo-cycle'],
   },
   {
     id: 'multi-hit', label: '多段连击', description: '把一次行动拆成多次命中以放大命中触发。',
-    requiredFeatures: [op('damage')], optionalFeatures: [weighted(anyOp('trigger', 'history_formula', 'apply_status'), 3)],
+    requiredFeatures: [op('exact_multi_hit')], optionalFeatures: [weighted(anyOp('trigger', 'history_formula', 'apply_status'), 3)],
     payoffFeatures: [anyOp('trigger', 'history_formula', 'modify')], genericRoles: ['启动', '收益'], antiSynergies: ['single-hit-only'],
     neighborHints: ['direct-pressure', 'on-hit-engine', 'status-stack', 'replay-chain'],
   },
@@ -132,8 +133,14 @@ const RAW_ARCHETYPES: RawNode[] = [
     neighborHints: ['direct-pressure', 'status-detonation', 'missing-hp-pressure'],
   },
   {
+    id: 'status-form-engine', label: '形态联动', description: '进入自身形态，再由同一状态身份解锁强化攻击、防御或资源收益。',
+    requiredFeatures: [op('exact_self_status_payoff')],
+    optionalFeatures: [weighted(op('apply_status'), 3)], payoffFeatures: [anyOp('damage', 'block', 'heal', 'resource', 'modify')],
+    genericRoles: ['启动', '收益'], antiSynergies: ['status-purge'], neighborHints: ['status-scaling', 'resource-engine'],
+  },
+  {
     id: 'status-stack', label: '状态积累', description: '持续施加可叠层状态并围绕层数取得收益。',
-    requiredFeatures: [op('apply_status'), count('statuses')], optionalFeatures: [weighted(anyOp('history_formula', 'trigger', 'modify'), 3)],
+    requiredFeatures: [op('apply_status', 'exact_stackable_status'), count('statuses')], optionalFeatures: [weighted(anyOp('history_formula', 'trigger', 'modify'), 3)],
     payoffFeatures: [anyOp('damage', 'lust', 'modify', 'condition')], genericRoles: ['启动', '成长'], antiSynergies: ['status-purge'],
     neighborHints: ['status-detonation', 'status-conversion', 'status-scaling', 'enemy-status-benefit'],
   },
@@ -145,13 +152,13 @@ const RAW_ARCHETYPES: RawNode[] = [
   },
   {
     id: 'status-detonation', label: '状态引爆', description: '消费或清除已积累状态，换取一次集中收益。',
-    requiredFeatures: [op('remove_status'), count('statuses')], optionalFeatures: [weighted(anyOp('damage', 'lust', 'heal', 'block'), 4)],
+    requiredFeatures: [op('exact_status_cashout'), count('statuses')], optionalFeatures: [weighted(anyOp('damage', 'lust', 'heal', 'block'), 4)],
     payoffFeatures: [anyOp('damage', 'lust', 'heal', 'block')], genericRoles: ['收益', '终结'], antiSynergies: ['status-preservation'],
     neighborHints: ['status-stack', 'damage-over-time', 'execute-finish', 'status-conversion'],
   },
   {
     id: 'status-conversion', label: '状态转化', description: '把状态层数转换为另一类资源、防护或压力。',
-    requiredFeatures: [count('statuses'), anyOp('condition', 'history_formula', 'modify', 'remove_status')],
+    requiredFeatures: [op('exact_status_conversion')],
     optionalFeatures: [weighted(anyOp('resource', 'energy', 'block', 'heal', 'damage', 'lust'), 3)],
     payoffFeatures: [anyAxis('格挡', '恢复', '生命压制', '欲望压制', '自定义资源')], genericRoles: ['桥接', '收益'], antiSynergies: [],
     neighborHints: ['status-stack', 'status-detonation', 'resource-engine', 'block-conversion'],
@@ -164,7 +171,7 @@ const RAW_ARCHETYPES: RawNode[] = [
   },
   {
     id: 'enemy-status-benefit', label: '敌方状态反哺', description: '敌方持有或获得状态时，为己方提供额外收益。',
-    requiredFeatures: [count('statuses'), anyOp('trigger', 'condition', 'history_formula')],
+    requiredFeatures: [op('exact_enemy_status_payoff')],
     optionalFeatures: [weighted(anyOp('heal', 'block', 'draw', 'energy', 'resource'), 3)],
     payoffFeatures: [anyAxis('格挡', '恢复', '牌序', '自定义资源')], genericRoles: ['桥接', '收益'], antiSynergies: ['status-purge'],
     neighborHints: ['status-stack', 'status-conversion', 'reactive-control'],
@@ -201,43 +208,43 @@ const RAW_ARCHETYPES: RawNode[] = [
   },
   {
     id: 'block-retention', label: '格挡留存', description: '跨回合保存防护并为延迟成长争取时间。',
-    requiredFeatures: [axis('格挡'), anyOp('card_rule', 'trigger', 'modify')],
+    requiredFeatures: [op('exact_block_retain')],
     optionalFeatures: [weighted(trigger('turn_start', 'turn_end'), 3)], payoffFeatures: [op('block')],
     genericRoles: ['循环', '成长'], antiSynergies: ['block-reset'], neighborHints: ['block-engine', 'delayed-payoff', 'stall-control'],
   },
   {
     id: 'block-conversion', label: '格挡转化', description: '把格挡量、格挡获得或格挡消耗转换为进攻与资源。',
-    requiredFeatures: [axis('格挡'), anyAxis('生命压制', '欲望压制', '自定义资源')],
+    requiredFeatures: [op('exact_block_value'), anyAxis('生命压制', '欲望压制', '自定义资源')],
     optionalFeatures: [weighted(anyOp('history_formula', 'condition', 'trigger'), 3)], payoffFeatures: [anyOp('damage', 'lust', 'resource')],
     genericRoles: ['桥接', '收益'], antiSynergies: [], neighborHints: ['block-engine', 'status-conversion', 'resource-cashout'],
   },
   {
     id: 'retaliation', label: '反击', description: '在承受、格挡或避免伤害后反向制造压力。',
-    requiredFeatures: [op('damage'), anyOp('trigger', 'history_formula')],
+    requiredFeatures: [op('exact_retaliation')],
     optionalFeatures: [weighted(trigger('damaged', 'block_gained', 'hp_lost'), 4)], payoffFeatures: [op('damage')],
     genericRoles: ['控制', '收益'], antiSynergies: ['never-targeted'], neighborHints: ['block-engine', 'self-damage', 'reactive-control'],
   },
   {
     id: 'healing-engine', label: '恢复循环', description: '通过稳定恢复延长资源交换并支撑成长。',
-    requiredFeatures: [op('heal')], optionalFeatures: [weighted(anyOp('trigger', 'resource', 'draw'), 2)],
+    requiredFeatures: [anyOp('heal', 'lifesteal')], optionalFeatures: [weighted(anyOp('trigger', 'resource', 'draw'), 2)],
     payoffFeatures: [op('heal')], genericRoles: ['循环', '成长'], antiSynergies: ['healing-disabled'],
     neighborHints: ['healing-conversion', 'self-damage', 'resource-engine'],
   },
   {
-    id: 'healing-conversion', label: '恢复转化', description: '把治疗、过量治疗或生命变化转化为进攻与资源。',
-    requiredFeatures: [axis('恢复'), anyAxis('生命压制', '欲望压制', '自定义资源')],
+    id: 'healing-conversion', label: '恢复转化', description: '把治疗、吸血或生命变化转化为进攻与资源。',
+    requiredFeatures: [anyAxis('恢复', '生存'), anyAxis('生命压制', '欲望压制', '自定义资源')],
     optionalFeatures: [weighted(anyOp('trigger', 'history_formula', 'condition'), 3)], payoffFeatures: [anyOp('damage', 'lust', 'resource')],
     genericRoles: ['桥接', '收益'], antiSynergies: [], neighborHints: ['healing-engine', 'self-damage', 'resource-cashout'],
   },
   {
     id: 'self-damage', label: '自伤交换', description: '主动支付生命换取超额效率，并要求可靠回收手段。',
-    requiredFeatures: [op('damage'), { field: 'targets', values: ['self'], mode: 'any' }],
+    requiredFeatures: [op('exact_self_damage')],
     optionalFeatures: [weighted(anyOp('heal', 'block', 'resource', 'draw'), 3)], payoffFeatures: [anyAxis('生命压制', '恢复', '自定义资源')],
     genericRoles: ['风险', '收益'], antiSynergies: ['low-max-hp'], neighborHints: ['healing-engine', 'missing-hp-pressure', 'retaliation'],
   },
   {
     id: 'missing-hp-pressure', label: '残血爆发', description: '依据已损生命或低生命条件强化行动。',
-    requiredFeatures: [op('condition'), anyOp('damage', 'block', 'heal')],
+    requiredFeatures: [op('exact_low_hp'), anyOp('damage', 'block', 'heal')],
     optionalFeatures: [weighted(anyOp('history_formula', 'modify'), 2)], payoffFeatures: [anyOp('damage', 'block', 'heal')],
     genericRoles: ['风险', '终结'], antiSynergies: ['full-hp-only'], neighborHints: ['self-damage', 'execute-finish', 'healing-conversion'],
   },
@@ -261,7 +268,7 @@ const RAW_ARCHETYPES: RawNode[] = [
   },
   {
     id: 'discard-payoff', label: '弃牌收益', description: '以本回合或本场弃牌事件作为主要收益来源。',
-    requiredFeatures: [anyOp('history_formula', 'trigger'), op('discard')], optionalFeatures: [weighted(anyOp('damage', 'block', 'energy', 'draw'), 3)],
+    requiredFeatures: [op('exact_discard_payoff')], optionalFeatures: [weighted(anyOp('damage', 'block', 'energy', 'draw'), 3)],
     payoffFeatures: [anyOp('damage', 'block', 'energy', 'draw')], genericRoles: ['收益', '终结'], antiSynergies: [],
     neighborHints: ['discard-engine', 'replay-chain', 'resource-engine'],
   },
@@ -289,7 +296,7 @@ const RAW_ARCHETYPES: RawNode[] = [
   },
   {
     id: 'thin-deck', label: '牌库精简', description: '移除、消耗或变形低效牌以提高核心循环密度。',
-    requiredFeatures: [anyOp('remove_card', 'exhaust', 'transform_card')], optionalFeatures: [weighted(anyOp('draw', 'recover'), 2)],
+    requiredFeatures: [anyOp('remove_card', 'exhaust')], optionalFeatures: [weighted(anyOp('draw', 'recover'), 2)],
     payoffFeatures: [anyOp('draw', 'history_formula', 'trigger')], genericRoles: ['循环', '成长'], antiSynergies: ['generated-clutter'],
     neighborHints: ['exhaust-engine', 'tempo-cycle', 'card-evolution'],
   },
@@ -301,7 +308,7 @@ const RAW_ARCHETYPES: RawNode[] = [
   },
   {
     id: 'cost-shift', label: '费用操纵', description: '动态调整卡牌费用以跨回合安排爆发。',
-    requiredFeatures: [anyOp('reduce_cost', 'patch_card', 'modify_card', 'free')], optionalFeatures: [weighted(anyOp('retain', 'draw'), 2)],
+    requiredFeatures: [op('exact_cost_change')], optionalFeatures: [weighted(anyOp('retain', 'draw'), 2)],
     payoffFeatures: [anyOp('damage', 'draw', 'replay')], genericRoles: ['启动', '成长'], antiSynergies: ['fixed-cost-only'],
     neighborHints: ['zero-cost-engine', 'x-cost-engine', 'retain-engine', 'card-evolution'],
   },
@@ -313,13 +320,13 @@ const RAW_ARCHETYPES: RawNode[] = [
   },
   {
     id: 'retain-engine', label: '保留蓄势', description: '保留关键牌，跨回合等待资源或条件成熟。',
-    requiredFeatures: [anyOp('retain', 'card_destination')], optionalFeatures: [weighted(anyOp('condition', 'reduce_cost', 'patch_card'), 2)],
+    requiredFeatures: [op('exact_retain')], optionalFeatures: [weighted(anyOp('condition', 'reduce_cost', 'patch_card'), 2)],
     payoffFeatures: [anyOp('damage', 'block', 'x_formula', 'apply_status')], genericRoles: ['成长', '终结'], antiSynergies: ['forced-discard'],
     neighborHints: ['cost-shift', 'delayed-payoff', 'topdeck-control'],
   },
   {
     id: 'replay-chain', label: '回响连锁', description: '让卡牌完整重复结算，并放大出牌触发与组合。',
-    requiredFeatures: [anyOp('replay', 'double')], optionalFeatures: [weighted(anyOp('trigger', 'history_formula', 'free'), 3)],
+    requiredFeatures: [anyOp('replay', 'replay_current', 'double')], optionalFeatures: [weighted(anyOp('trigger', 'history_formula', 'condition', 'free'), 3)],
     payoffFeatures: [anyOp('damage', 'block', 'apply_status', 'draw')], genericRoles: ['收益', '循环'], antiSynergies: ['single-resolution'],
     neighborHints: ['multi-hit', 'zero-cost-engine', 'on-play-engine', 'auto-play-engine'],
   },
@@ -331,13 +338,13 @@ const RAW_ARCHETYPES: RawNode[] = [
   },
   {
     id: 'on-play-engine', label: '出牌触发', description: '按出牌次数、类型或顺序持续积累收益。',
-    requiredFeatures: [anyOp('trigger', 'history_formula')], optionalFeatures: [weighted(trigger('card_played', 'attack_played', 'skill_played'), 4)],
+    requiredFeatures: [op('exact_on_play')], optionalFeatures: [weighted(trigger('card_played', 'attack_played', 'skill_played'), 4)],
     payoffFeatures: [anyOp('damage', 'block', 'draw', 'energy', 'apply_status')], genericRoles: ['成长', '收益'], antiSynergies: ['play-limit'],
     neighborHints: ['zero-cost-engine', 'replay-chain', 'multi-hit', 'power-engine'],
   },
   {
     id: 'on-hit-engine', label: '命中触发', description: '每次造成实际伤害时追加状态、资源或防护。',
-    requiredFeatures: [op('damage'), anyOp('trigger', 'history_formula')], optionalFeatures: [weighted(trigger('damage_dealt', 'hp_lost'), 4)],
+    requiredFeatures: [op('exact_on_hit')], optionalFeatures: [weighted(trigger('damage_dealt', 'hp_lost'), 4)],
     payoffFeatures: [anyOp('apply_status', 'resource', 'block', 'draw')], genericRoles: ['成长', '收益'], antiSynergies: ['non-damage'],
     neighborHints: ['multi-hit', 'status-scaling', 'resource-engine'],
   },
@@ -361,13 +368,13 @@ const RAW_ARCHETYPES: RawNode[] = [
   },
   {
     id: 'resource-hoard', label: '资源蓄积', description: '跨回合保存资源，等待高收益的集中消费窗口。',
-    requiredFeatures: [count('resources'), anyOp('trigger', 'condition', 'set_resource')],
+    requiredFeatures: [count('resources'), anyOp('resource_retained', 'x_cost', 'resource_payoff')],
     optionalFeatures: [weighted(anyOp('retain', 'x_cost', 'x_formula'), 3)], payoffFeatures: [anyOp('x_formula', 'damage', 'block')],
     genericRoles: ['成长', '终结'], antiSynergies: ['resource-reset'], neighborHints: ['resource-engine', 'resource-cashout', 'x-cost-engine'],
   },
   {
     id: 'resource-cashout', label: '资源兑现', description: '消费已积累资源，换取集中伤害、防护或控制。',
-    requiredFeatures: [count('resources'), anyOp('x_formula', 'condition', 'set_resource')],
+    requiredFeatures: [count('resources'), anyOp('resource_cost', 'resource_spend', 'resource_payoff')],
     optionalFeatures: [weighted(anyOp('damage', 'lust', 'block', 'apply_status'), 3)], payoffFeatures: [anyOp('damage', 'lust', 'block', 'apply_status')],
     genericRoles: ['收益', '终结'], antiSynergies: ['resource-hoard-only'], neighborHints: ['resource-engine', 'resource-hoard', 'x-cost-engine'],
   },
@@ -391,13 +398,13 @@ const RAW_ARCHETYPES: RawNode[] = [
   },
   {
     id: 'enchantment-engine', label: '附魔构筑', description: '用正面附着改变单张卡的数值、费用或规则。',
-    requiredFeatures: [anyOp('enchantment', 'attach_card')], optionalFeatures: [weighted(anyOp('patch_card', 'upgrade_card'), 2)],
+    requiredFeatures: [op('exact_enchantment')], optionalFeatures: [weighted(anyOp('patch_card', 'upgrade_card'), 2)],
     payoffFeatures: [anyOp('damage', 'block', 'draw', 'replay', 'free')], genericRoles: ['成长'], antiSynergies: ['transform-away'],
     neighborHints: ['card-evolution', 'cost-shift', 'replay-chain'],
   },
   {
     id: 'affliction-engine', label: '负面附着', description: '围绕可移除或可利用的卡牌负面附着进行交换。',
-    requiredFeatures: [anyOp('affliction', 'attach_card')], optionalFeatures: [weighted(anyOp('remove_card', 'transform_card', 'trigger'), 3)],
+    requiredFeatures: [op('exact_affliction')], optionalFeatures: [weighted(anyOp('remove_card', 'transform_card', 'trigger'), 3)],
     payoffFeatures: [anyOp('damage', 'draw', 'resource', 'remove_card')], genericRoles: ['风险', '桥接'], antiSynergies: ['unremovable-affliction'],
     neighborHints: ['card-evolution', 'curse-utilization', 'thin-deck'],
   },
@@ -420,21 +427,21 @@ const RAW_ARCHETYPES: RawNode[] = [
     neighborHints: ['multi-resource', 'power-engine', 'reactive-control'],
   },
   {
-    id: 'orb-engine', label: 'Orb循环', description: '围绕槽位、被动值与主动激发管理独立容器。',
+    id: 'orb-engine', label: '姿态槽循环', description: '围绕槽位、被动值与主动激发管理独立容器。',
     requiredFeatures: [anyOp('channel_orb', 'evoke_orb', 'modify_orb', 'orb_slots')],
     optionalFeatures: [weighted(anyOp('trigger', 'resource', 'extra_turn'), 2)], payoffFeatures: [anyOp('damage', 'block', 'draw', 'resource')],
     genericRoles: ['启动', '循环', '收益'], antiSynergies: ['no-orb-slots'], neighborHints: ['multi-resource', 'delayed-payoff', 'summon-engine'],
   },
   {
     id: 'summon-engine', label: '召唤协同', description: '召唤独立单位承担攻击、防护与触发职责。',
-    requiredFeatures: [op('spawn_summon')], optionalFeatures: [weighted(anyOp('activate_summon', 'heal_summon', 'modify_summon', 'modify_summon_effect', 'copy_summon', 'set_summon_resource', 'remove_summon_status'), 3)],
-    payoffFeatures: [anyOp('activate_summon', 'damage_summon', 'summon_resource', 'summoner_effects')], genericRoles: ['启动', '成长'], antiSynergies: ['summon-capacity'],
+    requiredFeatures: [anyOp('spawn_summon', 'summon_support', 'activate_summon', 'heal_summon', 'modify_summon', 'modify_summon_effect')], optionalFeatures: [weighted(anyOp('activate_summon', 'heal_summon', 'modify_summon', 'modify_summon_effect', 'copy_summon', 'set_summon_resource', 'remove_summon_status', 'summon_condition', 'summon_reinforce'), 3)],
+    payoffFeatures: [anyOp('summon_output', 'activate_summon', 'damage_summon', 'summon_resource', 'summoner_effects', 'summon_support')], genericRoles: ['启动', '成长'], antiSynergies: ['summon-capacity'],
     neighborHints: ['summon-swarm', 'summon-sacrifice', 'orb-engine'],
   },
   {
     id: 'summon-swarm', label: '召唤群攻', description: '通过多个召唤单位与额外行动形成持续压制。',
-    requiredFeatures: [op('spawn_summon'), anyOp('activate_summon', 'trigger')],
-    optionalFeatures: [weighted(anyOp('modify_summon', 'modify_summon_effect', 'copy_summon', 'summon_resource', 'set_summon_resource'), 2)], payoffFeatures: [anyOp('damage', 'apply_summon_status', 'remove_summon_status', 'summoner_effects')],
+    requiredFeatures: [op('spawn_summon'), anyOp('summon_multiple', 'copy_summon')],
+    optionalFeatures: [weighted(anyOp('modify_summon', 'modify_summon_effect', 'copy_summon', 'summon_resource', 'set_summon_resource', 'summon_condition'), 2)], payoffFeatures: [anyOp('damage', 'apply_summon_status', 'remove_summon_status', 'summoner_effects')],
     genericRoles: ['成长', '收益'], antiSynergies: ['summon-capacity'], neighborHints: ['summon-engine', 'on-play-engine', 'multi-target'],
   },
   {
@@ -444,15 +451,35 @@ const RAW_ARCHETYPES: RawNode[] = [
     neighborHints: ['summon-engine', 'resource-cashout', 'self-damage'],
   },
   {
+    id: 'summon-single-core', label: '单核心养成', description: '围绕同一召唤核心的行动、防护或强化持续获益。',
+    requiredFeatures: [op('spawn_summon', 'summon_single')], optionalFeatures: [weighted(anyOp('modify_summon', 'modify_summon_effect', 'summoner_effects'), 3)],
+    payoffFeatures: [anyOp('summon_output', 'damage', 'block', 'summoner_effects')], genericRoles: ['启动', '成长'], antiSynergies: ['summon-capacity'], neighborHints: ['summon-engine', 'summon-command-chain'],
+  },
+  {
+    id: 'summon-passive-growth', label: '召唤被动成长', description: '让召唤单位的被动或属性强化跨回合累积价值。',
+    requiredFeatures: [op('spawn_summon', 'summon_passive')], optionalFeatures: [weighted(anyOp('modify_summon', 'modify_summon_effect', 'trigger'), 3)],
+    payoffFeatures: [anyOp('summon_output', 'damage', 'block', 'summoner_effects')], genericRoles: ['成长', '收益'], antiSynergies: [], neighborHints: ['summon-single-core', 'summon-engine'],
+  },
+  {
+    id: 'summon-life-conversion', label: '召唤生命转伤', description: '根据召唤单位当前生命或生命上限计算伤害。',
+    requiredFeatures: [op('summon_hp_damage')], optionalFeatures: [weighted(anyOp('dismiss_summon', 'trigger', 'summoner_effects'), 3)],
+    payoffFeatures: [anyOp('summon_output', 'damage')], genericRoles: ['风险', '终结'], antiSynergies: ['single-irreplaceable-summon'], neighborHints: ['summon-sacrifice', 'summon-engine'],
+  },
+  {
+    id: 'summon-command-chain', label: '召唤指令连动', description: '命令已在场的召唤单位立即发动其实际行动。',
+    requiredFeatures: [op('activate_summon')], optionalFeatures: [weighted(anyOp('spawn_summon', 'summon_condition', 'copy_summon'), 3)],
+    payoffFeatures: [anyOp('summon_output', 'damage', 'block', 'summoner_effects')], genericRoles: ['收益', '循环'], antiSynergies: [], neighborHints: ['summon-engine', 'summon-single-core'],
+  },
+  {
     id: 'multi-target', label: '多目标压制', description: '通过全体、随机或条件选敌处理多敌人战斗。',
     requiredFeatures: [{ field: 'targets', values: ['all', 'random', 'random_n', 'lowest_hp', 'highest_hp', 'by_id'], mode: 'any' }],
-    optionalFeatures: [weighted(anyOp('damage', 'lust', 'apply_status'), 3)], payoffFeatures: [anyOp('damage', 'lust', 'apply_status')],
+    optionalFeatures: [weighted(anyOp('damage', 'lust', 'apply_status', 'ally_condition'), 3)], payoffFeatures: [anyOp('damage', 'lust', 'apply_status')],
     genericRoles: ['控制', '收益'], antiSynergies: ['single-boss-only'], neighborHints: ['direct-pressure', 'status-stack', 'summon-swarm'],
   },
   {
     id: 'reactive-control', label: '意图反制', description: '读取条件、行动或事件，在正确窗口进行防守与反击。',
-    requiredFeatures: [anyOp('condition', 'trigger', 'history_formula'), anyOp('block', 'apply_status', 'end_turn', 'card_rule')],
-    optionalFeatures: [weighted(anyOp('damage', 'draw', 'energy'), 2)], payoffFeatures: [anyOp('block', 'damage', 'apply_status')],
+    requiredFeatures: [op('exact_intent'), anyOp('block', 'apply_status', 'end_turn', 'card_rule')],
+    optionalFeatures: [weighted(anyOp('damage', 'draw', 'energy', 'ally_condition'), 2)], payoffFeatures: [anyOp('block', 'damage', 'apply_status')],
     genericRoles: ['控制', '收益'], antiSynergies: ['untelegraphed-random'], neighborHints: ['retaliation', 'rule-control', 'stall-control', 'enemy-status-benefit'],
   },
   {
@@ -487,7 +514,8 @@ function valuesFor(features: ContentMechanicFeatures, field: ArchetypeFeatureFie
 
 function predicateMatches(features: ContentMechanicFeatures, predicate: ArchetypeFeaturePredicate): boolean {
   const actual = valuesFor(features, predicate.field);
-  if (predicate.minimum !== undefined) return actual.length >= predicate.minimum;
+  if (predicate.minimum !== undefined) return actual.length >= predicate.minimum
+    || (predicate.field === 'statuses' && predicate.minimum === 1 && features.operations.includes('status_query'));
   const values = predicate.values || [];
   if (values.length === 0) return true;
   return predicate.mode === 'any'
@@ -534,7 +562,7 @@ function graphNodes(): ArchetypeNode[] {
             targets: [...sourceKeys].filter(key => key.startsWith('targets:')).map(key => key.slice(8)),
             zones: [...sourceKeys].filter(key => key.startsWith('zones:')).map(key => key.slice(6)),
             triggers: [...sourceKeys].filter(key => key.startsWith('triggers:')).map(key => key.slice(9)),
-            roles: [], statuses: [], resources: [], complexity: 0,
+            roles: [], statuses: [], resources: [], summons: [], complexity: 0,
           }, predicate))
           .map(predicateLabel);
         return {
@@ -557,9 +585,13 @@ function definitionLabel(definition: ContentDefinition, index: number): string {
 }
 
 function scoreNode(features: ContentMechanicFeatures, node: ArchetypeNode): { score: number; missingPayoffs: string[] } {
+  // A binary form's payoff is represented once, not split into an identical growth label.
+  if (node.id === 'status-scaling' && features.operations.includes('exact_self_status_payoff')) return { score: 0, missingPayoffs: [] };
   const requiredMatches = node.requiredFeatures.filter(predicate => predicateMatches(features, predicate)).length;
   const requiredRatio = node.requiredFeatures.length ? requiredMatches / node.requiredFeatures.length : 1;
-  if (requiredRatio < 0.5) return { score: 0, missingPayoffs: [] };
+  // A shared payoff (damage/block/draw) cannot establish a missing mechanic.
+  // Partial prerequisites used to label ordinary attacks as desire conversion.
+  if (requiredMatches !== node.requiredFeatures.length) return { score: 0, missingPayoffs: [] };
   const optionalTotal = node.optionalFeatures.reduce((sum, feature) => sum + feature.weight, 0);
   const optionalScore = node.optionalFeatures.reduce(
     (sum, feature) => sum + (predicateMatches(features, feature) ? feature.weight : 0),
@@ -575,10 +607,14 @@ function scoreNode(features: ContentMechanicFeatures, node: ArchetypeNode): { sc
 }
 
 function expandedContentFeatures(definition: ContentDefinition, pack?: ContentPack): ContentMechanicFeatures {
-  const base = extractContentMechanicFeatures(definition);
-  if (!pack || base.statuses.length === 0) return base;
-  const referenced = pack.statuses.filter(status => base.statuses.includes(String(status.id || '')));
-  return mergeContentMechanicFeatures([base, ...referenced.map(extractContentMechanicFeatures)]);
+  return extractArchetypeEvidence(definition, pack);
+}
+
+function isIdentityLinkedNode(node: ArchetypeNode): 'resources' | 'statuses' | 'summons' | null {
+  if (node.id.startsWith('resource-') || node.id === 'multi-resource') return 'resources';
+  if (node.id.startsWith('status-') || node.id === 'damage-over-time' || node.id === 'enemy-status-benefit') return 'statuses';
+  if (node.id.startsWith('summon-')) return 'summons';
+  return null;
 }
 
 export function scoreContentArchetypes(definition: ContentDefinition, pack?: ContentPack): ArchetypeAffinity[] {
@@ -606,45 +642,108 @@ function quantity(definition: ContentDefinition): number {
 }
 
 export function profileDeckArchetypes(pack: ContentPack): DeckArchetypeProfile {
-  const scores = new Map<string, { total: number; cards: Set<string>; missing: Set<string> }>();
+  const scores = new Map<string, { cards: Set<string>; evidence: Map<number, { score: number; missing: readonly string[] }> }>();
   const definitions: Array<{ value: ContentDefinition; weight: number; label: string }> = [
-    ...pack.cards.map((value, index) => ({ value, weight: quantity(value), label: definitionLabel(value, index) })),
+    ...pack.cards.filter(value => !isPlainLowValueStarterDefinition(value)).map((value, index) => ({ value, weight: quantity(value), label: definitionLabel(value, index) })),
     ...pack.relics.map((value, index) => ({ value, weight: 1.5, label: definitionLabel(value, index) })),
     ...pack.abilities.map((value, index) => ({ value, weight: 1.25, label: definitionLabel(value, index) })),
     ...pack.activeStatuses.map((value, index) => ({ value, weight: 0.75, label: definitionLabel(value, index) })),
   ];
-  let weightedContent = 0;
-  for (const definition of definitions) {
-    weightedContent += definition.weight;
-    for (const affinity of scoreContentArchetypes(definition.value, pack).slice(0, 6)) {
-      const entry = scores.get(affinity.id) || { total: 0, cards: new Set<string>(), missing: new Set<string>() };
-      entry.total += affinity.score * definition.weight;
-      entry.cards.add(definition.label);
-      affinity.missingPayoffs.forEach(value => entry.missing.add(value));
-      scores.set(affinity.id, entry);
+  const featured = definitions.map((definition, key) => ({ ...definition, key, features: expandedContentFeatures(definition.value, pack) }));
+  const weightedContent = featured.reduce((sum, definition) => sum + definition.weight, 0);
+  const add = (id: string, score: number, members: typeof featured, missing: readonly string[]): void => {
+    const entry = scores.get(id) || { cards: new Set<string>(), evidence: new Map<number, { score: number; missing: readonly string[] }>() };
+    for (const member of members) {
+      const previous = entry.evidence.get(member.key);
+      if (!previous || score > previous.score) entry.evidence.set(member.key, { score, missing });
+      entry.cards.add(member.label);
+    }
+    scores.set(id, entry);
+  };
+  const hasResourceCashoutEvidence = (features: ContentMechanicFeatures): boolean =>
+    features.resources.length > 0 && features.operations.some(operation =>
+      operation === 'resource_payoff' || operation === 'resource_cost' || operation === 'resource_spend',
+    );
+  for (const definition of featured) {
+    for (const node of ARCHETYPE_GRAPH) {
+      const result = scoreNode(definition.features, node);
+      if (result.score < 35) continue;
+      if (node.id === 'resource-cashout' && !hasResourceCashoutEvidence(definition.features)) continue;
+      add(node.id, result.score, [definition], result.missingPayoffs);
     }
   }
+  // Setup and payoff may sit on different cards, but every cross-card score is
+  // evaluated inside one stable-ID evidence group. No deck-wide union exists.
+  const linkedResourceMembers = new Set<number>();
+  for (const field of ['resources', 'statuses', 'summons'] as const) {
+    const groups = new Map<string, typeof featured>();
+    featured.forEach(definition => definition.features[field].forEach(id => {
+      const group = groups.get(id) || [];
+      group.push(definition);
+      groups.set(id, group);
+    }));
+    for (const group of groups.values()) {
+      if (group.length < 2 && field !== 'resources') continue;
+      const features = mergeContentMechanicFeatures(group.map(definition => definition.features));
+      for (const node of ARCHETYPE_GRAPH) {
+        if (isIdentityLinkedNode(node) !== field) continue;
+        const result = scoreNode(features, node);
+        if (result.score < 35) continue;
+        if (node.id === 'resource-cashout' && !hasResourceCashoutEvidence(features)) continue;
+        if (node.id === 'resource-cashout' && group.length >= 2) group.forEach(member => linkedResourceMembers.add(member.key));
+        add(node.id, result.score, group, result.missingPayoffs);
+      }
+    }
+  }
+  // Once a resource has a real multi-card setup/payoff group, standalone
+  // cashout evidence from another resource must not remain attached to that
+  // same affinity. Otherwise a foreign spender dilutes the linked resource's
+  // supporting cards and score.
+  if (linkedResourceMembers.size) {
+    const resourceCashout = scores.get('resource-cashout');
+    if (resourceCashout) {
+      for (const key of [...resourceCashout.evidence.keys()]) {
+        if (!linkedResourceMembers.has(key)) resourceCashout.evidence.delete(key);
+      }
+      resourceCashout.cards = new Set([...resourceCashout.evidence.keys()].map(key => featured[key].label));
+      if (!resourceCashout.evidence.size) scores.delete('resource-cashout');
+    }
+  }
+  // Generic payoffs never join unrelated cards. Cross-card assembly above
+  // requires a stable status, resource or summon identity.
+  const discardMembers = featured.filter(member => member.features.operations.some(operation => operation === 'discard' || operation === 'exact_discard_payoff'));
+  if (discardMembers.some(member => member.features.operations.includes('discard'))
+    && discardMembers.some(member => member.features.operations.includes('exact_discard_payoff'))) {
+    const node = ARCHETYPE_GRAPH.find(node => node.id === 'discard-payoff')!;
+    const result = scoreNode(mergeContentMechanicFeatures(discardMembers.map(member => member.features)), node);
+    add(node.id, result.score, discardMembers, result.missingPayoffs);
+  }
   const nodes = new Map(ARCHETYPE_GRAPH.map(node => [node.id, node]));
+  // Each owned instance contributes one finite evidence budget, divided among
+  // its matches. Adding more overlapping labels cannot erase scatter cards or
+  // outweigh a dedicated engine. Names never serve as evidence identities.
+  const totals = featured.map(member => [...scores.values()].reduce((sum, entry) => sum + (entry.evidence.get(member.key)?.score || 0), 0));
+  const scatterWeight = featured.filter(member => totals[member.key] === 0).reduce((sum, member) => sum + member.weight, 0);
+  const scatterShare = weightedContent ? Math.round(scatterWeight / weightedContent * 1000) / 10 : 100;
   const affinities = [...scores.entries()]
     .map(([id, entry]) => {
       const node = nodes.get(id)!;
+      const members = [...entry.evidence].map(([key, evidence]) => ({ ...evidence, member: featured[key] }));
+      const basis = members.reduce((sum, value) => sum + value.member.weight, 0);
+      const total = members.reduce((sum, value) => sum + value.score * value.member.weight, 0);
+      const missing = members.map(value => value.missing).reduce((left, right) => left.filter(value => right.includes(value)));
       return {
         id,
         label: node.label,
         description: node.description,
-        score: Math.round(entry.total / Math.max(1, weightedContent)),
-        share: entry.total,
+        score: Math.round(total / Math.max(1, basis)),
+        share: Math.round(members.reduce((sum, value) => sum + value.member.weight * value.score / totals[value.member.key], 0) / Math.max(1, weightedContent) * 1000) / 10,
         supportingCards: [...entry.cards].slice(0, 8),
-        missingPayoffs: [...entry.missing].slice(0, 5),
+        missingPayoffs: missing.slice(0, 5),
       } satisfies ArchetypeAffinity;
     })
     .filter(value => value.score >= 8)
     .sort((left, right) => right.share - left.share || left.id.localeCompare(right.id));
-  const represented = affinities.reduce((sum, value) => sum + value.share, 0);
-  const capacity = Math.max(1, weightedContent * 100 * 2.2);
-  const scatterShare = Math.round(Math.max(0, Math.min(1, 1 - represented / capacity)) * 1000) / 10;
-  const shareBase = Math.max(1, affinities.reduce((sum, value) => sum + value.share, 0));
-  affinities.forEach(value => { value.share = Math.round(value.share / shareBase * (100 - scatterShare) * 10) / 10; });
   const primary = affinities.slice(0, 5).map(value => value.id);
   const bridges = primary.flatMap((from, index) => primary.slice(index + 1).flatMap(to => {
     const edge = nodes.get(from)?.neighbors.find(neighbor => neighbor.target === to)
@@ -677,7 +776,7 @@ export function profileDeckArchetypes(pack: ContentPack): DeckArchetypeProfile {
     });
   return {
     spec: ARCHETYPE_GRAPH_SPEC,
-    fingerprint: createContentMechanicsFingerprint({ cards: pack.cards, statuses: pack.statuses }),
+    fingerprint: createContentMechanicsFingerprint({ cards: pack.cards, statuses: pack.statuses, relics: pack.relics, abilities: pack.abilities, activeStatuses: pack.activeStatuses, playerResources: pack.playerResources }),
     affinities,
     scatterShare,
     primary,

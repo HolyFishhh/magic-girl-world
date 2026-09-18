@@ -10,4 +10,6 @@ export interface CharacterConfig {
   card?: string;
   /** Optional tower-only guidance entered from the in-card start form. */
   towerRequirements?: string;
+  /** Selected foundations are sent as their own prompt field, never merged into card text. */
+  selectedMechanics?: string;
 }

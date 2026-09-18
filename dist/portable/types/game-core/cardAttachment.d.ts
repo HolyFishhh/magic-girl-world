@@ -3,7 +3,7 @@ import { type CardCostOperator, type CardKeyword, type CardPatchInheritancePolic
 import type { CardValueOperator, CardValueStat, NumericExpression } from './effectDsl';
 import type { PlayedCardDestination } from './cardRules';
 export type CardAttachmentKind = 'enchantment' | 'affliction';
-export type CardAttachmentRemovalEvent = 'played' | 'discarded' | 'turn_end' | 'combat_end' | 'run_end' | 'manual';
+export type CardAttachmentRemovalEvent = 'resolution_end' | 'played' | 'discarded' | 'turn_end' | 'combat_end' | 'run_end' | 'manual';
 export type CardAttachmentPatchChange = {
     kind: 'numeric';
     stat: CardValueStat;
@@ -79,12 +79,24 @@ export interface CardAttachmentDraft {
 export interface CardWithAttachments extends PatchableCard {
     attachments?: CardAttachment[];
 }
+/**
+ * Reasons that actually enter the gameplay discard lifecycle. Other
+ * CardMoveReason values remain useful journal metadata, but can never fire a
+ * discard program, discard attachment removal, or discard auto-play rule.
+ */
+export declare const CARD_DISCARD_TRIGGER_REASONS: ReadonlySet<CardMoveReason>;
 export declare function validateCardAttachmentDraft(draft: CardAttachmentDraft): void;
 /** Add one named package atomically. A card may carry only one enchantment but multiple distinct afflictions. */
 export declare function applyCardAttachment<TCard extends CardWithAttachments>(card: TCard, draft: CardAttachmentDraft): TCard;
 export declare function removeCardAttachment<TCard extends CardWithAttachments>(card: TCard, attachmentId: string): TCard;
 /** Advance named bundle lifetime after a completed event; all bundled patches are removed together. */
 export declare function advanceCardAttachments<TCard extends CardWithAttachments>(card: TCard, event: CardAttachmentRemovalEvent, reason?: CardMoveReason): TCard;
+/**
+ * Close the temporary lifetime shared by direct card patches and named
+ * attachment bundles. This is used both for cards still in a pile and for a
+ * played card that is temporarily detached while its effects resolve.
+ */
+export declare function finalizeCardResolution<TCard extends CardWithAttachments>(card: TCard): TCard;
 export declare function inheritedCardAttachments(card: CardWithAttachments, policy: CardPatchInheritancePolicy): CardAttachment[];
 export interface CardAttachmentPlayAccess {
     denied: boolean;

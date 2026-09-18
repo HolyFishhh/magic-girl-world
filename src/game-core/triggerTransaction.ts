@@ -2,10 +2,29 @@ type MaybePromise<T> = T | Promise<T>;
 
 export type TriggerTransactionFailurePolicy = 'propagate' | 'recover-and-continue';
 
+/**
+ * Diagnostics emitted after a recover-and-continue trigger was restored.
+ * The error is the original trigger failure; a rollback failure still rejects.
+ */
+export interface RecoveredTriggerFailure {
+  scope: string;
+  error: unknown;
+}
+
+/**
+ * Observers are deliberately diagnostic-only: their own failures cannot turn
+ * an established recover-and-continue UI path into a failed battle action.
+ */
+export type TriggerTransactionRecoveryObserver = (
+  failure: RecoveredTriggerFailure,
+) => MaybePromise<void>;
+
 export interface TriggerTransactionPorts<TToken> {
   beginTransaction(scope: string): MaybePromise<TToken>;
   commitTransaction(token: TToken): MaybePromise<void>;
   rollbackTransaction(token: TToken, cause?: unknown): MaybePromise<void>;
+  /** Optional observer for callers that must distinguish recovered triggers from a clean run. */
+  onRecoveredFailure?: TriggerTransactionRecoveryObserver;
 }
 
 export type TriggerTransactionResult<TValue> =
@@ -47,6 +66,11 @@ export async function runTriggerTransaction<TToken, TValue>(
     }
 
     if (failurePolicy === 'propagate') throw cause;
+    try {
+      await ports.onRecoveredFailure?.({ scope, error: cause });
+    } catch {
+      // Diagnostic observers must not change the established recovery contract.
+    }
     return { status: 'rolled_back', cause };
   }
 }

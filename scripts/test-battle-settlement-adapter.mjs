@@ -38,7 +38,7 @@ for (const battle of [variables.stat_data.battle]) {
   assert.deepEqual(battle.enemy.actions, []);
   assert.deepEqual(battle.enemy.action_config, {});
   assert.equal(battle.enemy.action_mode, 'sequence');
-  assert.deepEqual(battle.enemy.lust_effect.effects, []);
+  assert.equal(Object.hasOwn(battle.enemy, 'lust_effect'), false, 'settlement must remove the optional effect instead of leaving an invalid empty shell');
 }
 assert.equal(variables.battle, flatBattle, 'flat battle data is outside the current settlement contract');
 assert.deepEqual(variables.stat_data.reward.request, { marker: '[MVU_BATTLE_SETTLEMENT]', result: 'victory' });
@@ -104,4 +104,83 @@ assert.equal(
   'reaching an even level immediately grants one removal use',
 );
 
+const legacyTowerProgression = {
+  stat_data: {
+    game_mode: 'tower',
+    game_mode_lock: { schemaVersion: 1, mode: 'tower' },
+    battle: {
+      ...root(),
+      level: 1,
+      exp: 150,
+      core: { ...root().core, card_removal_count: 0 },
+    },
+  },
+};
+settleTavernBattleVariables(legacyTowerProgression, {
+  result: 'victory',
+  request: { player: { hp: 20, maxHp: 20, lust: 0, maxLust: 100, level: 1 }, route: null },
+  player: { currentHp: 12, currentLust: 7 },
+  items: [],
+  turns: 3,
+});
+assert.equal(legacyTowerProgression.stat_data.battle.level, 1, 'tower settlement preserves legacy levels without progressing them');
+assert.equal(legacyTowerProgression.stat_data.battle.exp, 150, 'tower settlement neither grants nor consumes legacy EXP');
+assert.equal(legacyTowerProgression.stat_data.battle.core.card_removal_count, 0, 'tower legacy EXP cannot generate removal rewards');
+
+const permanentGrowthVariables = { stat_data: { battle: root() } };
+const permanentGrowthInput = {
+  result: 'defeat',
+  player: { currentHp: 99, currentLust: 7 },
+  items: [],
+  turns: 2,
+  persistentGrowth: [
+    { id: 'growth_hp_1', stat: 'max_hp', operator: 'add', value: 12 },
+    { id: 'growth_lust_1', stat: 'max_lust', operator: 'set', value: 120 },
+  ],
+};
+const permanentGrowthSnapshot = structuredClone(permanentGrowthInput);
+settleTavernBattleVariables(permanentGrowthVariables, structuredClone(permanentGrowthSnapshot));
+assert.equal(permanentGrowthVariables.stat_data.battle.core.max_hp, 32, 'only the explicit ledger persists player maxima');
+assert.equal(permanentGrowthVariables.stat_data.battle.core.max_lust, 120);
+assert.equal(permanentGrowthVariables.stat_data.battle.core.hp, 32, 'settlement clamps final vitals to the new maximum');
+assert.deepEqual(
+  permanentGrowthVariables.stat_data.battle.core.persistent_growth_receipts,
+  ['growth_hp_1', 'growth_lust_1'],
+  'the MVU core stores the durable receipt with the applied growth',
+);
+const reloadSnapshot = structuredClone(permanentGrowthVariables);
+assert.equal(reloadSnapshot.stat_data.battle.core.max_hp, 32, 'the canonical settled root survives a reload snapshot');
+settleTavernBattleVariables(permanentGrowthVariables, structuredClone(permanentGrowthSnapshot));
+assert.equal(permanentGrowthVariables.stat_data.battle.core.max_hp, 32, 'a repeated settlement consumes the ledger instead of stacking permanent growth');
+
+const failedGrowthVariables = { stat_data: { battle: root() } };
+const failedGrowthInput = {
+  result: 'defeat', player: { currentHp: 12, currentLust: 7 }, items: [], turns: 1,
+  persistentGrowth: [
+    { id: 'retry_hp', stat: 'max_hp', operator: 'add', value: 4 },
+    { id: '', stat: 'max_lust', operator: 'add', value: 5 },
+  ],
+};
+assert.throws(
+  () => settleTavernBattleVariables(failedGrowthVariables, structuredClone(failedGrowthInput)),
+  /invalid persistent growth ledger entry/,
+);
+assert.equal(failedGrowthVariables.stat_data.battle.core.max_hp, 20, 'a failed settlement cannot partially apply a preceding growth entry');
+assert.equal(failedGrowthInput.persistentGrowth.length, 2, 'a failed callback leaves its source ledger intact for retry');
+const retryGrowthInput = structuredClone(failedGrowthInput);
+retryGrowthInput.persistentGrowth[1].id = 'retry_lust';
+settleTavernBattleVariables(failedGrowthVariables, retryGrowthInput);
+assert.equal(failedGrowthVariables.stat_data.battle.core.max_hp, 24, 'a later retry applies the intact ledger exactly once');
+const transientMaximumVariables = { stat_data: { battle: root() } };
+settleTavernBattleVariables(transientMaximumVariables, {
+  result: 'victory', player: { currentHp: 12, currentLust: 7 }, items: [], turns: 1,
+});
+assert.equal(transientMaximumVariables.stat_data.battle.core.max_hp, 20, 'ordinary combat settlement never invents permanent max-health growth');
+
 console.log('The Tavern settlement adapter cleans the canonical MUV root.');
+for(const withRequest of [false,true])for(const [hp,expected] of [[12.2,12],[12.5,13],[12.8,13]]){
+ const saved={stat_data:{battle:root(),reward:{card:[],artifact:[],item:[],limits:{},request:null}}};
+ const input={result:'victory',player:{currentHp:hp,currentLust:1.25},items:[],turns:3,...(withRequest?{request:{player:{hp:20,maxHp:20,lust:0,maxLust:100,level:1},route:null}}:{})};
+ settleTavernBattleVariables(saved,input);assert.equal(saved.stat_data.battle.core.hp,expected);assert.equal(input.player.currentHp,hp);
+ assert.equal(JSON.parse(JSON.stringify(saved)).stat_data.battle.core.hp,expected,'rounded outcome survives save restore');
+}

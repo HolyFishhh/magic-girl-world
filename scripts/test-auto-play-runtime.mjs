@@ -68,7 +68,10 @@ system.gameStateManager = store;
 system.activeAutoPlayIds = new Set();
 system.presentation = { animateTriggeredCard: async () => {} };
 const resolved = [];
-system.executeCardEffect = async (entry, _target, payment) => resolved.push({ id: entry.id, spent: payment.spentEnergy });
+system.executeCardEffect = async (entry, _target, payment) => {
+  resolved.push({ id: entry.id, spent: payment.spentEnergy });
+  return 0;
+};
 system.triggerPostCardPlayEffects = async entry => resolved.push({ post: entry.id });
 
 const top = store.readCardZoneState().drawPile.at(-1);
@@ -76,6 +79,7 @@ top.replayCount = 1;
 assert.equal(await system.autoPlayCard(top, 'drawPile', true), true);
 assert.deepEqual(resolved, [
   { id: 'top', spent: 0 },
+  { post: 'top' },
   { id: 'top', spent: 0 },
   { post: 'top' },
 ]);
@@ -93,5 +97,46 @@ assert.equal(after.eventJournal.events.some(event => event.kind === 'card_moved'
 const expensive = store.readCardZoneState().discardPile.find(entry => entry.id === 'paid');
 assert.equal(await system.autoPlayCard(expensive, 'discardPile', false), false);
 assert.equal(store.readCardZoneState().discardPile.some(entry => entry.id === 'paid'), true, 'failed payment leaves the source zone unchanged');
+
+// A discard-triggered auto-play failure must use its declared destination
+// instead of hiding, duplicating, or stranding the card in two zones.
+const discardState = core.createEmptyBattleState();
+discardState.currentTurn = 1;
+discardState.phase = 'player_turn';
+const discardBound = core.applyCardAttachment(card('discard_bound'), {
+  id: 'discard_echo',
+  kind: 'enchantment',
+  name: '弃置回响',
+  source: { kind: 'enchantment', id: 'discard_echo' },
+  scope: 'combat',
+  appliedTurn: 1,
+  removeOn: 'discarded',
+  remaining: 1,
+  changes: [{
+    kind: 'discard_auto_play',
+    reasons: ['effect'],
+    failureDestination: 'draw_top',
+    onlyPlayerTurn: true,
+  }],
+});
+discardState.player.hand = [discardBound];
+const discardStore = new core.BattleStateStore(discardState);
+const discardSystem = Object.create(CardSystem.prototype);
+discardSystem.gameStateManager = discardStore;
+discardSystem.relicTriggerHost = { triggerRelics: async () => {} };
+discardSystem.triggerDiscardEffect = async () => {};
+discardSystem.autoPlayCard = async () => false;
+discardSystem.presentation = { logDiscardCardDetail: () => {} };
+assert.equal(await discardSystem.discardCard(discardBound.id, 'effect'), true);
+const discardZones = discardStore.readCardZoneState();
+assert.deepEqual(discardZones.hand, []);
+assert.deepEqual(discardZones.discardPile, []);
+assert.deepEqual(discardZones.drawPile.map(entry => entry.id), [discardBound.id]);
+assert.equal(
+  [discardZones.hand, discardZones.drawPile, discardZones.discardPile, discardZones.exhaustPile]
+    .flat().filter(entry => entry.id === discardBound.id).length,
+  1,
+  'failed discard auto-play retains exactly one card instance',
+);
 
 console.log('Cards auto-play from non-hand zones through Replay, events, destination, payment checks, and independent rule-window counters.');

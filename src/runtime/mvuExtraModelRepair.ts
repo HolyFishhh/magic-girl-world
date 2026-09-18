@@ -1,14 +1,28 @@
 import { assertCurrentMessageLatest, getCurrentMessageVariableOptions } from './messageVariables';
 import { requireTavernHelperHost } from './tavernHost';
+import { captureMvuRepairScope } from './mvuRepairTransaction';
 
 const RETRY_BUTTON_NAME = '重试额外模型解析';
 const REQUEST_BEGIN = '[MWG_REPAIR_REQUEST_BEGIN]';
 const REQUEST_END = '[MWG_REPAIR_REQUEST_END]';
 
+export interface ExtraModelRepairEvidence {
+  response: string;
+  variableWriteObserved: boolean;
+  eventActivityObserved: boolean;
+  bareCommandObserved: boolean;
+  outcome?: 'success' | 'failure';
+  originalMessage?: string;
+  updateBlock?: string;
+}
+
 export class ExtraModelCandidateRejectedError extends Error {
-  constructor(message: string) {
+  readonly mvuRepairEvidence?: ExtraModelRepairEvidence;
+
+  constructor(message: string, evidence?: ExtraModelRepairEvidence) {
     super(message);
     this.name = 'ExtraModelCandidateRejectedError';
+    this.mvuRepairEvidence = evidence;
   }
 }
 
@@ -18,7 +32,7 @@ export interface ExtraModelRepairOptions {
     originalVariables: Record<string, any>,
     repairedVariables: Record<string, any>,
   ) => Record<string, any>;
-  /** Reject the repaired snapshot before it replaces the current message/chat variables. */
+  /** Reject the repaired snapshot before it replaces the current message variables. */
   validateVariables?: (variables: Record<string, any>) => void;
   /** Keep the owning iframe alive after rollback so a caller can perform a bounded follow-up repair. */
   refreshOnFailure?: 'none' | 'affected';
@@ -43,6 +57,8 @@ export interface ExtraModelRepairOptions {
   eventEmitter?: (eventName: string, ...args: unknown[]) => Promise<unknown> | unknown;
   /** Refuse every read/write as soon as the owning SillyTavern chat changes. */
   isCurrent?: () => boolean;
+  /** Local diagnostic hook. The caller owns retention/export of raw text. */
+  onEvidence?: (evidence: ExtraModelRepairEvidence) => void;
 }
 
 export type PersistentMvuRepairScope =
@@ -50,6 +66,7 @@ export type PersistentMvuRepairScope =
   | 'cards-only'
   | 'battle-content'
   | 'battle-settlement'
+  | 'stat-data'
   | 'generic';
 
 export interface PersistentMvuRepairRequest {
@@ -244,19 +261,40 @@ function canSafelyRestoreRepair(
   runtime: Record<string, any>,
   messageId: number,
   options: ExtraModelRepairOptions,
+  original: string,
+  repairInput: string,
+  originalVariables: Record<string, any>,
+  lastRepairVariables: Record<string, any> | null,
 ): boolean {
   if (!isRepairScopeCurrent(options)) return false;
   try {
-    return Number(runtime.getLastMessageId()) === messageId;
+    if (Number(runtime.getLastMessageId()) !== messageId) return false;
+    const currentMessage = readMessageText(runtime, messageId);
+    const currentVariables = runtime.getVariables({ type: 'message', message_id: messageId });
+    const ownsMessage = ownsRepairMessage(original, repairInput, currentMessage);
+    // A failed repair may restore only its own latest output. A tower task can
+    // update the same floor without changing its swipe, so scope identity alone
+    // is insufficient evidence to restore an old whole-variable snapshot.
+    const ownsVariables = valuesEqual(currentVariables, originalVariables)
+      || (lastRepairVariables !== null && valuesEqual(currentVariables, lastRepairVariables));
+    return ownsMessage && ownsVariables;
   } catch {
     return false;
   }
+}
+
+function ownsRepairMessage(original: string, repairInput: string, currentMessage: string): boolean {
+  return currentMessage.includes(REQUEST_BEGIN)
+    || currentMessage === repairInput
+    || findNewUpdateBlock(original, removeInjectedRequest(currentMessage)) !== null
+    || hasNewBareUpdateCommands(original, removeInjectedRequest(currentMessage));
 }
 
 function persistentRepairScope(prompt: string): PersistentMvuRepairScope {
   if (prompt.includes('[MVU_BATTLE_SETTLEMENT]')) return 'battle-settlement';
   if (prompt.includes('[战斗内容修复]')) return 'initial-content';
   if (prompt.includes('[玩家自然语言卡牌修复]')) return 'cards-only';
+  if (prompt.includes('[玩家自然语言变量修改]')) return 'stat-data';
   if (prompt.includes('[战斗场景修复]')) return 'battle-content';
   return 'generic';
 }
@@ -410,6 +448,8 @@ export async function retryMessageWithExtraModelHost(
     throw new Error(`酒馆助手接口缺失: ${missingFunctions.join(', ')}`);
   }
   if (!Number.isInteger(messageId) || messageId < 0) throw new Error('无法确定需要修复的助手楼层');
+  const scope = captureMvuRepairScope(runtime, messageId, options.isCurrent);
+  options = { ...options, isCurrent: scope.current };
   const emitEvent = resolveExtraModelEventEmitter(runtime, options);
   assertRepairScopeCurrent(runtime, messageId, options);
 
@@ -429,6 +469,24 @@ export async function retryMessageWithExtraModelHost(
 
   let succeeded = false;
   let repairedUpdateBlock = '';
+  let committedVariables: Record<string, any> | null = null;
+  let lastRepairVariables: Record<string, any> | null = null;
+  let latestResponse = original;
+  const reportEvidence = (outcome: 'success' | 'failure', partial: Partial<ExtraModelRepairEvidence> = {}) => {
+    try {
+      options.onEvidence?.({
+        response: partial.response ?? latestResponse,
+        variableWriteObserved: partial.variableWriteObserved ?? (lastRepairVariables !== null),
+        eventActivityObserved: partial.eventActivityObserved ?? false,
+        bareCommandObserved: partial.bareCommandObserved ?? hasNewBareUpdateCommands(original, latestResponse),
+        outcome,
+        originalMessage: original,
+        ...(repairedUpdateBlock ? { updateBlock: repairedUpdateBlock } : {}),
+      });
+    } catch {
+      // Diagnostics must never affect the repair transaction.
+    }
+  };
   try {
     const retryEvent = resolveExtraModelRetryEvent(runtime);
     const timeoutMs = Math.max(1, options.resultTimeoutMs ?? EXTRA_MODEL_RESULT_TIMEOUT_MS);
@@ -451,8 +509,11 @@ export async function retryMessageWithExtraModelHost(
         if (isPlainRecord(candidateVariables)) {
           try {
             options.validateVariables?.(candidateVariables);
+            if (!valuesEqual(runtime.getVariables(variableOptions), currentVariables)) {
+              throw new Error('修复提交前变量已被后台任务更新，已保留新数据并停止旧结果提交');
+            }
             await runtime.replaceVariables(candidateVariables, variableOptions);
-            await runtime.replaceVariables(candidateVariables, { type: 'chat' });
+            committedVariables = cloneValue(candidateVariables);
             succeeded = true;
           } catch {
             // The current snapshot is still invalid; run the owned retry below.
@@ -508,6 +569,7 @@ export async function retryMessageWithExtraModelHost(
     while (Date.now() <= deadline) {
       assertRepairScopeCurrent(runtime, messageId, options);
       const updated = readMessageText(runtime, messageId);
+      latestResponse = updated;
       const cleanedUpdated = removeInjectedRequest(updated);
       const updateBlock = findNewUpdateBlock(original, cleanedUpdated);
       if (updateBlock) {
@@ -525,6 +587,9 @@ export async function retryMessageWithExtraModelHost(
       const changedSinceEvent = !valuesEqual(updatedVariables, variablesBeforeEvent);
       if (changedSinceEvent && !valuesEqual(updatedVariables, baselineVariables)) {
         sawVariableWrite = true;
+        const hasAttributableResponse = sawNewUpdateBlock
+          || hasNewBareUpdateCommands(original, cleanedUpdated);
+        if (hasAttributableResponse) lastRepairVariables = cloneValue(updatedVariables);
         const mergedVariables = applyStructuralDelta(originalVariables, baselineVariables, updatedVariables);
         if (!isPlainRecord(mergedVariables)) throw new Error('MVU 额外模型返回的变量根不是对象');
         const candidateVariables = options.reconcileVariables
@@ -534,7 +599,10 @@ export async function retryMessageWithExtraModelHost(
         try {
           options.validateVariables?.(candidateVariables);
           lastValidationError = null;
-          if (sawNewUpdateBlock || options.acceptCurrentVariablesWhenValid === true) {
+          if (
+            hasAttributableResponse
+            || options.acceptCurrentVariablesWhenValid === true
+          ) {
             reconciledVariables = candidateVariables;
             break;
           }
@@ -553,6 +621,12 @@ export async function retryMessageWithExtraModelHost(
       ) {
         throw new ExtraModelCandidateRejectedError(
           'MVU 额外模型返回了变量命令，但缺少完整的 <UpdateVariable> 外层标签',
+          {
+            response: cleanedUpdated,
+            variableWriteObserved: sawVariableWrite,
+            eventActivityObserved: sawEventActivity,
+            bareCommandObserved: true,
+          },
         );
       }
 
@@ -562,7 +636,12 @@ export async function retryMessageWithExtraModelHost(
     if (!reconciledVariables) {
       if (lastValidationError && sawVariableWrite) throw lastValidationError;
       if (!sawNewUpdateBlock && (sawEventActivity || eventRetried)) {
-        throw new ExtraModelCandidateRejectedError('MVU 额外模型没有返回新的变量更新块');
+        throw new ExtraModelCandidateRejectedError('MVU 额外模型没有返回新的变量更新块', {
+          response: removeInjectedRequest(readMessageText(runtime, messageId)),
+          variableWriteObserved: sawVariableWrite,
+          eventActivityObserved: sawEventActivity,
+          bareCommandObserved: hasNewBareUpdateCommands(original, removeInjectedRequest(readMessageText(runtime, messageId))),
+        });
       }
       if (!sawNewUpdateBlock) throw new Error('MVU 额外模型重试事件没有启动');
       if (!sawVariableWrite) throw new Error('MVU 额外模型没有写回修复后的变量');
@@ -570,16 +649,25 @@ export async function retryMessageWithExtraModelHost(
     }
 
     assertRepairScopeCurrent(runtime, messageId, options);
+    if (lastRepairVariables && !valuesEqual(runtime.getVariables(variableOptions), lastRepairVariables)) {
+      throw new Error('修复提交前变量已被后台任务更新，已保留新数据并停止旧结果提交');
+    }
     await runtime.replaceVariables(reconciledVariables, variableOptions);
-    await runtime.replaceVariables(reconciledVariables, { type: 'chat' });
+    // The repaired floor is authoritative. Optional mirrors belong to MVU;
+    // never replace the separate preset/user chat-variable dictionary.
+    committedVariables = cloneValue(reconciledVariables);
     succeeded = true;
   } catch (error) {
+    const errorEvidence = error instanceof ExtraModelCandidateRejectedError ? error.mvuRepairEvidence : undefined;
+    if (errorEvidence) Object.assign(errorEvidence, { outcome: 'failure', originalMessage: original });
+    reportEvidence('failure', errorEvidence);
     // Tavern Helper's methods follow the active chat. Once the user changes
     // chats, attempting rollback would overwrite the new save instead of the
     // abandoned one. Leave that old floor untouched and reject the transaction.
-    if (canSafelyRestoreRepair(runtime, messageId, options)) {
+    if (canSafelyRestoreRepair(
+      runtime, messageId, options, original, `${repairInput}\n\n${requestBlock}`, originalVariables, lastRepairVariables,
+    )) {
       await runtime.replaceVariables(originalVariables, variableOptions);
-      await runtime.replaceVariables(originalVariables, { type: 'chat' });
       await runtime.setChatMessages(
         [{ message_id: messageId, message: original }],
         { refresh: options.refreshOnFailure ?? 'affected' },
@@ -587,7 +675,13 @@ export async function retryMessageWithExtraModelHost(
     }
     throw error;
   } finally {
-    if (succeeded) {
+    if (succeeded) reportEvidence('success');
+    if (
+      succeeded
+      && committedVariables
+      && valuesEqual(runtime.getVariables(variableOptions), committedVariables)
+      && ownsRepairMessage(original, `${repairInput}\n\n${requestBlock}`, readMessageText(runtime, messageId))
+    ) {
       assertRepairScopeCurrent(runtime, messageId, options);
       const cleaned = repairedUpdateBlock ? replaceUpdateBlocks(original, repairedUpdateBlock) : original;
       await runtime.setChatMessages(
@@ -621,6 +715,9 @@ export async function retryCurrentMessageWithExtraModel(
       await persistent;
       return;
     }
+  }
+  if (prompt.includes('[玩家自然语言变量修改]')) {
+    throw new Error('自然语言变量修改需要持久化结构化修复端点；未对当前楼层启动 MVU 重试');
   }
 
   const runtime = requireTavernHelperHost([

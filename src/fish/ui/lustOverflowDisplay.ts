@@ -9,6 +9,7 @@ import { EffectProgramDisplay } from './effectProgramDisplay';
 
 export interface LustOverflowEffect {
   name: string;
+  emoji?: string;
   description: string;
   effectProgram: EffectProgram;
 }
@@ -87,7 +88,8 @@ export class LustOverflowDisplay {
       </div>
     `);
 
-    $('body').append(modal);
+    const host = $('#battle-scene');
+    (host.length ? host : $('body')).append(modal);
 
     // 添加动画效果
     modal.css({ opacity: 0 }).animate({ opacity: 1 }, 300);
@@ -115,27 +117,28 @@ export class LustOverflowDisplay {
     // 移除已存在的弹窗
     $('.auto-lust-overflow-popup').remove();
 
-    const targetName = target === 'player' ? '玩家' : '敌人';
+    const targetName = target === 'player' ? '我方欲望效果发动' : '敌方欲望效果发动';
     const popup = $(`
       <div class="auto-lust-overflow-popup">
         <div class="auto-lust-content">
           <div class="auto-lust-header">
             <div class="auto-lust-icon">💗</div>
-            <div class="auto-lust-title">${targetName}欲望溢出！</div>
+            <div class="auto-lust-title">${targetName}</div>
           </div>
           <div class="auto-lust-effect-name">${escapeHtml(effect.name)}</div>
           <div class="auto-lust-description">${escapeHtml(effect.description)}</div>
+          <div class="overflow-effect-tags">${this.effectDisplay.createEffectTagsHTML(this.effectDisplay.programToTags(effect.effectProgram))}</div>
         </div>
       </div>
     `);
 
-    $('body').append(popup);
+    const host = $('#battle-scene');
+    (host.length ? host : $('body')).append(popup);
 
     // 动画显示
     popup
-      .css({ opacity: 0, transform: 'translate(-50%, -50%) scale(0.8)' })
-      .animate({ opacity: 1 }, 300)
-      .css({ transform: 'translate(-50%, -50%) scale(1)' });
+      .css({ opacity: 0 })
+      .animate({ opacity: 1 }, 300);
 
     // 3秒后自动消失
     setTimeout(() => {

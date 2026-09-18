@@ -16,14 +16,15 @@ export interface CombatantCollection<T extends IdentifiedCombatant> {
   activeId: string | null;
 }
 
+/** `team` is deliberately optional: absent remains the historical concrete-enemy roster. */
 export type EnemyTargetSelector =
-  | { mode: 'active' }
-  | { mode: 'by_id'; id: string }
-  | { mode: 'all' }
-  | { mode: 'random'; allowRepeat?: boolean; retarget?: 'locked' | 'each_hit' }
-  | { mode: 'random_n'; count: number; allowRepeat?: boolean; retarget?: 'locked' | 'each_hit' }
-  | { mode: 'lowest_hp' }
-  | { mode: 'highest_hp' };
+  | { mode: 'active'; team?: 'self' | 'opponent' | 'enemies' }
+  | { mode: 'by_id'; id: string; team?: 'self' | 'opponent' | 'enemies' }
+  | { mode: 'all'; team?: 'self' | 'opponent' | 'enemies' }
+  | { mode: 'random'; allowRepeat?: boolean; retarget?: 'locked' | 'each_hit'; team?: 'self' | 'opponent' | 'enemies' }
+  | { mode: 'random_n'; count: number; allowRepeat?: boolean; retarget?: 'locked' | 'each_hit'; team?: 'self' | 'opponent' | 'enemies' }
+  | { mode: 'lowest_hp'; team?: 'self' | 'opponent' | 'enemies' }
+  | { mode: 'highest_hp'; team?: 'self' | 'opponent' | 'enemies' };
 
 export interface ResolvedCombatantTargets<T extends IdentifiedCombatant> {
   targets: T[];

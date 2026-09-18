@@ -22,8 +22,11 @@ export declare function resolvePlayerTriggerDispatch(trigger: AbilityTrigger, co
 export declare function resolveAttributeTriggerDispatch(context: AttributeTriggerContext): BattleTriggerDispatch[];
 export interface StatusOwnershipDispatchContext {
     target: BattleSide;
+    /** Exact status holder. Required for enemy-owned status transitions in multi-enemy encounters. */
+    targetId?: string;
     statusType: string;
     change: StatusOwnershipChange;
+    eventContext?: BattleTriggerEventContext;
 }
 /** Resolve holder, opposing observer, and player-relic events for one status ownership transition. */
 export declare function resolveStatusOwnershipTriggerDispatch(context: StatusOwnershipDispatchContext): BattleTriggerDispatch[];

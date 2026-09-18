@@ -160,36 +160,41 @@
 }
 
 .tower-metrics {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(68px, auto));
-  gap: 8px;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 4px 10px;
 }
 
 .tower-metric {
-  min-width: 68px;
-  padding: 7px 10px;
-  border: 1px solid rgba(225, 202, 139, 0.2);
-  border-radius: 13px 11px 14px 10px;
-  background: rgba(8, 10, 26, 0.56);
-  text-align: center;
-  box-shadow: inset 0 0 18px rgba(77, 80, 142, 0.09);
+  display: inline-flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 3px;
+  color: var(--tower-muted);
+  font-size: 10px;
+  line-height: 1.3;
+  white-space: nowrap;
 }
 
+.tower-metric-icon { font-size: 13px; }
 .tower-metric-label,
 .tower-metric-value {
-  display: block;
+  display: inline;
 }
 
 .tower-metric-label {
   color: var(--tower-muted);
-  font-size: 9px;
-  letter-spacing: 0.14em;
+  font-size: inherit;
+  letter-spacing: 0;
 }
 
 .tower-metric-value {
-  margin-top: 1px;
+  margin: 0;
   color: var(--tower-gold-bright);
-  font-size: 13px;
+  font-size: inherit;
   font-weight: 700;
   white-space: nowrap;
 }
@@ -696,6 +701,16 @@
   opacity: 0.44;
   filter: saturate(0.35);
 }
+.tower-map-node.has-narrative {
+  z-index: 4;
+  overflow: visible;
+}
+/* A prefetched narrative may be visible, but it must never visually cancel the
+   route lock or make a later prepared room read as the active destination. */
+.tower-map-node.is-locked.has-narrative {
+  opacity: 0.44;
+  filter: saturate(0.35);
+}
 .tower-map-node.is-visited {
   opacity: 0.76;
 }
@@ -733,10 +748,20 @@
   transform: rotate(2deg) translateY(-2px) scale(1.06);
 }
 
-.tower-map-node.content-ready .tower-node-phase,
+.tower-map-node.content-ready:not(.is-locked) .tower-node-phase,
 .tower-map-node.content-consumed .tower-node-phase {
   border-color: rgba(115, 202, 164, 0.36);
   color: #a9e6c9;
+}
+/* Prepared is not enterable: future nodes use the neutral locked treatment
+   rather than the green ready cue reserved for the immediate route choice. */
+.tower-map-node.is-locked.content-ready .tower-node-phase {
+  border-color: rgba(156, 182, 226, 0.35);
+  color: #bcd2f5;
+}
+.tower-map-node.is-locked .tower-map-narrative-bubble {
+  color: #acb8cb;
+  text-shadow: 0 2px 4px #000;
 }
 
 .tower-map-node.content-failed .tower-node-sigil {
@@ -877,7 +902,7 @@
   .tower-metrics {
     grid-column: 1 / -1;
     grid-row: 2;
-    grid-template-columns: repeat(3, 1fr);
+    justify-content: flex-start;
     width: 100%;
   }
 
@@ -995,10 +1020,7 @@
   }
   .tower-metric {
     min-width: 0;
-    padding: 5px 6px;
-  }
-  .tower-metric-value {
-    font-size: 11px;
+    font-size: 9px;
   }
   .tower-act-name {
     font-size: 12px;
@@ -1100,3 +1122,83 @@
     transition-duration: 1ms !important;
   }
 }
+.tower-map-narrative-bubble {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: clamp(110px, 16vw, 190px);
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: #dce8ff;
+  font: 12px/1.5 sans-serif;
+  text-align: center;
+  display: block;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  overflow: visible;
+  pointer-events: none;
+  text-shadow: 0 2px 4px #000, 0 0 12px rgba(124, 216, 218, .35);
+  animation: tower-narrative-float 5s ease-in-out infinite;
+}
+.tower-map-node[data-column='0'] .tower-map-narrative-bubble {
+  left: 0;
+  transform: none;
+  text-align: left;
+  animation-name: tower-narrative-float-left;
+}
+.tower-map-node[data-column='4'] .tower-map-narrative-bubble {
+  left: auto;
+  right: 0;
+  transform: none;
+  text-align: right;
+  animation-name: tower-narrative-float-right;
+}
+.tower-map-node[data-floor='16'] .tower-map-narrative-bubble {
+  top: calc(100% + 8px);
+  bottom: auto;
+}
+@media (max-width: 520px) {
+  .tower-map-narrative-bubble {
+    width: 90px;
+    padding: 4px 0;
+    font-size: 11px;
+  }
+}
+
+@keyframes tower-narrative-float {
+  50% { transform: translate(-50%, -3px); }
+}
+@keyframes tower-narrative-float-left {
+  50% { transform: translateY(-3px); }
+}
+@keyframes tower-narrative-float-right {
+  50% { transform: translateY(-3px); }
+}
+.tower-map-node.is-reachable .tower-node-sigil {
+  animation: tower-reachable-glow 4s ease-in-out infinite;
+}
+@keyframes tower-reachable-glow {
+  50% { box-shadow: 0 0 0 5px rgba(124, 216, 218, .06), 0 0 25px rgba(124, 216, 218, .55); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tower-map-narrative-bubble, .tower-map-node.is-reachable .tower-node-sigil { animation: none; }
+}
+
+// Content readiness is independent of route access, including failed/queued work.
+.tower-map-node.is-locked .tower-node-sigil {
+  border-color: rgba(156, 182, 226, .35);
+  color: #acb8cb;
+  box-shadow: none;
+  animation: none;
+}
+.tower-map-node.is-locked .tower-node-phase {
+  border-color: rgba(156, 182, 226, .35);
+  color: #bcd2f5;
+}
+.tower-map-node.is-locked .tower-map-narrative-bubble {
+  text-shadow: none;
+  animation: none;
+}
+.tower-map-node.is-locked .tower-node-orbit { display: none; }

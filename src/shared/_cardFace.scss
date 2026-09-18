@@ -1,0 +1,332 @@
+@mixin face {
+.enhanced-card.rarity-Uncommon {
+  --rarity-accent: #38a169;
+  border-color: #38a169;
+  box-shadow: 0 6px 17px rgba(56, 161, 105, 0.35);
+}
+
+.enhanced-card.rarity-Rare {
+  --rarity-accent: #9333ea;
+  border-color: #9333ea;
+  box-shadow: 0 7px 20px rgba(147, 51, 234, 0.42);
+}
+
+.enhanced-card.rarity-Epic {
+  --rarity-accent: #dc2626;
+  border-color: #dc2626;
+  animation: epic-glow 2s ease-in-out infinite alternate;
+}
+
+.enhanced-card.rarity-Legendary {
+  --rarity-accent: #f59e0b;
+  border-color: #f59e0b;
+  animation: legendary-glow 3.5s ease-in-out infinite alternate;
+}
+
+.enhanced-card.rarity-Corrupt {
+  --rarity-accent: #8b0000;
+  border-color: #8b0000;
+  background: linear-gradient(135deg, #39020c, #160108);
+  animation: corrupt-pulse 2.4s ease-in-out infinite;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 25px;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(90deg, #ffd9e2, #f5e2e9);
+}
+
+.card-type-Attack {
+  --card-type-soft: #ffe2e7;
+  --card-type-ink: #a73f59;
+}
+.card-type-Skill {
+  --card-type-soft: #dceeff;
+  --card-type-ink: #326f9f;
+}
+.card-type-Power {
+  --card-type-soft: #eee3ff;
+  --card-type-ink: #7043a5;
+}
+.card-type-Event {
+  --card-type-soft: #fff0c7;
+  --card-type-ink: #956817;
+}
+.card-type-Curse {
+  --card-type-soft: #eadde8;
+  --card-type-ink: #6f315a;
+}
+.enhanced-card .card-header {
+  background: linear-gradient(90deg, var(--card-type-soft, #f4e9eb), #fff9f6);
+}
+
+.card-cost {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  margin-left: 2px;
+  border-radius: 50%;
+  background: #3f7db2;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.card-cost.composite-card-cost {
+  display: flex;
+  width: auto;
+  height: auto;
+  max-width: calc(100% - 42px);
+  align-items: center;
+  gap: 2px;
+  border-radius: 7px;
+  background: transparent;
+}
+
+.card-cost.insufficient-cost:not(.composite-card-cost) {
+  background: #8c2434;
+  color: #fff5f5;
+}
+
+.card-cost-component {
+  display: inline-flex;
+  min-width: 22px;
+  min-height: 20px;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  border-radius: 999px;
+  background: #3f7db2;
+  color: #fff;
+  font-size: 10px;
+  line-height: 1;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.55);
+}
+
+.card-cost-component.insufficient {
+  border-color: #ffd0d0;
+  background: #8c2434;
+  color: #fff5f5;
+}
+
+.card-cost-component.waived {
+  border-color: #c9f5dd;
+  background: #276a4d;
+  color: #f3fff8;
+}
+
+.card-type-indicator {
+  flex: 0 0 auto;
+  padding: 1px 4px;
+  border: 1px solid color-mix(in srgb, var(--card-type-ink, #765) 42%, transparent);
+  border-radius: 999px;
+  background: var(--card-type-soft, #f3e8e9);
+  color: var(--card-type-ink, var(--ink-muted));
+  font-size: 8px;
+  font-weight: 800;
+  line-height: 1.25;
+  text-shadow: none;
+}
+
+.card-rarity-badge {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 3px;
+  padding-right: 5px;
+  color: var(--rarity-accent, var(--ink-muted));
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+.card-rarity-gem {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--rarity-accent, #a0aec0);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--rarity-accent, #a0aec0) 65%, transparent);
+}
+
+.card-artwork {
+  position: relative;
+  display: grid;
+  height: 42%;
+  place-items: center;
+  overflow: hidden;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.92), transparent 58%), rgba(248, 243, 237, 0.82);
+}
+
+.card-emoji {
+  font-size: clamp(24px, 5vh, 40px);
+  line-height: 1;
+}
+
+.card-keywords {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 2px;
+}
+
+.card-keyword {
+  padding: 1px 3px;
+  border-radius: 3px;
+  background: rgba(87, 72, 75, 0.82);
+  color: #fff;
+  font-size: 7px;
+
+  &.innate {
+    background: #477761;
+  }
+
+  &.retain {
+    background: #406b8e;
+  }
+
+  &.exhaust,
+  &.ethereal {
+    background: #873657;
+  }
+}
+
+.card-body {
+  min-height: 0;
+  padding: 4px 5px;
+}
+
+.card-title-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.card-name {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--mwg-font-display);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.support-details-source {
+  margin-top: 7px;
+  color: var(--ink-muted);
+  font-size: 10px;
+}
+
+.card-description {
+  display: -webkit-box;
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--ink-muted);
+  font-size: 8px;
+  line-height: 1.25;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+
+}
+
+@mixin theme {
+.enhanced-card {
+  border-color: var(--rarity-accent, #8d96bd);
+  background: linear-gradient(145deg, #303754, #202743);
+  color: #f8f5ff;
+  box-shadow:
+    0 8px 20px rgba(0, 0, 0, 0.42),
+    0 0 10px color-mix(in srgb, var(--rarity-accent, #8d96bd) 20%, transparent);
+}
+
+/* Rarity is a visual tier, not just a text badge.  The restrained surfaces
+ * preserve card readability while restoring the old border/glow hierarchy. */
+.enhanced-card.rarity-Common {
+  --rarity-accent: #a8b1c7;
+  background:
+    radial-gradient(circle at 82% 12%, rgba(168, 177, 199, 0.14), transparent 34%),
+    linear-gradient(145deg, #343b57, #222840);
+}
+
+.enhanced-card.rarity-Uncommon {
+  --rarity-accent: #4fc3a1;
+  background:
+    radial-gradient(circle at 82% 12%, rgba(79, 195, 161, 0.22), transparent 36%),
+    linear-gradient(145deg, #274b52, #202e43);
+}
+
+.enhanced-card.rarity-Rare {
+  --rarity-accent: #a986ed;
+  background:
+    radial-gradient(circle at 82% 12%, rgba(169, 134, 237, 0.28), transparent 38%),
+    linear-gradient(145deg, #49366d, #262745);
+}
+
+.enhanced-card.rarity-Epic {
+  --rarity-accent: #f06778;
+  background:
+    radial-gradient(circle at 82% 12%, rgba(240, 103, 120, 0.3), transparent 40%),
+    linear-gradient(145deg, #653244, #2f233e);
+}
+
+.enhanced-card.rarity-Legendary {
+  --rarity-accent: #ffc85a;
+  background:
+    radial-gradient(circle at 78% 10%, rgba(255, 214, 112, 0.34), transparent 42%),
+    linear-gradient(145deg, #675125, #302c43);
+}
+
+.enhanced-card.rarity-Corrupt {
+  --rarity-accent: #e04a72;
+  background:
+    radial-gradient(circle at 82% 12%, rgba(224, 74, 114, 0.24), transparent 38%),
+    linear-gradient(145deg, #4b172d, #190f25);
+}
+
+.enhanced-card .card-glow {
+  background: linear-gradient(
+    115deg,
+    transparent 22%,
+    color-mix(in srgb, var(--rarity-accent, #a8b1c7) 24%, transparent) 48%,
+    transparent 72%
+  );
+  box-shadow: inset 0 0 24px color-mix(in srgb, var(--rarity-accent, #a8b1c7) 26%, transparent);
+}
+
+.enhanced-card .card-header {
+  border-bottom-color: rgba(255, 255, 255, 0.12);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--card-type-ink, #7685bd) 44%, #202743), #29304d);
+}
+
+.card-artwork {
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.14), transparent 62%), rgba(255, 255, 255, 0.035);
+}
+
+.card-name {
+  color: #fff;
+}
+.card-description {
+  color: #c8c3df;
+}
+.enhanced-card .card-type-indicator {
+  border-color: color-mix(in srgb, var(--card-type-ink, #765) 64%, transparent);
+  background: color-mix(in srgb, var(--card-type-soft, #f3e8e9) 88%, #fff);
+  color: color-mix(in srgb, var(--card-type-ink, #54384a) 86%, #111);
+}
+
+
+}
+

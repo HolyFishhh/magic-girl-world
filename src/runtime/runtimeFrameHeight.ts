@@ -1,3 +1,4 @@
+import { setRuntimeFrameHeight } from './runtimeFrameResize';
 type RuntimeFrameHeightController = Readonly<{
   request: () => void;
   destroy: () => void;
@@ -58,7 +59,7 @@ function createRuntimeFrameHeightController(frame: HTMLElement): RuntimeFrameHei
     animationFrame = 0;
     if (destroyed || isFullscreen(frame)) return;
     const nextHeight = `${measureDocumentHeight()}px`;
-    if (frame.style.height !== nextHeight) frame.style.height = nextHeight;
+    setRuntimeFrameHeight(frame, nextHeight);
   };
 
   const request = () => {

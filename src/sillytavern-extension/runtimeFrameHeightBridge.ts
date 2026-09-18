@@ -1,3 +1,4 @@
+import { setRuntimeFrameHeight } from '../runtime/runtimeFrameResize';
 import { subscribeTavernHelperRequestEvent } from './tavernHelperEventSubscription';
 
 const FRAME_HEIGHT_SPEC = 'mwg.runtime-frame-height/v1';
@@ -69,7 +70,7 @@ export function activateRuntimeFrameHeightBridge(
     if (frame.hasAttribute('data-mwg-runtime-fullscreen')) return;
     const height = Math.min(MAX_FRAME_HEIGHT, Math.max(MIN_FRAME_HEIGHT, Math.ceil(payload.height)));
     const nextHeight = `${height}px`;
-    if (frame.style.height !== nextHeight) frame.style.height = nextHeight;
+    setRuntimeFrameHeight(frame, nextHeight);
   };
   const onMessage = (event: MessageEvent<unknown>): void => applyHeight(event.data, event.source);
   const onHelperEvent = (payload: unknown): void => applyHeight(payload);
@@ -108,7 +109,7 @@ export function activateRuntimeFrameHeightBridge(
           if (frame.hasAttribute('data-mwg-runtime-fullscreen')) return;
           if (!frame.isConnected || frame.getBoundingClientRect().height > MIN_FRAME_HEIGHT + 10) return;
           const height = hostWindow.innerWidth <= 760 ? MOBILE_FALLBACK_HEIGHT : DESKTOP_FALLBACK_HEIGHT;
-          frame.style.height = `${height}px`;
+          setRuntimeFrameHeight(frame, `${height}px`);
         }, 2000);
         fallbackTimers.set(frame, timer);
       });

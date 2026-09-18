@@ -3,6 +3,7 @@ import { formatContentContractIssues, validateContentPackContract, type ContentC
 import { stableHash32 } from './deterministicRandom';
 import type { BattleEndResult } from './battleTerminal';
 import { normalizeRunPacingContext, type RunPacingContext } from './runPacing';
+import { settleBattleOutcomeVitals } from './battleOutcome';
 import { roundBattleValue } from './battleMath';
 
 export const BATTLE_REQUEST_SCHEMA_VERSION = 1 as const;
@@ -114,10 +115,10 @@ export function createBattleResult(input: {
   return {
     schemaVersion: BATTLE_RESULT_SCHEMA_VERSION,
     outcome,
-    player: {
-      hp: roundBattleValue(Math.min(input.request.player.maxHp, Math.max(0, finite(input.player.hp, 0)))),
-      lust: roundBattleValue(Math.min(input.request.player.maxLust, Math.max(0, finite(input.player.lust, 0)))),
-    },
+    player: settleBattleOutcomeVitals(
+      { currentHp: input.player.hp, currentLust: input.player.lust },
+      { max_hp: input.request.player.maxHp, max_lust: input.request.player.maxLust },
+    ),
     items: (input.items || [])
       .filter(item => typeof item.id === 'string' && item.id.length > 0 && Number.isInteger(item.count))
       .map(item => ({ id: String(item.id), count: Math.max(0, Number(item.count)) })),

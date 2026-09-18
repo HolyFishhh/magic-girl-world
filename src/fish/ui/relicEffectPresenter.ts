@@ -1,3 +1,4 @@
+import { isolatedPresenter } from '../core/isolatedBattlePresentation';
 import { BattleLog } from '../modules/battleLog';
 import type { Relic } from '../../game-core';
 import { AnimationManager } from './animationManager';
@@ -10,6 +11,8 @@ export class RelicEffectPresenter {
   private readonly effectDisplay = EffectProgramDisplay.getInstance();
 
   public static getInstance(): RelicEffectPresenter {
+    const isolated = isolatedPresenter<RelicEffectPresenter>('relics');
+    if (isolated) return isolated;
     if (!RelicEffectPresenter.instance) RelicEffectPresenter.instance = new RelicEffectPresenter();
     return RelicEffectPresenter.instance;
   }

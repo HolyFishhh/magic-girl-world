@@ -63,7 +63,7 @@ export function resolvePassiveCardPlayRules(
 ): ResolvedCardPlayRule[] {
   const result: ResolvedCardPlayRule[] = [];
   for (const source of sources || []) {
-    if (normalizeAbilityTrigger(source.trigger || '') !== 'passive') continue;
+    if (normalizeAbilityTrigger(source.trigger || '') !== 'passive' || !source.effectProgram) continue;
     result.push(...programRules(source.effectProgram, ownerType, target, state).map(rule => ({ rule, source })));
   }
   return result;
@@ -128,7 +128,10 @@ export function resolveActiveCardPlayRules(
     }
     if (rule.rule !== 'free' && rule.rule !== 'replay') continue;
     if (rule.selector && !matches(rule, card)) continue;
-    if (rule.limit !== 'all' && (rule.limit === undefined || played >= rule.limit)) continue;
+    const matchingRulePlays = rule.selector && playedCardsThisTurn.length > 0
+      ? playedCardsThisTurn.filter(entry => matches(rule, entry)).length
+      : played;
+    if (rule.limit !== 'all' && (rule.limit === undefined || matchingRulePlays >= rule.limit)) continue;
     if (rule.rule === 'free') {
       free = true;
       if (rule.freeResources === 'all' || rule.freeResources === undefined) waiveAllResources = true;

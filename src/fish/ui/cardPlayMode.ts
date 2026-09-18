@@ -7,6 +7,7 @@ import {
   resolveCardClickAction,
   resolveCardDropAction,
   restoreDraggedElementToSlot,
+  shouldRestoreInterruptedDrag,
   type CardDragSlot,
   type CardDropAction,
 } from './cardPlayInteraction';
@@ -14,6 +15,8 @@ import {
 export class CardPlayMode {
   private static instance: CardPlayMode;
   private selectedCard: JQuery | null = null;
+  private pressPreviewTimer: ReturnType<typeof setTimeout> | undefined;
+  private pressPreviewCard: JQuery | null = null;
   private draggedCard: JQuery | null = null;
   private dragTooltip: JQuery | null = null;
   private dragSlot: CardDragSlot | null = null;
@@ -43,13 +46,21 @@ export class CardPlayMode {
       .on('pointerup.mwgPointerCardPlay pointercancel.mwgPointerCardPlay', event =>
         this.handlePointerEnd(event as JQuery.Event),
       )
+      // Browsers do not consistently dispatch pointercancel when a tab is
+      // backgrounded. Restore only an uncommitted visual drag in that case.
+      .on('visibilitychange.mwgPointerCardPlay', () => {
+        if (document.hidden) this.cancelInterruptedPointer();
+      })
       .on('click.mwgPointerCardPlay', event => {
         if ($(event.target).closest('.enhanced-card').length === 0) this.clearSelection();
       });
+    $(window)
+      .off('blur.mwgPointerCardPlay')
+      .on('blur.mwgPointerCardPlay', () => this.cancelInterruptedPointer());
     this.initialized = true;
   }
 
-  private clearSelection(): void {
+  public clearSelection(): void {
     if (!this.selectedCard) return;
     this.selectedCard.removeClass('selected').removeAttr('aria-pressed');
     this.selectedCard = null;
@@ -63,22 +74,30 @@ export class CardPlayMode {
     if (cardData) BattleUI.showCardTooltip(card, cardData);
   }
 
-  private requestPlay(card: JQuery): void {
+  private requestPlay(card: JQuery, animate = true): void {
     if (!card.hasClass('clickable') || card.data('playPending')) return;
+    this.hideCardDetail();
     this.clearSelection();
     card
       .data('playPending', true)
       .removeClass('clickable selected')
       .addClass('card-playing')
       .attr('aria-disabled', 'true');
+    if (animate) {
+      // Mark the visual flight before dispatching the async combat request so
+      // the transaction presenter cannot start a second, delayed flight.
+      card.data('visualPlayStarted', true);
+      this.animatePlayedCard(card);
+    }
     card.trigger('mwg:play-card');
   }
 
   private handleCardClick(event: JQuery.Event, card: JQuery): void {
     event.preventDefault();
     event.stopPropagation();
-    if (!card.hasClass('clickable') || card.data('suppressPlayClick') || card.data('justEndedDrag')) return;
-    if (resolveCardClickAction(this.selectedCard?.get(0), card.get(0)) === 'play') {
+    if (card.data('suppressPlayClick') || card.data('justEndedDrag')) return;
+    if (!card.hasClass('clickable')) { BattleUI.showCardTooltip(card, card.data('cardData')); return; }
+    if ($('.card-tooltip').length && resolveCardClickAction(this.selectedCard?.get(0), card.get(0)) === 'play') {
       this.requestPlay(card);
       return;
     }
@@ -86,7 +105,52 @@ export class CardPlayMode {
   }
 
   private hideCardDetail(): void {
-    $('.card-tooltip').stop(true, true).remove();
+    BattleUI.dismissCardTooltip();
+  }
+
+  /**
+   * Return a card to its real hand slot if the browser interrupted a drag
+   * without delivering pointerup/pointercancel. This deliberately does not
+   * touch playPending: that flag belongs to an already-dispatched game action.
+   */
+  private cancelInterruptedPointer(): void {
+    clearTimeout(this.pressPreviewTimer);
+    this.pressPreviewCard?.removeData('suppressPlayClick');
+    this.pressPreviewCard = null;
+    if (!this.draggedCard) return;
+
+    const card = this.draggedCard;
+    if (this.dragFrame !== null) cancelAnimationFrame(this.dragFrame);
+    this.dragFrame = null;
+
+    if (shouldRestoreInterruptedDrag(this.pointerDragActive, Boolean(this.dragSlot))) {
+      this.finishPointerDrag(card, 'restore');
+      return;
+    }
+
+    this.releasePointerCapture(card);
+    card.removeClass('dragging is-cast-ready card-hover is-active');
+    $('#playArea').removeClass('show active');
+    this.draggedCard = null;
+    this.dragPointerId = null;
+    this.dragOrigin = null;
+    this.lastPointer = null;
+    this.pendingPointer = null;
+    this.playAreaRect = null;
+    this.pointerDragActive = false;
+  }
+
+  /** Releasing a capture already lost during an interruption can throw. */
+  private releasePointerCapture(card: JQuery): void {
+    if (this.dragPointerId === null) return;
+    const element = card.get(0) as HTMLElement | undefined;
+    if (!element?.releasePointerCapture) return;
+    try {
+      if (element.hasPointerCapture && !element.hasPointerCapture(this.dragPointerId)) return;
+      element.releasePointerCapture(this.dragPointerId);
+    } catch {
+      // A browser may have already released this pointer while backgrounded.
+    }
   }
 
   /**
@@ -180,35 +244,38 @@ export class CardPlayMode {
       return;
     }
     const current = element.getBoundingClientRect();
+    // Double-click starts in the hand flow layout, whereas drag has already
+    // been portalled by beginVisualDrag. Portal both paths into the viewport
+    // before animating so overflow/hand transforms cannot clip or offset it.
+    if (element.parentElement !== document.body) document.body.appendChild(element);
     const targetX = stage.left + stage.width / 2 - current.width / 2;
     const targetY = stage.top + stage.height * 0.46 - current.height / 2;
-    card.css({ left: `${current.left}px`, top: `${current.top}px`, transform: 'none' });
-    const animation = element.animate(
-      [
-        { transform: 'translate3d(0, 0, 0) scale(1.035)', opacity: 1 },
-        {
-          transform: `translate3d(${targetX - current.left}px, ${targetY - current.top}px, 0) scale(.72)`,
-          opacity: 0,
-        },
-      ],
-      { duration: 145, easing: 'cubic-bezier(.22,.8,.2,1)', fill: 'forwards' },
-    );
-    let removed = false;
-    const remove = (): void => {
-      if (removed) return;
-      removed = true;
-      card.remove();
-    };
-    const fallback = window.setTimeout(remove, 220);
-    void animation.finished
-      .catch(() => undefined)
-      .finally(() => {
-        window.clearTimeout(fallback);
-        remove();
-      });
+    card.addClass('card-cast-flight').removeClass('card-hover selected').css({
+      position: 'fixed', left: `${current.left}px`, top: `${current.top}px`, bottom: 'auto',
+      width: `${current.width}px`, height: `${current.height}px`, maxHeight: 'none', margin: 0,
+      pointerEvents: 'none', zIndex: 3000, transform: 'translate3d(0,0,0)', transition: 'none',
+    });
+    const queueIndex = Math.max(0, document.querySelectorAll('.card-cast-flight').length - 1);
+    const dx = targetX - current.left + Math.min(queueIndex, 5) * 16;
+    const dy = targetY - current.top + Math.min(queueIndex, 5) * 8;
+    card.attr('data-queue-state', 'waiting').attr('aria-label', '等待出牌');
+    const duration = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 1 : 220;
+    element.animate([
+      { transform: 'translate3d(0,0,0) scale(1)', opacity: 1 },
+      { transform: `translate3d(${dx}px,${dy}px,0) scale(.8)`, opacity: 1 },
+    ], { duration, easing: 'cubic-bezier(.22,.8,.2,1)', fill: 'forwards' });
+    // The queued real card remains here until its own transaction completes.
+    card.data('visualPlayReady', new Promise<void>(resolve => window.setTimeout(resolve, duration)));
+
   }
 
   private handlePointerStart(event: JQuery.Event, card: JQuery): void {
+    this.pressPreviewCard = card;
+    clearTimeout(this.pressPreviewTimer);
+    this.pressPreviewTimer = setTimeout(() => {
+      BattleUI.showCardTooltip(card, card.data('cardData'));
+      card.data('suppressPlayClick', true);
+    }, 350);
     if (!card.hasClass('clickable')) return;
     const pointer = (event as any).originalEvent as PointerEvent | undefined;
     if (!pointer || (pointer.pointerType === 'mouse' && pointer.button !== 0)) return;
@@ -223,12 +290,23 @@ export class CardPlayMode {
   private handlePointerMove(event: JQuery.Event): void {
     const pointer = (event as any).originalEvent as PointerEvent | undefined;
     if (!pointer || !this.draggedCard || pointer.pointerId !== this.dragPointerId || !this.dragOrigin) return;
+    // On phones a horizontal gesture scrolls readable hand cards; an upward
+    // gesture still drags a card into play. Native pointercancel ends a swipe.
+    if (!this.pointerDragActive && pointer.pointerType === 'touch' && window.matchMedia('(max-width: 760px)').matches) {
+      const dx = pointer.clientX - this.dragOrigin.x, dy = pointer.clientY - this.dragOrigin.y;
+      if (Math.abs(dx) >= 6 && Math.abs(dx) > Math.abs(dy)) {
+        clearTimeout(this.pressPreviewTimer);
+        this.cancelInterruptedPointer();
+        return;
+      }
+    }
     event.preventDefault();
     event.stopPropagation();
 
     if (!this.pointerDragActive) {
       const distance = Math.hypot(pointer.clientX - this.dragOrigin.x, pointer.clientY - this.dragOrigin.y);
       if (distance < 6) return;
+      clearTimeout(this.pressPreviewTimer);
       this.pointerDragActive = true;
       this.clearSelection();
       if (!this.beginVisualDrag(this.draggedCard)) {
@@ -241,6 +319,10 @@ export class CardPlayMode {
   }
 
   private handlePointerEnd(event: JQuery.Event): void {
+    clearTimeout(this.pressPreviewTimer);
+    const previewCard = this.pressPreviewCard;
+    this.pressPreviewCard = null;
+    setTimeout(() => previewCard?.removeData('suppressPlayClick'), 250);
     const pointer = (event as any).originalEvent as PointerEvent | undefined;
     if (!pointer || !this.draggedCard || pointer.pointerId !== this.dragPointerId) return;
     const card = this.draggedCard;
@@ -267,19 +349,18 @@ export class CardPlayMode {
   }
 
   private finishPointerDrag(card: JQuery, action: CardDropAction): void {
-    if (this.dragPointerId !== null) {
-      (card.get(0) as HTMLElement | undefined)?.releasePointerCapture?.(this.dragPointerId);
-    }
+    this.releasePointerCapture(card);
     this.justEndedDrag = this.pointerDragActive;
     card.data('justEndedDrag', this.pointerDragActive);
-    this.hideCardDetail();
+    if (this.pointerDragActive) this.hideCardDetail();
     $('#playArea').removeClass('show active');
 
     if (this.pointerDragActive && this.dragSlot) {
       if (action === 'play') {
         this.releaseDragSlot(this.dragSlot);
+        card.data('visualPlayStarted', true);
         this.animatePlayedCard(card);
-        this.requestPlay(card);
+        this.requestPlay(card, false);
       } else {
         this.restoreCardToSlot(card, this.dragSlot);
       }

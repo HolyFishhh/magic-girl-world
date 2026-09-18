@@ -1,4 +1,6 @@
+import { growSummonDefinition, type PersistentGrowthOperation } from './persistentGrowth';
 import type { BattleRequest } from './battleContract';
+import { roundBattleValue } from './battleMath';
 import type { PlayedCardDestination } from './cardRules';
 import { getCardSourceId } from './cardRules';
 import {
@@ -23,8 +25,9 @@ import {
   type AdvancedCardZoneFailureCode,
 } from './advancedCardZoneTransaction';
 import { createBattleRandomState, drawBattleRandom, type BattleRandomState } from './deterministicRandom';
-import type { EffectProgram } from './effectDsl';
+import type { ConditionExpression, EffectProgram } from './effectDsl';
 import { allocateRuntimeId } from './runtimeIds';
+import { arrangeEnemyFrontline, admitEnemyReserves } from './enemyFormation';
 import type { CardIdentity, CardOrigin } from './cardIdentity';
 import type { CardPatch, CardPatchBaseSnapshot, CardPatchLedger } from './cardPatch';
 import type { CardAttachment } from './cardAttachment';
@@ -66,6 +69,7 @@ import {
   type TurnControlState,
 } from './specialCombatContainers';
 import type { CardValueOperator, EffectOrbSelector } from './effectDsl';
+import type { DamageProtectionRule } from './damageProtection';
 import {
   applySummonStatus,
   buildSummonActionQueue,
@@ -77,6 +81,7 @@ import {
   interceptUnblockedAttack,
   modifySummonUnits,
   modifySummonEffectPrograms,
+  planSummonActions,
   removeSummonStatus,
   resetSummonTurnState,
   resolveSummonTargets,
@@ -95,6 +100,10 @@ import {
 } from './summonUnit';
 
 export interface Card extends Partial<CardIdentity> {
+  /** Optional player-facing line shown when this card resolves. */
+  dialogue?: string;
+  unique?: boolean;
+  lifecycle?: import('./cardLifecycle').CardLifecycle;
   id: string;
   originalId?: string;
   name: string;
@@ -119,6 +128,7 @@ export interface Card extends Partial<CardIdentity> {
   attachments?: CardAttachment[];
   replayCount?: number;
   xValueBonus?: number;
+  requiresSummonTemplateId?: string;
 }
 
 export interface StatusEffect {
@@ -144,11 +154,13 @@ export interface Relic {
   id: string;
   name: string;
   description: string;
-  effectProgram: EffectProgram;
+  /** Omitted for acquisition-only relics; battle trigger resolution treats them as no-ops. */
+  effectProgram?: EffectProgram;
   emoji: string;
-  rarity: 'Common' | 'Uncommon' | 'Rare' | 'Boss' | 'ENS';
-  trigger: string;
+  rarity: 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary' | 'Boss' | 'ENS';
+  trigger?: string;
   eventQuery?: import('./battleEventJournal').EventTriggerQuery;
+  onAcquire?: import('./nonCombatSettlement').NonCombatSettlementPlan;
 }
 
 export interface Ability {
@@ -161,6 +173,8 @@ export interface Ability {
   trigger: string;
   eventQuery?: import('./battleEventJournal').EventTriggerQuery;
   effectProgram: EffectProgram;
+  /** Continuous ally protection; runtime resolves exact enemy IDs, never active aliases. */
+  protection?: DamageProtectionRule;
 }
 
 export interface BattleHistoryEntry {
@@ -210,14 +224,22 @@ export interface EnemyIntent {
 }
 
 export interface EnemyAction {
+  /** Stable authored identity used by event filters and lineage memory. */
+  id?: string;
   name: string;
+  emoji?: string;
   effectProgram: EffectProgram;
   description: string;
+  dialogue?: string;
   weight: number;
 }
 
 export interface Enemy {
   id: string;
+  /** Stable visible position. Defeat never shifts the surviving members. */
+  stageSlot?: number;
+  /** This enemy's finalized defeat ends the encounter, even with reserves. */
+  victoryOnDefeat?: boolean;
   name: string;
   maxHp: number;
   currentHp: number;
@@ -234,6 +256,7 @@ export interface Enemy {
   nextAction: EnemyAction | null;
   lustEffect?: {
     name: string;
+    emoji?: string;
     description: string;
     effectProgram: EffectProgram;
   };
@@ -251,16 +274,40 @@ export interface Enemy {
   tags?: string[];
   stance?: ActiveStance | null;
   orbs?: OrbContainer;
+  /** Compiled from authored escape_when; JSON-safe and retained by battle snapshots. */
+  escapeCondition?: ConditionExpression;
+  /** Shown before departure; this is the earliest enemy turn that may remove it. */
+  escapePending?: boolean;
+  escapeReadyTurn?: number;
+  /** Direct authored loot for this original encounter enemy; never retained by spawned reinforcements. */
+  defeatReward?: Record<string, unknown>;
 }
 
 export type BattlePhase = CoreBattlePhase;
 
+export interface PersistentGrowthEntry extends PersistentGrowthOperation {
+  /** Stable across a battle-session reload; used by settlement receipts. */
+  id: string;
+
+}
+
 export interface GameState {
+  /** Explicit player-growth operations awaiting the one atomic battle settlement. */
+  persistentGrowth?: PersistentGrowthEntry[];
+  summonGrowth?: PersistentGrowthOperation[];
+  /** Monotonic identity for event-bearing stances, persisted with battle state. */
+  stanceActivationSequence?: number;
   player: Player;
   /** Ordered living/defeated enemy entities. New code uses this collection. */
   enemies?: Enemy[];
+  /** Inactive wave members: excluded from targeting, timers, triggers and intentions. */
+  reserveEnemies?: Enemy[];
   /** Removed combatants retained for complete logs and post-battle narration. */
   defeatedEnemies?: Enemy[];
+  /** Combatants that left without being defeated. They never count as kills or reward receipts. */
+  escapedEnemies?: Enemy[];
+  /** Original encounter roster eligible for program-owned base gold; reinforcements are excluded. */
+  rewardEligibleEnemyIds?: string[];
   /** Player-selected or compatibility opponent. */
   activeEnemyId?: string | null;
   /** Legacy active-opponent alias; kept synchronized with enemies. */
@@ -284,10 +331,14 @@ export interface GameState {
   eventJournal?: BattleEventJournalState;
   /** Template/future-copy patches are persisted separately from concrete card instances. */
   cardPatchLedger?: CardPatchLedger;
+  /** Exact owned-card tombstones; persisted with the combat session until settlement. */
+  purgedRunInstanceIds?: string[];
   effectScheduler?: EffectSchedulerState;
   turnControl?: TurnControlState;
   /** Independent allied/enemy sub-entities with their own HP, statuses and action order. */
   summons?: SummonCollectionState;
+  /** Last capacity actually used by each side's summon operation; UI metadata. */
+  summonLimits?: Partial<Record<BattleOwner, number>>;
 }
 
 export type BattleStateChangeListener = (state: GameState) => void;
@@ -322,6 +373,7 @@ export function createEmptyBattleState(): GameState {
     player: createEmptyPlayer(),
     enemies: [],
     defeatedEnemies: [],
+    escapedEnemies: [],
     activeEnemyId: null,
     enemy: null,
     currentTurn: 0,
@@ -339,6 +391,7 @@ export function createEmptyBattleState(): GameState {
     effectScheduler: createEffectSchedulerState(),
     turnControl: normalizeTurnControl(),
     summons: createSummonCollectionState(),
+    persistentGrowth: [],
   };
 }
 
@@ -349,8 +402,14 @@ export class BattleStateStore {
   private readonly listeners = new Map<string, BattleStateChangeListener[]>();
   private readonly snapshots = new Map<string, GameState>();
   private readonly inFlightCardCounts = new Map<string, number>();
+  private readonly inFlightRunInstanceCounts = new Map<string, number>();
+  /** Runtime-only owner binding for nested enemy effects, including defeated owners. */
+  private readonly enemyResolutionStack: string[] = [];
 
-  public constructor(initialState: GameState = createEmptyBattleState()) {
+  public constructor(
+    initialState: GameState = createEmptyBattleState(),
+    private readonly identityPorts: { persistentGrowthNonce?: () => string } = {},
+  ) {
     this.gameState = cloneState(initialState);
     this.normalizeEnemyCollection();
     this.gameState.eventJournal = initialState.eventJournal
@@ -379,17 +438,20 @@ export class BattleStateStore {
   }
 
   protected normalizeEnemyCollection(): void {
-    const source = Array.isArray(this.gameState.enemies) && this.gameState.enemies.length > 0
+    const source = Array.isArray(this.gameState.enemies) && (this.gameState.enemies.length > 0 || !this.gameState.enemy)
       ? this.gameState.enemies
       : this.gameState.enemy
         ? [this.gameState.enemy]
         : [];
     const seen = new Set<string>();
-    this.gameState.enemies = source.filter(enemy => {
+    const unique = source.filter(enemy => {
       if (!enemy?.id || seen.has(enemy.id)) return false;
       seen.add(enemy.id);
       return true;
     }).map(enemy => ({ ...enemy, orbs: normalizeOrbContainer(enemy.orbs) }));
+    const formation = arrangeEnemyFrontline(unique, this.gameState.reserveEnemies || []);
+    this.gameState.enemies = formation.frontline;
+    this.gameState.reserveEnemies = formation.reserves;
     const requested = this.gameState.activeEnemyId;
     this.gameState.activeEnemyId = requested && this.gameState.enemies.some(enemy => enemy.id === requested)
       ? requested
@@ -431,7 +493,19 @@ export class BattleStateStore {
   }
 
   public recordBattleEvent(draft: BattleEventDraft): AppendBattleEventResult {
-    const result = appendBattleEvent(this.gameState.eventJournal || createBattleEventJournal(), draft);
+    const sideOf = (id: string | undefined): 'player' | 'enemy' | undefined => {
+      if (!id) return undefined;
+      if (id === 'player') return 'player';
+      if (id === 'enemy' || this.getEnemyById(id)) return 'enemy';
+      return this.getSummonById(id)?.owner;
+    };
+    const actorSide = sideOf('actorId' in draft ? draft.actorId : undefined);
+    const targetSide = sideOf('targetId' in draft ? draft.targetId : undefined);
+    const result = appendBattleEvent(this.gameState.eventJournal || createBattleEventJournal(), {
+      ...draft,
+      ...(actorSide ? { actorSide } : {}),
+      ...(targetSide ? { targetSide } : {}),
+    });
     if (result.ok) {
       this.gameState.eventJournal = result.state;
       this.notifyListeners('battle_event_recorded');
@@ -490,14 +564,17 @@ export class BattleStateStore {
     owner: BattleOwner,
     definition: SummonUnitDefinition,
     count: number,
-    capacity = 3,
+    capacity = owner === 'enemy' ? Number.MAX_SAFE_INTEGER : 3,
     overflow: SummonOverflowPolicy = 'replace_oldest',
+    summonerId: string | null = owner === 'player' ? 'player' : null,
   ): { spawned: SummonUnit[]; replaced: SummonUnit[] } {
     const result = spawnSummonUnits(
-      this.readSummons(), owner, definition, count, capacity, overflow, this.gameState.currentTurn,
+      this.readSummons(), owner, owner === 'player' ? growSummonDefinition(definition, this.gameState.summonGrowth || []) : definition, count, capacity, overflow, this.gameState.currentTurn, summonerId,
     );
+    this.gameState.summonLimits = { ...this.gameState.summonLimits, [owner]: capacity };
     this.writeSummons(result.state, 'summons_spawned');
-    return { spawned: result.spawned, replaced: result.replaced };
+    this.planSummonActions(result.spawned.map(unit => unit.instanceId));
+    return { spawned: result.spawned.map(unit => this.getSummonById(unit.instanceId) || unit), replaced: result.replaced };
   }
 
   public selectSummons(selector: SummonSelector, source: BattleOwner): SummonUnit[] {
@@ -507,14 +584,16 @@ export class BattleStateStore {
   public copySummons(
     targetIds: readonly string[],
     owner: BattleOwner,
-    capacity = 3,
+    capacity = owner === 'enemy' ? Number.MAX_SAFE_INTEGER : 3,
     overflow: SummonOverflowPolicy = 'replace_oldest',
+    binding: { summonerId: string | null } | 'preserve' = 'preserve',
   ): ReturnType<typeof copySummonUnits> {
     const result = copySummonUnits(
-      this.readSummons(), targetIds, owner, capacity, overflow, this.gameState.currentTurn,
+      this.readSummons(), targetIds, owner, capacity, overflow, this.gameState.currentTurn, binding,
     );
     this.writeSummons(result.state, 'summons_copied');
-    return result;
+    this.planSummonActions(result.copied.map(unit => unit.instanceId));
+    return { ...result, copied: result.copied.map(unit => this.getSummonById(unit.instanceId) || unit) };
   }
 
   public damageSummons(targetIds: readonly string[], amount: number, bypassBlock = false): SummonDamageResult {
@@ -584,9 +663,11 @@ export class BattleStateStore {
     return result;
   }
 
-  public interceptDamageWithSummons(owner: BattleOwner, amount: number): SummonInterceptResult {
-    const result = interceptUnblockedAttack(this.readSummons(), owner, amount);
-    if (result.interceptedDamage > 0) this.writeSummons(result.state, 'summon_damage_intercepted');
+  public interceptDamageWithSummons(owner: BattleOwner, amount: number, protectedEnemyIdOrMitigate?: string | ((unit: SummonUnit, incoming: number) => number), mitigate?: (unit: SummonUnit, incoming: number) => number): SummonInterceptResult {
+    const protectedEnemyId = typeof protectedEnemyIdOrMitigate === 'string' ? protectedEnemyIdOrMitigate : undefined;
+    const effectiveMitigate = typeof protectedEnemyIdOrMitigate === 'function' ? protectedEnemyIdOrMitigate : mitigate;
+    const result = interceptUnblockedAttack(this.readSummons(), owner, amount, effectiveMitigate, protectedEnemyId);
+    if (result.hits.length > 0) this.writeSummons(result.state, 'summon_damage_intercepted');
     return result;
   }
 
@@ -598,7 +679,24 @@ export class BattleStateStore {
     return buildSummonActionQueue(this.readSummons(), owner);
   }
 
+  /** Plan a full next activation at a state transition, never while reading an intent. */
+  public planSummonActions(targetIds: readonly string[]): void {
+    if (targetIds.length === 0) return;
+    this.writeSummons(planSummonActions(this.readSummons(), targetIds, () => this.nextRandom()), 'summon_actions_planned');
+  }
+
+  /** Restore/legacy compatibility: fill only missing plan slots without changing an already visible intent. */
+  public ensureSummonActionsPlanned(targetIds: readonly string[]): void {
+    if (targetIds.length === 0) return;
+    this.writeSummons(planSummonActions(this.readSummons(), targetIds, () => this.nextRandom(), false), 'summon_actions_planned');
+  }
+
   public getEnemy(): Enemy | null {
+    const resolvedId = this.enemyResolutionStack.at(-1);
+    if (resolvedId) {
+      const resolved = this.gameState.enemies?.find(enemy => enemy.id === resolvedId);
+      if (resolved) return cloneState(resolved);
+    }
     this.syncLegacyEnemyAlias();
     return this.gameState.enemy ? cloneState(this.gameState.enemy) : null;
   }
@@ -610,6 +708,29 @@ export class BattleStateStore {
   public getEnemyById(enemyId: string): Enemy | null {
     const enemy = this.gameState.enemies?.find(entry => entry.id === enemyId);
     return enemy ? cloneState(enemy) : null;
+  }
+
+  /** Bind legacy side-based operations to one exact enemy for a nested resolution. */
+  public beginEnemyResolution(enemyId: string): boolean {
+    if (!this.gameState.enemies?.some(enemy => enemy.id === enemyId)) return false;
+    this.enemyResolutionStack.push(enemyId);
+    return true;
+  }
+
+  public endEnemyResolution(enemyId: string): void {
+    const index = this.enemyResolutionStack.lastIndexOf(enemyId);
+    if (index >= 0) this.enemyResolutionStack.splice(index, 1);
+  }
+
+  private currentEnemyId(): string | null {
+    const resolvedId = this.enemyResolutionStack.at(-1);
+    if (resolvedId && this.gameState.enemies?.some(enemy => enemy.id === resolvedId)) return resolvedId;
+    return this.gameState.activeEnemyId || this.gameState.enemy?.id || null;
+  }
+
+  private currentEnemy(): Enemy | null {
+    const enemyId = this.currentEnemyId();
+    return enemyId ? this.gameState.enemies?.find(enemy => enemy.id === enemyId) || null : null;
   }
 
   public setActiveEnemy(enemyId: string): boolean {
@@ -651,8 +772,35 @@ export class BattleStateStore {
     this.notifyListeners('player_updated');
   }
 
+  /** Record only the dedicated permanent-growth operation; ordinary combat stat changes never enter this ledger. */
+  public recordPersistentGrowth(entry: Omit<PersistentGrowthEntry, 'id'>): void {
+    if (!Number.isFinite(entry.value)) throw new Error('persistent growth value must be finite');
+    const existingIds = new Set((this.gameState.persistentGrowth || []).map(value => value.id));
+    // Hosts supply a unique receipt namespace; portable replay stays deterministic.
+    // The allocated ID is saved in the ledger and survives reload unchanged.
+    const nonce = this.identityPorts.persistentGrowthNonce?.() || 'replay';
+    const source = `persistent_growth_${this.gameState.battleRequest?.seed ?? 'combat'}_${nonce}`;
+    this.gameState.persistentGrowth = [
+      ...(this.gameState.persistentGrowth || []),
+      { ...entry, id: allocateRuntimeId(source, existingIds), value: roundBattleValue(entry.value) },
+    ];
+    this.notifyListeners('persistent_growth_recorded');
+  }
+
+  public growPlayerSummonTemplate(entry: PersistentGrowthOperation): void {
+    const collection = this.readSummons();
+    const grow = (unit: SummonUnit): SummonUnit => {
+      if (unit.owner !== 'player' || unit.templateId !== entry.summonTemplateId) return unit;
+      const definition = growSummonDefinition({ ...unit, id: unit.templateId }, [entry]);
+      return { ...unit, ...definition, id: unit.id, maxHp: definition.maxHp ?? unit.maxHp,
+        currentHp: Math.min(unit.currentHp, definition.maxHp ?? unit.maxHp) };
+    };
+    this.gameState.summonGrowth = [...(this.gameState.summonGrowth || []), structuredClone(entry)];
+    this.writeSummons({ ...collection, living: collection.living.map(grow), defeated: collection.defeated.map(grow) }, 'summon_permanent_growth');
+  }
+
   public updateEnemy(updates: Partial<Enemy>, _options?: { skipAttributeTriggers?: boolean }): void {
-    const enemyId = this.gameState.activeEnemyId || this.gameState.enemy?.id;
+    const enemyId = this.currentEnemyId();
     if (!enemyId) return;
     this.updateEnemyById(enemyId, updates, _options);
   }
@@ -674,12 +822,19 @@ export class BattleStateStore {
     target: 'player' | 'enemy',
     stance: Omit<ActiveStance, 'enteredTurn'> | null,
   ): ReturnType<typeof transitionStance> {
-    const entity = target === 'player' ? this.gameState.player : this.gameState.enemy;
+    const entity = target === 'player' ? this.gameState.player : this.currentEnemy();
     const result = transitionStance(entity?.stance, stance, this.gameState.currentTurn);
     if (!entity || !result.changed) return result;
+    if (result.next?.events?.length) {
+      const largest = Math.max(0, this.gameState.stanceActivationSequence || 0,
+        this.gameState.player.stance?.activationId || 0,
+        ...(this.gameState.enemies || []).map(enemy => enemy.stance?.activationId || 0));
+      if (!Number.isSafeInteger(largest) || largest >= Number.MAX_SAFE_INTEGER) throw new Error('Stance activation identity exhausted');
+      this.gameState.stanceActivationSequence = largest + 1;
+      result.next.activationId = largest + 1;
+    }
     if (target === 'player') this.gameState.player.stance = result.next;
-    else if (this.gameState.activeEnemyId)
-      this.updateEnemyById(this.gameState.activeEnemyId, { stance: result.next });
+    else this.updateEnemy({ stance: result.next });
     if (target === 'player') this.notifyListeners('stance_changed');
     return result;
   }
@@ -688,14 +843,14 @@ export class BattleStateStore {
     target: 'player' | 'enemy',
     slots: number,
   ): ReturnType<typeof resizeOrbContainer> {
-    const entity = target === 'player' ? this.gameState.player : this.gameState.enemy;
+    const entity = target === 'player' ? this.gameState.player : this.currentEnemy();
     const result = resizeOrbContainer(entity?.orbs, slots);
     if (!entity) return result;
     if (target === 'player') {
       this.gameState.player.orbs = result.container;
       this.notifyListeners('orbs_changed');
-    } else if (this.gameState.activeEnemyId) {
-      this.updateEnemyById(this.gameState.activeEnemyId, { orbs: result.container });
+    } else {
+      this.updateEnemy({ orbs: result.container });
     }
     return result;
   }
@@ -704,7 +859,7 @@ export class BattleStateStore {
     target: 'player' | 'enemy',
     definition: Omit<OrbInstance, 'instanceId'>,
   ): ReturnType<typeof channelOrbInContainer> {
-    const entity = target === 'player' ? this.gameState.player : this.gameState.enemy;
+    const entity = target === 'player' ? this.gameState.player : this.currentEnemy();
     const current = normalizeOrbContainer(entity?.orbs);
     const instanceId = allocateRuntimeId(definition.id, new Set(current.orbs.map(orb => orb.instanceId)));
     const result = channelOrbInContainer(current, { ...cloneState(definition), instanceId });
@@ -712,8 +867,8 @@ export class BattleStateStore {
     if (target === 'player') {
       this.gameState.player.orbs = result.container;
       this.notifyListeners('orbs_changed');
-    } else if (this.gameState.activeEnemyId) {
-      this.updateEnemyById(this.gameState.activeEnemyId, { orbs: result.container });
+    } else {
+      this.updateEnemy({ orbs: result.container });
     }
     return result;
   }
@@ -722,14 +877,14 @@ export class BattleStateStore {
     target: 'player' | 'enemy',
     selector: EffectOrbSelector,
   ): ReturnType<typeof removeSelectedOrbs> {
-    const entity = target === 'player' ? this.gameState.player : this.gameState.enemy;
+    const entity = target === 'player' ? this.gameState.player : this.currentEnemy();
     const result = removeSelectedOrbs(entity?.orbs, selector);
     if (!entity) return result;
     if (target === 'player') {
       this.gameState.player.orbs = result.container;
       this.notifyListeners('orbs_changed');
-    } else if (this.gameState.activeEnemyId) {
-      this.updateEnemyById(this.gameState.activeEnemyId, { orbs: result.container });
+    } else {
+      this.updateEnemy({ orbs: result.container });
     }
     return result;
   }
@@ -740,14 +895,14 @@ export class BattleStateStore {
     operator: CardValueOperator,
     value: number,
   ): ReturnType<typeof modifyValuesInOrbContainer> {
-    const entity = target === 'player' ? this.gameState.player : this.gameState.enemy;
+    const entity = target === 'player' ? this.gameState.player : this.currentEnemy();
     const result = modifyValuesInOrbContainer(entity?.orbs, selector, operator, value);
     if (!entity) return result;
     if (target === 'player') {
       this.gameState.player.orbs = result.container;
       this.notifyListeners('orbs_changed');
-    } else if (this.gameState.activeEnemyId) {
-      this.updateEnemyById(this.gameState.activeEnemyId, { orbs: result.container });
+    } else {
+      this.updateEnemy({ orbs: result.container });
     }
     return result;
   }
@@ -789,7 +944,10 @@ export class BattleStateStore {
   public setEnemies(enemies: readonly Enemy[], activeEnemyId?: string | null): void {
     const ids = enemies.map(enemy => enemy.id);
     if (ids.some(id => !id) || new Set(ids).size !== ids.length) throw new Error('enemy ids must be non-empty and unique');
-    this.gameState.enemies = [...cloneState(enemies)];
+    const previous = new Map((this.gameState.enemies || []).map(enemy => [enemy.id, enemy.stageSlot]));
+    const formation = arrangeEnemyFrontline(enemies.map(enemy => ({ ...enemy, stageSlot: enemy.stageSlot ?? previous.get(enemy.id) })), this.gameState.reserveEnemies || []);
+    this.gameState.enemies = formation.frontline;
+    this.gameState.reserveEnemies = formation.reserves;
     this.gameState.activeEnemyId = activeEnemyId ?? enemies.find(enemy => enemy.currentHp > 0)?.id ?? null;
     this.syncLegacyEnemyAlias();
     this.notifyListeners('enemy_set');
@@ -809,6 +967,36 @@ export class BattleStateStore {
     this.syncLegacyEnemyAlias();
     this.notifyListeners('enemies_removed');
     return cloneState(removed);
+  }
+
+  public getReserveEnemies(): Enemy[] { return cloneState(this.gameState.reserveEnemies || []); }
+
+  public admitReserveEnemies(): Enemy[] {
+    const next = admitEnemyReserves(this.gameState.enemies || [], this.gameState.reserveEnemies || []);
+    this.gameState.enemies = next.frontline;
+    this.gameState.reserveEnemies = next.reserves;
+    this.syncLegacyEnemyAlias();
+    if (next.admitted.length) this.notifyListeners('enemies_admitted');
+    return cloneState(next.admitted);
+  }
+
+  public setRewardEligibleEnemyIds(enemyIds: readonly string[]): void {
+    this.gameState.rewardEligibleEnemyIds = [...new Set(enemyIds.filter(id => typeof id === 'string' && id))];
+    this.notifyListeners('reward_eligible_enemies_updated');
+  }
+
+  /** Remove a living enemy without processing defeat hooks or adding a kill receipt. */
+  public removeEscapingEnemy(enemyId: string): Enemy | null {
+    const enemy = this.gameState.enemies?.find(entry => entry.id === enemyId && entry.currentHp > 0);
+    if (!enemy) return null;
+    this.gameState.enemies = (this.gameState.enemies || []).filter(entry => entry.id !== enemyId);
+    const previous = this.gameState.escapedEnemies || [];
+    this.gameState.escapedEnemies = previous.some(entry => entry.id === enemyId)
+      ? previous
+      : [...previous, cloneState(enemy)];
+    this.syncLegacyEnemyAlias();
+    this.notifyListeners('enemy_escaped');
+    return cloneState(enemy);
   }
 
   public setPhase(phase: BattlePhase): void {
@@ -867,7 +1055,7 @@ export class BattleStateStore {
   }
 
   public addStatusEffect(target: 'player' | 'enemy', effect: StatusEffect): void {
-    const entity = target === 'player' ? this.gameState.player : this.gameState.enemy;
+    const entity = target === 'player' ? this.gameState.player : this.currentEnemy();
     if (!entity) return;
     const existing = entity.statusEffects.find(entry => entry.id === effect.id);
     if (existing) {
@@ -880,7 +1068,7 @@ export class BattleStateStore {
   }
 
   public removeStatusEffect(target: 'player' | 'enemy', effectId: string): void {
-    const entity = target === 'player' ? this.gameState.player : this.gameState.enemy;
+    const entity = target === 'player' ? this.gameState.player : this.currentEnemy();
     if (!entity) return;
     const index = entity.statusEffects.findIndex(effect => effect.id === effectId);
     if (index < 0) return;
@@ -889,7 +1077,7 @@ export class BattleStateStore {
   }
 
   public updateStatusEffect(target: 'player' | 'enemy', effectId: string, updates: Partial<StatusEffect>): void {
-    const entity = target === 'player' ? this.gameState.player : this.gameState.enemy;
+    const entity = target === 'player' ? this.gameState.player : this.currentEnemy();
     const effect = entity?.statusEffects.find(entry => entry.id === effectId);
     if (!effect) return;
     Object.assign(effect, updates);
@@ -933,6 +1121,15 @@ export class BattleStateStore {
   public moveCardToExhaust(card: Card): void {
     this.applyCardZones(appendCardToZone(this.getCardZones(), 'exhaustPile', card));
     this.notifyListeners('exhaust_updated');
+  }
+
+  public purgeOwnedCard(card: Card): void {
+    // Temporary copies share lineage but must never delete their original.
+    if (card.runInstanceId && !(card.origin === 'copied' && card.parentCombatInstanceId) && this.gameState.player.deck.some(c => c.runInstanceId === card.runInstanceId)) {
+      this.gameState.purgedRunInstanceIds = [...new Set([...(this.gameState.purgedRunInstanceIds || []), card.runInstanceId])];
+      this.gameState.player.deck = this.gameState.player.deck.filter(owned => owned.runInstanceId !== card.runInstanceId);
+    }
+    this.notifyListeners('card_purged');
   }
 
   public placeResolvedCard(card: Card, destination: PlayedCardDestination): PlayedCardDestination {
@@ -1100,10 +1297,14 @@ export class BattleStateStore {
   }
 
   /** One authoritative placement rule for generated cards and hand overflow. */
-  public placeGeneratedCard(card: Card, preferredZone: 'hand' | 'draw'): 'hand' | 'draw' | 'discard' {
+  public placeGeneratedCard(card: Card, preferredZone: 'hand' | 'draw' | 'discard'): 'hand' | 'draw' | 'discard' {
     if (preferredZone === 'draw') {
       this.addCardToDeck(card);
       return 'draw';
+    }
+    if (preferredZone === 'discard') {
+      this.moveCardToDiscard(card);
+      return 'discard';
     }
     if (this.addCardToHand(card)) return 'hand';
     this.moveCardToDiscard(card);
@@ -1111,12 +1312,22 @@ export class BattleStateStore {
   }
 
   public beginCardTransit(card: Card): void {
+    // A resolving card is temporarily outside every pile but is still owned.
+    // Persistent MVU decks reconcile exact run identities, not just templates.
+    if (card.runInstanceId) {
+      this.inFlightRunInstanceCounts.set(card.runInstanceId, (this.inFlightRunInstanceCounts.get(card.runInstanceId) || 0) + 1);
+    }
     const key = getCardSourceId(card);
     if (!key) return;
     this.inFlightCardCounts.set(key, (this.inFlightCardCounts.get(key) || 0) + 1);
   }
 
   public endCardTransit(card: Card): void {
+    if (card.runInstanceId) {
+      const remaining = (this.inFlightRunInstanceCounts.get(card.runInstanceId) || 0) - 1;
+      if (remaining > 0) this.inFlightRunInstanceCounts.set(card.runInstanceId, remaining);
+      else this.inFlightRunInstanceCounts.delete(card.runInstanceId);
+    }
     const key = getCardSourceId(card);
     if (!key) return;
     const remaining = (this.inFlightCardCounts.get(key) || 0) - 1;
@@ -1126,6 +1337,10 @@ export class BattleStateStore {
 
   protected getInFlightCardCounts(): ReadonlyMap<string, number> {
     return this.inFlightCardCounts;
+  }
+
+  protected getInFlightRunInstanceIds(): IterableIterator<string> {
+    return this.inFlightRunInstanceCounts.keys();
   }
 
   public addEventListener(event: string, listener: BattleStateChangeListener): () => void {
@@ -1144,6 +1359,7 @@ export class BattleStateStore {
     this.gameState = createEmptyBattleState();
     this.snapshots.clear();
     this.inFlightCardCounts.clear();
+    this.inFlightRunInstanceCounts.clear();
     this.notifyListeners('game_reset');
   }
 
@@ -1185,3 +1401,7 @@ export class BattleStateStore {
     }
   }
 }
+
+
+
+

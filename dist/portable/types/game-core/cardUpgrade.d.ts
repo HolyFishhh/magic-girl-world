@@ -21,6 +21,7 @@ export interface CardUpgradePatch {
 }
 export interface CardUpgradeOptions {
     maxLevel?: number;
+    playerDesireEffect?: unknown;
     knownStatusIds?: Iterable<string>;
     statusDefinitions?: readonly unknown[];
     knownResourceIds?: Iterable<string>;

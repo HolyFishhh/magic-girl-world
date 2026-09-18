@@ -95,7 +95,7 @@ assert.deepEqual(
     description: '施加2层月蚀。',
     effects: [{ apply_status: 'eclipse', stacks: 2 }],
   }, { knownStatusIds: [] }),
-  { ok: false, message: '引用了未注册状态: eclipse' },
+  { ok: false, message: 'cards[0].effects[0].status: 状态未注册: eclipse' },
 );
 assert.equal(
   upgrades.applyCardUpgrade(base, {

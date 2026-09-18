@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+process.env.TS_NODE_COMPILER_OPTIONS = JSON.stringify({module:'CommonJS',moduleResolution:'node'});
+require('ts-node/register/transpile-only');
+const { renderStatusReferences } = require('../src/shared/statusReference.ts');
+const statuses = [{id:'tower_shine',name:'塔辉',rules:'回合开始获得1点能量',flavor:'<img src=x>'}];
+const html = renderStatusReferences('获得1层tower_shine。<script> 塔辉', statuses);
+assert.equal((html.match(/class="mwg-status-reference(?:\s|"|$)/g)||[]).length,2);
+assert.match(html,/data-status-rules="回合开始获得1点能量"/);
+assert.doesNotMatch(html,/<script>|<img|>tower_shine</);
+assert.match(html,/&lt;script&gt;/);
+assert.equal(renderStatusReferences('未知状态',[]),'未知状态');
+console.log('Status references resolve ids, escape author text and preserve unknown text.');

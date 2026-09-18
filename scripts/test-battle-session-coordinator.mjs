@@ -189,6 +189,31 @@ function cardPorts(state, tx, overrides = {}) {
   };
 }
 
+// Payment is observable while the card flies; effects still wait for impact.
+for (const failPresentation of [false, true]) {
+  const state = cardState(); state.energy = 1; state.hand[1].cost = 1;
+  const before = structuredClone(state), tx = transactionHarness(state);
+  let impact, arrived;
+  const held = new Promise(resolve => { impact = resolve; });
+  const presenting = new Promise(resolve => { arrived = resolve; });
+  const playing = core.playBattleSessionCard('attack', cardPorts(state, tx, {
+    presentCardPlay: async () => { arrived(); await held; if (failPresentation) throw Error('presentation failed'); },
+  }));
+  await presenting;
+  assert.equal(state.energy, 0, 'hand affordability sees payment before impact');
+  assert.equal(state.effects, 0, 'damage waits for the impact presentation');
+  assert.equal(state.hand.some(c => c.id === 'attack'), false);
+  assert.equal(state.hand[0].cost > state.energy, true, 'remaining card is already unaffordable');
+  impact();
+  if (failPresentation) {
+    await assert.rejects(playing, /presentation failed/);
+    assert.deepEqual(state, before, 'failed presentation restores cost and hand');
+  } else {
+    assert.equal((await playing).status, 'completed');
+    assert.equal(state.effects, 2);
+  }
+}
+
 {
   const state = cardState();
   const tx = transactionHarness(state);
@@ -201,12 +226,33 @@ function cardPorts(state, tx, overrides = {}) {
   assert.equal(state.attacksPlayedThisTurn, 1);
   assert.equal(state.skillsPlayedThisTurn, 0);
   assert.equal(state.effects, 2);
-  assert.equal(state.postTriggers, 1);
+  assert.equal(state.postTriggers, 2, 'Replay repeats the card-play and type-specific trigger lifecycle');
   assert.deepEqual(state.transit, []);
   assert.equal(state.discardPile.length, 1);
   assert.equal(state.discardPile[0].id, 'attack');
   assert.equal(state.discardPile[0].doubleEffect, undefined);
   assert.deepEqual(tx.events, ['begin:play_card', 'present', 'commit']);
+}
+
+{
+  const state = cardState();
+  const tx = transactionHarness(state);
+  const replayIndices = [];
+  const result = await core.playBattleSessionCard('attack', cardPorts(state, tx, {
+    executeCardEffect: (_card, _payment, replayIndex) => {
+      state.effects += 1;
+      replayIndices.push(replayIndex);
+      return 2;
+    },
+  }));
+  assert.equal(result.status, 'completed');
+  assert.equal(result.repeatsExecuted, 4, 'current-card Replay extends the existing two resolutions by two');
+  assert.deepEqual(replayIndices, [0, 1, 2, 3], 'Replay executes the complete card program through the normal loop');
+  assert.equal(state.energy, 2, 'all current-card Replay resolutions share the original single payment');
+  assert.equal(state.postTriggers, 4, 'each complete Replay dispatches normal post-play triggers');
+  assert.equal(core.extendCardResolutionLimit(1, 20, 0), 21);
+  assert.equal(core.extendCardResolutionLimit(21, 20, 1), 21, 'a replayed resolution cannot append more replays');
+  assert.equal(core.extendCardResolutionLimit(40, 20, 0), 41, 'all replay sources share the finite safety ceiling');
 }
 
 {

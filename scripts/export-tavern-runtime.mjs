@@ -3,15 +3,16 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { parse, serializeOuter } from 'parse5';
-import ts from 'typescript';
+import webpack from 'webpack';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
+const buildRoot = resolve(process.env.MWG_BUILD_OUTPUT_ROOT || resolve(root, 'dist'));
 const releaseConfig = JSON.parse(await readFile(resolve(root, 'release.config.json'), 'utf8'));
 const viewSources = {
-  start: 'dist/src/start/index.html',
-  common: 'dist/src/common/index.html',
-  fish: 'dist/src/fish/index.html',
-  update: 'dist/src/common/update/index.html',
+  start: resolve(buildRoot, 'src/start/index.html'),
+  common: resolve(buildRoot, 'src/common/index.html'),
+  fish: resolve(buildRoot, 'src/fish/index.html'),
+  update: resolve(buildRoot, 'src/common/update/index.html'),
 };
 
 function textContent(node) {
@@ -91,10 +92,23 @@ const buildInfo = {
 };
 
 const sourcePath = resolve(root, 'src/runtime/characterRuntime.ts');
-let runtimeScript = ts.transpileModule(await readFile(sourcePath, 'utf8'), {
-  compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022, removeComments: true },
-  fileName: sourcePath,
-}).outputText;
+// The runtime is a browser script, not CommonJS. Bundle shared assessment imports.
+const bundleRoot = resolve(buildRoot, 'tavern/runtime-bundle');
+await new Promise((resolveBuild, reject) => {
+  const compiler = webpack({
+    mode: 'production', target: ['web', 'es2022'], entry: sourcePath,
+    output: { path: bundleRoot, filename: 'runtime.js', iife: true },
+    module: { rules: [{ test: /\.ts$/, exclude: /node_modules/, use: { loader: 'ts-loader', options: { transpileOnly: true } } }] },
+    resolve: { extensions: ['.ts', '.js'] },
+    optimization: { minimize: false, splitChunks: false, runtimeChunk: false },
+    devtool: false, performance: { hints: false },
+  });
+  compiler.run((error, stats) => compiler.close(closeError => {
+    if (error || closeError || stats?.hasErrors()) reject(error || closeError || new Error(stats.toString({ all: false, errors: true })));
+    else resolveBuild();
+  }));
+});
+let runtimeScript = await readFile(resolve(bundleRoot, 'runtime.js'), 'utf8');
 const serializedAssets = safeJson(assets);
 const serializedBuildInfo = safeJson(buildInfo);
 runtimeScript = runtimeScript
@@ -109,8 +123,8 @@ if (/__MWG_(?:VIEW_ASSETS|BUILD_INFO)__/.test(runtimeScript)) {
 }
 if (/<\/script/i.test(runtimeScript)) throw new Error('Character runtime must not contain a literal closing script tag');
 
-const runtimePath = resolve(root, 'dist/tavern/character-runtime.js');
-const manifestPath = resolve(root, 'dist/tavern/character-runtime-manifest.json');
+const runtimePath = resolve(buildRoot, 'tavern/character-runtime.js');
+const manifestPath = resolve(buildRoot, 'tavern/character-runtime-manifest.json');
 await mkdir(dirname(runtimePath), { recursive: true });
 await Promise.all([
   writeFile(runtimePath, runtimeScript, 'utf8'),

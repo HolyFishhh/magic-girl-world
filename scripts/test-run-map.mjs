@@ -61,7 +61,7 @@ assert.ok(
 
 for (const act of first.acts) {
   assert.equal(act.paths.length, 5, `act ${act.act} should expose five branch tracks`);
-  assert.equal(act.startNodeIds.length, 1, `act ${act.act} should have one reward start`);
+  assert.equal(act.startNodeIds.length, 3, `act ${act.act} should have three independent entrances`);
   assert.equal(act.nodes.find(node => node.id === act.bossNodeId)?.kind, 'boss');
   assert.equal(new Set(Object.values(act.seeds)).size, 4, `act ${act.act} should retain independent random streams`);
   for (const node of act.nodes) {
@@ -86,7 +86,7 @@ for (const act of first.acts) {
   }
 
   for (const node of act.nodes) {
-    if (node.floor === 1) assert.equal(node.kind, 'treasure');
+    if (node.floor === 1) assert.equal(node.kind, 'battle');
     if (node.floor === 2) assert.equal(node.kind, 'battle');
     if (node.floor === 9) assert.equal(node.kind, 'treasure');
     if (node.floor === 15) assert.equal(node.kind, 'rest');
@@ -110,7 +110,10 @@ for (const act of first.acts) {
   }
 
   const startId = act.startNodeIds[0];
-  assert.equal(outgoing.get(startId)?.length, 3, `act ${act.act} reward start should open three main routes`);
+  for (const id of act.startNodeIds) {
+    assert.equal(incoming.get(id)?.length ?? 0, 0, 'entrances have no common predecessor');
+    assert.ok(outgoing.get(id)?.length > 0, 'each entrance opens a route');
+  }
 
   const special = new Set(['elite', 'rest', 'shop', 'treasure']);
   for (const edge of act.edges) {

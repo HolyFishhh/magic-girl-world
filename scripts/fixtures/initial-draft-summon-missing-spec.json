@@ -1,0 +1,213 @@
+{
+  "opening": {
+    "choices": [
+      {
+        "description": "旧纸边角用灯语写着“先亮后攻”，像是老守灯人的经验札记。",
+        "id": "choice_take_lantern_paper",
+        "label": "取走灯槽里叠好的旧纸",
+        "outcome": {
+          "reward": {
+            "artifacts": [
+              {
+                "description": "每场战斗开始时，额外抽1张牌。",
+                "emoji": "📜",
+                "id": "keeper_lantern_paper",
+                "name": "守灯人旧札",
+                "rarity": "Common",
+                "trigger": {
+                  "effects": {
+                    "draw": 1
+                  },
+                  "on": "battle_start"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "description": "燃芯在你指间颤了一下，化作一团不灭的小光，似乎仍记得求救的节律。",
+        "id": "choice_take_signal_cinder",
+        "label": "小心剔出求救灯壳里的半截燃芯",
+        "outcome": {
+          "reward": {
+            "artifacts": [
+              {
+                "description": "每回合你第一次打出攻击牌后，获得2点格挡。",
+                "emoji": "🕯️",
+                "id": "signal_cinder",
+                "name": "求救燃芯",
+                "rarity": "Uncommon",
+                "trigger": {
+                  "effects": {
+                    "block": 2
+                  },
+                  "on": "attack_played",
+                  "ordinal": "first",
+                  "scope": "turn"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "description": "铜签入掌即亮，像一撮随时可以掷出去的火种。",
+        "id": "choice_take_signal_tag",
+        "label": "收下老灯守递来的铜签符纸",
+        "outcome": {
+          "reward": {
+            "cards": [
+              {
+                "cost": 0,
+                "description": "造成4点伤害。消耗。",
+                "effects": {
+                  "damage": 4
+                },
+                "emoji": "🎴",
+                "exhaust": true,
+                "id": "signal_burning_tag",
+                "name": "燃芯铜签",
+                "quantity": 1,
+                "rarity": "Uncommon",
+                "type": "Attack"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "narrative": "老灯守说，门廊灯槽里的启程馈赠是塔里的规矩。澄鸢蹲下，把还在发抖的求救提灯轻轻拢在掌边，看见灯槽里躺着三样东西：叠好的旧纸、半截仍在发光的燃芯，以及一枚用灯语刻满短句的铜签。风从断桥与门缝同时灌进来，老人从门后望着她，慢慢地说：“塔心在往下坏，旅人。挑一样趁手的，就当替我送灯的谢礼。”",
+    "title": "灯槽与门后的馈赠"
+  },
+  "player": {
+    "cards": [
+      {
+        "cost": 1,
+        "description": "造成6点伤害。",
+        "effects": {
+          "damage": 6
+        },
+        "emoji": "✨",
+        "id": "starfire_strike",
+        "name": "星焰击",
+        "quantity": 3,
+        "rarity": "Common",
+        "type": "Attack"
+      },
+      {
+        "cost": 1,
+        "description": "获得6点格挡。",
+        "effects": {
+          "block": 6
+        },
+        "emoji": "🛡️",
+        "id": "lamp_shell_ward",
+        "name": "灯壳守御",
+        "quantity": 3,
+        "rarity": "Common",
+        "type": "Skill"
+      },
+      {
+        "cost": 1,
+        "description": "召唤1名守灯小卫。守灯小卫有生命、会主动啄击敌人，并能替你拦下未被格挡的攻击。",
+        "effects": {
+          "spawn_summon": {
+            "actions": [
+              {
+                "effects": [
+                  {
+                    "damage": 2
+                  },
+                  {
+                    "summoner_effects": {
+                      "block": 2
+                    }
+                  }
+                ],
+                "id": "warden_peck",
+                "name": "焰喙护灯"
+              }
+            ],
+            "actions_per_activation": 1,
+            "description": "由掌心星灯唤起的小型守卫，回合间会啄击敌人并为你点亮护体灯光。",
+            "emoji": "🏮",
+            "has_hp": true,
+            "id": "lantern_warden",
+            "intercept": {
+              "max_per_turn": 3,
+              "mode": "unblocked_attack",
+              "priority": 1
+            },
+            "max_hp": 12,
+            "name": "守灯小卫"
+          }
+        },
+        "emoji": "🏮",
+        "id": "call_lantern_warden",
+        "name": "唤灯卫",
+        "quantity": 2,
+        "rarity": "Common",
+        "type": "Skill"
+      },
+      {
+        "cost": 1,
+        "description": "造成3点伤害；场上每有1个你的召唤物，伤害再+2。",
+        "effects": {
+          "damage": "3 + self.summon_count * 2"
+        },
+        "emoji": "⚡",
+        "id": "warden_flash",
+        "name": "灯卫突袭",
+        "quantity": 2,
+        "rarity": "Common",
+        "type": "Attack"
+      },
+      {
+        "cost": 1,
+        "description": "本场战斗中，你造成的伤害和获得的格挡均+1。",
+        "emoji": "🔗",
+        "id": "light_pact_resonance",
+        "name": "星契共鸣",
+        "quantity": 1,
+        "rarity": "Common",
+        "trigger": {
+          "effects": [
+            {
+              "add": 1,
+              "modify": "damage"
+            },
+            {
+              "add": 1,
+              "modify": "block"
+            }
+          ],
+          "on": "passive"
+        },
+        "type": "Power"
+      }
+    ],
+    "core": {
+      "emoji": "🏮",
+      "energy": 3,
+      "hp": 72,
+      "lust": 20,
+      "max_energy": 3,
+      "max_hp": 72,
+      "max_lust": 100
+    },
+    "status": {
+      "location": "碧落群岛·风裂灯塔码头·主塔门廊前",
+      "profession": {
+        "ability": "以掌心命灯与破碎灯火立约，呼唤小型灯卫并指挥它们行动",
+        "name": "星灯契约师"
+      },
+      "time": "星灯历137年-5月6日-17:42"
+    }
+  },
+  "registry": {
+    "resources": [],
+    "statuses": [],
+    "templates": []
+  }
+}

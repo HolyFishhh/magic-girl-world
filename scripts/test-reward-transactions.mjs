@@ -52,10 +52,12 @@ assert.deepEqual(rewards.applyRewardSelectionsToStat(stat, { cards: [0], artifac
   artifacts: ['月轮'],
   items: ['药剂 x3'],
 });
-assert.equal(strike.quantity, 4);
-assert.equal(potion.count, 4);
+assert.equal(stat.battle.cards[0].quantity, 4, 'the atomically replaced stat owns the merged card stack');
+assert.equal(stat.battle.items[0].count, 4, 'the atomically replaced stat owns the merged item stack');
+assert.equal(strike.quantity, 2, 'atomic replacement must not mutate caller-owned card aliases');
+assert.equal(potion.count, 1, 'atomic replacement must not mutate caller-owned item aliases');
 assert.equal(stat.battle.artifacts[0].id, 'moon');
-assert.deepEqual(stat.reward, { card: [], artifact: [], item: [], limits: {} });
+assert.deepEqual(stat.reward, { card: [], artifact: [], item: [], limits: {}, pool_revision: 1 });
 assert.equal(rewards.hasSelectableRewards(stat), false);
 
 const invalid = {
@@ -68,7 +70,7 @@ const invalid = {
   },
 };
 const invalidBefore = structuredClone(invalid);
-assert.throws(() => rewards.applyRewardSelectionsToStat(invalid, { cards: [1], artifacts: [], items: [] }), /索引无效/);
+assert.throws(() => rewards.applyRewardSelectionsToStat(invalid, { cards: [1], artifacts: [], items: [] }), /卡牌不属于待领取奖励/);
 assert.deepEqual(invalid, invalidBefore, 'invalid selection must not partially mutate MUV data');
 
 const malformedReward = {
@@ -162,7 +164,7 @@ const missingStatusReward = {
 const missingStatusBefore = structuredClone(missingStatusReward);
 assert.throws(
   () => rewards.applyRewardSelectionsToStat(missingStatusReward, { cards: [0], artifacts: [], items: [] }),
-  /未注册状态: missing_hex/,
+  /(?:未注册状态|状态未注册): missing_hex/,
 );
 assert.deepEqual(missingStatusReward, missingStatusBefore);
 
@@ -201,9 +203,10 @@ const malformedReferencedStatus = {
     limits: { cards: 1 },
   },
 };
-assert.throws(
-  () => rewards.applyRewardSelectionsToStat(malformedReferencedStatus, { cards: [0], artifacts: [], items: [] }),
-  /状态 broken_hex 无效: 状态 hold 只能包含持续修饰或出牌规则/,
+const malformedReferencedStatusCopy = structuredClone(malformedReferencedStatus);
+assert.doesNotThrow(
+  () => rewards.applyRewardSelectionsToStat(malformedReferencedStatusCopy, { cards: [0], artifacts: [], items: [] }),
+  'reward selection resolves persistent status ids without repeating validation owned by the full battle content pass',
 );
 
 const validReferencedStatus = structuredClone(malformedReferencedStatus);
@@ -254,6 +257,62 @@ assert.equal(
   undefined,
   'support status must not remain on persistent content',
 );
+
+const multiStatusDefinitions = [
+  {
+    id: 'gift_force',
+    name: '馈赠之力',
+    emoji: '⚔️',
+    type: 'buff',
+    triggers: { hold: { modify: 'damage', add: 'stacks' } },
+  },
+  {
+    id: 'gift_guard',
+    name: '馈赠之护',
+    emoji: '🛡️',
+    type: 'buff',
+    triggers: { hold: { modify: 'block', add: 'stacks' } },
+  },
+  {
+    id: 'gift_focus',
+    name: '馈赠之愈',
+    emoji: '✨',
+    type: 'buff',
+    triggers: { hold: { modify: 'heal', add: 'stacks' } },
+  },
+];
+const multiStatusReward = {
+  battle: { core: {}, cards: [], artifacts: [], items: [], statuses: [] },
+  reward: {
+    card: [],
+    artifact: [{
+      id: 'threefold_gift',
+      name: '三相馈赠',
+      rarity: 'Rare',
+      trigger: {
+        on: 'battle_start',
+        effects: {
+          choose: 'threefold_gift_choice',
+          options: multiStatusDefinitions.map((status, index) => ({
+            id: `threefold_${index + 1}`,
+            label: status.name,
+            effects: { apply_status: status.id, stacks: 1, to: 'self' },
+          })),
+        },
+      },
+      statuses: multiStatusDefinitions,
+    }],
+    item: [],
+    limits: { artifacts: 1 },
+  },
+};
+assert.equal(
+  rewards.applyRewardSelectionsToStat(multiStatusReward, { cards: [], artifacts: [0], items: [] }).artifacts[0],
+  '三相馈赠',
+);
+assert.deepEqual(multiStatusReward.battle.statuses.map(status => status.id), multiStatusDefinitions.map(status => status.id));
+assert.equal(multiStatusReward.battle.artifacts[0].status, undefined);
+assert.equal(multiStatusReward.battle.artifacts[0].statuses, undefined, 'all support definitions are registered atomically');
 
 const skippedBundledStatus = {
   battle: { core: {}, cards: [], artifacts: [], items: [], statuses: [] },
@@ -516,7 +575,7 @@ assert.deepEqual(rewards.applyRewardSelectionsToStat(skipped, { cards: [], artif
   artifacts: [],
   items: [],
 });
-assert.deepEqual(skipped.reward, { card: [], artifact: [], item: [], limits: {} });
+assert.deepEqual(skipped.reward, { card: [], artifact: [], item: [], limits: {}, pool_revision: 1 });
 
 const deck = {
   core: { card_removal_count: 2 },
@@ -667,3 +726,25 @@ assert.throws(
 );
 
 console.log('Atomic reward selection, stack merging, skipping, and single-card removal passed.');
+
+// A same-template reward must not grow quantity on a persisted card identity.
+{
+  const { migratePersistentRunDeck } = require(resolve('src/game-core/cardProgression.ts'));
+  const owned=migratePersistentRunDeck([{...strike,quantity:2}]);
+  const fixture={battle:{cards:structuredClone(owned),artifacts:[],items:[]},reward:{
+    card:[{...strike,quantity:1,runInstanceId:owned[1].runInstanceId}],artifact:[],item:[],limits:{cards:1,artifacts:0,items:0}}};
+  rewards.applyRewardSelectionsToStat(fixture,{cards:[0],artifacts:[],items:[]});
+  assert.equal(fixture.battle.cards.length,3);
+  assert.deepEqual(fixture.battle.cards.slice(0,2),owned,'existing instances stay byte-equivalent');
+  assert.equal(new Set(fixture.battle.cards.map(c=>c.runInstanceId)).size,3);
+  assert.ok(fixture.battle.cards.every(c=>c.quantity===1));
+  assert.deepEqual(migratePersistentRunDeck(JSON.parse(JSON.stringify(fixture.battle.cards))),fixture.battle.cards);
+  assert.throws(()=>rewards.applyRewardSelectionsToStat(fixture,{cards:[0],artifacts:[],items:[]}));
+  const mixed=[{...owned[0],quantity:2},owned[1]];
+  const restored=migratePersistentRunDeck(mixed);
+  assert.equal(restored.length,3);
+  assert.equal(restored[0].runInstanceId,owned[0].runInstanceId);
+  assert.equal(restored[2].runInstanceId,owned[1].runInstanceId,'later explicit identity is reserved');
+  assert.throws(()=>migratePersistentRunDeck([owned[0],owned[0]]),/duplicate run card identity/);
+  console.log('Reward acquisition reserves existing IDs, restores safely, rejects real duplicates and double claims.');
+}

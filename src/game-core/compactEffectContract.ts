@@ -1,4 +1,12 @@
+/** Shared by compilation and bounded repair so filters survive both paths. */
+export const COMPACT_CARD_SELECTOR_FILTER_KEYS = [
+  'name', 'name_contains', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'id',
+  'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'keyword', 'exclude_keyword', 'root_only',
+] as const;
+export const COMPACT_CARD_SELECTOR_INPUT_KEYS = ['from', 'pick', ...COMPACT_CARD_SELECTOR_FILTER_KEYS] as const;
+
 export const COMPACT_EFFECT_META_KEYS = [
+  'id',
   'to',
   'targets',
   'when',
@@ -31,6 +39,7 @@ export const COMPACT_EFFECT_META_KEYS = [
   'min',
   'max',
   'name',
+  'name_contains',
   'card_type',
   'rarity',
   'cost',
@@ -38,10 +47,13 @@ export const COMPACT_EFFECT_META_KEYS = [
   'max_cost',
   'tag',
   'template_id',
+  'summon_template',
   'run_instance_id',
   'combat_instance_id',
   'origin',
   'upgraded',
+  'keyword',
+  'exclude_keyword',
   'root_only',
   'include_copies',
   'phase',
@@ -80,13 +92,6 @@ export const COMPACT_EFFECT_BUNDLE_OPERATIONS = [
 export type CompactEffectBundleOperation = (typeof COMPACT_EFFECT_BUNDLE_OPERATIONS)[number];
 
 export const COMPACT_EFFECT_BUNDLE_OPERATION_SET = new Set<string>(COMPACT_EFFECT_BUNDLE_OPERATIONS);
-
-/**
- * One auxiliary card-zone operation may accompany a common shallow bundle.
- * Its position is deterministic (after common operations), so the adapter can
- * split the object internally without guessing author intent.
- */
-export const COMPACT_EFFECT_SAFE_AUXILIARY_BUNDLE_OPERATION_SET = new Set<string>(['scry', 'seek']);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -134,6 +139,7 @@ const LEGACY_PATCH_CARD_META_KEYS = new Set([
   'minimum',
   'maximum',
   'name',
+  'name_contains',
   'card_type',
   'rarity',
   'cost',
@@ -251,41 +257,10 @@ function normalizeEffectItemPresentation(value: unknown): unknown {
   return normalized;
 }
 
-/**
- * A target is redundant on operations that can only affect the acting side's
- * card flow (for example `{ draw: 1, to: 'self' }`). Models commonly repeat
- * `to: self` on every array entry after authoring a targeted damage step.
- * Remove only that exact no-op spelling; opponent/all targets, multi-operation
- * bundles and operations that genuinely support targeting remain strict.
- */
-function normalizeRedundantSelfTarget(value: unknown): unknown {
-  if (!isRecord(value)) return value;
-  const hasSelfTo = value.to === 'self';
-  const hasSelfTargets = Array.isArray(value.targets)
-    && value.targets.length === 1
-    && value.targets[0] === 'self';
-  if (!hasSelfTo && !hasSelfTargets) return value;
-
-  const operations = compactEffectOperationKeys(value);
-  if (operations.length !== 1) return value;
-  const supportedMeta = new Set(compactOperationMetaKeys(operations[0]));
-  const normalized = { ...value };
-  let changed = false;
-  if (hasSelfTo && !supportedMeta.has('to')) {
-    delete normalized.to;
-    changed = true;
-  }
-  if (hasSelfTargets && !supportedMeta.has('targets')) {
-    delete normalized.targets;
-    changed = true;
-  }
-  return changed ? normalized : value;
-}
-
 function normalizeCompactEffectInput(value: unknown): unknown {
   return normalizeNestedPatchCardInput(
     normalizeNestedStatusInput(
-      normalizeRedundantSelfTarget(normalizeEffectItemPresentation(value)),
+      normalizeEffectItemPresentation(value),
     ),
   );
 }
@@ -311,7 +286,19 @@ const NAMED_EFFECT_PRESENTATION_KEYS = new Set(['name', 'emoji', 'description', 
 export function normalizeCompactNamedEffectInput(value: unknown, fallbackName: string): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
   const source = value as Record<string, unknown>;
-  if (Object.prototype.hasOwnProperty.call(source, 'effects')) return value;
+  if (Object.prototype.hasOwnProperty.call(source, 'effects')) {
+    // Desire effects are invoked only after the opposing desire meter has
+    // already overflowed. Models sometimes repeat that fixed lifecycle guard
+    // with the otherwise invalid bare expression `lust >= max_lust`. Removing
+    // only this exact redundant guard is semantics-preserving; every other
+    // authored condition remains intact and must pass the normal formula DSL.
+    if (typeof source.when === 'string' && /^\s*lust\s*>=\s*max_lust\s*$/.test(source.when)) {
+      const normalized = { ...source };
+      delete normalized.when;
+      return normalized;
+    }
+    return value;
+  }
 
   const effects = Object.fromEntries(
     Object.entries(source).filter(([key]) => !NAMED_EFFECT_PRESENTATION_KEYS.has(key)),
@@ -341,54 +328,68 @@ const OPERATION_META_KEYS: Readonly<Record<string, readonly string[]>> = {
   set_lust: ['to', 'targets', 'when', 'on'],
   set_energy: ['to', 'targets', 'when', 'on'],
   set_block: ['to', 'targets', 'when', 'on'],
+  persistent_growth: ['summon_template', 'add', 'subtract', 'set', 'when', 'on'],
   narrate: ['when', 'on'],
   apply_status: ['stacks', 'to', 'targets', 'when', 'on'],
   remove_status: ['to', 'targets', 'when', 'on'],
   draw: ['when', 'on'],
   scry: ['when', 'on'],
   seek: ['when', 'on'],
-  discard: ['from', 'pick', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when', 'on'],
-  exhaust: ['from', 'pick', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when', 'on'],
-  recover: ['from', 'pick', 'when', 'on'],
-  reduce_cost: ['from', 'pick', 'count', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when', 'on'],
-  modify_card: ['from', 'pick', 'count', 'add', 'subtract', 'multiply', 'divide', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when', 'on'],
-  patch_card: ['from', 'pick', 'count', 'add', 'subtract', 'multiply', 'divide', 'set', 'min', 'max', 'extra', 'enabled', 'scope', 'match', 'future_copies', 'timing', 'minimum', 'maximum', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when', 'on'],
-  attach_card: ['from', 'pick', 'count', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when', 'on'],
-  upgrade_card: ['from', 'pick', 'count', 'scope', 'levels', 'max_level', 'changes', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when', 'on'],
-  copy: ['from', 'pick', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when', 'on'],
-  double: ['from', 'pick', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when', 'on'],
+  discard: ['from', 'pick', 'name', 'name_contains', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'id', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'root_only', 'when', 'on'],
+  exhaust: ['from', 'pick', 'name', 'name_contains', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'id', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'root_only', 'when', 'on'],
+  recover: ['from', 'pick', 'name', 'name_contains', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'id', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'root_only', 'when', 'on'],
+  reduce_cost: ['from', 'pick', 'count', 'name', 'name_contains', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'id', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'root_only', 'when', 'on'],
+  modify_card: ['from', 'pick', 'count', 'add', 'subtract', 'multiply', 'divide', 'name', 'name_contains', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'id', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'root_only', 'when'],
+  patch_card: ['from', 'pick', 'count', 'add', 'subtract', 'multiply', 'divide', 'set', 'min', 'max', 'extra', 'enabled', 'scope', 'match', 'future_copies', 'timing', 'minimum', 'maximum', 'name', 'name_contains', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'id', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'root_only', 'when', 'on'],
+  attach_card: ['from', 'pick', 'count', 'name', 'name_contains', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'id', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'root_only', 'when', 'on'],
+  upgrade_card: ['from', 'pick', 'scope', 'levels', 'max_level', 'changes', 'name', 'name_contains', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'id', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'root_only', 'when', 'on'],
+  copy: ['to', 'from', 'pick', 'name', 'name_contains', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'id', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'root_only', 'when', 'on'],
+  double: ['from', 'pick', 'name', 'name_contains', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'id', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'root_only', 'when', 'on'],
   add_card: ['to', 'count', 'when', 'on'],
   ensure_card: ['to', 'minimum', 'include_copies', 'when', 'on'],
   modify: ['add', 'subtract', 'multiply', 'divide', 'set', 'to', 'targets'],
-  card_rule: ['limit', 'extra', 'to', 'destination', 'priority', 'resources', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded'],
+  card_rule: ['limit', 'extra', 'to', 'destination', 'priority', 'resources', 'name', 'name_contains', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'id', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'root_only'],
   stance: ['to', 'targets', 'when'],
   channel_orb: ['to', 'targets', 'when'],
   spawn_summon: ['to', 'when'],
   spawn_enemy: ['when'],
+  enemy_intent: ['when'],
+  wait: ['when'],
+  say: ['when'],
   damage_summon: ['when'],
   heal_summon: ['when'],
   modify_summon: ['when'],
+  modify_summon_effect: ['when'],
   summon_resource: ['when'],
   set_summon_resource: ['when'],
   apply_summon_status: ['when'],
   remove_summon_status: ['when'],
   activate_summon: ['when'],
+  trigger_summon_death: ['when'],
   dismiss_summon: ['when'],
   copy_summon: ['when'],
   summoner_effects: ['when'],
-  evoke_orb: ['to', 'targets', 'pick', 'count', 'orb_id', 'when'],
+  evoke_orb: ['to', 'targets', 'pick', 'orb_id', 'when'],
   orb_slots: ['to', 'targets', 'when'],
   modify_orb: ['to', 'targets', 'pick', 'count', 'orb_id', 'add', 'subtract', 'multiply', 'divide', 'when'],
   extra_turn: ['to', 'when'],
   end_turn: ['to', 'when'],
   schedule: ['phase', 'priority', 'repeat_every', 'repeats', 'effects', 'when'],
-  auto_play: ['from', 'pick', 'count', 'free', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when'],
+  guard: ['effects'],
+  auto_play: ['from', 'pick', 'free', 'name', 'name_contains', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'id', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'root_only', 'when'],
+  replay_current: ['when'],
   card_destination: ['when'],
-  move_card: ['from', 'pick', 'count', 'destination', 'position', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when'],
-  remove_card: ['from', 'pick', 'count', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when'],
-  transform_card: ['from', 'pick', 'count', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'when'],
-  choose: ['options', 'when', 'on'],
+  move_card: ['from', 'pick', 'destination', 'position', 'name', 'name_contains', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'id', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'root_only', 'when'],
+  remove_card: ['from', 'pick', 'name', 'name_contains', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'id', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'root_only', 'when'],
+  transform_card: ['from', 'pick', 'count', 'name', 'name_contains', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'id', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'root_only', 'when'],
+  choose: ['count', 'options', 'when', 'on'],
 };
+
+const CARD_SELECTOR_OPERATION_SET = new Set([
+  'discard', 'exhaust', 'recover', 'reduce_cost', 'modify_card', 'patch_card', 'attach_card',
+  'upgrade_card', 'copy', 'double', 'card_rule', 'auto_play', 'move_card', 'remove_card', 'transform_card',
+]);
+const CARD_KEYWORD_FILTER_META_KEYS = ['keyword', 'exclude_keyword'] as const;
 
 export function compactEffectOperationKeys(value: Readonly<Record<string, unknown>>): string[] {
   return Object.keys(value).filter(key => !COMPACT_EFFECT_META_KEY_SET.has(key));
@@ -402,7 +403,10 @@ export function sortCompactBundleOperations(operations: readonly string[]): stri
 }
 
 export function compactOperationMetaKeys(operation: string): readonly string[] {
-  return OPERATION_META_KEYS[operation] ?? [];
+  const base = OPERATION_META_KEYS[operation] ?? [];
+  return CARD_SELECTOR_OPERATION_SET.has(operation)
+    ? [...base, ...CARD_KEYWORD_FILTER_META_KEYS]
+    : base;
 }
 
 export function compactBundleMetaKeys(operations: readonly string[]): Set<string> {

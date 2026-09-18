@@ -1,7 +1,9 @@
+import { validTowerEncounterBaseline, type TowerEncounterBaseline } from './towerEncounterBudget';
 import {
   DEFAULT_RUN_MAP_ACTS,
   DEFAULT_RUN_MAP_ROUTE_FLOORS,
   generateRunMap,
+  runMapContentKind,
   validateRunMap,
   type RunMap,
   type RunMapNode,
@@ -10,7 +12,11 @@ import {
   createTowerContentStore,
   validateTowerContentStore,
   type TowerNodeContentStore,
+  type TowerNodeContentEnvelope,
 } from './towerContentState';
+import { fixedCampfireEnvelope } from './towerCampfire';
+import { isTowerDungeonPlan, type TowerDungeonPlan } from './towerDungeonPlan';
+import type { TowerCardMemory } from './towerCardMemory';
 import { createTowerRunScore, validateTowerRunScore, type TowerRunScore } from './towerRunScore';
 
 export const RUN_STATE_SCHEMA_VERSION = 3 as const;
@@ -68,6 +74,10 @@ export interface RunState {
   opening: TowerOpeningState;
   score: TowerRunScore;
   stateRevision: number;
+  cardMemory?: TowerCardMemory;
+  shopRemovalCount?: number;
+  encounterBaseline?: TowerEncounterBaseline;
+  dungeonPlan?: TowerDungeonPlan;
 }
 
 export interface CreateRunStateOptions {
@@ -104,6 +114,10 @@ export function isBattleRunNode(kind: RunNodeKind): boolean {
 
 function emptyNodeCounts(): RunNodeCounts {
   return { battle: 0, elite: 0, event: 0, rest: 0, shop: 0, treasure: 0, boss: 0 };
+}
+
+function pendingActOpening(previous: TowerOpeningState): TowerOpeningState {
+  return { phase: 'pending', requestId: null, basedOnRevision: 0, attempts: previous.attempts };
 }
 
 function requireInteger(value: number, name: string, minimum: number, maximum: number): number {
@@ -175,10 +189,10 @@ function mapAct(state: RunState) {
 function mapNodeToChoice(node: RunMapNode): RunNodeChoice {
   return {
     id: node.id,
-    kind: node.kind,
+    kind: runMapContentKind(node),
     act: node.act,
     floor: node.floor,
-    danger: NODE_DANGER[node.kind],
+    danger: NODE_DANGER[runMapContentKind(node)],
     column: node.column,
   };
 }
@@ -272,7 +286,7 @@ export function createRunState(options: CreateRunStateOptions): RunState {
     routeMode,
     map,
     visitedNodeIds: [],
-    nodeContent: map ? createTowerContentStore(map.nodes.map(node => ({ id: node.id, kind: node.kind }))) : {},
+    nodeContent: map ? createTowerContentStore(map.nodes.map(node => ({ id: node.id, kind: runMapContentKind(node) }))) : {},
     opening: {
       phase: map ? 'pending' : 'skipped',
       requestId: null,
@@ -283,6 +297,15 @@ export function createRunState(options: CreateRunStateOptions): RunState {
     stateRevision: 0,
   };
   return generateRunChoices(state);
+}
+
+/** The unique map room settled by the opening gift, without advancing state. */
+export function getOpeningTreasureNode(input: RunState): RunNodeChoice | null {
+  if (input.routeMode !== 'map' || input.phase !== 'awaiting_choice' || input.floor !== 0 || input.currentNode) {
+    return null;
+  }
+  const start = input.choices.length === 1 ? input.choices[0] : null;
+  return start?.kind === 'treasure' && start.floor === 1 ? start : null;
 }
 
 export function enterRunNode(input: RunState, choiceId: string): RunState {
@@ -355,6 +378,7 @@ function completeMapRunNode(
       choices: [],
       nodeCounts,
       lastNodeKind: null,
+      opening: pendingActOpening(input.opening),
       visitedNodeIds,
       stateRevision: input.stateRevision + 1,
     });
@@ -418,6 +442,7 @@ export function completeRunNode(input: RunState, options: CompleteRunNodeOptions
       choices: [],
       nodeCounts,
       lastNodeKind: null,
+      opening: pendingActOpening(input.opening),
       stateRevision: input.stateRevision + 1,
     });
   }
@@ -464,6 +489,18 @@ export function migrateRunState(value: unknown): unknown {
       score: createTowerRunScore(),
       stateRevision: 0,
     } satisfies Partial<RunState>;
+  }
+  if (source.schemaVersion === 3 && isRecord(source.nodeContent)) {
+    let nodeContent = source.nodeContent;
+    for (const [id, value] of Object.entries(nodeContent)) {
+      if (!isRecord(value) || value.kind !== 'rest' || !['idle', 'queued', 'generating', 'ready', 'failed'].includes(String(value.phase))) continue;
+      const oldEnvelope = value as unknown as TowerNodeContentEnvelope;
+      const next = fixedCampfireEnvelope(oldEnvelope);
+      if (next === oldEnvelope) continue;
+      if (nodeContent === source.nodeContent) nodeContent = { ...nodeContent };
+      nodeContent[id] = next;
+    }
+    if (nodeContent !== source.nodeContent) source = { ...source, nodeContent };
   }
   return source;
 }
@@ -570,6 +607,7 @@ export function validateRunState(value: unknown): RunStateValidationResult {
   value = migrateRunState(value);
   if (!isRecord(value)) return { ok: false, message: 'run state must be an object' };
   if (value.schemaVersion !== RUN_STATE_SCHEMA_VERSION) return { ok: false, message: 'unsupported run schema version' };
+  if (value.dungeonPlan !== undefined && !isTowerDungeonPlan(value.dungeonPlan)) return { ok: false, message: 'run dungeon plan is invalid' };
   if (!Number.isInteger(value.seed) || Number(value.seed) < 0 || Number(value.seed) > UINT32_MAX) {
     return { ok: false, message: 'run seed is invalid' };
   }
@@ -655,5 +693,7 @@ export function validateRunState(value: unknown): RunStateValidationResult {
     if (value.map !== null) return { ok: false, message: 'legacy run map must be null' };
     if (!validateTowerContentStore(value.nodeContent)) return { ok: false, message: 'run node content is invalid' };
   }
+  if (value.encounterBaseline !== undefined && !validTowerEncounterBaseline(value.encounterBaseline))
+    return { ok: false, message: 'invalid tower encounter baseline' };
   return { ok: true, value: value as unknown as RunState };
 }

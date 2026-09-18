@@ -1,3 +1,4 @@
+import { isolatedBattlePresentation } from './isolatedBattlePresentation';
 import {
   getCurrentMessageVariables,
   isCurrentMessageLatest,
@@ -5,17 +6,19 @@ import {
 } from '../../runtime/messageVariables';
 import { refreshMvuContentDesignContext } from '../../runtime/contentDesignContextAdapter';
 import { readRuntimeContentDesignSettings } from '../../runtime/contentDesignSettings';
-import { maybeRequestAutomaticBalanceCalibration } from '../../runtime/automaticBalanceCalibration';
 import { normalizeTowerBattleEnemyIdentifiers } from '../../runtime/towerContentActivation';
+import { readRunEventHistoryInStat } from '../../runtime/runStateAdapter';
 import {
+  appendCardPatch,
+  cardPatchApplies,
+  attachRunEventHistory,
   assessEnemyBudget,
   BattleStateStore,
   countCardOwnership,
+  createBattleEventJournal,
   createBattleRandomState,
   isBattleRunNode,
   readGameMode,
-  resolveStartingHand,
-  shuffleCards,
   type BattleRequest,
   type Ability,
   BattleContentContractError,
@@ -28,7 +31,6 @@ import {
   type Card,
   type Enemy,
   type GameState,
-  type ContentDesignAssessment,
 } from '../../game-core';
 import { formatBattleContentIssues, preflightBattleContent, type BattleContentIssue } from './battleContentPreflight';
 import { inspectBattleDataContract, readBattleDataContract } from './battleDataContract';
@@ -128,7 +130,9 @@ export class GameStateManager extends BattleStateStore {
   private lastLoadIssues: BattleContentIssue[] = [];
 
   private constructor() {
-    super();
+    super(undefined, {
+      persistentGrowthNonce: () => globalThis.crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+    });
   }
 
   public static getInstance(): GameStateManager {
@@ -165,8 +169,26 @@ export class GameStateManager extends BattleStateStore {
 
     try {
       const variables = getCurrentMessageVariables();
-      const battleContract = readBattleDataContract(variables);
-      const battleData = battleContract?.data;
+      const inspection = inspectBattleDataContract(variables);
+      if (!inspection.ok) {
+        if (inspection.issue.code !== 'MISSING_BATTLE') {
+          this.lastLoadIssues = [{ ...inspection.issue }];
+          this.lastLoadError = `恢复战斗内容校验失败：${inspection.issue.path}: ${inspection.issue.message}`;
+          console.error(this.lastLoadError);
+        }
+        return null;
+      }
+      const battleData = inspection.result.data;
+      if (!battleData) return null;
+      // Recovery must obey the same content gate as normal loading. Otherwise
+      // adapter defaults can turn incomplete old data into invented combat stats.
+      const preflight = preflightBattleContent(battleData);
+      if (!preflight.ok) {
+        this.lastLoadIssues = preflight.issues.map(issue => ({ ...issue }));
+        this.lastLoadError = `恢复战斗内容校验失败：${formatBattleContentIssues(preflight.issues)}`;
+        console.error(this.lastLoadError);
+        return null;
+      }
       const mvuEnemies = Array.isArray(battleData?.enemies) && battleData.enemies.length > 0
         ? battleData.enemies
         : battleData?.enemy
@@ -213,6 +235,9 @@ export class GameStateManager extends BattleStateStore {
       // empty) canonical enemy root, otherwise the previous node can be played
       // and persisted over a newer run revision.
       const stat = variables?.stat_data;
+      const runEventHistory = readGameMode(stat) === 'tower'
+        ? readRunEventHistoryInStat(stat)
+        : undefined;
       if (readGameMode(stat) === 'tower') {
         const runResult = validateRunState(stat?.run);
         const run = runResult.ok ? runResult.value : null;
@@ -258,14 +283,12 @@ export class GameStateManager extends BattleStateStore {
       const battleRequest = battleData ? createBattleRequestFromMvu(variables, battleData) : undefined;
       if (battleRequest && isCurrentMessageLatest()) {
         let designDiagnostics = '';
-        let designAssessment: ContentDesignAssessment | null = null;
         await Promise.resolve(
           updateCurrentMessageVariablesWith(currentVariables => {
             const design = refreshMvuContentDesignContext(currentVariables, {
               request: battleRequest,
               ...readRuntimeContentDesignSettings(),
             });
-            designAssessment = design.assessment;
             designDiagnostics = design.assessment
               ? design.assessment.diagnostics
                   .filter(issue => issue.severity !== 'advice')
@@ -276,9 +299,6 @@ export class GameStateManager extends BattleStateStore {
           }),
         );
         if (designDiagnostics) console.warn(`内容设计辅助警告：${designDiagnostics}`);
-        if (designAssessment && await maybeRequestAutomaticBalanceCalibration(variables, designAssessment)) {
-          return this.loadFromSillyTavern();
-        }
       }
       if (battleRequest) {
         const balance = assessEnemyBudget(
@@ -294,6 +314,12 @@ export class GameStateManager extends BattleStateStore {
       const restoredState = this.battleSessionStore.prepare(variables, battleRequest);
       if (restoredState) {
         this.gameState = recoverRestoredAbilityMetadata(restoredState);
+        if (runEventHistory) {
+          this.gameState.eventJournal = attachRunEventHistory(
+            this.gameState.eventJournal || createBattleEventJournal(),
+            runEventHistory,
+          );
+        }
         this.gameState.turnControl = normalizeTurnControl(this.gameState.turnControl);
         this.gameState.player.orbs = normalizeOrbContainer(this.gameState.player.orbs);
         this.gameState.player.resources = normalizeCombatResourceStates(this.gameState.player.resources);
@@ -305,6 +331,12 @@ export class GameStateManager extends BattleStateStore {
         }
         if (this.gameState.defeatedEnemies) {
           this.gameState.defeatedEnemies = this.gameState.defeatedEnemies.map(enemy => ({
+            ...enemy,
+            resources: normalizeCombatResourceStates(enemy.resources),
+          }));
+        }
+        if (this.gameState.escapedEnemies) {
+          this.gameState.escapedEnemies = this.gameState.escapedEnemies.map(enemy => ({
             ...enemy,
             resources: normalizeCombatResourceStates(enemy.resources),
           }));
@@ -321,6 +353,12 @@ export class GameStateManager extends BattleStateStore {
       if (battleRequest) {
         // 转换MVU数据到GameState格式
         this.convertMVUToGameState(battleRequest);
+        if (runEventHistory) {
+          this.gameState.eventJournal = attachRunEventHistory(
+            this.gameState.eventJournal || createBattleEventJournal(),
+            runEventHistory,
+          );
+        }
         this.battleSessionStore.enable();
         this.notifyListeners('state_loaded');
 
@@ -346,6 +384,7 @@ export class GameStateManager extends BattleStateStore {
    * 将MVU变量数据转换为GameState格式
    */
   public syncNewCardsFromMVU(): void {
+    if (this.gameState.isGameOver || this.gameState.phase === 'game_over') return;
     try {
       // 从规范 MUV 根读取本轮新增的 cards。
       const variables = getCurrentMessageVariables();
@@ -359,7 +398,10 @@ export class GameStateManager extends BattleStateStore {
       if (!player) return;
 
       const ownedCards = [...player.hand, ...player.drawPile, ...player.discardPile, ...player.exhaustPile];
-      const ownedRunIds = new Set(ownedCards.map(card => card.runInstanceId).filter(Boolean));
+      const ownedRunIds = new Set([
+        ...ownedCards.map(card => card.runInstanceId).filter(Boolean),
+        ...this.getInFlightRunInstanceIds(),
+      ]);
       for (const card of mvuCards) {
         if (typeof card?.runInstanceId !== 'string' || ownedRunIds.has(card.runInstanceId)) continue;
         const converted = convertMvuCards([{ ...card, quantity: 1 }], {
@@ -413,7 +455,18 @@ export class GameStateManager extends BattleStateStore {
     }
   }
 
+  /** Use the exact production conversion, with storage disabled, in a dedicated Worker. */
+  public loadIsolatedBattleRequest(request: BattleRequest): void {
+    if (!isolatedBattlePresentation()) throw new Error('Isolated battle host was not installed');
+    this.battleSessionStore.prepare(undefined, undefined);
+    this.convertMVUToGameState(request);
+  }
+
   private convertMVUToGameState(request: BattleRequest): void {
+    // A new encounter must not inherit summons, scheduled effects, patches,
+    // terminal state or event history from the previous encounter in the same
+    // long-lived single-floor iframe.
+    this.resetGame();
     const battleData = battleRequestToRuntimeData(request);
     const core = battleData.core || {};
     const enemies = Array.isArray(battleData.enemies) && battleData.enemies.length > 0
@@ -433,9 +486,21 @@ export class GameStateManager extends BattleStateStore {
     const items = convertMvuItems(battleData.items, { statusNames });
 
     // 转换卡牌数据
-    const convertedCards = convertMvuCards(cards, { statusNames });
+    const convertedCards = convertMvuCards(cards, { statusNames }).map(card => {
+      for (const patch of request.content.playerCardPatches || []) {
+        if (cardPatchApplies(card, patch) && !card.patches?.some(existing => existing.id === patch.id)) card = appendCardPatch(card, patch);
+      }
+      return card;
+    });
+    const expectedCardCount = cards.reduce((count, card) => count + Number(card.quantity ?? 1), 0);
+    if (convertedCards.length !== expectedCardCount) {
+      throw new Error('部分卡牌未能载入战斗，请检查卡牌规则；已停止启动，防止牌组缺失。');
+    }
     this.gameState.random = createBattleRandomState(request.seed);
     this.gameState.battleRequest = request;
+    this.gameState.summonGrowth = structuredClone(request.content.playerSummonGrowth || []);
+    const persistentPatches = structuredClone(request.content.playerCardPatches || []);
+    this.gameState.cardPatchLedger = { patches: persistentPatches, nextSequence: persistentPatches.length + 1 };
 
     // 更新玩家状态
     this.gameState.player = {
@@ -452,8 +517,8 @@ export class GameStateManager extends BattleStateStore {
       drawPerTurn: 5, // 固定值，不从MVU读取
       // 设置卡牌数据
       deck: [...convertedCards],
-      hand: [], // 手牌在游戏开始时为空，稍后抽取
-      drawPile: [], // 先初始化为空，稍后洗牌后填充
+      hand: [], // 起始手牌在 battle_start 效果之后由正式首回合流程抽取
+      drawPile: [...convertedCards],
       discardPile: [], // 弃牌堆初始为空
       exhaustPile: [], // 消耗堆初始为空
       // 转换遗物数据
@@ -467,19 +532,11 @@ export class GameStateManager extends BattleStateStore {
       orbs: convertMvuOrbContainer(core['orb_slots'], core['orbs']),
     };
 
-    const opening = resolveStartingHand(
-      convertedCards,
-      this.gameState.player.drawPerTurn,
-      cardsToShuffle => shuffleCards(cardsToShuffle, () => this.nextRandom()),
-      10,
-    );
-    this.gameState.player.hand = opening.hand;
-    this.gameState.player.drawPile = opening.drawPile;
-
     // 更新敌人状态
     const convertedEnemies = convertMvuEnemies(enemies, () => this.nextRandom(), statusContext);
     if (convertedEnemies.length > 0) {
       this.setEnemies(convertedEnemies, convertedEnemies[0].id);
+      this.gameState.rewardEligibleEnemyIds = convertedEnemies.map(enemy => enemy.id);
     } else {
       console.error('❌ 无法读取敌人数据！battle.enemy 变量未正确设置');
       throw new Error('敌人数据未找到或无效。请确保AI已正确生成敌人信息。');
@@ -491,17 +548,8 @@ export class GameStateManager extends BattleStateStore {
       fallbackName: '欲望满溢',
     });
     this.gameState.battle = {
-      player_lust_effect: playerLustEffect || {
-        name: '欲望反噬',
-        description: '敌人欲望达到上限时受到伤害，你获得少量治疗',
-        effectProgram: {
-          spec: 'mwg.effect/v1',
-          steps: [
-            { op: 'damage', target: 'opponent', amount: 8 },
-            { op: 'heal', target: 'self', amount: 5 },
-          ],
-        },
-      },
+      // Missing authored content is not a request for a weak built-in payoff.
+      ...(playerLustEffect ? { player_lust_effect: playerLustEffect } : {}),
     };
 
     // 保障玩家最大欲望值来自 MVU 核心配置，避免被其他流程意外覆盖

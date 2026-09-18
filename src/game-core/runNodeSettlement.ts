@@ -71,6 +71,7 @@ export function planShopPurchase(input: ShopPurchasePlanInput): ShopPurchasePlan
     selectedPrice(input.candidates.cards, selections.cards, 'cards', input.run.act) +
     selectedPrice(input.candidates.artifacts, selections.artifacts, 'artifacts', input.run.act) +
     selectedPrice(input.candidates.items, selections.items, 'items', input.run.act);
-  const remainingRun = completeRunNode(spendRunGold(input.run, spentGold), { outcome: 'cleared' });
+  if (!selections.cards.length && !selections.artifacts.length && !selections.items.length) throw new Error('请先选择要购买的商品');
+  const remainingRun = spendRunGold(input.run, spentGold);
   return { selections, spentGold, remainingGold: remainingRun.gold, run: remainingRun };
 }

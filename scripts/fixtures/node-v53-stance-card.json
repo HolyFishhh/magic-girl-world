@@ -1,0 +1,13 @@
+{
+  "id": "vane_release",
+  "name": "闸叶泄放",
+  "emoji": "🍃",
+  "type": "Skill",
+  "rarity": "Uncommon",
+  "cost": 1,
+  "description": "获得2点风压，然后若你处于强排姿态，改为获得5点格挡；处于谐振姿态则获得2点能量。",
+  "effects": [
+    {"resource": {"id": "wind_pressure", "amount": 2}},
+    {"energy": "self.stance == 'none' ? 0 : 1", "when": "self.stance == 'resonant_guard'"}
+  ]
+}

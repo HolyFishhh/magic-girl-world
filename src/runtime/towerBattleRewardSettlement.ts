@@ -1,6 +1,8 @@
 import { isBattleRunNode, type BattleEndResult, type RunState } from '../game-core';
 import { readGameMode } from '../game-core/towerMode';
 import { readRunState } from './runStateAdapter';
+import { applyDesireEffectGrowth } from './desireEffectGrowth';
+import { readRewardCardGroups } from '../game-core/rewardCardGroups';
 import {
   normalizeTowerReward,
   TOWER_ACTIVE_NODE_SCHEMA_VERSION,
@@ -15,6 +17,11 @@ export interface TowerBattleRewardSettlementResult {
   changed: boolean;
   promoted: boolean;
   nodeId: string | null;
+}
+
+export interface TowerDefeatRewardReceipt {
+  enemyId: string;
+  reward: Record<string, unknown>;
 }
 
 type JsonRecord = Record<string, any>;
@@ -39,6 +46,8 @@ function emptyReward(): JsonRecord {
     artifact: [],
     item: [],
     limits: {},
+    gold: 0,
+    gold_claimed: true,
     request: null,
     disabled_categories: [],
     pool_revision: 0,
@@ -84,18 +93,90 @@ function normalizeStagedReward(staged: TowerStagedRewardState, battle: unknown):
     'disabled_categories',
     'pool_revision',
     'reroll_count',
+    'gold',
+    'gold_claimed',
+    'defeat_reward_receipts',
+    'card_choice_groups',
   ]);
   const unknown = Object.keys(staged.reward).find(key => !allowed.has(key));
   if (unknown) throw new Error(`tower staged reward contains unsupported field: ${unknown}`);
-  return normalizeTowerReward(
+  const normalized = normalizeTowerReward(
     {
       card: staged.reward.card,
       artifact: staged.reward.artifact,
       item: staged.reward.item,
       limits: staged.reward.limits,
+      ...(staged.reward.card_choice_groups === undefined ? {} : {card_choice_groups:staged.reward.card_choice_groups}),
     },
     battle,
   );
+  // Saves created before program-owned currency staged only content pools.
+  // Keep those in-flight victories claimable once, without manufacturing a
+  // retroactive currency drop that was never part of their saved snapshot.
+  if (staged.reward.gold === undefined && staged.reward.gold_claimed === undefined) {
+    return { ...normalized, gold: 0, gold_claimed: true };
+  }
+  const gold = Number(staged.reward.gold);
+  if (!Number.isInteger(gold) || gold < 0 || staged.reward.gold_claimed !== false) {
+    throw new Error('tower staged reward gold is invalid');
+  }
+  return { ...normalized, gold, gold_claimed: false };
+}
+
+function appendDefeatRewards(
+  staged: TowerStagedRewardState,
+  battle: unknown,
+  receipts: readonly TowerDefeatRewardReceipt[],
+): JsonRecord {
+  const normalized = normalizeStagedReward(staged, battle);
+  normalized.card_choice_groups = readRewardCardGroups(normalized, normalized.card.length);
+  const claimed = new Set(
+    Array.isArray((staged as Record<string, any>).defeat_reward_receipts)
+      ? (staged as Record<string, any>).defeat_reward_receipts.filter((id: unknown): id is string => typeof id === 'string')
+      : [],
+  );
+  for (const receipt of receipts) {
+    if (!receipt || typeof receipt.enemyId !== 'string' || !receipt.enemyId || claimed.has(receipt.enemyId)) continue;
+    const source = receipt.reward;
+    if (!isRecord(source)) throw new Error('enemy defeat reward is invalid');
+    const extra = normalizeTowerReward({
+      cards: source.cards ?? [],
+      artifacts: source.artifacts ?? [],
+      items: source.items ?? [],
+      limits: {
+        cards: Array.isArray(source.cards) ? source.cards.length : 0,
+        artifacts: Array.isArray(source.artifacts) ? source.artifacts.length : 0,
+        items: Array.isArray(source.items) ? source.items.length : 0,
+      },
+    }, battle);
+    const offset=normalized.card.length;
+    normalized.card.push(...extra.card);
+    if(extra.card.length) normalized.card_choice_groups.push({id:`defeat:${receipt.enemyId}`,indices:extra.card.map((_card:unknown,index:number)=>offset+index),pick:extra.limits.cards});
+    normalized.artifact.push(...extra.artifact);
+    normalized.item.push(...extra.item);
+    normalized.limits.cards += extra.limits.cards;
+    normalized.limits.artifacts += extra.limits.artifacts;
+    normalized.limits.items += extra.limits.items;
+    const gold = Number(source.gold ?? 0);
+    if (!Number.isInteger(gold) || gold < 0) throw new Error('enemy defeat reward gold is invalid');
+    claimed.add(receipt.enemyId);
+  }
+  return normalized;
+}
+
+function prorateBaseGold(
+  reward: JsonRecord,
+  defeatedEnemyIds: readonly string[],
+  eligibleEnemyIds: readonly string[] | undefined,
+): void {
+  // Legacy snapshots predate the original-roster receipt. Preserve their
+  // saved payout; new battles store the exact roster before reinforcements.
+  if (!eligibleEnemyIds?.length) return;
+  const eligible = new Set(eligibleEnemyIds);
+  const defeated = new Set(defeatedEnemyIds);
+  const count = [...eligible].filter(id => defeated.has(id)).length;
+  reward.gold = Math.floor((Number(reward.gold) || 0) * count / eligible.size);
+  reward.gold_claimed = reward.gold <= 0;
 }
 
 /**
@@ -107,6 +188,9 @@ export function settleTowerBattleRewardInStat(
   statValue: unknown,
   result: BattleEndResult,
   expectedNodeId?: string,
+  defeatRewards: readonly TowerDefeatRewardReceipt[] = [],
+  defeatedEnemyIds: readonly string[] = [],
+  eligibleEnemyIds?: readonly string[],
 ): TowerBattleRewardSettlementResult {
   const stat = requireRecord(statValue, 'stat_data is unavailable');
   if (readGameMode(stat) !== 'tower') {
@@ -142,7 +226,18 @@ export function settleTowerBattleRewardInStat(
   const draft = structuredClone(stat);
   let promoted = false;
   if (result === 'victory' && staged) {
-    draft.reward = normalizeStagedReward(staged, draft.battle);
+    if (staged.desire_growth !== undefined) draft.battle = applyDesireEffectGrowth(draft.battle, staged.desire_growth);
+    draft.reward = appendDefeatRewards(staged, draft.battle, defeatRewards);
+    prorateBaseGold(draft.reward, defeatedEnemyIds, eligibleEnemyIds);
+    // Special loot gold is granted only to actual defeat receipts, after the
+    // ordinary roster share is calculated.
+    for (const receipt of defeatRewards) {
+      const gold = Number(receipt.reward?.gold ?? 0);
+      if (Number.isInteger(gold) && gold > 0) {
+        draft.reward.gold += gold;
+        draft.reward.gold_claimed = false;
+      }
+    }
     promoted = true;
   } else if (result !== 'victory') {
     draft.reward = emptyReward();
@@ -150,6 +245,7 @@ export function settleTowerBattleRewardInStat(
   draft.run_node = null;
   draft.run_node_reward = null;
   draft.run_event = null;
+  draft.run_event_state = null;
   draft.run_shop = null;
   draft.run_treasure = null;
   draft.run_rest = null;

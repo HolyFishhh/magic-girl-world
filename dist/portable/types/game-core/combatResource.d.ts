@@ -5,10 +5,14 @@ export interface CombatResourceState {
     id: string;
     name: string;
     emoji: string;
+    /** Authored explanation only; never interpreted as executable mechanics. */
+    description?: string;
     current: number;
     max: number;
     /** reset refills at player turn start; retain preserves the previous amount. */
     refresh: 'reset' | 'retain';
+    start?: number;
+    end_of_battle?: 'retain' | 'reset';
 }
 export type CombatResourcePool = Readonly<Record<string, number>>;
 export type CardResourceWaiver = 'all' | readonly string[] | undefined;
@@ -30,7 +34,7 @@ export interface CardResourcePayment {
 }
 export interface CombatResourceDefinitionIssue {
     path: string;
-    code: 'INVALID_RESOURCE_COLLECTION' | 'TOO_MANY_RESOURCES' | 'INVALID_RESOURCE_ENTRY' | 'UNKNOWN_RESOURCE_FIELD' | 'INVALID_RESOURCE_ID' | 'DUPLICATE_RESOURCE_ID' | 'INVALID_RESOURCE_NAME' | 'INVALID_RESOURCE_EMOJI' | 'INVALID_RESOURCE_VALUE' | 'INVALID_RESOURCE_REFRESH';
+    code: 'INVALID_RESOURCE_COLLECTION' | 'TOO_MANY_RESOURCES' | 'INVALID_RESOURCE_ENTRY' | 'UNKNOWN_RESOURCE_FIELD' | 'INVALID_RESOURCE_ID' | 'DUPLICATE_RESOURCE_ID' | 'INVALID_RESOURCE_NAME' | 'INVALID_RESOURCE_EMOJI' | 'INVALID_RESOURCE_DESCRIPTION' | 'INVALID_RESOURCE_VALUE' | 'INVALID_RESOURCE_REFRESH';
     message: string;
 }
 export declare function isCompositeCardCost(value: unknown): value is CompositeCardCost;
@@ -48,7 +52,7 @@ export declare function resolveCardResourcePayment(cost: CardCost | undefined, a
 export declare function applyCardResourcePayment(available: CombatResourcePool, payment: CardResourcePayment): Record<string, number>;
 export declare function normalizeCombatResourceStates(value: unknown): Record<string, CombatResourceState>;
 /** Strict authoring validation; normalization remains tolerant only for old saves. */
-export declare function validateCombatResourceDefinitions(value: unknown, path?: string): CombatResourceDefinitionIssue[];
+export declare function validateCombatResourceDefinitions(value: unknown, path?: string, reportLocation?: (issue: CombatResourceDefinitionIssue, relativePath: readonly (string | number)[]) => void): CombatResourceDefinitionIssue[];
 export declare function resourcePoolFromCombatant(energy: number, resources?: Readonly<Record<string, CombatResourceState>>): Record<string, number>;
 export declare function applyResourcePoolToStates(resources: Readonly<Record<string, CombatResourceState>> | undefined, pool: CombatResourcePool): Record<string, CombatResourceState>;
 export declare function refreshCombatResourceStates(resources: Readonly<Record<string, CombatResourceState>> | undefined): Record<string, CombatResourceState>;

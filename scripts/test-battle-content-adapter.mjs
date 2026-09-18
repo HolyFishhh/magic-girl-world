@@ -6,6 +6,11 @@ const require = createRequire(import.meta.url);
 process.env.TS_NODE_COMPILER_OPTIONS = JSON.stringify({ module: 'CommonJS', moduleResolution: 'node' });
 require('ts-node/register/transpile-only');
 const adapter = require(resolve('src/fish/core/battleContentAdapter.ts'));
+const core = require(resolve('src/game-core/index.ts'));
+const rules = (card, field = 'effectProgram') => core.effectProgramToDisplayTags(card[field], {
+  statusNames: { death_mark:'死印', focus:'专注' },
+}).map(tag=>tag.text).join('；');
+const { TavernEffectCommandHost } = require(resolve('src/fish/core/effectCommandHost.ts'));
 
 const strike = adapter.normalizeCardDefinition({
   id: 'strike',
@@ -18,7 +23,23 @@ const strike = adapter.normalizeCardDefinition({
 });
 assert.equal(strike.quantity, 2);
 assert.equal(strike.description, '');
-assert.deepEqual(strike.effectProgram.steps, [{ op: 'damage', target: 'opponent', amount: 6 }]);
+assert.deepEqual(strike.effectProgram.steps, [{ op: 'damage', target: 'opponent', amount: 6, hitGroup: '$:damage' }]);
+
+const inertCurse = adapter.normalizeCardDefinition({
+  id: 'sealed_fragment',
+  name: '封印残片',
+  type: 'Curse',
+  rarity: 'Corrupt',
+  quantity: 1,
+  description: '无法被打出，只会占据手牌位置。',
+});
+assert.ok(inertCurse);
+assert.deepEqual(inertCurse.effectProgram, { spec: 'mwg.effect/v1', steps: [] });
+assert.equal(inertCurse.cost, undefined);
+assert.equal(adapter.normalizeCardDefinition({
+  id: 'false_story_curse', name: '伪叙事诅咒', type: 'Curse', rarity: 'Corrupt', quantity: 1,
+  effects: { narrate: '非法叙事占位。' },
+}), null, 'an explicit invalid Curse effect cannot fall back to the inert program');
 
 const power = adapter.normalizeCardDefinition({
   id: 'power',
@@ -29,7 +50,66 @@ const power = adapter.normalizeCardDefinition({
 });
 assert.equal(power.exhaust, true);
 assert.equal(power.effectProgram.steps[0].op, 'register_trigger');
-assert.equal(power.description, '回合开始时，获得2点格挡；抽1张牌。');
+assert.equal(power.description, '', 'rules are rendered from the live program, not stored as prose');
+assert.match(rules(power), /回合开始.*2点格挡.*抽1张牌/);
+
+const passivePower = adapter.normalizeCardDefinition({
+  id: 'echo_form',
+  name: '回响形态',
+  type: 'Power',
+  rarity: 'Rare',
+  cost: 2,
+  quantity: 1,
+  trigger: { on: 'passive', effects: { card_rule: 'replay', limit: 1, extra: 1 } },
+});
+assert.ok(passivePower);
+assert.equal(passivePower.exhaust, true);
+assert.equal(passivePower.effectProgram.steps[0].op, 'register_trigger');
+assert.equal(passivePower.effectProgram.steps[0].trigger, 'passive');
+assert.equal(passivePower.effectProgram.steps[0].effects[0].op, 'card_play_rule');
+const powerWithEmptyOptionalRoot = adapter.normalizeCardDefinition({
+  id: 'empty_root_power',
+  name: '空根能力',
+  type: 'Power',
+  rarity: 'Uncommon',
+  cost: 1,
+  quantity: 1,
+  effects: [],
+  trigger: { on: 'turn_start', effects: { block: 2 } },
+});
+assert.ok(powerWithEmptyOptionalRoot);
+assert.equal(powerWithEmptyOptionalRoot.effectProgram.steps[0].trigger, 'turn_start');
+const redundantOverflowGuard = adapter.normalizeNamedEffectDefinition({
+  name: '满溢反击',
+  effects: { damage: 5 },
+  when: 'lust >= max_lust',
+});
+assert.ok(redundantOverflowGuard);
+assert.equal(redundantOverflowGuard.effectProgram.steps[0].op, 'damage');
+let registeredPassive = null;
+const passiveCoreState = {
+  self: { hp: 20, maxHp: 20, lust: 0, maxLust: 100, energy: 3, maxEnergy: 3, block: 0 },
+  opponent: { hp: 20, maxHp: 20, lust: 0, maxLust: 100, energy: 0, maxEnergy: 0, block: 0 },
+  currentTurn: 1, cardsPlayedThisTurn: 0, attacksPlayedThisTurn: 0, skillsPlayedThisTurn: 0,
+};
+const passiveHost = new TavernEffectCommandHost({
+  readState: () => passiveCoreState,
+  isTerminal: () => false,
+  executeCardCommand: async () => {}, presentCommand: () => {}, executeBattleCommand: async () => {},
+  executeSpecialCommand: async () => {}, executeSummonCommand: async () => {}, executeEnemyCommand: async () => {},
+  executeSummonerProgram: async () => {}, forEachEnemyTarget: async () => {}, applyStatus: async () => {},
+  removeStatuses: async () => {}, scheduleEffect: async () => {}, setCardDestination: async () => {}, narrate: async () => {},
+  registerAbility: async (_target, definition) => { registeredPassive = definition; },
+});
+await passiveHost.executeProgram(passivePower.effectProgram, true);
+assert.equal(registeredPassive.trigger, 'passive');
+const passiveRules = core.resolvePassiveCardPlayRules(
+  [{ id: 'echo_form_power', name: '回响形态', ...registeredPassive }],
+  'player',
+  'player',
+  passiveCoreState,
+).map(entry => entry.rule);
+assert.equal(core.resolveActiveCardPlayRules(passiveRules, 0).extraReplays, 1);
 
 const structuredPower = adapter.normalizeCardDefinition({
   id: 'structured_power',
@@ -42,7 +122,8 @@ const structuredPower = adapter.normalizeCardDefinition({
   trigger: { on: 'deal_damage', effects: { apply_status: 'mark', stacks: 1, to: 'opponent' } },
 });
 assert.deepEqual(structuredPower.effectProgram.steps.map(step => step.op), ['gain_block', 'register_trigger']);
-assert.equal(structuredPower.description, '获得4点格挡；造成伤害时，向敌方施加1层未注册状态。');
+assert.equal(structuredPower.description, '');
+assert.match(rules(structuredPower), /4点格挡.*造成伤害.*1层/);
 
 const authored = adapter.normalizeCardDefinition({
   id: 'authored',
@@ -60,7 +141,8 @@ const duplicated = adapter.normalizeCardDefinition({
   description: '造成6点伤害。',
   effects: { damage: 6 },
 });
-assert.equal(duplicated.description, '', 'simple numeric prose must not duplicate the authoritative effect tag');
+assert.equal(duplicated.description, '造成6点伤害。', 'authored prose is preserved separately from executable rules');
+assert.match(rules(duplicated), /6点伤害/);
 
 const formulaCard = adapter.normalizeCardDefinition(
   {
@@ -71,7 +153,8 @@ const formulaCard = adapter.normalizeCardDefinition(
   },
   { statusNames: { death_mark: '死印' } },
 );
-assert.equal(formulaCard.description, '对敌方造成敌方死印层数 * 10点伤害。');
+assert.equal(formulaCard.description, '');
+assert.match(rules(formulaCard), /死印层数.*10/);
 
 const unsafeAuthoredFormula = adapter.normalizeCardDefinition(
   {
@@ -83,7 +166,8 @@ const unsafeAuthoredFormula = adapter.normalizeCardDefinition(
   },
   { statusNames: { death_mark: '死印' } },
 );
-assert.equal(unsafeAuthoredFormula.description, '对敌方造成敌方死印层数 * 10点伤害。');
+assert.equal(unsafeAuthoredFormula.description, '');
+assert.match(rules(unsafeAuthoredFormula), /死印层数.*10/);
 
 const discardCard = adapter.normalizeCardDefinition(
   {
@@ -98,9 +182,10 @@ const discardCard = adapter.normalizeCardDefinition(
 assert.deepEqual(discardCard.discardEffectProgram.steps.map(step => step.op), ['draw_cards', 'apply_status']);
 assert.equal(
   discardCard.description,
-  '此牌被战斗效果弃掉后，抽1张牌；向自身施加1层专注。',
-  'runtime card description keeps the discard condition and exact result',
+  '',
+  'discard rules remain in the separately rendered discard program',
 );
+assert.match(rules(discardCard, 'discardEffectProgram'), /抽1张牌.*1层专注/);
 
 const authoredConditionalCard = adapter.normalizeCardDefinition({
   id: 'authored_conditional',
@@ -111,9 +196,19 @@ const authoredConditionalCard = adapter.normalizeCardDefinition({
 });
 assert.equal(
   authoredConditionalCard.description,
-  '护盾只会在真正需要的瞬间亮起。当自身生命低于自身最大生命的一半时，获得5点格挡。',
-  'creative prose is preserved while executable conditions are appended authoritatively',
+  '护盾只会在真正需要的瞬间亮起。',
+  'creative prose never becomes a cached mechanical sentence',
 );
+assert.match(rules(authoredConditionalCard), /生命.*最大生命.*5点格挡/);
+
+const conditionalDesire = adapter.normalizeNamedEffectDefinition({
+  name: '临界回响',
+  when: 'self.hp < self.max_hp / 2',
+  effects: { damage: 4 },
+});
+assert.equal(conditionalDesire.effectProgram.steps[0].op, 'if');
+assert.equal(conditionalDesire.description, '');
+assert.match(rules(conditionalDesire), /生命.*最大生命.*4点伤害/);
 
 const generated = adapter.normalizeCardDefinition({
   id: 'forge',
@@ -171,7 +266,9 @@ const sourcedAbility = adapter.normalizeAbilityDefinition({
 });
 assert.equal(sourcedAbility.source, '遗物「旧誓徽章」');
 
-const action = adapter.normalizeEnemyAction({ name: '攻击', weight: 2, effects: { damage: 4 } });
+const action = adapter.normalizeEnemyAction({ id: 'enemy_strike', name: '攻击', emoji: '⚔️', weight: 2, effects: { damage: 4 } });
+assert.equal(action.id, 'enemy_strike');
+assert.equal(action.emoji, '⚔️');
 assert.equal(action.weight, 2);
 assert.equal(action.description, '');
 
@@ -195,10 +292,23 @@ assert.equal(insertingAction.effectProgram.steps[0].op, 'add_card');
 assert.equal(insertingAction.effectProgram.steps[0].zone, 'draw');
 assert.equal(insertingAction.effectProgram.steps[0].card.type, 'Curse');
 
-assert.deepEqual(adapter.normalizeNamedEffectDefinition({ name: '反击', effects: { damage: 5 } }), {
+const inertCurseAction = adapter.normalizeEnemyAction({
+  name: '封印牌库',
+  weight: 1,
+  effects: { add_card: 'sealed_enemy_curse', to: 'deck' },
+  creates: [{
+    id: 'sealed_enemy_curse', name: '沉默封印', type: 'Curse', rarity: 'Corrupt',
+    description: '无法被打出，只会占据手牌位置。',
+  }],
+});
+assert.ok(inertCurseAction);
+assert.deepEqual(inertCurseAction.effectProgram.steps[0].card.program.steps, []);
+
+assert.deepEqual(adapter.normalizeNamedEffectDefinition({ name: '反击', emoji: '💥', effects: { damage: 5 } }), {
   name: '反击',
+  emoji: '💥',
   description: '',
-  effectProgram: { spec: 'mwg.effect/v1', steps: [{ op: 'damage', target: 'opponent', amount: 5 }] },
+  effectProgram: { spec: 'mwg.effect/v1', steps: [{ op: 'damage', target: 'opponent', amount: 5, hitGroup: '$:damage' }] },
 });
 
 assert.deepEqual(

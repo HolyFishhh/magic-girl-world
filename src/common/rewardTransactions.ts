@@ -1,3 +1,7 @@
+import { rememberTowerCardOffer, recoverTowerCardMemory, rememberRejectedTowerOffer } from '../game-core/towerCardMemory';
+import { applyNonCombatSettlementInStat, type NonCombatAnswers } from './nonCombatSettlementTransactions';
+import type { NonCombatGrantPlan } from '../game-core/nonCombatSettlement';
+import { validateRunState } from '../game-core/runState';
 import {
   readRewardCandidateQuantity,
   validateRewardCandidateAgainstLibrary,
@@ -12,6 +16,8 @@ import type { RewardCategory, RewardSelections } from '../game-core/rewardSelect
 import { readGameMode } from '../game-core/towerMode';
 import { towerItemSlotsRemaining, towerRewardItemSlots } from '../game-core/towerInventory';
 import { flattenMvuArray, normalizeMvuStatusDefinitions } from '../runtime/mvuArrays';
+import { readRewardCardGroups, planRewardCardGroupClaim } from '../game-core/rewardCardGroups';
+import { migratePersistentRunDeck } from '../game-core/cardProgression';
 
 export type { RewardCategory, RewardSelections } from '../game-core/rewardSelection';
 
@@ -69,12 +75,12 @@ export function readRewardRoot(statRoot: unknown): Record<string, any> | null {
 export function hasSelectableRewards(statRoot: unknown): boolean {
   const reward = readRewardRoot(statRoot);
   const disabled = new Set(readDisabledRewardCategories(statRoot));
-  const limits = readRewardLimits(statRoot);
+  const limits = readRewardEntitlements(statRoot);
   return Boolean(
-    reward && REWARD_CATEGORIES.some(category =>
+    reward && (Number(reward.gold) > 0 && reward.gold_claimed !== true || REWARD_CATEGORIES.some(category =>
       !disabled.has(category)
       && limits[category] > 0
-      && normalizeMvuList(reward[REWARD_KEYS[category]]).length > 0),
+      && normalizeMvuList(reward[REWARD_KEYS[category]]).length > 0)),
   );
 }
 
@@ -103,7 +109,7 @@ function readLimit(value: unknown): number {
   return numeric;
 }
 
-export function readRewardLimits(statRoot: unknown): Record<RewardCategory, number> {
+export function readRewardEntitlements(statRoot: unknown): Record<RewardCategory, number> {
   const reward = readRewardRoot(statRoot);
   if (!reward) return { cards: 1, artifacts: 1, items: 1 };
   const limits = isRecord(reward.limits) ? reward.limits : {};
@@ -113,6 +119,11 @@ export function readRewardLimits(statRoot: unknown): Record<RewardCategory, numb
     artifacts: disabled.has('artifacts') ? 0 : readLimit(limits.artifacts),
     items: disabled.has('items') ? 0 : readLimit(limits.items),
   };
+  return result;
+}
+
+export function readRewardLimits(statRoot: unknown): Record<RewardCategory, number> {
+  const result = readRewardEntitlements(statRoot);
   if (isRecord(statRoot) && readGameMode(statRoot) === 'tower') {
     result.items = Math.min(result.items, towerItemSlotsRemaining(statRoot.battle));
   }
@@ -142,6 +153,7 @@ function validateRewardPool(stat: Record<string, any>, candidates: Record<Reward
     for (const candidate of candidates[category]) {
       if (!isRecord(candidate)) throw new Error(`奖励池 ${category} 候选必须是对象`);
       const validation = validateRewardCandidateAgainstLibrary(category, candidate, {
+        playerDesireEffect: battle.player_lust_effect,
         existing: libraries[category],
         statusDefinitions,
         knownResourceIds,
@@ -169,6 +181,28 @@ export function mutateRewardPoolInStat(
     mutation,
   );
   validateRewardPool(stat, plan.candidates);
+
+  if (reward.card_choice_groups != null && plan.changedCategories.includes('cards')) {
+    let groups=readRewardCardGroups(reward,normalizeMvuList(reward.card).length);
+    if(mutation.kind==='disable_category')groups=[];
+    else if(mutation.kind==='modify'){
+      const removed=[...(mutation.removeIndices||[])].sort((a,b)=>a-b);
+      groups=groups.map(group=>{
+        const indices=group.indices.filter(index=>!removed.includes(index)).map(index=>index-removed.filter(value=>value<index).length);
+        return {...group,indices,pick:Math.min(group.pick,indices.length)};
+      });
+      const additions=mutation.add?.length||0;
+      if(additions){
+        const first=groups[0]||{id:'cards',indices:[],pick:0};
+        if(!groups.length)groups.push(first);
+        first.indices.push(...Array.from({length:additions},(_,index)=>plan.candidates.cards.length-additions+index));
+      }
+    } else if(mutation.kind==='reroll' && plan.candidates.cards.length!==normalizeMvuList(reward.card).length) {
+      throw new Error('多组选牌奖励重投必须保留分组候选数量');
+    }
+    reward.card_choice_groups=groups;
+    reward.limits={...reward.limits,cards:groups.reduce((sum,group)=>sum+group.pick,0)};
+  }
 
   reward.card = plan.candidates.cards.map(clonePlainValue);
   reward.artifact = plan.candidates.artifacts.map(clonePlainValue);
@@ -211,17 +245,28 @@ export function inspectRewardCandidates(statRoot: unknown): RewardCandidateInspe
 
   return {
     cards: candidates.cards.map(candidate =>
-      validateRewardCandidateAgainstLibrary('cards', candidate, { existing: existing.cards, statusDefinitions, knownResourceIds }),
+      validateRewardCandidateAgainstLibrary('cards', candidate, {
+        playerDesireEffect: battle.player_lust_effect,
+        existing: existing.cards,
+        statusDefinitions,
+        knownResourceIds,
+      }),
     ),
     artifacts: candidates.artifacts.map(candidate =>
       validateRewardCandidateAgainstLibrary('artifacts', candidate, {
+        playerDesireEffect: battle.player_lust_effect,
         existing: existing.artifacts,
         statusDefinitions,
         knownResourceIds,
       }),
     ),
     items: candidates.items.map(candidate =>
-      validateRewardCandidateAgainstLibrary('items', candidate, { existing: existing.items, statusDefinitions, knownResourceIds }),
+      validateRewardCandidateAgainstLibrary('items', candidate, {
+        playerDesireEffect: battle.player_lust_effect,
+        existing: existing.items,
+        statusDefinitions,
+        knownResourceIds,
+      }),
     ),
   };
 }
@@ -246,10 +291,26 @@ function findByIdentity(list: any[], value: Record<string, any>): Record<string,
 function appendReward(target: any[], value: Record<string, any>, category: RewardCategory): void {
   const copy = clonePlainValue(value);
   delete copy.status;
+  delete copy.statuses;
   if (category === 'cards') {
     const quantity = readRewardCandidateQuantity(category, copy);
     if (quantity === null) throw new Error(`奖励 ${rewardName(copy)} 的数量无效`);
     const existing = findByIdentity(target, copy);
+    if ((copy.unique === true && (quantity !== 1 || existing)) || existing?.unique === true) throw new Error(`唯一卡牌“${rewardName(copy)}”已持有或数量重复`);
+    // A reward is a new acquisition, never another copy of an owned instance.
+    // Keep legacy quantity-only decks compact, but do not merge into an instance
+    // (which could also carry upgrades/attachments belonging to just that card).
+    delete copy.runInstanceId;
+    delete copy.runInstanceIds;
+    delete copy.combatInstanceId;
+    delete copy.parentRunInstanceId;
+    delete copy.parentCombatInstanceId;
+    copy.quantity = quantity;
+    if (target.some(card => card.runInstanceId || card.runInstanceIds)) {
+      const next = migratePersistentRunDeck([...target, copy]);
+      target.splice(0, target.length, ...next);
+      return;
+    }
     if (existing) {
       existing.quantity = rewardQuantity(existing, category) + quantity;
     } else {
@@ -277,19 +338,30 @@ function appendReward(target: any[], value: Record<string, any>, category: Rewar
 }
 
 /** Mutates one stat_data root. Call it only from an atomic MUV updater. */
-export function applyRewardSelectionsToStat(
+function applyRewardSelectionsDraft(
   statRoot: Record<string, any>,
   selections: RewardSelections,
+  options: RewardApplicationOptions = {},
 ): RewardSelectionSummary {
   const stat = requireRecord(statRoot, '奖励领取失败：stat_data 不存在');
   const reward = requireRecord(stat.reward, '奖励领取失败：reward 数据不存在');
   const battle = requireRecord(stat.battle, '奖励领取失败：battle 数据不存在');
-  const limits = readRewardLimits(stat);
+  // Item capacity is a property of the complete receipt. Keep the authored
+  // entitlement for selection validation, then reject an over-capacity batch
+  // below before any mutation can grant a partial receipt.
+  const limits = readRewardEntitlements(stat);
   const candidates = {
     cards: normalizeMvuList<Record<string, any>>(reward.card),
     artifacts: normalizeMvuList<Record<string, any>>(reward.artifact),
     items: normalizeMvuList<Record<string, any>>(reward.item),
   };
+  const cardGroups = readRewardCardGroups(reward, candidates.cards.length);
+  if (options.cardGroupId !== undefined) {
+    const group = cardGroups.find(group=>group.id===options.cardGroupId);
+    const selected = new Set(selections.cards);
+    if(!group || selected.size!==group.pick || ![...selected].every(index=>group.indices.includes(index)))throw new Error('卡牌奖励已经更新，请重新选择');
+  }
+  const cardClaim = planRewardCardGroupClaim(cardGroups,selections.cards);
   const statusDefinitions = normalizeMvuStatusDefinitions(battle.statuses);
   const knownResourceIds = normalizeMvuList<Record<string, any>>(battle.core?.resources)
     .map(resource => String(resource?.id || ''))
@@ -305,6 +377,7 @@ export function applyRewardSelectionsToStat(
     existing: validationLibraries,
     statusDefinitions,
     knownResourceIds,
+    playerDesireEffect: battle.player_lust_effect,
     limits,
   });
   if (readGameMode(stat) === 'tower') {
@@ -325,11 +398,109 @@ export function applyRewardSelectionsToStat(
   });
   plan.statuses.forEach(status => targetStatuses!.push(status));
 
-  reward.card = [];
-  reward.artifact = [];
-  reward.item = [];
-  reward.limits = {};
+  const run = validateRunState(stat.run);
+  if (readGameMode(stat) === 'tower' && run.ok) {
+    const remembered = recoverTowerCardMemory(run.value, normalizeMvuList(battle.cards));
+    stat.run = rememberTowerCardOffer(remembered, candidates.cards, plan.entries
+      .filter(entry => entry.category === 'cards').map(entry => String(entry.value.id)));
+    if (!options.partial) {
+      for (const group of cardGroups) {
+        if (group.pick <= 0 || group.indices.length !== 3 || group.indices.some(index => selections.cards.includes(index))) continue;
+        const cards = group.indices.map(index => candidates.cards[index]);
+        const receipt = JSON.stringify([run.value.currentNode?.id || 'opening', group.id, cards.map(card => card?.id)]);
+        stat.run = rememberRejectedTowerOffer(stat.run, cards, receipt);
+      }
+    }
+
+  }
+
+  const selectedCategories = new Set(plan.entries.map(entry => entry.category));
+  if (options.partial) {
+    const nextLimits = { ...(isRecord(reward.limits) ? reward.limits : {}) };
+    for (const category of selectedCategories) {
+      const selected = new Set(plan.selections[category]);
+      const remaining = candidates[category].filter((_candidate, index) => !(category==='cards'?cardClaim.removed:selected).has(index));
+      reward[REWARD_KEYS[category]] = remaining.map(clonePlainValue);
+      // A partial claim spends only the selected allowances.  This matters for
+      // multi-pick relic drops: claiming A must leave B and one relic pick.
+      nextLimits[category] = Math.max(0, readRewardEntitlements(stat)[category] - selected.size);
+    }
+    if(selectedCategories.has('cards')) {
+      reward.card_choice_groups = cardClaim.groups;
+      nextLimits.cards = cardClaim.groups.reduce((sum,group)=>sum+group.pick,0);
+    }
+    reward.limits = nextLimits;
+  } else {
+    reward.card = [];
+    reward.artifact = [];
+    reward.item = [];
+    reward.limits = {};
+    if (Object.hasOwn(reward,'card_choice_groups')) reward.card_choice_groups=null;
+  }
+  reward.pool_revision = Math.max(0,Number(reward.pool_revision)||0)+1;
+  const acquisitions = plan.entries.filter(entry => entry.category === 'artifacts' && entry.value.on_acquire !== undefined);
+  if (options.acquisitionPreview) {
+    options.acquisitionPreview(structuredClone(stat), acquisitions.map(entry => structuredClone(entry.value)));
+    return plan.summary;
+  }
+  for (const entry of acquisitions) {
+    applyNonCombatSettlementInStat(stat, entry.value.on_acquire, options.acquisitionAnswers?.[String(entry.value.id)] ?? {}, {
+      seed: JSON.stringify([stat.run?.seed ?? 0, 'acquisition', entry.value.id]),
+      grant: applyFixedRewardGrant,
+    });
+  }
   return plan.summary;
+}
+
+export interface RewardApplicationOptions {
+  /** Pure UI preparation only. The caller must execute against a private clone. */
+  acquisitionPreview?: (stat: Record<string, any>, artifacts: Record<string, any>[]) => void;
+  partial?: boolean;
+  cardGroupId?: string;
+  acquisitionAnswers?: Record<string, NonCombatAnswers>;
+}
+
+/** An acquisition, its choices, and every other selected reward commit together. */
+export function applyRewardSelectionsToStat(
+  stat: Record<string, any>,
+  selections: RewardSelections,
+  options: RewardApplicationOptions = {},
+): RewardSelectionSummary {
+  const draft = clonePlainValue(stat);
+  const result = applyRewardSelectionsDraft(draft, selections, options);
+  for (const key of Object.keys(stat)) delete stat[key];
+  Object.assign(stat, draft);
+  return result;
+}
+
+/** Reuse the same candidate/slot/status validation without consuming an outer reward pool. */
+export function applyFixedRewardGrant(
+  stat: Record<string, any>,
+  bundle: NonCombatGrantPlan,
+  selections: { cards: number[]; items: number[] },
+): void {
+  const previous = stat.reward;
+  stat.reward = {
+    card: bundle.cards,
+    artifact: [],
+    item: bundle.items,
+    limits: { ...bundle.limits, artifacts: 0 },
+  };
+  try {
+    applyRewardSelectionsToStat(stat, { ...selections, artifacts: [] });
+  } finally {
+    if (previous === undefined) delete stat.reward;
+    else stat.reward = previous;
+  }
+}
+
+/** Claim one reward category without discarding the remaining menu. */
+export function claimRewardCategoryInStat(statRoot: Record<string, any>, category: RewardCategory, indexes: number[]): RewardSelectionSummary {
+  return applyRewardSelectionsToStat(statRoot, {
+    cards: category === 'cards' ? indexes : [],
+    artifacts: category === 'artifacts' ? indexes : [],
+    items: category === 'items' ? indexes : [],
+  }, { partial: true });
 }
 
 /** Removes exactly one copy and consumes exactly one allowance. */

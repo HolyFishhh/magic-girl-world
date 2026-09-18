@@ -124,6 +124,21 @@ export function refreshMvuContentDesignContext(
   variables: Record<string, any>,
   options: ContentDesignContextRefreshOptions = {},
 ): { changed: boolean; assessment: ContentDesignAssessment | null } {
+  // Rendering a just-committed opening must not mutate its authoritative
+  // snapshot. The extension still verifies/publishes that exact snapshot, and
+  // a failed publication may be retried after a reload. Analysis is a derived
+  // cache, not an initial reward or game action. Resume legacy cache updates
+  // only after the player advances the opening; never relax the commit digest.
+  const initialCommit = variables?.mwg_tower_initial_commit;
+  const run = variables?.stat_data?.run;
+  if (initialCommit?.spec === 'mwg.tower-initial-commit/v1'
+    && run?.seed === initialCommit.runSeed
+    && run?.opening?.requestId === initialCommit.openingRequestId
+    && run?.stateRevision === initialCommit.revision
+    && run?.act === 1 && run?.floor === 0 && run?.currentNode === null
+    && run?.opening?.phase === 'ready') {
+    return { changed: false, assessment: null };
+  }
   const battle = variables?.stat_data?.battle;
   if (isRecord(battle) && !options.outcome && isRecord(battle.design_context)) {
     const context = battle.design_context;

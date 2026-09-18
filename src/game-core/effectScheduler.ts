@@ -4,8 +4,33 @@ import { isCardEffectCommand, type CardEffectCommand } from './cardEffectRuntime
 export type ScheduledPhase = 'turn_start' | 'before_draw' | 'after_draw' | 'turn_end';
 export type ScheduledOwner = 'player' | 'enemy' | 'system';
 
+/** Serializable formula and entity binding captured when a detached effect is scheduled. */
+export interface ScheduledEffectExecutionContext {
+  sourceEnemyId?: string;
+  boundEnemyTargetId?: string;
+  summonInstanceId?: string;
+  summonSelfTargetsOwner?: boolean;
+  statusContext?: {
+    id: string;
+    name?: string;
+    emoji?: string;
+    description?: string;
+    stacks?: number;
+  };
+  spentEnergy?: number;
+  spentResources?: Record<string, number>;
+  xValues?: Record<string, number>;
+  xValue?: number;
+  orbValue?: number;
+}
+
 export type ScheduledPayload =
-  | { type: 'effect_program'; program: EffectProgram; sourceIsPlayer: boolean }
+  | {
+      type: 'effect_program';
+      program: EffectProgram;
+      sourceIsPlayer: boolean;
+      context?: ScheduledEffectExecutionContext;
+    }
   | { type: 'remove_status'; owner: ScheduledOwner; statusId: string }
   | { type: 'defeat_entity'; entityId: string; reason: 'delayed_death' | 'execute' }
   | { type: 'card_zone_operation'; command: CardEffectCommand }
@@ -80,6 +105,31 @@ function validateDraft(draft: ScheduleEffectDraft): void {
   if (draft.remainingRepeats !== undefined && (!Number.isInteger(draft.remainingRepeats) || draft.remainingRepeats < 1))
     throw new Error('remainingRepeats must be positive integer');
   if (!draft.payload || typeof draft.payload !== 'object') throw new Error('scheduled effect requires payload');
+  if (draft.payload.type === 'effect_program' && draft.payload.context) {
+    const context = draft.payload.context;
+    for (const field of ['sourceEnemyId', 'boundEnemyTargetId', 'summonInstanceId'] as const) {
+      if (context[field] !== undefined && (typeof context[field] !== 'string' || !context[field]?.trim()))
+        throw new Error(`scheduled effect context ${field} must be a non-empty string`);
+    }
+    for (const field of ['spentEnergy', 'xValue', 'orbValue'] as const) {
+      if (context[field] !== undefined && (typeof context[field] !== 'number' || !Number.isFinite(context[field])))
+        throw new Error(`scheduled effect context ${field} must be finite`);
+    }
+    for (const field of ['spentResources', 'xValues'] as const) {
+      const values = context[field];
+      if (values !== undefined && (
+        !values || typeof values !== 'object' || Array.isArray(values) ||
+        Object.entries(values).some(([id, amount]) => !id.trim() || typeof amount !== 'number' || !Number.isFinite(amount))
+      )) throw new Error(`scheduled effect context ${field} must contain finite numeric values`);
+    }
+    if (context.statusContext !== undefined && (
+      !context.statusContext || typeof context.statusContext !== 'object' ||
+      typeof context.statusContext.id !== 'string' || !context.statusContext.id.trim() ||
+      (context.statusContext.stacks !== undefined && (
+        typeof context.statusContext.stacks !== 'number' || !Number.isFinite(context.statusContext.stacks)
+      ))
+    )) throw new Error('scheduled effect status context is invalid');
+  }
   if (draft.payload.type === 'remove_status' && (!draft.payload.statusId.trim() || !['player', 'enemy'].includes(draft.payload.owner)))
     throw new Error('scheduled remove_status requires a player/enemy owner and status id');
   if (draft.payload.type === 'defeat_entity' && !draft.payload.entityId.trim())

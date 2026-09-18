@@ -5,6 +5,7 @@ import { parse, serializeOuter } from 'parse5';
 import ts from 'typescript';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
+const buildRoot = resolve(process.env.MWG_BUILD_OUTPUT_ROOT || resolve(root, 'dist'));
 const releaseConfig = JSON.parse(await readFile(resolve(root, 'release.config.json'), 'utf8'));
 const viewBootstrapPath = resolve(root, 'src/runtime/viewBootstrap.ts');
 const viewBootstrapSource = await readFile(viewBootstrapPath, 'utf8');
@@ -51,7 +52,7 @@ const interfaces = [
     source: 'dist/src/common/index.html',
     output: 'dist/tavern/common-interface.json',
     findRegex:
-      '(?<![\\s\\S]*<BATTLE_START>[\\s\\S]*)(?![\\s\\S]*<BATTLE_START>)(?:<CHARACTER_INIT_PENDING>\\s*)?(?:<UpdateVariable>[\\s\\S]*?<\\/UpdateVariable>\\s*)?(?:(?:<CONTENT_PENDING>\\s*)?<StatusPlaceHolderImpl\\s*\\/?>|<CONTENT_PENDING>)',
+      '^(?![\\s\\S]*<BATTLE_START>)(?=[\\s\\S]*(?:<StatusPlaceHolderImpl\\s*\\/?>|<CONTENT_PENDING>))[\\s\\S]*$',
     placement: [2],
     minDepth: 0,
     maxDepth: 2,
@@ -65,7 +66,7 @@ const interfaces = [
     source: 'dist/src/fish/index.html',
     output: 'dist/tavern/fish-interface.json',
     findRegex:
-      '(?:<UpdateVariable>[\\s\\S]*?<\\/UpdateVariable>\\s*)?(?:<StatusPlaceHolderImpl\\s*\\/?>\\s*)?<BATTLE_START>\\s*(?:<StatusPlaceHolderImpl\\s*\\/?>)?',
+      '^(?=[\\s\\S]*<BATTLE_START>)[\\s\\S]*$',
     placement: [2],
     minDepth: 0,
     maxDepth: 0,
@@ -117,8 +118,8 @@ function protectTavernScript(node) {
 }
 
 async function exportInterface(definition) {
-  const sourcePath = resolve(root, definition.source);
-  const outputPath = resolve(root, definition.output);
+  const sourcePath = resolve(buildRoot, definition.source.replace(/^dist\//, ''));
+  const outputPath = resolve(buildRoot, definition.output.replace(/^dist\//, ''));
   const document = parse(
     definition.runtimeView ? createRuntimeShell(definition.runtimeView) : await readFile(sourcePath, 'utf8'),
   );

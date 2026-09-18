@@ -1,4 +1,5 @@
 import { type CardCost, type CardResourcePayment } from './combatResource';
+import { type CardLifecycle } from './cardLifecycle';
 export interface CardRuleCard {
     id: string;
     name: string;
@@ -13,6 +14,7 @@ export interface CardRuleCard {
     exhaust?: boolean;
     ethereal?: boolean;
     innate?: boolean;
+    lifecycle?: CardLifecycle;
     /** Added after paying an X-cost card; does not consume extra energy. */
     xValueBonus?: number;
 }
@@ -38,7 +40,7 @@ export declare function resolveStartingHand<TCard extends CardRuleCard>(cards: r
 export declare function resolveCardEnergyPayment(card: Pick<CardRuleCard, 'cost' | 'xValueBonus'>, availableEnergy: number): CardEnergyPayment;
 export type { CardResourcePayment };
 /** Power cards are one-shot ability registrations even if generated content omits exhaust. */
-export declare function resolvePlayedCardDestination(card: Pick<CardRuleCard, 'type' | 'exhaust'>): PlayedCardDestination;
+export declare function resolvePlayedCardDestination(card: Pick<CardRuleCard, 'type' | 'exhaust' | 'lifecycle'>): PlayedCardDestination;
 /** Freeze the curses that were present when turn-end card processing began. */
 export declare function selectTurnEndCurseTriggers<TCard extends CardRuleCard>(hand: readonly TCard[]): TCard[];
 /** Partition the current hand after curse effects have finished mutating it. */

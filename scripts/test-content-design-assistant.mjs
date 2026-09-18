@@ -201,7 +201,7 @@ const desireOnlyEnemy = {
 const desireOnlyAssessment = assess(pack(desireOnlyEnemy));
 assert.ok(desireOnlyAssessment.enemy.dimensions.includes('欲望'));
 assert.ok(desireOnlyAssessment.diagnostics.some(issue => issue.code === 'ENEMY_NO_DEFEAT_PRESSURE'));
-assert.ok(desireOnlyAssessment.diagnostics.some(issue => issue.code === 'ENEMY_LUST_EFFECT_UNDERPOWERED'));
+assert.ok(!desireOnlyAssessment.diagnostics.some(issue => issue.code === 'ENEMY_LUST_EFFECT_UNDERPOWERED'));
 
 const desireWithFinish = assess(
   pack({
@@ -210,7 +210,7 @@ const desireWithFinish = assess(
   }),
 );
 assert.ok(!desireWithFinish.diagnostics.some(issue => issue.code === 'ENEMY_NO_DEFEAT_PRESSURE'));
-assert.ok(desireWithFinish.diagnostics.some(issue => issue.code === 'ENEMY_LUST_EFFECT_UNDERPOWERED'));
+assert.ok(!desireWithFinish.diagnostics.some(issue => issue.code === 'ENEMY_LUST_EFFECT_UNDERPOWERED'));
 
 const decisiveDesire = assess(
   pack({

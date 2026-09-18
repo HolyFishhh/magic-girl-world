@@ -88,6 +88,7 @@ globalThis.ResizeObserver = FakeObserver;
 globalThis.MutationObserver = FakeObserver;
 
 const { ensureRuntimeFrameHeightSync } = require('../src/runtime/runtimeFrameHeight.ts');
+const { setRuntimeFrameHeight } = require('../src/runtime/runtimeFrameResize.ts');
 const flushAnimationFrame = () => {
   const callback = animationFrames.shift();
   if (callback) callback();
@@ -135,6 +136,34 @@ assert.equal(
   '760px',
   'switching from a tall common view to battle must not reuse the stale iframe viewport height',
 );
+
+// Reproduce delayed host scroll anchoring after a ResizeObserver height write.
+const hostScroller = {
+  scrollHeight: 3200, clientHeight: 700, scrollWidth: 400, clientWidth: 400,
+  scrollTop: 840, scrollLeft: 0, style: {}, parentElement: null,
+};
+const delayedFrames = [];
+frame.parentElement = hostScroller;
+frame.ownerDocument.defaultView = {
+  requestAnimationFrame(callback) { delayedFrames.push(callback); return delayedFrames.length; },
+};
+frame.style.height = '640px';
+setRuntimeFrameHeight(frame, '700px');
+hostScroller.scrollTop = 1180;
+delayedFrames.shift()();
+assert.equal(hostScroller.scrollTop, 840, 'a delayed host scroll anchor must not move the reader into the story');
+hostScroller.scrollTop = 1210;
+delayedFrames.shift()();
+assert.equal(hostScroller.scrollTop, 840, 'the second layout frame must also retain the reader position');
+
+frame.style.height = '700px';
+setRuntimeFrameHeight(frame, '737px');
+parentDocument.dispatch('wheel');
+hostScroller.scrollTop = 913;
+delayedFrames.shift()();
+delayedFrames.shift()();
+assert.equal(hostScroller.scrollTop, 913, 'a user wheel during the short guard must cancel later scroll restoration');
+
 
 controller.destroy();
 assert.ok(FakeObserver.instances.every(observer => observer.disconnected));

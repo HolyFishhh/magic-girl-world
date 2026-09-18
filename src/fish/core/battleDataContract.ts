@@ -42,7 +42,7 @@ function inspectSpecialContainers(
   if (source.orbs !== undefined && !Array.isArray(source.orbs))
     return failure('INVALID_TYPE', `${path}.orbs`, '必须是数组');
   if (Array.isArray(source.orbs) && Number.isInteger(source.orb_slots) && source.orbs.length > source.orb_slots)
-    return failure('INVALID_TYPE', `${path}.orbs`, '初始 Orb 数量不能超过槽位数');
+    return failure('INVALID_TYPE', `${path}.orbs`, '初始姿态数量不能超过姿态槽数量');
   const resourceIssue = validateCombatResourceDefinitions(source.resources, `${path}.resources`)[0];
   if (resourceIssue) return failure('INVALID_TYPE', resourceIssue.path, resourceIssue.message);
   return null;

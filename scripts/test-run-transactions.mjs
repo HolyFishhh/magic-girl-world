@@ -27,13 +27,25 @@ const initialized = { run: null, run_upgrade: { stale: true } };
 const ensured = adapter.ensureRunStateInStat(initialized, 42);
 assert.equal(ensured.run.phase, 'awaiting_choice');
 assert.equal(initialized.run_upgrade, null);
+assert.deepEqual(initialized.run_event_history, core.createRunEventHistory());
 assert.equal(adapter.ensureRunStateInStat(initialized, 99).run.seed, 42, 'valid persisted runs must not be replaced');
 assert.equal(
   adapter.deriveRunSeed({ status: { time: 'x', location: 'y', profession: { name: 'z' } }, battle: { cards: [] } }),
   adapter.deriveRunSeed({ status: { time: 'x', location: 'y', profession: { name: 'z' } }, battle: { cards: [] } }),
 );
+const archivedTurn = core.appendBattleEvent(core.createBattleEventJournal(), {
+  turn: 1,
+  phase: 'after',
+  kind: 'turn_ended',
+  cause: { source: { kind: 'system', id: 'turn' } },
+  actorId: 'player',
+});
+assert.equal(archivedTurn.ok, true);
+adapter.archiveBattleEventJournalInStat(initialized, 'battle:a', archivedTurn.state);
+assert.equal(initialized.run_event_history.records.length, 1);
 const restartedSeed = adapter.restartRunInStat(initialized).seed;
 assert.notEqual(restartedSeed, 42);
+assert.deepEqual(initialized.run_event_history, core.createRunEventHistory(), 'a new run never inherits old encounter history');
 
 const coreRestPlan = core.planRestHeal({ run: reach('rest', 2), hp: 40, maxHp: 100 });
 assert.equal(coreRestPlan.hp, 70);
@@ -262,7 +274,7 @@ const missingStatusUpgrade = {
 };
 missingStatusUpgrade.run_upgrade.node_id = missingStatusUpgrade.run.currentNode.id;
 const missingStatusUpgradeBefore = structuredClone(missingStatusUpgrade);
-assert.throws(() => transactions.settleRestUpgradeInStat(missingStatusUpgrade), /未注册状态: unknown_status/);
+assert.throws(() => transactions.settleRestUpgradeInStat(missingStatusUpgrade), /(?:未注册状态|状态未注册): unknown_status/);
 assert.deepEqual(missingStatusUpgrade, missingStatusUpgradeBefore);
 
 const shopStat = {
@@ -395,6 +407,71 @@ assert.throws(
   /stale run transaction revision/,
 );
 assert.deepEqual(staleUnifiedReward, unifiedRewardStat, 'stale transactions must preserve deck, candidates, and log');
+
+// Battle spoils are claimed one category at a time.  The card claim must not
+// consume the later relic offer, and gold is an idempotent transaction on the
+// same persisted reward root rather than a UI-only counter.
+const partialRewardStat = {
+  run: run.createRunState({ seed: 92 }),
+  battle: { core: {}, cards: [], artifacts: [], items: [], statuses: [] },
+  reward: {
+    card: [{ id: 'partial_guard', name: '分批守势', type: 'Skill', rarity: 'Common', cost: 1, quantity: 1, effects: { block: 5 } }],
+    artifact: [
+      { id: 'partial_relic_a', name: '保留遗物A', trigger: 'battle_start', effects: { block: 2 } },
+      { id: 'partial_relic_b', name: '保留遗物B', trigger: 'battle_start', effects: { block: 3 } },
+    ],
+    item: [], gold: 37, limits: { cards: 1, artifacts: 2, items: 0 },
+  },
+};
+const goldBeforePartialClaim = partialRewardStat.run.gold;
+transactions.executeUnifiedRunTransactionInStat(partialRewardStat, {
+  kind: 'reward_claim', selections: { cards: [0], artifacts: [], items: [] }, partial: true,
+  source: { kind: 'player', id: 'partial-reward-test' },
+});
+assert.deepEqual(partialRewardStat.reward.card, []);
+assert.deepEqual(partialRewardStat.reward.artifact.map(relic => relic.id), ['partial_relic_a', 'partial_relic_b'], 'partial card claim preserves unclaimed relics');
+assert.equal(partialRewardStat.reward.limits.artifacts, 2);
+transactions.executeUnifiedRunTransactionInStat(partialRewardStat, {
+  kind: 'reward_claim', selections: { cards: [], artifacts: [], items: [] }, partial: true, claimGold: true,
+  source: { kind: 'player', id: 'partial-reward-test' },
+});
+assert.equal(partialRewardStat.run.gold, goldBeforePartialClaim + 37);
+assert.equal(partialRewardStat.reward.gold_claimed, true);
+const onceClaimedGold = structuredClone(partialRewardStat);
+assert.throws(
+  () => transactions.executeUnifiedRunTransactionInStat(partialRewardStat, {
+    kind: 'reward_claim', selections: { cards: [], artifacts: [], items: [] }, partial: true, claimGold: true,
+  }),
+  /金币奖励不可领取/,
+);
+assert.deepEqual(partialRewardStat, onceClaimedGold, 'duplicate gold claims roll back atomically');
+transactions.executeUnifiedRunTransactionInStat(partialRewardStat, {
+  kind: 'reward_claim', selections: { cards: [], artifacts: [0], items: [] }, partial: true,
+  source: { kind: 'player', id: 'partial-reward-test' },
+});
+assert.deepEqual(partialRewardStat.reward.artifact.map(relic => relic.id), ['partial_relic_b'], 'claiming relic A preserves B in the same category');
+assert.equal(partialRewardStat.reward.limits.artifacts, 1, 'claiming one of two relic picks leaves one allowance');
+assert.equal(partialRewardStat.reward.limits.cards, 0, 'an earlier consumed card allowance remains consumed');
+assert.equal(partialRewardStat.reward.limits.items, 0, 'unselected categories retain their own remaining allowance');
+transactions.executeUnifiedRunTransactionInStat(partialRewardStat, {
+  kind: 'reward_claim', selections: { cards: [], artifacts: [0], items: [] }, partial: true,
+  source: { kind: 'player', id: 'partial-reward-test' },
+});
+assert.deepEqual(partialRewardStat.reward.artifact, [], 'the later same-category relic claim consumes the remaining candidate');
+assert.equal(partialRewardStat.reward.limits.artifacts, 0);
+const skippedRewardStat = structuredClone(partialRewardStat);
+skippedRewardStat.reward.gold = 19;
+skippedRewardStat.reward.gold_claimed = false;
+skippedRewardStat.reward.artifact = [{ id: 'skipped_relic', name: '放弃遗物', trigger: 'battle_start', effects: { block: 1 } }];
+skippedRewardStat.reward.limits.artifacts = 1;
+const goldBeforeSkip = skippedRewardStat.run.gold;
+transactions.executeUnifiedRunTransactionInStat(skippedRewardStat, {
+  kind: 'reward_claim', selections: { cards: [], artifacts: [], items: [] }, discardGold: true,
+  source: { kind: 'player', id: 'partial-reward-test' },
+});
+assert.equal(skippedRewardStat.run.gold, goldBeforeSkip, 'discarding gold never credits the run');
+assert.equal(skippedRewardStat.reward.gold_claimed, true);
+assert.deepEqual(skippedRewardStat.reward.artifact, []);
 
 const unifiedPoolStat = {
   run: run.createRunState({ seed: 91 }),
@@ -565,6 +642,37 @@ transactions.executeUnifiedRunTransactionInStat(statusTransformRest, {
 });
 assert.equal(statusTransformRest.battle.statuses[0].id, 'rest_mark_status');
 assert.equal(statusTransformRest.battle.cards[0].status, undefined, 'support status is registered, not stored on the card');
+
+const multiStatusTransformRest = makeRestTransactionStat();
+multiStatusTransformRest.battle.statuses = [];
+transactions.executeUnifiedRunTransactionInStat(multiStatusTransformRest, {
+  kind: 'rest_transform_card',
+  runInstanceId: 'rest_guard__run__1',
+  replacement: {
+    id: 'rest_dual_mark', name: '营火双印', type: 'Skill', rarity: 'Uncommon', cost: 1, quantity: 1,
+    effects: [
+      { apply_status: 'rest_force_mark', stacks: 1, to: 'self' },
+      { apply_status: 'rest_guard_mark', stacks: 1, to: 'self' },
+    ],
+    statuses: [
+      {
+        id: 'rest_force_mark', name: '营火力印', emoji: 'F', type: 'buff',
+        triggers: { hold: { modify: 'damage', add: 'stacks' } },
+      },
+      {
+        id: 'rest_guard_mark', name: '营火护印', emoji: 'G', type: 'buff',
+        triggers: { hold: { modify: 'block', add: 'stacks' } },
+      },
+    ],
+  },
+});
+assert.deepEqual(
+  multiStatusTransformRest.battle.statuses.map(status => status.id),
+  ['rest_force_mark', 'rest_guard_mark'],
+  'a transformed card atomically registers every candidate-owned status definition',
+);
+assert.equal(multiStatusTransformRest.battle.cards[0].status, undefined);
+assert.equal(multiStatusTransformRest.battle.cards[0].statuses, undefined);
 
 const upgradeRest = makeRestTransactionStat();
 transactions.executeUnifiedRunTransactionInStat(upgradeRest, {

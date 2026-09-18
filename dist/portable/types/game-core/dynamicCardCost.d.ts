@@ -27,6 +27,8 @@ export interface DynamicCostLifecycleCard extends PatchableCard {
     /** Evaluated once when this concrete instance is drawn; cleared after it leaves play. */
     drawCostOverride?: CardCost;
     dynamicCostDrawTurn?: number;
+    /** Freeze evaluated draw-rule operands, never the ordinary card cost. */
+    drawnCostRules?: DynamicCardCostRule[];
 }
 export declare function cardDynamicCostRules(card: Pick<DynamicCostLifecycleCard, 'patches'>): DynamicCardCostRule[];
 /** Resolve cost from the current base every time; while-in-hand rules never accumulate. */

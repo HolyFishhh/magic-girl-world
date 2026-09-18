@@ -1,32 +1,34 @@
 import { STATUS_TRIGGERS, type StatusTrigger } from './battleTriggers';
 import { compileCompactEffectList } from './compactEffectDsl';
-import { describeCompactStatus, normalizeChinesePlayerDescription } from './contentDescription';
+import { describeCompactStatus, normalizeChinesePlayerDescription, type CompactCardDescriptionOptions } from './contentDescription';
 import type { EffectProgram } from './effectDsl';
-import { validateCompactStatusDefinition } from './statusDefinitionValidation';
+import { isThresholdExecuteProgram, validateCompactStatusDefinition } from './statusDefinitionValidation';
+import { normalizeDamageProtectionRule, type DamageProtectionRule } from './damageProtection';
 
 export type StatusRuntimeEffect = EffectProgram;
+export type StatusTickTiming = 'before_action' | 'after_action';
 
 export interface RuntimeStatusDefinition {
   id: string;
   name: string;
   emoji: string;
   description: string;
+  /** Authored flavor is preserved separately and never overrides the rules. */
+  flavorText?: string;
   type: 'buff' | 'debuff' | 'neutral';
   stacks_change?: number | string;
+  /** Tick effects resolve around the exact holder action; omitted content defaults before it. */
+  tick_timing: StatusTickTiming;
   maxStacks?: number;
   stun: boolean;
+  character_emoji?: string;
   triggers: Partial<Record<StatusTrigger, EffectProgram[]>>;
+  protection?: DamageProtectionRule;
 }
 
 export interface StatusDefinitionRegistryLoadResult {
   loaded: readonly RuntimeStatusDefinition[];
   rejected: readonly unknown[];
-}
-
-function isThresholdExecuteProgram(program: EffectProgram): boolean {
-  return program.steps.length > 0 && program.steps.every(step =>
-    (step.op === 'execute' || step.op === 'kill') && step.target === 'self' && !step.targetSelector,
-  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -51,7 +53,7 @@ function normalizeStacksChange(value: unknown): number | string | null | undefin
 /** Normalize one modern shallow status definition into the portable runtime shape. */
 export function normalizeRuntimeStatusDefinition(
   value: unknown,
-  options: { statusNames?: Readonly<Record<string, string>> } = {},
+  options: CompactCardDescriptionOptions = {},
 ): RuntimeStatusDefinition | null {
   if (!isRecord(value)) return null;
   if (!validateCompactStatusDefinition(value).ok) return null;
@@ -69,18 +71,24 @@ export function normalizeRuntimeStatusDefinition(
   const triggers: RuntimeStatusDefinition['triggers'] = {};
   for (const trigger of STATUS_TRIGGERS) {
     if (!(trigger in rawTriggers)) continue;
-    const compiled = compileCompactEffectList(rawTriggers[trigger], { implicitTarget: 'self' });
+    const compiled = compileCompactEffectList(rawTriggers[trigger], {
+      implicitTarget: 'self', creates: value.creates, statusNames: options.statusNames,
+    });
     if (!compiled.ok) return null;
     if (trigger === 'threshold_execute' && !isThresholdExecuteProgram(compiled.value)) return null;
     triggers[trigger] = [compiled.value];
   }
 
   const stacksChange = normalizeStacksChange(value.stacks_change);
+  const tickTiming: StatusTickTiming = value.tick_timing === 'after_action' ? 'after_action' : 'before_action';
   if (stacksChange === null) return null;
   const rawMaxStacks = value.maxStacks;
   const maxStacks = rawMaxStacks === undefined ? undefined : Number(rawMaxStacks);
   if (maxStacks !== undefined && (!Number.isInteger(maxStacks) || maxStacks < 1 || maxStacks > 999)) return null;
-  const description = normalizeChinesePlayerDescription(value.description) || describeCompactStatus(value, options);
+  const protection = normalizeDamageProtectionRule(value.protection);
+  if (value.protection !== undefined && !protection) return null;
+  const description = describeCompactStatus(value, options);
+  const flavorText = normalizeChinesePlayerDescription(value.description);
   if (!description) return null;
 
   return {
@@ -88,11 +96,15 @@ export function normalizeRuntimeStatusDefinition(
     name,
     emoji,
     description,
+    ...(flavorText ? { flavorText } : {}),
     type,
     stun: value.stun === true,
+    ...(typeof value.character_emoji === 'string' ? { character_emoji: value.character_emoji } : {}),
     ...(stacksChange === undefined ? {} : { stacks_change: stacksChange }),
+    tick_timing: tickTiming,
     ...(maxStacks === undefined ? {} : { maxStacks }),
     triggers,
+    ...(protection ? { protection } : {}),
   };
 }
 
@@ -101,7 +113,7 @@ export class StatusDefinitionRegistry {
 
   public replace(
     values: readonly unknown[],
-    options: { statusNames?: Readonly<Record<string, string>> } = {},
+    options: CompactCardDescriptionOptions = {},
   ): StatusDefinitionRegistryLoadResult {
     this.definitions.clear();
     const loaded: RuntimeStatusDefinition[] = [];
@@ -129,3 +141,5 @@ export class StatusDefinitionRegistry {
     return new Map(this.definitions);
   }
 }
+
+

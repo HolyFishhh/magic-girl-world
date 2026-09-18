@@ -243,8 +243,9 @@ assert.equal(lifecycleState.living[0].block, 4, 'apply and stack triggers both r
 assert.equal(lifecycleState.living[1].block, 2, 'ordinary self never expands to every allied summon');
 assert.deepEqual(executedContexts.slice(0, 2).map(context => context.triggerType), ['apply', 'stack']);
 
-await lifecycle.processTurnEnd('player');
+await lifecycle.processActionTiming(firstHolder.instanceId, 'before_action');
 assert.equal(lifecycleState.living[0].block, 6, 'tick resolves on its summon holder');
+await lifecycle.processTurnEnd('player');
 assert.equal(lifecycleState.living[0].statusEffects[0].stacks, 2, 'turn-end decay follows the registered stack rule');
 assert.equal(lifecycleState.living[1].block, 2);
 
@@ -255,7 +256,7 @@ assert.equal(lifecycleState.living[0].block, 9, 'remove trigger keeps the remove
 await lifecycle.apply([firstHolder.instanceId], 'unstable', 1);
 const beforeFailedTick = structuredClone(lifecycleState);
 failUnstableTick = true;
-await lifecycle.processTurnEnd('player');
+await lifecycle.processActionTiming(firstHolder.instanceId, 'before_action');
 assert.deepEqual(lifecycleState, beforeFailedTick, 'a failed summon tick rolls its mutations back and continues');
 assert.equal(
   lifecycleEvents.filter(event => event.type === 'trigger_failed' && event.status.id === 'unstable').length,

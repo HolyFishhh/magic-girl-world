@@ -1,0 +1,367 @@
+{
+  "player": {
+    "status": {
+      "time": "14:20",
+      "location": "书树塔根部-邮务广场入口",
+      "profession": {
+        "name": "织纸修复师",
+        "ability": "读取并修补书页记忆纤维"
+      }
+    },
+    "core": {
+      "emoji": "📜",
+      "hp": 48,
+      "max_hp": 48,
+      "lust": 0,
+      "max_lust": 20,
+      "energy": 3,
+      "max_energy": 3
+    },
+    "cards": [
+      {
+        "id": "mend_page",
+        "name": "补页",
+        "emoji": "🪡",
+        "type": "Skill",
+        "rarity": "Common",
+        "cost": 0,
+        "description": "修复空白书页。获得7点格挡。",
+        "effects": {
+          "block": 7
+        },
+        "quantity": 4
+      },
+      {
+        "id": "trace_memory",
+        "name": "追忆",
+        "emoji": "🔍",
+        "type": "Skill",
+        "rarity": "Common",
+        "cost": 1,
+        "description": "梳理残存记忆，抽2张牌。",
+        "effects": {
+          "draw": 2
+        },
+        "quantity": 3
+      },
+      {
+        "id": "scrap_page",
+        "name": "撕页",
+        "emoji": "✂️",
+        "type": "Attack",
+        "rarity": "Common",
+        "cost": 1,
+        "description": "撕下空白页造成6点伤害，生成1张残页。",
+        "effects": [
+          {
+            "damage": 6
+          },
+          {
+            "add_card": "blank_scrap",
+            "to": "hand"
+          }
+        ],
+        "quantity": 3
+      },
+      {
+        "id": "hammer_press",
+        "name": "压平",
+        "emoji": "⚒️",
+        "type": "Attack",
+        "rarity": "Common",
+        "cost": 2,
+        "description": "重压纸面。造成12点伤害。",
+        "effects": {
+          "damage": 12
+        },
+        "quantity": 2
+      },
+      {
+        "id": "rewrite_memory",
+        "name": "改写",
+        "emoji": "✒️",
+        "type": "Power",
+        "rarity": "Uncommon",
+        "cost": 1,
+        "description": "本场战斗中，每当打出追忆时，生成1张残页。",
+        "trigger": {
+          "on": "skill_played",
+          "effects": [
+            {
+              "add_card": "blank_scrap",
+              "to": "hand",
+              "when": "self.hand_size < 10"
+            }
+          ]
+        },
+        "quantity": 1
+      },
+      {
+        "id": "discard_forge",
+        "name": "弃墨转印",
+        "emoji": "🔄",
+        "type": "Skill",
+        "rarity": "Uncommon",
+        "cost": 0,
+        "description": "弃掉1张牌后，生成1张残页；若弃的是攻击牌，再抽1张牌。",
+        "effects": [
+          {
+            "discard": 1,
+            "from": "hand"
+          },
+          {
+            "add_card": "blank_scrap",
+            "to": "hand"
+          },
+          {
+            "draw": 1,
+            "when": "self.status.discard_gain_draw.stacks > 0"
+          }
+        ],
+        "quantity": 2
+      }
+    ],
+    "artifacts": [
+      {
+        "id": "woven_apron",
+        "name": "织纹围裙",
+        "rarity": "Common",
+        "emoji": "🧵",
+        "description": "修补工作服。每场战斗开始获得1点格挡与1张残页。",
+        "trigger": {
+          "on": "battle_start",
+          "effects": [
+            {
+              "block": 1
+            },
+            {
+              "add_card": "blank_scrap",
+              "to": "hand"
+            }
+          ]
+        }
+      }
+    ],
+    "player_status_effects": [
+      {
+        "id": "discard_gain_draw",
+        "stacks": 1
+      }
+    ],
+    "player_lust_effect": {
+      "name": "纸墨意乱",
+      "emoji": "🌫️",
+      "description": "墨意翻涌。回复5点生命，获得2层虚弱，并生成1张残页。",
+      "effects": [
+        {
+          "heal": 5
+        },
+        {
+          "apply_status": "ink_weakness",
+          "stacks": 2,
+          "to": "self"
+        },
+        {
+          "add_card": "blank_scrap",
+          "to": "hand"
+        }
+      ]
+    },
+    "level": 1,
+    "exp": 0
+  },
+  "opening": {
+    "title": "信使枯页的启程礼",
+    "narrative": "守门人枯页从斗篷内袋取出树皮包裹，在你眼前掂了掂：“每只迷路的邮鸟都会在我这里留下一点羽毛。你若是要往上走，总得添点能耐。”他把树皮展开，原来里面包着三样东西。",
+    "choices": [
+      {
+        "id": "choice_relic_pouch",
+        "label": "接过那枚旧邮戳挂坠",
+        "description": "一枚嵌着琥珀的木制邮戳挂坠：战斗开始时获得1点力量。",
+        "outcome": {
+          "reward": {
+            "artifacts": [
+              {
+                "id": "spark_of_lost_letters",
+                "name": "遗失信件余烬",
+                "rarity": "Uncommon",
+                "emoji": "💌",
+                "description": "上面的字迹已褪去，却仍温热。攻击牌伤害+1。",
+                "trigger": {
+                  "on": "passive",
+                  "effects": {
+                    "modify": "damage",
+                    "add": 1
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "choice_relic_quill",
+        "label": "接过那根不再出墨的羽毛笔",
+        "description": "枯页年轻时用的羽毛笔：每回合第一次打出技能牌时抽1张牌。",
+        "outcome": {
+          "reward": {
+            "artifacts": [
+              {
+                "id": "mute_quill",
+                "name": "哑墨羽笔",
+                "rarity": "Common",
+                "emoji": "🪶",
+                "description": "笔尖早已枯竭。每回合首次打出技能牌时抽1张牌。",
+                "trigger": {
+                  "on": "skill_played",
+                  "scope": "turn",
+                  "ordinal": "first",
+                  "effects": {
+                    "draw": 1
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "choice_repair_kit",
+        "label": "接过那捆细麻线与两根补页针",
+        "description": "暂时收起好奇心：“有了这些，或许能把塔里的故事缝得更牢些。”",
+        "outcome": {
+          "hp": -5,
+          "reward": {
+            "cards": [
+              {
+                "id": "reinforced_story",
+                "name": "加固故事",
+                "emoji": "🧶",
+                "type": "Skill",
+                "rarity": "Common",
+                "cost": 0,
+                "description": "用麻线加固记忆边界。获得2点格挡。每回合第一次打出时额外获得1点格挡。",
+                "effects": [
+                  {
+                    "block": 2
+                  },
+                  {
+                    "block": 1,
+                    "when": "self.skills_played_this_turn == 1"
+                  }
+                ],
+                "quantity": 1
+              },
+              {
+                "id": "scissors_page",
+                "name": "裁页",
+                "emoji": "✂️",
+                "type": "Skill",
+                "rarity": "Common",
+                "cost": 0,
+                "description": "裁掉残缺书页。抽1张牌。若手牌中有残页，先弃掉1张再抽。",
+                "effects": [
+                  {
+                    "discard": 1,
+                    "from": "hand",
+                    "pick": "random",
+                    "template_id": "blank_scrap",
+                    "when": "self.status.blank_scrap.stacks > 0"
+                  },
+                  {
+                    "draw": 1
+                  }
+                ],
+                "quantity": 1
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "spec": "mwg.initial-draft/v1",
+  "registry": {
+    "statuses": [
+      {
+        "id": "blank_scrap",
+        "name": "残页",
+        "emoji": "📄",
+        "description": "已破碎的记忆残页。",
+        "type": "neutral",
+        "triggers": {}
+      },
+      {
+        "id": "discard_gain_draw",
+        "name": "弃墨灵感",
+        "emoji": "🖋️",
+        "description": "当你弃掉一张牌后，抽1张牌。",
+        "type": "buff",
+        "stacks_change": "reset",
+        "triggers": {
+          "on_discard": {
+            "draw": 1
+          }
+        }
+      },
+      {
+        "id": "ink_weakness",
+        "name": "墨弱",
+        "emoji": "🌧️",
+        "description": "因墨意侵蚀而使伤害降低。",
+        "type": "debuff",
+        "stacks_change": -1,
+        "triggers": {
+          "hold": {
+            "modify": "damage",
+            "subtract": "stacks"
+          }
+        }
+      }
+    ],
+    "resources": [
+      {
+        "id": "mana_ink",
+        "name": "墨油",
+        "emoji": "🖌️",
+        "max": 5,
+        "refresh": "retain",
+        "start": 0
+      }
+    ],
+    "templates": [
+      {
+        "id": "blank_scrap",
+        "name": "残页",
+        "emoji": "📄",
+        "type": "Curse",
+        "rarity": "Common",
+        "description": "这张卡无法打出。结算弃牌时，获得1点墨油。",
+        "cost": 1,
+        "effects": {
+          "add_card": {
+            "id": "blank_scrap",
+            "name": "残页",
+            "emoji": "📄",
+            "type": "Curse",
+            "rarity": "Common",
+            "description": "这张卡无法打出。结算弃牌时，获得1点墨油。",
+            "cost": 1,
+            "effects": {
+              "resource": {
+                "id": "mana_ink",
+                "amount": 1
+              }
+            }
+          }
+        },
+        "discard_effects": {
+          "resource": {
+            "id": "mana_ink",
+            "amount": 1
+          }
+        }
+      }
+    ]
+  }
+}

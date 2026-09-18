@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';import {createRequire} from 'node:module';
+const require=createRequire(import.meta.url);process.env.TS_NODE_COMPILER_OPTIONS=JSON.stringify({module:'CommonJS',moduleResolution:'node'});require('ts-node/register/transpile-only');
+const {createRunState,validateRunState}=require('../src/game-core/runState.ts');
+const {applyRewardSelectionsToStat}=require('../src/common/rewardTransactions.ts');
+const {towerRewardPreferenceContext,recoverTowerCardMemory,rememberRejectedTowerOffer}=require('../src/game-core/towerCardMemory.ts');
+const {buildTowerSemanticMvuContext}=require('../src/sillytavern-extension/towerCoordinator.ts');
+const card=i=>({id:'offer'+i,name:'奖励'+i,type:'Skill',rarity:'Common',cost:1,effects:{block:3}});
+const stat=()=>({game_mode:'tower',run:createRunState({seed:41}),battle:{core:{},cards:[],artifacts:[],items:[],statuses:[]},reward:{card:[0,1,2].map(card),artifact:[],item:[],limits:{cards:1}}});
+const none={cards:[],artifacts:[],items:[]};
+const partial=stat();applyRewardSelectionsToStat(partial,none,{partial:true});assert.equal(towerRewardPreferenceContext(partial.run),undefined,'partial receipt is not rejection');
+applyRewardSelectionsToStat(partial,none);assert.equal(partial.run.cardMemory.rejectedOffers.length,1);assert.equal(validateRunState(JSON.parse(JSON.stringify(partial.run))).ok,true);assert.match(towerRewardPreferenceContext(partial.run).instruction,/新流派/);assert.equal(buildTowerSemanticMvuContext({stat_data:partial}).stat_data.run.rewardPreferences.recentRejectedOffers.length,1);
+const picked=stat();applyRewardSelectionsToStat(picked,{...none,cards:[0]},{partial:true});applyRewardSelectionsToStat(picked,none);assert.equal(towerRewardPreferenceContext(picked.run),undefined,'remaining two alternatives after a pick are not full rejection');
+let run=createRunState({seed:42});run=rememberRejectedTowerOffer(run,[0,1,2].map(card),'receipt');run=rememberRejectedTowerOffer(run,[0,1,2].map(card),'receipt');assert.equal(run.cardMemory.rejectedOffers.length,1);assert.equal(recoverTowerCardMemory(run,[]).cardMemory.rejectedOffers.length,1);
+console.log('PASS finalized rejection, partial and selected exclusions, stable receipts, save restore and generation prompt');

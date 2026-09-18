@@ -15,11 +15,11 @@ assert.deepEqual(flow.BATTLE_TURN_FLOW_STEPS, [
   'player_cards_end',
   'player_relics_end',
   'player_abilities_end',
-  'player_summons_action',
   'player_orbs_end',
   'player_statuses_end',
   'player_threshold_execute',
   'scheduled_turn_end',
+  'player_summons_action',
   'advance_turn',
   'enemy_block_reset',
   'enemy_resources_reset',
@@ -32,17 +32,19 @@ assert.deepEqual(flow.BATTLE_TURN_FLOW_STEPS, [
   'enemy_orbs_end',
   'enemy_statuses_end',
   'enemy_threshold_execute',
+  'enemy_escape',
   'temporary_modifiers_clear',
   'player_begin',
   'player_summons_reset',
-  'scheduled_turn_start',
   'player_block_reset',
   'player_energy_reset',
+  'scheduled_turn_start',
   'scheduled_before_draw',
   'player_draw',
   'scheduled_after_draw',
   'player_abilities_start',
   'player_relics_start',
+  'player_statuses_before_action',
 ]);
 assert.equal(new Set(flow.BATTLE_TURN_FLOW_STEPS).size, flow.BATTLE_TURN_FLOW_STEPS.length);
 
@@ -130,6 +132,7 @@ assert.equal(touched, false);
 }
 
 assert.deepEqual(flow.BATTLE_START_FLOW_STEPS, [
+  'initial_player_reset',
   'player_stance_battle_start',
   'enemy_stance_battle_start',
   'player_abilities_battle_start',
@@ -138,6 +141,7 @@ assert.deepEqual(flow.BATTLE_START_FLOW_STEPS, [
   'enemy_abilities_gain_initial',
   'player_relics_ability_gain_initial',
   'player_relics_battle_start',
+  'initial_player_turn',
 ]);
 const startExecuted = [];
 assert.equal(

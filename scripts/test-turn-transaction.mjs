@@ -45,15 +45,19 @@ const executeTurnFlowStep = readClassMethod(
   'executeTurnFlowStep',
 );
 assert.match(executeTurnFlowStep, /case 'player_cards_end':[\s\S]*cardSystem\.onTurnEnd\(\)/);
-assert.match(executeTurnFlowStep, /case 'player_relics_end':[\s\S]*relicTriggerHost\.triggerRelics\('turn_end'\)/);
+assert.match(executeTurnFlowStep, /case 'player_cards_end':[\s\S]*recordTurnLifecycle\('turn_ended', 'player'\)/);
+assert.match(executeTurnFlowStep, /case 'player_relics_end':[\s\S]*relicTriggerHost\.triggerRelics\(\s*'turn_end'/);
 assert.match(
   executeTurnFlowStep,
-  /case 'player_abilities_end':[\s\S]*processAbilitiesByTrigger\('player', 'turn_end'\)/,
+  /case 'player_abilities_end':[\s\S]*processAbilitiesByTrigger\(\s*'player',\s*'turn_end'/,
 );
 assert.match(executeTurnFlowStep, /case 'player_statuses_end':[\s\S]*processStatusEffectsAtTurnEnd\('player'\)/);
-assert.match(executeTurnFlowStep, /case 'enemy_abilities_end':[\s\S]*processAbilitiesByTrigger\('enemy', 'turn_end'\)/);
+assert.match(executeTurnFlowStep, /case 'enemy_block_reset':[\s\S]*recordTurnLifecycle\('turn_started', 'enemy'\)/);
+assert.match(executeTurnFlowStep, /case 'enemy_abilities_end':[\s\S]*recordTurnLifecycle\('turn_ended', 'enemy'\)/);
+assert.match(executeTurnFlowStep, /case 'enemy_abilities_end':[\s\S]*processAllEnemyAbilitiesByTrigger\(\s*'turn_end'/);
 assert.match(executeTurnFlowStep, /case 'enemy_statuses_end':[\s\S]*processStatusEffectsAtTurnEnd\('enemy'\)/);
 assert.match(executeTurnFlowStep, /case 'player_begin':[\s\S]*beginPlayerTurn\(\)/);
+assert.match(executeTurnFlowStep, /case 'player_begin':[\s\S]*recordTurnLifecycle\('turn_started', 'player'\)/);
 assert.match(executeTurnFlowStep, /case 'player_draw':[\s\S]*cardSystem\.onTurnStart\(\)/);
 assert.doesNotMatch(battleManagerSource, /private async (?:startPlayerTurn|startNewTurn|executeEnemyTurn)\(/);
 

@@ -1,3 +1,4 @@
+import { markTowerShopCardsShown, readTowerCardMemory, recoverTowerCardMemory } from '../game-core/towerCardMemory';
 import { formatContentContractIssues, validateContentPackContract } from '../game-core/contentContract';
 import {
   enforceBattleRewardBudget,
@@ -13,15 +14,19 @@ import {
   type RunNodeKind,
   type RunState,
 } from '../game-core/runState';
-import { planTowerEventOutcome } from '../game-core/towerEventOutcome';
-import { towerItemSlotsRemaining, towerRewardItemSlots } from '../game-core/towerInventory';
+import { planTowerEventOutcome, planTowerEventResourceSettlement } from '../game-core/towerEventOutcome';
+import { parseTowerEventFlow, type TowerEventFlow } from '../game-core/towerEventFlow';
 import {
   validateRewardCandidateAgainstLibrary,
   type RewardCandidateCategory,
 } from '../game-core/rewardCandidateValidation';
 import { createContentPackFromMvuBattle } from './contentPackAdapter';
 import { flattenMvuArray, normalizeMvuStatusDefinitions } from './mvuArrays';
+import { normalizeMvuPlayerAuthoredContent, normalizeMvuBattleContent } from './mvuBattleContentNormalizer';
 import { buildTowerAdjacency, readTowerRunState } from './towerStateAdapter';
+import { applyDesireEffectGrowth } from './desireEffectGrowth';
+import { readRewardCardGroups } from '../game-core/rewardCardGroups';
+import { materializeTowerEventStageInStat } from './towerEventState';
 
 export const TOWER_ACTIVE_NODE_SCHEMA_VERSION = 1 as const;
 export const TOWER_STAGED_REWARD_SCHEMA_VERSION = 1 as const;
@@ -32,13 +37,13 @@ export interface TowerActiveNodeState {
   kind: RunNodeKind;
   title: string;
   narrative: string;
-  narrative_source?: 'fallback' | 'preset';
+  narrative_source?: 'fallback' | 'preset' | 'program';
   narrative_phase?: 'pending' | 'generating' | 'ready' | 'failed';
   narrative_request_id?: string;
   narrative_error?: string;
   program_balance?: {
-    playerDeckScore: number;
-    finalEnemyScore: number;
+    playerDeckScore?: number;
+    finalEnemyScore?: number;
     [key: string]: unknown;
   };
 }
@@ -48,6 +53,7 @@ export interface TowerStagedRewardState {
   node_id: string;
   kind: RunNodeKind;
   reward: Record<string, any>;
+  desire_growth?: Record<string, any>;
 }
 
 export interface TowerNodeActivationResult {
@@ -76,8 +82,16 @@ const TOWER_REWARD_RUNTIME_FIELDS = new Set([
   'disabled_categories',
   'pool_revision',
   'reroll_count',
+  'card_choice_groups',
 ]);
-const NODE_TEMP_FIELDS = ['run_event', 'run_shop', 'run_treasure', 'run_rest', 'run_node_reward'] as const;
+const NODE_TEMP_FIELDS = [
+  'run_event',
+  'run_event_state',
+  'run_shop',
+  'run_treasure',
+  'run_rest',
+  'run_node_reward',
+] as const;
 const GENERATED_BATTLE_FIELDS = new Set(['enemy', 'enemies', 'statuses', 'player_abilities', 'player_status_effects']);
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -91,6 +105,14 @@ function requireRecord(value: unknown, message: string): JsonRecord {
 
 function clone<T>(value: T): T {
   return structuredClone(value);
+}
+
+function finalizedEnemyCount(battleValue: unknown): number {
+  if (!isRecord(battleValue)) return 1;
+  if (Array.isArray(battleValue.enemies) && battleValue.enemies.length > 0) {
+    return battleValue.enemies.length;
+  }
+  return isRecord(battleValue.enemy) ? 1 : 1;
 }
 
 function stableJson(value: unknown): string {
@@ -112,8 +134,16 @@ function shortStableHash(value: unknown): string {
   return (hash >>> 0).toString(36);
 }
 
-function uniqueTowerRewardCardId(candidate: JsonRecord, library: readonly unknown[]): string {
-  const original = String(candidate.id || 'tower_card');
+function rewardCrossCategoryFingerprint(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  const comparable = clone(value);
+  delete comparable.id;
+  delete comparable.type;
+  return stableJson(comparable);
+}
+
+function uniqueTowerRewardContentId(candidate: JsonRecord, library: readonly unknown[], fallback: string): string {
+  const original = String(candidate.id || fallback);
   const stem = `${original}__tower_${shortStableHash(candidate)}`;
   const ids = new Set(
     library
@@ -235,11 +265,12 @@ function rewriteTowerEnemyReferences(value: unknown, replacements: ReadonlyMap<s
  */
 export function normalizeTowerBattleEnemyIdentifiers(value: unknown): JsonRecord {
   const battle = clone(requireRecord(value, 'battle data is unavailable'));
-  const sourceEnemies = Array.isArray(battle.enemies) && battle.enemies.length > 0
-    ? battle.enemies
-    : isRecord(battle.enemy)
-      ? [battle.enemy]
-      : [];
+  const sourceEnemies =
+    Array.isArray(battle.enemies) && battle.enemies.length > 0
+      ? battle.enemies
+      : isRecord(battle.enemy)
+        ? [battle.enemy]
+        : [];
   if (sourceEnemies.length === 0) return battle;
 
   const authoredIds = new Set<string>();
@@ -278,7 +309,7 @@ export function normalizeTowerBattleEnemyIdentifiers(value: unknown): JsonRecord
 
 export function prepareTowerBattleForActivation(existingValue: unknown, generatedValue: unknown): JsonRecord {
   const existing = requireRecord(existingValue, 'battle data is unavailable');
-  const generated = requireRecord(generatedValue, 'tower battle content is unavailable');
+  const generated = normalizeMvuBattleContent(requireRecord(generatedValue, 'tower battle content is unavailable'));
   const unsupported = Object.keys(generated).find(key => !GENERATED_BATTLE_FIELDS.has(key));
   if (unsupported) throw new Error(`tower battle content cannot replace persistent field: ${unsupported}`);
 
@@ -314,7 +345,10 @@ export function prepareTowerBattleForActivation(existingValue: unknown, generate
     requireExecutable: true,
   });
   if (!contract.ok) {
-    throw new Error(`tower battle content is invalid: ${formatContentContractIssues(contract.issues)}`);
+    // A batch receives only one bounded structure-repair request. Preserve a
+    // generous set of concrete paths so an early malformed branch cannot hide
+    // independent errors that would otherwise surface only after the repair.
+    throw new Error(`tower battle content is invalid: ${formatContentContractIssues(contract.issues, 40)}`);
   }
   return normalizedBattle;
 }
@@ -329,18 +363,51 @@ export function validateTowerBattleNodeForActivation(
   existingBattle: unknown,
   generatedBattle: unknown,
   reward: unknown,
-  route?: Pick<RunNodeChoice, 'id' | 'kind' | 'act' | 'floor'>,
+  route?: Pick<RunNodeChoice, 'id' | 'kind' | 'act' | 'floor'> & { rewardSeed?: number },
 ): void {
-  const prepared = prepareTowerBattleForActivation(existingBattle, generatedBattle);
-  const budget = route && BATTLE_NODE_KINDS.has(route.kind)
-    ? recommendTowerBattleRewardBudget({
-      nodeId: route.id,
-      kind: route.kind as 'battle' | 'elite' | 'boss',
-      act: route.act,
-      floor: route.floor,
-    })
-    : undefined;
-  normalizeTowerReward(reward, prepared, budget);
+  const budgetFor = (battle: unknown) =>
+    route && BATTLE_NODE_KINDS.has(route.kind)
+      ? recommendTowerBattleRewardBudget({
+          nodeId: route.id,
+          kind: route.kind as 'battle' | 'elite' | 'boss',
+          act: route.act,
+          floor: route.floor,
+          rewardSeed: route.rewardSeed,
+          enemyCount: finalizedEnemyCount(battle),
+        })
+      : undefined;
+  const issues: string[] = [];
+  let rewardContext: unknown = existingBattle;
+  let budget: BattleRewardBudget | undefined;
+  try {
+    rewardContext = prepareTowerBattleForActivation(existingBattle, generatedBattle);
+    budget = budgetFor(rewardContext);
+  } catch (error) {
+    issues.push(error instanceof Error ? error.message : String(error));
+    // Reward candidates may legitimately reference a status definition authored
+    // by this encounter. Preserve only that library branch for the independent
+    // reward probe, even when some unrelated enemy/action field is malformed.
+    // This lets one bounded repair request see both encounter and reward errors
+    // without falsely reporting a valid node-local status as unregistered.
+    try {
+      const fallback = clone(requireRecord(existingBattle, 'battle data is unavailable'));
+      if (isRecord(generatedBattle) && generatedBattle.statuses !== undefined) {
+        fallback.statuses = mergeDefinitions(fallback.statuses, generatedBattle.statuses);
+      }
+      rewardContext = fallback;
+    } catch {
+      rewardContext = existingBattle;
+    }
+    budget = budgetFor(generatedBattle);
+  }
+  try {
+    normalizeTowerReward(reward, rewardContext, budget);
+  } catch (error) {
+    issues.push(error instanceof Error ? error.message : String(error));
+  }
+  if (issues.length > 0) {
+    throw new Error(`tower battle node is invalid: ${issues.join('; ')}`);
+  }
 }
 
 function rewardSourceList(source: JsonRecord, category: RewardCandidateCategory): unknown[] {
@@ -354,23 +421,17 @@ function rewardSourceList(source: JsonRecord, category: RewardCandidateCategory)
   return value.map(clone);
 }
 
-function reconciledRewardLimit(
-  limits: JsonRecord,
-  category: RewardCandidateCategory,
-  candidateCount: number,
-  removedCount: number,
-): number {
+function reconciledRewardLimit(limits: JsonRecord, category: RewardCandidateCategory, candidateCount: number): number {
   const value = limits[category];
   if (value === undefined) return candidateCount > 0 ? 1 : 0;
   if (!Number.isInteger(value) || value < 0) {
     throw new Error(`tower reward limit ${category} is invalid`);
   }
   if (value <= candidateCount) return value;
-  // A future node may have been prepared before the player obtained one of
-  // its relics. Removing that stale candidate also shrinks the selectable
-  // amount, but must not make an otherwise valid route impossible to enter.
-  if (removedCount > 0 && value <= candidateCount + removedCount) return candidateCount;
-  throw new Error(`tower reward limit ${category} is invalid`);
+  // Selection limits are program/UI metadata, not authored gameplay. Clamp an
+  // overlarge value to the candidates that actually survived validation (or
+  // became stale during lookahead) instead of spending an AI repair request.
+  return candidateCount;
 }
 
 export function normalizeTowerReward(
@@ -379,21 +440,51 @@ export function normalizeTowerReward(
   battleBudget?: BattleRewardBudget,
 ): JsonRecord {
   let source = clone(requireRecord(rewardValue, 'tower node reward is unavailable'));
+  const cardGroups = source.card_choice_groups;
   // These fields belong to the live reward transaction UI. Older prompts and
   // some providers may echo them from the current MVU snapshot. They carry no
   // authored reward meaning, so remove only this explicit allowlist while
   // continuing to reject every other unknown creative field.
   for (const field of TOWER_REWARD_RUNTIME_FIELDS) delete source[field];
-  if (battleBudget) source = enforceBattleRewardBudget(source, battleBudget) as JsonRecord;
-  const allowed = new Set(['card', 'artifact', 'item', 'cards', 'artifacts', 'items', 'limits']);
+  if (battleBudget)
+    source = enforceBattleRewardBudget(source, battleBudget, { allowProgramCurrency: true }) as JsonRecord;
+  if (!battleBudget && (source.gold !== undefined || source.gold_claimed !== undefined)) {
+    throw new Error('tower reward gold is program-owned');
+  }
+  const allowed = new Set([
+    'card',
+    'artifact',
+    'item',
+    'cards',
+    'artifacts',
+    'items',
+    'limits',
+    'gold',
+    'gold_claimed',
+  ]);
   const unknown = Object.keys(source).find(key => !allowed.has(key));
   if (unknown) throw new Error(`tower reward contains unsupported field: ${unknown}`);
   const battle = requireRecord(battleValue, 'battle data is unavailable');
   const pools: RewardPools = {
-    cards: rewardSourceList(source, 'cards'),
-    artifacts: rewardSourceList(source, 'artifacts'),
-    items: rewardSourceList(source, 'items'),
+    cards: rewardSourceList(source, 'cards').map(entry => normalizeMvuPlayerAuthoredContent(entry)),
+    artifacts: rewardSourceList(source, 'artifacts').map(entry => normalizeMvuPlayerAuthoredContent(entry)),
+    items: rewardSourceList(source, 'items').map(entry => normalizeMvuPlayerAuthoredContent(entry)),
   };
+  // Some providers duplicate one otherwise identical relic into both the card
+  // and artifact arrays while labeling the card copy `type:"Relic"`. Keep the
+  // correctly categorized artifact and drop only that exact duplicate. A lone
+  // or mechanically different Relic-shaped card still fails validation.
+  const artifactFingerprints = new Set(
+    pools.artifacts.map(rewardCrossCategoryFingerprint).filter((value): value is string => Boolean(value)),
+  );
+  pools.cards = pools.cards.filter(
+    candidate =>
+      !(
+        isRecord(candidate) &&
+        candidate.type === 'Relic' &&
+        artifactFingerprints.has(rewardCrossCategoryFingerprint(candidate) || '')
+      ),
+  );
   const libraries: RewardPools = {
     cards: flattenMvuArray(battle.cards).map(clone),
     artifacts: flattenMvuArray(battle.artifacts).map(clone),
@@ -405,48 +496,41 @@ export function normalizeTowerReward(
       .map(entry => entry.id)
       .filter((id): id is string => typeof id === 'string' && id.length > 0),
   );
-  const removedCounts: Record<RewardCandidateCategory, number> = {
-    cards: 0,
-    artifacts: 0,
-    items: 0,
-  };
-  const availableItemSlots = towerItemSlotsRemaining(battle);
-  let reservedItemSlots = 0;
   const statusDefinitions = normalizeMvuStatusDefinitions(battle.statuses);
   const knownResourceIds = flattenMvuArray<JsonRecord>(battle.core?.resources, { objectsOnly: true })
     .map(resource => String(resource.id || ''))
     .filter(Boolean);
+  const candidateIssues: string[] = [];
 
   for (const category of Object.keys(pools) as RewardCandidateCategory[]) {
     const accepted: unknown[] = [];
-    for (const candidate of pools[category]) {
-      if (category === 'items') {
-        const slots = towerRewardItemSlots([candidate]);
-        if (reservedItemSlots + slots > availableItemSlots) {
-          removedCounts.items += 1;
-          continue;
-        }
-        reservedItemSlots += slots;
-      }
+    for (const [candidateIndex, candidate] of pools[category].entries()) {
       let validation = validateRewardCandidateAgainstLibrary(category, candidate, {
+        playerDesireEffect: battle.player_lust_effect,
         existing: libraries[category],
         statusDefinitions,
         knownResourceIds,
       });
-      // A long run may acquire a card after a future node was generated. If
-      // that node used the same ID for different rules, preserve the authored
-      // card under a deterministic new ID instead of blocking the route. Other
+      // A long run may acquire a card or consumable after a future node was
+      // generated. If that node used the same technical ID for different
+      // rules, preserve the authored reward under a deterministic new ID
+      // instead of spending a model repair on identity bookkeeping. Other
       // validation failures and duplicate relic ownership remain strict.
       if (
-        category === 'cards'
-        && !validation.ok
-        && isRecord(candidate)
-        && typeof candidate.id === 'string'
-        && libraries.cards.some(entry => isRecord(entry) && entry.id === candidate.id)
-        && validation.message.includes('规则不同')
+        (category === 'cards' || category === 'items') &&
+        !validation.ok &&
+        isRecord(candidate) &&
+        typeof candidate.id === 'string' &&
+        libraries[category].some(entry => isRecord(entry) && entry.id === candidate.id) &&
+        validation.message.includes('规则不同')
       ) {
-        candidate.id = uniqueTowerRewardCardId(candidate, libraries.cards);
+        candidate.id = uniqueTowerRewardContentId(
+          candidate,
+          libraries[category],
+          category === 'cards' ? 'tower_card' : 'tower_item',
+        );
         validation = validateRewardCandidateAgainstLibrary(category, candidate, {
+          playerDesireEffect: battle.player_lust_effect,
           existing: libraries[category],
           statusDefinitions,
           knownResourceIds,
@@ -460,39 +544,54 @@ export function normalizeTowerReward(
       // check to the pre-activation library also keeps duplicate IDs inside a
       // newly generated pool strict.
       if (
-        category === 'artifacts'
-        && !validation.ok
-        && isRecord(candidate)
-        && typeof candidate.id === 'string'
-        && ownedArtifactIds.has(candidate.id)
-        && validation.message.startsWith('遗物已持有:')
+        category === 'artifacts' &&
+        !validation.ok &&
+        isRecord(candidate) &&
+        typeof candidate.id === 'string' &&
+        ownedArtifactIds.has(candidate.id) &&
+        validation.message.startsWith('遗物已持有:')
       ) {
-        removedCounts.artifacts += 1;
         continue;
       }
-      if (!validation.ok) throw new Error(`tower reward ${category} is invalid: ${validation.message}`);
+      if (!validation.ok) {
+        const identity =
+          isRecord(candidate) && typeof candidate.id === 'string' && candidate.id ? ` (${candidate.id})` : '';
+        candidateIssues.push(
+          `tower reward ${category} is invalid at ${category}[${candidateIndex}]${identity}: ${validation.message}`,
+        );
+        continue;
+      }
       libraries[category].push(clone(candidate));
       accepted.push(candidate);
     }
     pools[category] = accepted;
   }
+  if (candidateIssues.length > 0) throw new Error(candidateIssues.join('；'));
   const limits =
     source.limits === undefined ? {} : requireRecord(source.limits, 'tower reward limits must be an object');
   const unknownLimit = Object.keys(limits).find(key => !['cards', 'artifacts', 'items'].includes(key));
   if (unknownLimit) throw new Error(`tower reward limit is unsupported: ${unknownLimit}`);
-  return {
+  const normalized = {
     card: pools.cards,
     artifact: pools.artifacts,
     item: pools.items,
     limits: {
-      cards: reconciledRewardLimit(limits, 'cards', pools.cards.length, removedCounts.cards),
-      artifacts: reconciledRewardLimit(limits, 'artifacts', pools.artifacts.length, removedCounts.artifacts),
-      items: reconciledRewardLimit(limits, 'items', pools.items.length, removedCounts.items),
+      cards: reconciledRewardLimit(limits, 'cards', pools.cards.length),
+      artifacts: reconciledRewardLimit(limits, 'artifacts', pools.artifacts.length),
+      items: reconciledRewardLimit(limits, 'items', pools.items.length),
     },
     disabled_categories: [],
     pool_revision: 0,
     reroll_count: 0,
+    gold: battleBudget?.gold ?? 0,
+    gold_claimed: battleBudget?.gold === undefined,
   };
+  if (cardGroups != null)
+    return {
+      ...normalized,
+      card_choice_groups: readRewardCardGroups({ ...normalized, card_choice_groups: cardGroups }, pools.cards.length),
+    };
+  return normalized;
 }
 
 function emptyReward(): JsonRecord {
@@ -501,6 +600,8 @@ function emptyReward(): JsonRecord {
     artifact: [],
     item: [],
     limits: {},
+    gold: 0,
+    gold_claimed: true,
     disabled_categories: [],
     pool_revision: 0,
     reroll_count: 0,
@@ -509,42 +610,115 @@ function emptyReward(): JsonRecord {
 
 function validateEvent(value: unknown): JsonRecord {
   const event = requireRecord(value, 'tower event content is unavailable');
-  if (!Array.isArray(event.choices) || event.choices.length < 2 || event.choices.length > 6) {
-    throw new Error('tower event choices must contain two to six entries');
-  }
-  const ids = new Set<string>();
-  for (const choice of event.choices) {
-    if (!isRecord(choice)) throw new Error('tower event choice must be an object');
-    const id = text(choice.id, 64);
-    const label = text(choice.label, 120);
-    if (!id || !label || !isRecord(choice.outcome)) throw new Error('tower event choice is invalid');
-    planTowerEventOutcome(choice.outcome);
-    if (ids.has(id)) throw new Error(`tower event choice id is duplicated: ${id}`);
-    ids.add(id);
+  const flow = parseTowerEventFlow(event, planTowerEventOutcome);
+  if (flow.version === 1 && flow.stages[0].choices.length > 6) {
+    throw new Error('tower legacy event choices must contain two to six entries');
   }
   return clone(event);
 }
 
-function prepareEvent(value: unknown, battle: unknown): JsonRecord {
-  const event = validateEvent(value);
-  event.choices = event.choices.map((choice: JsonRecord) => {
-    const outcome = clone(choice.outcome);
-    if (outcome.reward !== undefined) outcome.reward = normalizeTowerReward(outcome.reward, battle);
-    return { ...choice, outcome };
-  });
-  return event;
+function normalizeEventOutcome(outcomeValue: unknown, battle: unknown, core: JsonRecord): JsonRecord {
+  const outcome = clone(requireRecord(outcomeValue, 'tower event outcome is unavailable'));
+  const outcomePlan = planTowerEventOutcome(outcome);
+  // Unknown resource IDs are an authoring error and should enter the bounded
+  // repair loop. Unaffordable costs remain authored content and are checked
+  // again by the transaction against the click-time state.
+  planTowerEventResourceSettlement(outcomePlan.resourceDeltas, core.resources);
+  // Costs use the same player resource namespace as deltas. Planning them as
+  // positive changes is validation-only here; click-time settlement still
+  // checks affordability before applying any authored gains.
+  planTowerEventResourceSettlement(outcomePlan.cost.resources, core.resources);
+  if (outcome.reward !== undefined) outcome.reward = normalizeTowerReward(outcome.reward, battle);
+  if (outcome.gain_cards !== undefined) {
+    outcome.gain_cards = normalizeTowerReward(
+      {
+        cards: outcome.gain_cards,
+        artifacts: [],
+        items: [],
+        limits: { cards: outcome.gain_cards.length, artifacts: 0, items: 0 },
+      },
+      battle,
+    ).card;
+  }
+  if (isRecord(outcome.grant)) {
+    const grant = clone(outcome.grant);
+    if (Array.isArray(grant.cards)) {
+      grant.cards = normalizeTowerReward(
+        {
+          cards: grant.cards,
+          artifacts: [],
+          items: [],
+          limits: { cards: grant.cards.length, artifacts: 0, items: 0 },
+        },
+        battle,
+      ).card;
+    }
+    if (Array.isArray(grant.items)) {
+      grant.items = normalizeTowerReward(
+        {
+          cards: [],
+          artifacts: [],
+          items: grant.items,
+          limits: { cards: 0, artifacts: 0, items: grant.items.length },
+        },
+        battle,
+      ).item;
+    }
+    outcome.grant = grant;
+  }
+  if (Array.isArray(outcome.deck_actions)) {
+    outcome.deck_actions = outcome.deck_actions.map(action => {
+      if (!isRecord(action) || !isRecord(action.replacement)) return action;
+      return {
+        ...action,
+        replacement: normalizeTowerReward(
+          {
+            cards: [action.replacement],
+            artifacts: [],
+            items: [],
+            limits: { cards: 1, artifacts: 0, items: 0 },
+          },
+          battle,
+        ).card[0],
+      };
+    });
+  }
+  return outcome;
 }
 
+function normalizedEventFromFlow(flow: TowerEventFlow, battle: unknown, core: JsonRecord): JsonRecord {
+  const normalizeChoice = (choice: TowerEventFlow['stages'][number]['choices'][number]): JsonRecord => ({
+    id: choice.id,
+    label: choice.label,
+    ...(choice.description === undefined ? {} : { description: choice.description }),
+    outcome: normalizeEventOutcome(choice.outcome, battle, core),
+    ...(choice.next_stage === undefined ? {} : { next_stage: choice.next_stage }),
+  });
+  if (flow.version === 1) return { choices: flow.stages[0].choices.map(normalizeChoice) };
+  return {
+    spec: 'mwg.tower-event/v2',
+    start_stage: flow.startStage,
+    stages: flow.stages.map(stage => ({
+      id: stage.id,
+      ...(stage.narrative === undefined ? {} : { narrative: stage.narrative }),
+      choices: stage.choices.map(normalizeChoice),
+    })),
+  };
+}
+
+function prepareEvent(value: unknown, battle: unknown): JsonRecord {
+  const event = validateEvent(value);
+  const battleRecord = requireRecord(battle, 'tower event player battle content is unavailable');
+  const core = requireRecord(battleRecord.core, 'tower event player core is unavailable');
+  return normalizedEventFromFlow(parseTowerEventFlow(event, planTowerEventOutcome), battle, core);
+}
 /**
  * Validate every optional event reward against the player's current content
  * library before a generated event is committed as ready. This keeps an
  * invalid lookahead payload inside the bounded model-repair loop instead of
  * discovering it only when the player clicks the node several floors later.
  */
-export function validateTowerEventNodeForActivation(
-  battleValue: unknown,
-  eventValue: unknown,
-): void {
+export function validateTowerEventNodeForActivation(battleValue: unknown, eventValue: unknown): void {
   prepareEvent(eventValue, battleValue);
 }
 
@@ -604,6 +778,7 @@ export function activateTowerNodeInStat(statValue: unknown, nodeId: string): Tow
   const nodePayload = requireNodePayload(payload, choice.kind);
   const draft = clone(stat);
   for (const field of NODE_TEMP_FIELDS) draft[field] = null;
+  delete draft.run_event_reveal;
   draft.reward = emptyReward();
 
   let battle = draft.battle;
@@ -619,19 +794,40 @@ export function activateTowerNodeInStat(statValue: unknown, nodeId: string): Tow
     persistedContent = replaceTowerNodeBattlePayload(envelope.content, normalizedNodePayload);
   }
 
-  const rewardValue = envelope.reward ?? unpacked.embeddedReward;
+  let rewardValue = envelope.reward ?? unpacked.embeddedReward;
+  if (choice.kind === 'shop' && isRecord(rewardValue)) {
+    const memory = readTowerCardMemory(
+      recoverTowerCardMemory(previous, flattenMvuArray(draft.battle?.cards, { objectsOnly: true })),
+    );
+    const excluded = new Set([...memory.shopShownIds, ...memory.acquiredIds]);
+    rewardValue = clone(rewardValue);
+    const key = Array.isArray((rewardValue as JsonRecord).cards) ? 'cards' : 'card';
+    (rewardValue as JsonRecord)[key] = ((rewardValue as JsonRecord)[key] || []).filter(
+      (card: JsonRecord) => !excluded.has(card.id),
+    );
+  }
   const rewardRequired = BATTLE_NODE_KINDS.has(choice.kind) || choice.kind === 'shop' || choice.kind === 'treasure';
   if (rewardRequired && rewardValue === undefined) throw new Error(`tower ${choice.kind} reward is not ready`);
   const battleBudget = BATTLE_NODE_KINDS.has(choice.kind)
     ? recommendTowerBattleRewardBudget({
-      nodeId: choice.id,
-      kind: choice.kind as 'battle' | 'elite' | 'boss',
-      act: choice.act,
-      floor: choice.floor,
-      floorsPerAct: previous.floorsPerAct,
-    })
+        nodeId: choice.id,
+        kind: choice.kind as 'battle' | 'elite' | 'boss',
+        act: choice.act,
+        floor: choice.floor,
+        floorsPerAct: previous.floorsPerAct,
+        rewardSeed:
+          isRecord(envelope.content) && typeof envelope.content.program_reward_seed === 'number'
+            ? envelope.content.program_reward_seed
+            : undefined,
+        enemyCount: finalizedEnemyCount(battle),
+      })
     : undefined;
   const reward = rewardValue === undefined ? null : normalizeTowerReward(rewardValue, battle, battleBudget);
+  if (payload.desire_growth !== undefined) {
+    if (!BATTLE_NODE_KINDS.has(choice.kind)) throw new Error('欲望成长仅支持战斗胜利奖励');
+    // Validation only: never grant the payoff before the battle is won.
+    applyDesireEffectGrowth(battle, payload.desire_growth);
+  }
 
   if (choice.kind === 'event') draft.run_event = prepareEvent(nodePayload, battle);
   else if (choice.kind === 'shop') draft.run_shop = clone(nodePayload);
@@ -650,6 +846,7 @@ export function activateTowerNodeInStat(statValue: unknown, nodeId: string): Tow
         node_id: choice.id,
         kind: choice.kind,
         reward,
+        ...(payload.desire_growth !== undefined ? { desire_growth: clone(payload.desire_growth) } : {}),
       } satisfies TowerStagedRewardState;
     }
   }
@@ -660,37 +857,44 @@ export function activateTowerNodeInStat(statValue: unknown, nodeId: string): Tow
     kind: choice.kind,
     title: unpacked.title,
     narrative: unpacked.narrative,
-    narrative_source: 'fallback',
-    narrative_phase: 'pending',
+    narrative_source: choice.kind === 'rest' ? 'program' : 'fallback',
+    narrative_phase: choice.kind === 'rest' ? 'ready' : 'pending',
     narrative_request_id: `${envelope.requestId || choice.id}__narrative`,
   };
   const programBalance = isRecord((envelope.content as JsonRecord).program_balance)
     ? (envelope.content as JsonRecord).program_balance
     : null;
   if (
-    programBalance
-    && Number.isFinite(Number(programBalance.playerDeckScore))
-    && Number.isFinite(Number(programBalance.finalEnemyScore))
+    programBalance &&
+    (programBalance.spec === 'mwg.tower-enemy-balance/v2' ||
+      (Number.isFinite(Number(programBalance.playerDeckScore)) &&
+        Number.isFinite(Number(programBalance.finalEnemyScore))))
   ) {
     activeNode.program_balance = clone(programBalance) as TowerActiveNodeState['program_balance'];
   }
   draft.run_node = activeNode;
 
-  const previousForEntry = persistedContent === envelope.content
-    ? previous
-    : {
-      ...previous,
-      nodeContent: {
-        ...previous.nodeContent,
-        [nodeId]: {
-          ...envelope,
-          content: persistedContent,
-        },
-      },
-    };
+  const previousForEntry =
+    persistedContent === envelope.content
+      ? previous
+      : {
+          ...previous,
+          nodeContent: {
+            ...previous.nodeContent,
+            [nodeId]: {
+              ...envelope,
+              content: persistedContent,
+            },
+          },
+        };
   const entered = abandonDiscardedBranches(enterRunNode(previousForEntry, nodeId));
-  const run = consumeEnteredNode(entered);
+  let run = consumeEnteredNode(entered);
+  if (choice.kind === 'shop' && reward) {
+    run = recoverTowerCardMemory(run, flattenMvuArray(draft.battle?.cards, { objectsOnly: true }));
+    run = markTowerShopCardsShown(run, flattenMvuArray(reward.card, { objectsOnly: true }));
+  }
   draft.run = run;
+  if (choice.kind === 'event') materializeTowerEventStageInStat(draft);
   replaceRecord(stat, draft);
   return { previous, run, node: activeNode, rewardStaged };
 }

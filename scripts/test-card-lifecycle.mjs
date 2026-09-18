@@ -3,6 +3,10 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import ts from 'typescript';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+process.env.TS_NODE_COMPILER_OPTIONS = JSON.stringify({module:'CommonJS',moduleResolution:'node'});
+require('ts-node/register/transpile-only');
 
 const lifecyclePath = resolve('src/game-core/cardRules.ts');
 const resourcePath = resolve('src/game-core/combatResource.ts');
@@ -17,7 +21,7 @@ const source = (await readFile(lifecyclePath, 'utf8')).replace(
 const output = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 }).outputText;
-const lifecycle = await import(`data:text/javascript;base64,${Buffer.from(output).toString('base64')}`);
+const lifecycle = require(lifecyclePath);
 
 assert.equal(lifecycle.resolvePlayedCardDestination({ type: 'Attack', exhaust: false }), 'discard');
 assert.equal(lifecycle.resolvePlayedCardDestination({ type: 'Skill', exhaust: true }), 'exhaust');
@@ -41,11 +45,12 @@ const conflicting = {
 const curse = { id: 'curse', type: 'Curse', effectProgram };
 const etherealCurse = { id: 'ethereal_curse', type: 'Curse', effectProgram, ethereal: true };
 const emptyCurse = { id: 'empty_curse', type: 'Curse' };
+const inertCurse = { id: 'inert_curse', type: 'Curse', effectProgram: { spec: 'mwg.effect/v1', steps: [] } };
 
 assert.deepEqual(
-  lifecycle.selectTurnEndCurseTriggers([ordinary, curse, etherealCurse, emptyCurse]).map(card => card.id),
+  lifecycle.selectTurnEndCurseTriggers([ordinary, curse, etherealCurse, emptyCurse, inertCurse]).map(card => card.id),
   ['curse', 'ethereal_curse'],
-  'ethereal curses must still trigger once when turn-end processing begins',
+  'ethereal curses still trigger once, while a type-only inert Curse has no turn-end program to execute',
 );
 
 const disposition = lifecycle.resolveTurnEndHandDisposition([

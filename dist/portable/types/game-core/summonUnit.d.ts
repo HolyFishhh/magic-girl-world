@@ -1,13 +1,16 @@
 import type { CombatResourceState } from './combatResource';
 import type { EventTriggerQuery } from './battleEventJournal';
+import type { BattleTriggerDispatch } from './battleEventDispatch';
+import type { BattleTriggerEventContext } from './battleEventJournal';
 import type { CardValueOperator, CardValueStat, EffectProgram } from './effectDsl';
-import type { RuntimeStatusDefinition, StatusRuntimeEffect } from './statusDefinitionRuntime';
+import type { RuntimeStatusDefinition, StatusRuntimeEffect, StatusTickTiming } from './statusDefinitionRuntime';
+import type { StatusEventTrigger, StatusTrigger } from './battleTriggers';
 import { type TriggerTransactionPorts } from './triggerTransaction';
 export type BattleOwner = 'player' | 'enemy';
 export type SummonOverflowPolicy = 'reject' | 'replace_oldest' | 'replace_lowest_hp';
 export type SummonPick = 'left' | 'right' | 'choose'
 /** Compatibility aliases retained for already-authored content. */
- | 'first' | 'last' | 'random' | 'random_n' | 'all' | 'lowest_hp' | 'highest_hp' | 'by_id';
+ | 'first' | 'last' | 'random' | 'random_n' | 'all' | 'lowest_hp' | 'highest_hp' | 'by_id' | 'source';
 export interface SummonStatusState {
     id: string;
     name: string;
@@ -18,7 +21,7 @@ export interface SummonStatusState {
     duration?: number;
 }
 export interface SummonInterceptRule {
-    /** Only damage left after the protected combatant's block can be intercepted. */
+    /** Intercept after the protected combatant's vulnerability, before recipient mitigation/block. */
     mode: 'unblocked_attack';
     priority?: number;
     maxPerTurn?: number;
@@ -29,6 +32,7 @@ export interface SummonActionDefinition {
     name: string;
     emoji?: string;
     description?: string;
+    dialogue?: string;
     weight?: number;
     /** Fixed entries ignore summon effect-value amplification. */
     fixed?: boolean;
@@ -70,6 +74,7 @@ export interface SummonUnitDefinition {
     /** Optional owner-local slot. A slot can model a persistent companion without constraining ordinary summons. */
     slot?: string;
     onExisting?: 'add_instance' | 'reinforce' | 'replace';
+    onExistingProgram?: EffectProgram;
     onDefeated?: 'new_instance' | 'revive_reset' | 'revive_reinforce';
     retainCorpse?: boolean;
     capabilities?: {
@@ -84,11 +89,20 @@ export interface SummonUnit extends Omit<SummonUnitDefinition, 'id' | 'maxHp'> {
     templateId: string;
     instanceId: string;
     owner: BattleOwner;
+    /** Program-owned combatant identity, never authored in a summon definition.
+     * Missing legacy enemy identity is unknown, not the currently selected enemy. */
+    summonerId?: string | null;
     maxHp: number;
     currentHp: number;
     createdTurn: number;
     createdSequence: number;
     interceptionsThisTurn: number;
+    /**
+     * Chosen before this unit's next activation.  This records the behaviour
+     * identity only: effect programs still come from the current runtime unit,
+     * so buffs, statuses and formula inputs remain live when it resolves.
+     */
+    plannedActionIds?: string[];
 }
 export interface SummonCollectionState {
     living: SummonUnit[];
@@ -115,6 +129,7 @@ export interface SummonActionQueueEntry {
     createdSequence: number;
 }
 export interface ResolvedSummonAction {
+    dialogue?: string;
     id: string;
     name: string;
     emoji: string;
@@ -127,6 +142,7 @@ export interface SummonDamageResult {
     hits: Array<{
         summonId: string;
         requested: number;
+        modified?: number;
         blocked: number;
         hpLost: number;
         defeated: boolean;
@@ -139,8 +155,9 @@ export interface SummonCopyResult {
 }
 type MaybePromise<T> = T | Promise<T>;
 export type SummonStatusLifecycleTrigger = 'apply' | 'stack' | 'tick' | 'remove';
+export type SummonStatusExecutableTrigger = SummonStatusLifecycleTrigger | StatusEventTrigger;
 export interface SummonStatusLifecycleExecutionContext extends Readonly<Record<string, unknown>> {
-    triggerType: SummonStatusLifecycleTrigger;
+    triggerType: SummonStatusExecutableTrigger;
     statusContext: SummonStatusState;
     /** The exact holder. Hosts must keep ordinary `self` effects bound to this unit. */
     summonContext: SummonUnit;
@@ -161,12 +178,12 @@ export type SummonStatusLifecycleEvent = {
     type: 'trigger_started';
     summon: SummonUnit;
     status: SummonStatusState;
-    trigger: SummonStatusLifecycleTrigger;
+    trigger: SummonStatusExecutableTrigger;
 } | {
     type: 'trigger_completed';
     summon: SummonUnit;
     status: SummonStatusState;
-    trigger: SummonStatusLifecycleTrigger;
+    trigger: SummonStatusExecutableTrigger;
 } | {
     type: 'status_removed';
     summon: SummonUnit;
@@ -176,12 +193,12 @@ export type SummonStatusLifecycleEvent = {
     type: 'trigger_failed';
     summon: SummonUnit;
     status: SummonStatusState;
-    trigger: 'tick' | 'remove';
+    trigger: SummonStatusExecutableTrigger;
     cause: unknown;
 };
 export interface SummonStatusDefinitionReader {
     get(statusId: string): RuntimeStatusDefinition | undefined;
-    getTriggerEffects(statusId: string, trigger: SummonStatusLifecycleTrigger): StatusRuntimeEffect[];
+    getTriggerEffects(statusId: string, trigger: StatusTrigger): StatusRuntimeEffect[];
 }
 export interface SummonStatusLifecycleState {
     readSummons(): SummonCollectionState;
@@ -193,6 +210,10 @@ export interface SummonStatusLifecycleRuntimePorts<TToken> {
     definitions: SummonStatusDefinitionReader;
     transactions: TriggerTransactionPorts<TToken>;
     execute(effect: StatusRuntimeEffect, owner: BattleOwner, context: SummonStatusLifecycleExecutionContext): MaybePromise<void>;
+    record?(event: Extract<SummonStatusLifecycleEvent, {
+        type: 'status_applied' | 'trigger_completed' | 'status_removed';
+    }>): BattleTriggerEventContext | undefined;
+    dispatch?(dispatches: readonly BattleTriggerDispatch[]): MaybePromise<void>;
     present?(event: SummonStatusLifecycleEvent): void;
 }
 export interface SummonInterceptResult extends SummonDamageResult {
@@ -202,7 +223,7 @@ export interface SummonInterceptResult extends SummonDamageResult {
 export declare function isSummonAlive(unit: Pick<SummonUnit, 'hasHp' | 'currentHp'>): boolean;
 export declare function createSummonCollectionState(living?: readonly SummonUnit[], defeated?: readonly SummonUnit[]): SummonCollectionState;
 export declare function validateSummonDefinition(definition: SummonUnitDefinition): string[];
-export declare function spawnSummonUnits(current: SummonCollectionState, owner: BattleOwner, definition: SummonUnitDefinition, requestedCount: number, capacity?: number, overflow?: SummonOverflowPolicy, createdTurn?: number): {
+export declare function spawnSummonUnits(current: SummonCollectionState, owner: BattleOwner, definition: SummonUnitDefinition, requestedCount: number, capacity?: number, overflow?: SummonOverflowPolicy, createdTurn?: number, summonerId?: string | null): {
     state: SummonCollectionState;
     spawned: SummonUnit[];
     replaced: SummonUnit[];
@@ -213,9 +234,13 @@ export declare function resolveSummonTargets(state: SummonCollectionState, selec
  * triggered abilities, statuses and resources. New identities and queue order
  * are allocated here; capacity and overflow use the same rules as spawning.
  */
-export declare function copySummonUnits(current: SummonCollectionState, targetIds: readonly string[], owner: BattleOwner, capacity?: number, overflow?: SummonOverflowPolicy, createdTurn?: number): SummonCopyResult;
+export declare function copySummonUnits(current: SummonCollectionState, targetIds: readonly string[], owner: BattleOwner, capacity?: number, overflow?: SummonOverflowPolicy, createdTurn?: number, binding?: {
+    summonerId: string | null;
+} | 'preserve'): SummonCopyResult;
 export declare function damageSummonUnits(current: SummonCollectionState, targetIds: readonly string[], requestedDamage: number, bypassBlock?: boolean): SummonDamageResult;
-export declare function interceptUnblockedAttack(current: SummonCollectionState, owner: BattleOwner, requestedDamage: number): SummonInterceptResult;
+export declare function interceptUnblockedAttack(current: SummonCollectionState, owner: BattleOwner, requestedDamage: number, mitigate?: (unit: SummonUnit, incoming: number) => number, 
+/** Exact enemy holder being damaged. Enemy summons never fall back to active aliases. */
+protectedEnemyId?: string): SummonInterceptResult;
 export declare function healSummonUnits(current: SummonCollectionState, targetIds: readonly string[], amount: number): {
     state: SummonCollectionState;
     changed: Array<{
@@ -254,11 +279,16 @@ export declare class SummonStatusLifecycleRuntime<TToken> {
         summon: SummonUnit;
         status: SummonStatusState;
     }>>;
-    /** Tick and then decay a stable owner-local summon/status snapshot. */
+    /** Resolve tick effects for one exact summon at its declared action boundary. */
+    processActionTiming(summonId: string, timing: StatusTickTiming): Promise<void>;
+    /** Stack decay is independent of tick timing and occurs once at each owner's turn end. */
     processTurnEnd(owner: BattleOwner): Promise<void>;
+    /** Resolve a concrete battle event for statuses present before that event began. */
+    processEvent(summon: SummonUnit, trigger: StatusEventTrigger, context?: Readonly<Record<string, unknown>>, activeStatusIds?: readonly string[]): Promise<void>;
     private applyStacksDecay;
     private removeOne;
     private executeIsolatedTrigger;
+    private dispatchOwnership;
     private execute;
     private createStatus;
     private matchesSelection;
@@ -280,6 +310,10 @@ export declare function dismissSummonUnits(current: SummonCollectionState, targe
 };
 export declare function resetSummonTurnState(current: SummonCollectionState, owner: BattleOwner): SummonCollectionState;
 export declare function buildSummonActionQueue(state: SummonCollectionState, owner: BattleOwner): SummonActionQueueEntry[];
+/** Select the action identities for an upcoming activation and persist them on the units. */
+export declare function planSummonActions(current: SummonCollectionState, targetIds: readonly string[], random: () => number, replace?: boolean): SummonCollectionState;
+/** Resolve a previously selected action without drawing RNG. */
+export declare function resolvePlannedSummonAction(unit: SummonUnit, actionIndex: number): ResolvedSummonAction | null;
 /** Select one autonomous behaviour without coupling summon design to a fixed content preset. */
 export declare function resolveSummonAction(unit: SummonUnit, random?: () => number): ResolvedSummonAction | null;
 export {};

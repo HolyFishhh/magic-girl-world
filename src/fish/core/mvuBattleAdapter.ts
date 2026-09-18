@@ -1,6 +1,8 @@
 import {
   allocateRuntimeId,
   compileCompactEffectList,
+  compileCompactCondition,
+  validateEffectProgramPolicy,
   ensureCardIdentity,
   normalizeOrbContainer,
   normalizeCombatResourceStates,
@@ -226,18 +228,13 @@ export function convertMvuStance(
   const source = value as Record<string, unknown>;
   if (typeof source.id !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(source.id)) return null;
   if (typeof source.name !== 'string' || !source.name.trim()) return null;
-  const enterEffects = compileOptionalContainerEffects(source.enter, options);
-  const exitEffects = compileOptionalContainerEffects(source.exit, options);
-  const passiveEffects = compileOptionalContainerEffects(source.passive, options);
-  if (!enterEffects || !exitEffects || !passiveEffects) return null;
+  // Use the same whole-stance compiler as card effects, including detached
+  // event contexts and their strict runtime policy. Never drop event listeners.
+  const compiledStance = compileCompactEffectList({ stance: source }, options);
+  if (!compiledStance.ok || compiledStance.value.steps[0]?.op !== 'set_stance' || !compiledStance.value.steps[0].stance) return null;
+  if (!validateEffectProgramPolicy(compiledStance.value, { triggerPolicy: 'forbid', modifierPolicy: 'forbid' }).ok) return null;
   return {
-    id: source.id,
-    name: source.name.trim(),
-    ...(typeof source.emoji === 'string' ? { emoji: source.emoji } : {}),
-    ...(typeof source.description === 'string' ? { description: source.description } : {}),
-    ...(enterEffects.length ? { enterEffects } : {}),
-    ...(exitEffects.length ? { exitEffects } : {}),
-    ...(passiveEffects.length ? { passiveEffects } : {}),
+    ...structuredClone(compiledStance.value.steps[0].stance),
     enteredTurn: Math.max(0, Math.trunc(enteredTurn)),
     source: { kind: 'system', id: 'mvu_initial_stance', name: '初始姿态' },
   };
@@ -267,11 +264,11 @@ function convertMvuOrb(
     value: roundBattleValue(source.value),
     ...(passiveEffects.length ? { passiveEffects } : {}),
     ...(evokeEffects.length ? { evokeEffects } : {}),
-    source: { kind: 'system', id: 'mvu_initial_orb', name: '初始 Orb' },
+    source: { kind: 'system', id: 'mvu_initial_orb', name: '初始姿态槽' },
   };
 }
 
-/** Initial MVU Orb state is concrete; formulas remain inside passive/evoke effect programs. */
+/** Initial MVU stance-slot state is concrete; formulas remain inside passive/evoke effect programs. */
 export function convertMvuOrbContainer(
   slotsValue: unknown,
   orbsValue: unknown,
@@ -322,6 +319,7 @@ export function convertMvuEnemy(
     statusNames?: Readonly<Record<string, string>>;
     statusDescriptions?: Readonly<Record<string, string>>;
     fallbackId?: string;
+    deferAction?: boolean;
   } = {},
 ): Enemy | null {
   if (!mvuEnemy || typeof mvuEnemy !== 'object' || Array.isArray(mvuEnemy)) return null;
@@ -333,22 +331,19 @@ export function convertMvuEnemy(
     .map(value => normalizeEnemyAction(value, enemyCompilationOptions))
     .filter(value => value !== null);
   const { actionMode, actionConfig } = normalizeEnemyActionSelectionInput(source);
-  const selection = selectEnemyAction({ ...source, actions, actionMode, actionConfig }, random);
+  const selection = options.deferAction
+    ? { action: null, state: { sequenceIndex: 0, sequenceDoneOnce: false } }
+    : selectEnemyAction({ ...source, actions, actionMode, actionConfig }, random);
   const preview = selection.action as import('../../game-core').EnemyAction | null;
   const lustEffect = normalizeNamedEffectDefinition(source.lust_effect, {
     ...enemyCompilationOptions,
     fallbackName: '欲望爆发',
-  }) || {
-    name: '欲望爆发',
-    description: '敌人欲望达到上限时，对玩家造成额外伤害',
-    effectProgram: {
-      spec: 'mwg.effect/v1',
-      steps: [{ op: 'damage', target: 'opponent', amount: 5 }],
-    } as EffectProgram,
-  };
+  });
   const maxHp = Math.max(1, roundBattleValue(source.max_hp ?? 100));
   const maxLust = Math.max(1, roundBattleValue(source.max_lust ?? 100));
   const maxEnergy = Math.max(0, Math.floor(Number(source.max_energy ?? 0) || 0));
+  const escape = source.escape_when === undefined ? null : compileCompactCondition(source.escape_when, '$.escape_when');
+  if (source.escape_when !== undefined && !escape?.ok) return null;
 
   return {
     id:
@@ -373,7 +368,8 @@ export function convertMvuEnemy(
     nextAction: preview ? ({ ...preview } as any) : null,
     abilities: convertMvuAbilities(source.abilities, enemyCompilationOptions) as any,
     dialogue: normalizeChinesePlayerDescription(source.description),
-    lustEffect,
+    ...(source.victory_on_defeat === true ? { victoryOnDefeat: true } : {}),
+    ...(lustEffect ? { lustEffect } : {}),
     actionMode,
     actionConfig,
     _sequenceIndex: selection.state.sequenceIndex,
@@ -385,6 +381,10 @@ export function convertMvuEnemy(
       : undefined,
     stance: convertMvuStance(source.stance, 1, enemyCompilationOptions),
     orbs: convertMvuOrbContainer(source.orb_slots, source.orbs, enemyCompilationOptions),
+    ...(escape?.ok ? { escapeCondition: escape.value } : {}),
+    ...(source.defeat_reward && typeof source.defeat_reward === 'object' && !Array.isArray(source.defeat_reward)
+      ? { defeatReward: structuredClone(source.defeat_reward) }
+      : {}),
   } as Enemy & { actionMode: string; actionConfig: Record<string, any> };
 }
 
@@ -396,7 +396,8 @@ export function convertMvuEnemies(
     statusDescriptions?: Readonly<Record<string, string>>;
   } = {},
 ): Enemy[] {
-  return normalizeMvuArray(value)
-    .map((entry, index) => convertMvuEnemy(entry, random, { ...options, fallbackId: `enemy_${index + 1}` }))
+  return expandEnemyQuantities(normalizeMvuArray(value))
+    .map((entry, index) => convertMvuEnemy(entry, random, { ...options, fallbackId: `enemy_${index + 1}`, deferAction: index >= 5 }))
     .filter((entry): entry is Enemy => entry !== null);
 }
+import { expandEnemyQuantities } from '../../game-core/enemyQuantity';

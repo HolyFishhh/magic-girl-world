@@ -1,6 +1,7 @@
 import { type CardZoneOperationPlan, type CardZoneOperationRequest, type CommitCardZoneOperationResult } from './cardZoneOperation';
 import type { CardPileZone, CardZoneState } from './cardZoneReducer';
 import type { Card, Player } from './battleState';
+import type { CardSelector } from './effectDsl';
 import { type CardPatch, type CardPatchLedger } from './cardPatch';
 import type { CardMoveReason } from './battleEventJournal';
 import type { EffectCommand } from './effectCommandRuntime';
@@ -65,7 +66,20 @@ export type CardEffectRuntimeEvent = {
     attachmentId: string;
     attachmentKind: 'enchantment' | 'affliction';
 };
+/** A command-local value snapshot, never a live Card reference or persisted history. */
+export interface DiscardCommandResult {
+    readonly status: 'pending' | 'cancelled' | 'committed';
+    readonly cards: readonly Readonly<{
+        id: string;
+        type: Card['type'];
+        source: CardPileZone;
+    }>[];
+}
 export interface CardEffectRuntimeContext {
+    /** Caller must allocate a distinct cell for each command/invocation. */
+    discardResult?: {
+        value: DiscardCommandResult;
+    };
     currentCardId?: string;
     excludedCardIds?: readonly string[];
     doubleEffectFilter?: 'playable' | 'any';
@@ -74,6 +88,22 @@ export interface CardEffectRuntimeContext {
         kind: CardPatch['source']['kind'];
         id: string;
         name?: string;
+    };
+    /**
+     * A single effect program can apply several numeric upgrades to one chosen
+     * card. The host supplies this short-lived cell so the first operation asks
+     * once from the union of the operations' eligible targets.
+     */
+    sharedCardChoice?: {
+        requirements: readonly Readonly<{
+            selector: CardSelector;
+            /** Omitted when a non-numeric upgrade can affect any matching card. */
+            stats?: readonly Extract<CardEffectCommand, {
+                type: 'modify_card_value';
+            }>['stat'][];
+            maxLevel?: number;
+        }>[];
+        selectedIds?: readonly string[] | null;
     };
 }
 export interface CardEffectStatePort {
@@ -91,7 +121,7 @@ export interface CardEffectStatePort {
     createRuntimeCardId(sourceId: string): string;
     addCardToHand(card: Card): boolean;
     addCardToDeck(card: Card): void;
-    placeGeneratedCard(card: Card, preferredZone: 'hand' | 'draw'): 'hand' | 'draw' | 'discard';
+    placeGeneratedCard(card: Card, preferredZone: 'hand' | 'draw' | 'discard'): 'hand' | 'draw' | 'discard';
 }
 export interface CardEffectRuntimePorts {
     drawCards(count: number): Promise<void>;

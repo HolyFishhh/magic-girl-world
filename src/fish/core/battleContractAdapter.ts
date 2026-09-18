@@ -69,6 +69,12 @@ export function battleRequestToRuntimeData(request: BattleRequest): Record<strin
       max_hp: request.player.maxHp,
       lust: request.player.lust,
       max_lust: request.player.maxLust,
+      // These authored definitions already passed the content-pack contract.
+      // Keep them through the host projection, not only in design analysis.
+      resources: pack.playerResources,
+      stance: pack.playerStance,
+      orb_slots: pack.playerOrbSlots,
+      orbs: pack.playerOrbs,
     },
     level: request.player.level,
     cards: pack.cards,

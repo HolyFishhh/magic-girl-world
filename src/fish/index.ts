@@ -1,3 +1,6 @@
+import { applyNavigationFocus } from '../runtime/navigationFocus';
+import { paintBattleLoading, setBattleLoading } from './ui/battleLoading';
+import {bindPileFlowAnimations} from './ui/pileFlowAnimation';
 // Fish RPG 战斗系统入口文件 - 纯协调器
 //
 // ⚠️ 重要架构说明：
@@ -6,9 +9,12 @@
 // 3. 不包含任何重复的函数实现
 //
 import '../runtime/bootstrap';
-import { ensureMvuRuntimeReady } from '../runtime/messageVariables';
+import { ensureMvuRuntimeReady, getCurrentMessageVariables } from '../runtime/messageVariables';
 import { registerNaturalLanguageCardRepairHandler } from '../runtime/naturalLanguageCardRepair';
 import { registerRuntimeViewLifecycle } from '../runtime/runtimeViewSwitcher';
+import { renderStoryPanel } from '../runtime/storyPanel';
+import { renderBattleOverview, destroyBattleOverview } from './ui/battleOverview';
+import '../tower/index.scss';
 import { ensureRuntimeFrameHeightSync } from '../runtime/runtimeFrameHeight';
 import {
   formatBoundedContentIssueSummary,
@@ -17,6 +23,9 @@ import {
   type BattleStartFlowStep,
 } from '../game-core';
 import './index.scss';
+import './styles/cardPlayQueue.scss';
+import { CardPlayQueue, captureQueuedCardVisual, clearQueuedCardVisuals } from './ui/cardPlayQueue';
+import { AnimationManager, resolveCombatAnimationTarget } from './ui/animationManager';
 import './styles/animations.scss';
 
 // 导入专门模块
@@ -52,6 +61,7 @@ class FishRPGCoordinator {
   private readonly disposeStateListeners: Array<() => void> = [];
   private disposeCardRepairHandler: (() => void) | null = null;
   private destroyed = false;
+  private readonly cardPlayQueue = new CardPlayQueue();
 
   constructor() {
     // 初始化所有模块
@@ -71,6 +81,7 @@ class FishRPGCoordinator {
    */
   async initialize(): Promise<void> {
     try {
+      await paintBattleLoading();
       // Wait for the real MVU/Tavern Helper bridge before reading the battle floor.
       await ensureMvuRuntimeReady();
       if (this.destroyed) return;
@@ -106,6 +117,17 @@ class FishRPGCoordinator {
         this.shellPresenter.showBattleUnavailable(safeMessage, loadIssues, () =>
           this.requestBattleContentRepair(loadIssues),
         );
+        return;
+      }
+
+      // A completed snapshot legitimately has no living opponent. Restore its
+      // settlement UI before validating a playable battle or running any start
+      // hooks; rendering a terminal result must not deal cards or save a turn.
+      if (this.gameStateManager.wasBattleSessionRestored() && this.gameStateManager.isGameOver()) {
+        await this.refreshUI();
+        if (this.destroyed) return;
+        this.shellPresenter.initializeAfterFirstRender();
+        this.battleEndHost.resumeBattleEndDialog();
         return;
       }
 
@@ -148,6 +170,8 @@ class FishRPGCoordinator {
       console.error('❌ 初始化失败:', error);
       const message = error instanceof Error ? error.message : String(error);
       this.shellPresenter.showBattleUnavailable(`酒馆运行环境未就绪：${message}`);
+    } finally {
+      setBattleLoading(false);
     }
   }
 
@@ -189,6 +213,7 @@ class FishRPGCoordinator {
     // 监听 GameStateManager 的关键事件以自动刷新UI
     // 确保抽牌/加牌/弃牌/洗牌等由效果或遗物触发时，UI能即时更新
     const gsm = this.gameStateManager;
+    this.disposeStateListeners.push(bindPileFlowAnimations());
     const scheduleRefresh = () => {
       // 合并短时间内的多次事件，减少重复刷新与日志噪声
       if (this.refreshTimer) {
@@ -198,7 +223,7 @@ class FishRPGCoordinator {
         this.refreshTimer = null;
         if (this.destroyed) return;
         try {
-          await this.refreshUI();
+          await this.refreshUI(false);
         } catch (e) {
           console.error('自动刷新UI失败:', e);
         }
@@ -214,6 +239,7 @@ class FishRPGCoordinator {
       'deck_shuffled',
       'player_updated',
       'enemy_updated',
+      'active_enemy_changed',
       'player_status_added',
       'player_status_updated',
       'player_status_removed',
@@ -232,6 +258,14 @@ class FishRPGCoordinator {
         }),
       );
     });
+    // Node prose can arrive after the battle snapshot without a combat-state event.
+    const storyTimer = setInterval(() => {
+      if (!this.destroyed) {
+        renderStoryPanel('fish');
+        renderBattleOverview(getCurrentMessageVariables()?.stat_data || {}, this.gameStateManager.getGameState());
+      }
+    }, 750);
+    this.disposeStateListeners.push(() => clearInterval(storyTimer));
   }
 
   /**
@@ -268,55 +302,22 @@ class FishRPGCoordinator {
   }
 
   private async executeBattleStartFlowStep(step: BattleStartFlowStep): Promise<void> {
-    switch (step) {
-      case 'player_stance_battle_start':
-        await this.effectExecutor.processInitialStance('player');
-        return;
-      case 'enemy_stance_battle_start': {
-        const previous = this.gameStateManager.getGameState().activeEnemyId;
-        for (const enemy of this.gameStateManager.getEnemies({ livingOnly: true })) {
-          this.gameStateManager.setActiveEnemy(enemy.id);
-          await this.effectExecutor.processInitialStance('enemy');
-        }
-        if (previous) this.gameStateManager.setActiveEnemy(previous);
-        return;
-      }
-      case 'player_abilities_battle_start':
-        await this.effectExecutor.processAbilitiesByTrigger('player', 'battle_start');
-        return;
-      case 'enemy_abilities_battle_start':
-        await this.effectExecutor.processAbilitiesByTrigger('enemy', 'battle_start');
-        return;
-      case 'player_abilities_gain_initial':
-        await this.effectExecutor.processAbilitiesByTrigger('player', 'ability_gain');
-        return;
-      case 'enemy_abilities_gain_initial':
-        await this.effectExecutor.processAbilitiesByTrigger('enemy', 'ability_gain');
-        return;
-      case 'player_relics_ability_gain_initial':
-        await this.relicTriggerHost.triggerRelics('ability_gain', { initial: true });
-        return;
-      case 'player_relics_battle_start':
-        await this.relicTriggerHost.triggerRelics('battle_start');
-        return;
-      default: {
-        const exhaustive: never = step;
-        throw new Error(`未知战斗开始步骤: ${String(exhaustive)}`);
-      }
-    }
+    await this.battleManager.executeBattleStartFlowStep(step);
   }
 
   /**
    * 刷新UI
    */
-  private async refreshUI(): Promise<void> {
+  private async refreshUI(syncPersistent = true): Promise<void> {
     try {
       if (this.destroyed) return;
       // Sync persistent MVU additions before taking the render snapshot.
-      this.gameStateManager.syncNewCardsFromMVU();
+      if (syncPersistent) this.gameStateManager.syncNewCardsFromMVU();
       const gameState = this.gameStateManager.getGameState();
       if (gameState) {
         await this.shellPresenter.refresh(gameState);
+        renderStoryPanel('fish');
+        renderBattleOverview(getCurrentMessageVariables()?.stat_data || {}, gameState);
       } else {
         console.warn('⚠️ 没有游戏状态数据');
       }
@@ -329,31 +330,33 @@ class FishRPGCoordinator {
    * 使用卡牌
    */
   private async playCard(cardId: string): Promise<void> {
-    try {
-      if (!this.canMutateCurrentMessage()) return;
-      if (!this.battleManager.canPlayerAct()) return;
-
-      // 获取卡牌信息用于日志
-      const card = this.cardSystem.getCardInHand(cardId);
-      const cardName = card ? card.name : cardId;
-
-      const success = await this.cardSystem.playCard(cardId);
-      if (success) {
-        this.shellPresenter.logPlayerAction('卡牌', `使用了卡牌 ${cardName}`);
-        await this.refreshUI();
-      } else {
-        // 卡牌使用失败时，确保UI状态正确
-        await this.refreshUI();
+    const targetId = this.gameStateManager.getGameState().activeEnemyId;
+    const visual = captureQueuedCardVisual(cardId);
+    await this.cardPlayQueue.enqueue(cardId, async () => {
+      try {
+        if (this.destroyed || !this.canMutateCurrentMessage() || !this.battleManager.canPlayerAct()) return;
+        const card = this.cardSystem.getCardInHand(cardId);
+        // Do not silently redirect a queued attack when its selected target died.
+        if (card && resolveCombatAnimationTarget(card.effectProgram, 'skill') === 'opponent' && targetId && !this.gameStateManager.getEnemies({ livingOnly: true }).some(enemy => enemy.id === targetId)) return;
+        if (targetId) this.gameStateManager.setActiveEnemy(targetId);
+        const visualReady = visual.begin();
+        const [success] = await Promise.all([this.battleManager.playCard(cardId), visualReady]);
+        await AnimationManager.getInstance().waitForActionPresentation();
+        if (success) this.shellPresenter.logPlayerAction('卡牌', `使用了卡牌 ${card?.name || cardId}`);
+      } catch (error) {
+        console.error('使用卡牌失败:', error);
+      } finally {
+        await visual.finish();
+        if (!this.destroyed) await this.refreshUI();
       }
-    } catch (error) {
-      console.error('使用卡牌失败:', error);
-    }
+    });
   }
 
   /**
    * 结束回合
    */
   private async endTurn(): Promise<void> {
+    if (this.cardPlayQueue.busy) return;
     try {
       if (!this.canMutateCurrentMessage()) return;
       await this.battleManager.endPlayerTurn();
@@ -435,7 +438,11 @@ class FishRPGCoordinator {
 
   public destroy(): void {
     if (this.destroyed) return;
+    destroyBattleOverview();
     this.destroyed = true;
+    setBattleLoading(false);
+    this.cardPlayQueue.dispose();
+    clearQueuedCardVisuals();
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.refreshTimer = null;
     for (const dispose of this.disposeStateListeners.splice(0)) dispose();
@@ -447,4 +454,7 @@ class FishRPGCoordinator {
 
 const coordinator = new FishRPGCoordinator();
 registerRuntimeViewLifecycle('fish', () => coordinator.destroy());
-void coordinator.initialize();
+void coordinator.initialize().then(() => {
+  renderStoryPanel('fish');
+  requestAnimationFrame(() => applyNavigationFocus());
+});

@@ -30,6 +30,11 @@ const guardReward = {
   description: '稳住脚步抵挡冲击。',
   effects: { block: 8 },
 };
+const baseChoiceRewards = [
+  guardReward,
+  { ...guardReward, id: 'tower_lantern', name: '塔灯', emoji: '🏮', description: '点亮前路并获得格挡。' },
+  { ...guardReward, id: 'tower_feather', name: '塔羽', emoji: '🪶', description: '轻盈地获得格挡。' },
+];
 const enemy = {
   name: '试炼魔偶',
   emoji: '🗿',
@@ -79,13 +84,15 @@ function activeTowerStat(seed = 400) {
         node_id: choice.id,
         kind: choice.kind,
         reward: {
-          card: [guardReward],
+          card: baseChoiceRewards,
           artifact: [],
           item: [],
           limits: { cards: 1, artifacts: 0, items: 0 },
           disabled_categories: [],
           pool_revision: 0,
           reroll_count: 0,
+          gold: 37,
+          gold_claimed: false,
         },
       },
       run_event: null,
@@ -121,9 +128,51 @@ function activeTowerStat(seed = 400) {
   assert.equal(settled.nodeId, choice.id);
   assert.equal(stat.reward.card[0].id, 'tower_guard');
   assert.equal(stat.reward.limits.cards, 1);
+  assert.equal(stat.reward.gold, 37);
+  assert.equal(stat.reward.gold_claimed, false);
   assert.equal(stat.run_node, null);
   assert.equal(stat.run_node_reward, null);
   assert.deepEqual(stat.run, runBefore, 'the pure reward transaction does not settle the route');
+}
+
+// Special enemy loot is appended only from an actual defeat receipt. It shares
+// the normal reward validator and never changes the program-authored base gold.
+{
+  const { stat, choice } = activeTowerStat(498);
+  rewardSettlement.settleTowerBattleRewardInStat(stat, 'victory', choice.id, [{
+    enemyId: 'chest_monster',
+    reward: {
+      cards: [{ ...guardReward, id: 'chest_guard', name: '宝箱壁垒' }],
+      artifacts: [{ id: 'chest_relic', name: '宝箱棱镜', rarity: 'Common', emoji: '◇', trigger: { on: 'battle_start', effects: { block: 1 } } }],
+      items: [{ id: 'chest_tonic', name: '宝箱药剂', count: 1, description: '回复生命。', effects: { heal: 4 } }],
+      gold: 19,
+    },
+  }]);
+  assert.equal(stat.reward.card.some(entry => entry.id === 'chest_guard'), true);
+  assert.deepEqual(
+    stat.reward.card_choice_groups,
+    [
+      { id: 'cards', indices: [0, 1, 2], pick: 1 },
+      { id: 'defeat:chest_monster', indices: [3], pick: 1 },
+    ],
+    'the base three-choice pool and a defeated enemy card drop remain separate choice groups',
+  );
+  assert.equal(stat.reward.artifact.some(entry => entry.id === 'chest_relic'), true);
+  assert.equal(stat.reward.item.some(entry => entry.id === 'chest_tonic'), true);
+  assert.equal(stat.reward.gold, 56);
+  assert.equal(stat.reward.gold_claimed, false);
+}
+
+// Base currency is owned by the original roster: escaped or spawned enemies
+// do not create a receipt, while a partial real defeat earns only its share.
+{
+  const { stat, choice } = activeTowerStat(497);
+  rewardSettlement.settleTowerBattleRewardInStat(stat, 'victory', choice.id, [], ['front'], ['front', 'runner']);
+  assert.equal(stat.reward.gold, 18);
+  const escaped = activeTowerStat(496);
+  rewardSettlement.settleTowerBattleRewardInStat(escaped.stat, 'victory', escaped.choice.id, [], [], ['runner']);
+  assert.equal(escaped.stat.reward.gold, 0);
+  assert.equal(escaped.stat.reward.gold_claimed, true);
 }
 
 // Defeat and escape discard the hidden pool instead of exposing it.
@@ -133,7 +182,32 @@ for (const result of ['defeat', 'terminated']) {
   const settled = rewardSettlement.settleTowerBattleRewardInStat(stat, result, choice.id);
   assert.equal(settled.promoted, false);
   assert.deepEqual(stat.reward.card, []);
+  assert.equal(stat.reward.gold, 0);
+  assert.equal(stat.reward.gold_claimed, true);
   assert.equal(stat.run_node_reward, null);
+}
+
+// Currency is generated from the durable node plan and finalized roster, not
+// from reward JSON.  The same save context restores exactly the same payout.
+{
+  const context = { nodeId: 'gold-node', kind: 'battle', act: 2, floor: 5, rewardSeed: 913, enemyCount: 3 };
+  const planned = core.recommendTowerBattleRewardBudget(context);
+  assert.equal(planned.gold, core.recommendTowerBattleRewardBudget(context).gold);
+  assert.equal(planned.gold, core.recommendTowerBattleGold(context));
+  assert.notEqual(planned.gold, core.recommendTowerBattleGold({ ...context, enemyCount: 1 }), 'roster size participates in the saved payout plan');
+  assert.ok(core.recommendTowerBattleGold({ ...context, kind: 'elite' }) > planned.gold);
+  assert.ok(core.recommendTowerBattleGold({ ...context, kind: 'boss' }) > core.recommendTowerBattleGold({ ...context, kind: 'elite' }));
+}
+
+// An in-flight legacy save has no currency receipt; preserve its old reward
+// rather than inventing money while migrating the staged pool.
+{
+  const { stat, choice } = activeTowerStat(499);
+  delete stat.run_node_reward.reward.gold;
+  delete stat.run_node_reward.reward.gold_claimed;
+  rewardSettlement.settleTowerBattleRewardInStat(stat, 'victory', choice.id);
+  assert.equal(stat.reward.gold, 0);
+  assert.equal(stat.reward.gold_claimed, true);
 }
 
 // Every scope mismatch is rejected before any mutation.
@@ -183,12 +257,26 @@ for (const result of ['defeat', 'terminated']) {
     runSeed: stat.run.seed,
   });
   const variables = { stat_data: stat };
+  const played = core.appendBattleEvent(core.createBattleEventJournal(), {
+    turn: 1,
+    phase: 'after',
+    kind: 'card_played',
+    cause: { source: { kind: 'card', id: 'strike' }, reason: 'player_choice' },
+    actorId: 'player',
+    cardInstanceId: 'strike__combat__1',
+    templateId: 'strike',
+    cardType: 'Attack',
+    automatic: false,
+    replayIndex: 0,
+  });
+  assert.equal(played.ok, true);
   battleSettlement.settleTavernBattleVariables(variables, {
     result: 'victory',
     request,
     player: { currentHp: 73, currentLust: 4 },
     items: [],
     turns: 4,
+    eventJournal: played.state,
     rewardRequest: null,
   });
   assert.equal(variables.stat_data.reward.card[0].id, 'tower_guard');
@@ -199,8 +287,11 @@ for (const result of ['defeat', 'terminated']) {
   assert.equal(variables.stat_data.run.score.encounters[0].playerDeckScore, 150);
   assert.equal(variables.stat_data.run.score.encounters[0].enemyScore, 120);
   assert.equal(variables.stat_data.run.score.encounters[0].relativeDifficulty, 0.8);
+  assert.equal(variables.stat_data.run_event_history.records.length, 1);
+  assert.equal(variables.stat_data.run_event_history.records[0].encounterId, choice.id);
 
   const experienceAfterFirstSettlement = variables.stat_data.battle.exp;
+  assert.equal(experienceAfterFirstSettlement, 0, 'tower victory does not grant experience');
   const afterFirstSettlement = structuredClone(variables);
   battleSettlement.settleTavernBattleVariables(variables, {
     result: 'victory',
@@ -208,6 +299,7 @@ for (const result of ['defeat', 'terminated']) {
     player: { currentHp: 1, currentLust: 99 },
     items: [],
     turns: 4,
+    eventJournal: played.state,
     rewardRequest: null,
     persistentCards: [{ ...strike, id: 'stale_card', quantity: 1 }],
   });
@@ -225,8 +317,8 @@ for (const result of ['defeat', 'terminated']) {
   assert.equal(variables.stat_data.reward.card[0].id, 'tower_guard');
 }
 
-// A migrated tower save without pre-generation staging still receives its
-// first victory EXP; only a genuinely repeated route callback is suppressed.
+// A migrated tower save without pre-generation staging remains playable without
+// granting or consuming its legacy experience.
 {
   const { stat, choice } = activeTowerStat(406);
   stat.run_node = null;
@@ -255,8 +347,19 @@ for (const result of ['defeat', 'terminated']) {
     items: [],
     turns: 3,
   });
-  assert.ok(variables.stat_data.battle.exp > 0, 'legacy tower victory still awards EXP once');
+  assert.equal(variables.stat_data.battle.exp, 0, 'legacy tower victory does not award EXP');
   assert.equal(variables.stat_data.run.phase, 'awaiting_choice');
 }
 
 console.log('Tower battle reward promotion, cleanup, scope guard, and Tavern settlement integration passed.');
+
+// An elite payout is staged currency, and claiming currency alone must not be
+// reported as skipping all rewards (the production feedback case).
+{
+ const {stat}=activeTowerStat();stat.reward={card:[],artifact:[],item:[],limits:{cards:0,artifacts:0,items:0},gold:74,gold_claimed:false};
+ const before=stat.run.gold;
+ const {executeUnifiedRunTransactionInStat}=require('../src/common/runTransactions.ts');
+ executeUnifiedRunTransactionInStat(stat,{kind:'reward_claim',selections:{cards:[],artifacts:[],items:[]},partial:true,claimGold:true});
+ assert.equal(stat.run.gold,before+74);assert.match(stat.run_transaction_log.at(-1).summary,/74 金币/);assert.doesNotMatch(stat.run_transaction_log.at(-1).summary,/跳过/);
+ assert.throws(()=>executeUnifiedRunTransactionInStat(stat,{kind:'reward_claim',selections:{cards:[],artifacts:[],items:[]},partial:true,claimGold:true}));
+}

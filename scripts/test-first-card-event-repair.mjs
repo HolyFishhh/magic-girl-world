@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {createRequire} from 'node:module';
+const require=createRequire(import.meta.url);
+process.env.TS_NODE_COMPILER_OPTIONS=JSON.stringify({module:'CommonJS',moduleResolution:'node'});
+require('ts-node/register/transpile-only');require('tsconfig-paths/register');
+const {collectAuthoredLiteralEffectIssues:collect,inspectFirstCardEventMismatch:inspect,assertAuthoredLiteralRepairPreservation:preserve}=require('../src/game-core/authoredLiteralEffects.ts');
+const {extractTowerInitialRepairSlotTargets:plan,parseTowerInitialSlotRepairResponse:parse,mergeTowerInitialSlotRepair:merge}=require('../src/sillytavern-extension/controller.ts');
+const file='tmp/initial101-final-browser-v183.json',bytes=readFileSync(file),capture=JSON.parse(bytes);
+const original=JSON.parse(capture.evidence.find(e=>e.stage==='compiled-result').text),snapshot=structuredClone(original);
+const issues=collect(original).filter(i=>i.code==='EXPLICIT_FIRST_CARD_EVENT_MISMATCH');
+assert.equal(issues.length,1);
+const roots=plan(original,issues.map(i=>`${i.path}：[${i.code}] ${i.message}`).join('；'));
+assert.equal(roots.length,1);assert.equal(roots[0].slots.length,1);
+assert.equal(roots[0].slots[0].kind,'first_card_event_condition');
+const response=value=>({spec:'mwg.tower-initial-slot-repair/v1',support_statuses:[],support_resources:[],roots:{[roots[0].token]:{slots:{[roots[0].slots[0].token]:{action:'replace_value',value}}}}});
+for(const bad of [null,'true','cards_played_this_turn == 1','attacks_played_this_turn == 1',''])assert.throws(()=>parse(response(bad),roots));
+const fixed=merge(original,roots,parse(response('skills_played_this_turn == 1'),roots));
+const expected=structuredClone(original);expected.player.statuses[0].triggers.skill_played.when='skills_played_this_turn == 1';
+assert.deepEqual(fixed,expected);preserve(original,fixed);
+assert.equal(collect(fixed).filter(i=>i.code==='EXPLICIT_FIRST_CARD_EVENT_MISMATCH').length,0);
+const status=original.player.statuses[0];
+const attack=structuredClone(status);attack.description='每回合首次打出攻击牌时，获得3点格挡。';
+attack.triggers={attack_played:attack.triggers.skill_played};
+assert.deepEqual(inspect(attack),{event:'attack_played',condition:'attacks_played_this_turn == 1'});
+for(const change of [s=>s.description+='若生命不足则不触发。',s=>s.triggers.skill_played.when='cards_played_this_turn == 1 && self.hp > 5',s=>s.triggers.turn_end={block:2},s=>s.triggers.skill_played.block=4,s=>s.triggers.skill_played.to='opponent']){
+ const candidate=structuredClone(status);change(candidate);assert.equal(inspect(candidate),null,'unsupported or independently mismatched content is not rewritten');
+}
+const changedDescription=structuredClone(fixed);changedDescription.player.statuses[0].description='每回合第一张牌为技能时获得格挡';
+assert.throws(()=>preserve(original,changedDescription));
+assert.deepEqual(original,snapshot);assert.deepEqual(readFileSync(file),bytes);
+console.log('PASS recorded101 exact mismatch -> one non-deletable condition slot; other fields locked; ambiguous clauses excluded; no input/save writes.');

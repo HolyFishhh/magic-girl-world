@@ -1,3 +1,4 @@
+import { renderSupportDetails } from '../../shared/supportPresentation';
 import {
   isCurrentMessageLatest,
   rerenderHistoricalMessageForDepth,
@@ -17,6 +18,7 @@ import { PileViewer } from './pileViewer';
 import { EffectProgramDisplay } from './effectProgramDisplay';
 import { StatusDetailViewer } from './statusDetailViewer';
 import { BattleFullscreenController } from './battleFullscreenController';
+import { BATTLE_ITEM_USAGE_LABEL } from '../../game-core/battleItemUsage';
 
 type MaybePromise = void | Promise<void>;
 
@@ -55,6 +57,14 @@ export class TavernBattleShellPresenter {
     if (this.initialized) return;
     this.initialized = true;
 
+    // All battle dialogs share the scene's bounded coordinate system. The
+    // surrounding iframe also contains story text and can be much taller.
+    const scene = document.getElementById('battle-scene');
+    if (scene) {
+      document.querySelectorAll('.card-game-container > .loading-overlay, .card-game-container > .narrative-overlay, .card-game-container > .game-over-dialog, .card-game-container > .no-enemy-dialog, .card-game-container > .reward-dialog, .item-modal, .lust-overflow-area')
+        .forEach(dialog => scene.appendChild(dialog));
+    }
+
     BattleLog.init();
     this.statusDetailViewer.initializeStatusDetailSystem();
     Card3DEffects.getInstance();
@@ -66,6 +76,11 @@ export class TavernBattleShellPresenter {
     this.bindDetailRequests();
     this.applyMessageScope();
     this.startLatestMessageGuard();
+  }
+
+  public restoreHand(): void {
+    BattleUI.updateHandCardsDisplay(GameStateManager.getInstance().getPlayer().hand);
+    this.applyMessageScope();
   }
 
   public async refresh(gameState: GameState): Promise<void> {
@@ -86,7 +101,7 @@ export class TavernBattleShellPresenter {
     const dialog = document.getElementById('no-enemy-dialog') as HTMLElement | null;
     const messageElement = document.getElementById('no-enemy-message') as HTMLElement | null;
     if (messageElement) messageElement.textContent = message;
-    if (dialog) dialog.style.display = 'block';
+    if (dialog) dialog.style.display = 'grid';
 
     const refreshButton = document.getElementById('no-enemy-refresh') as HTMLButtonElement | null;
     if (refreshButton) refreshButton.onclick = () => location.reload();
@@ -128,13 +143,9 @@ export class TavernBattleShellPresenter {
         return `
           <div class="item-entry">
             <div class="item-info">
-              <div class="item-header">
-                <span class="item-emoji">${escapeHtml(item.emoji || '🧪')}</span>
-                <span class="item-name">${escapeHtml(item.name)}</span>
-                <span class="item-count">x${escapeHtml(item.count)}</span>
-              </div>
-              ${effectTags}
-              ${item.description ? `<div class="item-description">${escapeHtml(item.description)}</div>` : ''}
+              ${renderSupportDetails(item, { kind: '道具', rulesHtml: effectTags,
+                extraHtml: `<div class="item-usage">${escapeHtml(BATTLE_ITEM_USAGE_LABEL)}</div>`,
+              })}
             </div>
             <button class="item-use-btn" data-item-id="${escapeHtmlAttribute(item.id)}">使用</button>
           </div>
@@ -197,12 +208,13 @@ export class TavernBattleShellPresenter {
     root.on(
       'mwg:play-card.mwgBattleShell',
       '.card:not(.disabled), .enhanced-card:not(.disabled)',
-      event => {
+      async event => {
         event.preventDefault();
         event.stopPropagation();
         const card = $(event.currentTarget);
         const cardId = String(card.data('card-id') || '');
-        if (cardId) void handlers.onPlayCard(cardId);
+        try { if (cardId) await handlers.onPlayCard(cardId); }
+        finally { card.removeData('playPending').removeClass('card-playing'); }
       },
     );
     root.on('click.mwgBattleShell', '.end-turn-button', () => void handlers.onEndTurn());

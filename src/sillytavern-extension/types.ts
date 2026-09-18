@@ -6,6 +6,8 @@ import type {
 } from '../game-core';
 import type { KnowledgeGraphView } from './knowledgeGraph';
 import type { KnowledgeGraphStorage } from './knowledgeGraph';
+import type { TowerBuildMeasurement } from '../game-core/towerEncounterBudget';
+import type { TowerInitialPersistenceCheck } from './initialPersistence';
 
 export const DESIGN_ASSISTANT_EXTENSION_ID = 'magic-girl-design-assistant';
 export const DESIGN_ASSISTANT_METADATA_KEY = 'magicGirlDesignAssistant';
@@ -21,6 +23,10 @@ export interface DesignAssistantSettings {
   simulationSeeds: number;
   showNotifications: boolean;
   debug: boolean;
+  firstAuthoringSchemaTransport?: 'provider-outline' | 'compact-context';
+  initialAuthoringProtocol?: 'canonical' | 'registry-draft';
+  /** Experimental DeepSeek V4 initial mechanism calls only; never the story preset. */
+  initialMechanismThinking?: 'inherit' | 'disabled';
 }
 
 export const DEFAULT_DESIGN_ASSISTANT_SETTINGS: DesignAssistantSettings = {
@@ -30,6 +36,9 @@ export const DEFAULT_DESIGN_ASSISTANT_SETTINGS: DesignAssistantSettings = {
   simulationSeeds: 8,
   showNotifications: true,
   debug: false,
+  firstAuthoringSchemaTransport: 'provider-outline',
+  initialAuthoringProtocol: 'canonical',
+  initialMechanismThinking: 'inherit',
 };
 
 export interface ProgramCalibrationMemory {
@@ -86,6 +95,7 @@ export interface DesignAssistantDashboard {
   graph: { nodes: number; edges: number; version: string; storage: KnowledgeGraphStorage };
   state: DesignAssistantChatState;
   snapshot: MvuDesignSnapshot | null;
+  runtimeMeasurement?: { fingerprint: string; status: 'running' | 'ready' | 'failed'; value?: TowerBuildMeasurement; error?: string };
 }
 
 export interface MvuHost {
@@ -109,12 +119,15 @@ export interface SillyTavernContext {
   characterId?: string | number | null;
   groupId?: string | number | null;
   characters?: Array<Record<string, any>>;
+  /** Official getContext() reference; read only, never serialize credentials. */
+  chatCompletionSettings?: { chat_completion_source?: string; deepseek_model?: string; show_thoughts?: boolean; custom_model?: string; custom_url?: string; custom_include_body?: string; custom_exclude_body?: string };
   chat?: Array<Record<string, any>>;
   extensionSettings: Record<string, any>;
   saveSettingsDebounced(): void;
   chatMetadata: Record<string, any>;
   saveMetadataDebounced(): void;
   saveChat?(): Promise<void> | void;
+  getRequestHeaders?(): Record<string, string>;
   updateMessageBlock?(
     messageId: number,
     message: Record<string, any>,
@@ -129,4 +142,5 @@ export interface DesignAssistantHost {
   mvu(): MvuHost | null;
   now(): number;
   notify(level: 'info' | 'success' | 'warning' | 'error', message: string, title?: string): void;
+  verifyTowerInitialPersistence?(expected: TowerInitialPersistenceCheck): Promise<void>;
 }

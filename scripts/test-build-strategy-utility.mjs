@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';import {createRequire} from 'node:module';const require=createRequire(import.meta.url);process.env.TS_NODE_COMPILER_OPTIONS=JSON.stringify({module:'CommonJS',moduleResolution:'node'});require('ts-node/register/transpile-only');const {evaluateIsolatedEncounter}=require('../src/runtime/isolatedEncounterEvaluator.ts');
+globalThis.getVariables=()=>{throw Error('live read forbidden')};globalThis.replaceVariables=()=>{throw Error('live write forbidden')};
+const b=damage=>({core:{hp:60,max_hp:60,lust:0,max_lust:100},cards:[{id:'strike',name:'攻击',type:'Attack',cost:1,quantity:5,effects:{damage}}],statuses:[],artifacts:[],enemies:[{id:'target',name:'目标',hp:90,max_hp:90,lust:0,max_lust:100,actions:[{id:'attack',name:'攻击',effects:{damage:10}}]}]});
+const run=battle=>evaluateIsolatedEncounter({battle,seeds:2,policies:['tempo','survival','engine'],maxTurns:6,search:'rollout'});
+const weak=await run(b(3)),strong=await run(b(30));assert.ok(strong.trials.every(t=>t.outcome==='victory'));assert.ok(weak.trials.every(t=>t.outcome!=='victory'));
+const form=b(1);form.cards=[{id:'transform',name:'变身',type:'Skill',cost:0,quantity:1,effects:{apply_status:'demon',to:'self'}},{id:'strike',name:'形态攻击',type:'Attack',cost:1,quantity:4,effects:{damage:'self.status.demon.stacks > 0 ? 30 : 1'}}];form.statuses=[{id:'demon',name:'恶魔化',emoji:'✨',character_emoji:'😈',type:'buff',maxStacks:1,triggers:{hold:{modify:'damage',multiply:1.5}}}];
+const before=JSON.stringify(form);const enabled=await run(form);assert.equal(JSON.stringify(form),before);assert.ok(enabled.trials.some(t=>t.outcome==='victory'));assert.ok(enabled.trials.some(t=>t.statusUptime?.some(s=>s.id==='demon')));
+const restored=await run(JSON.parse(before));assert.deepEqual(restored,enabled);
+const disabled=JSON.parse(before);disabled.cards[0].effects={wait:true};const noForm=await run(disabled);assert.ok(enabled.trials.reduce((sum,t)=>sum+t.damageDealt,0)>noForm.trials.reduce((sum,t)=>sum+t.damageDealt,0));
+const passive=JSON.parse(before);passive.cards=passive.cards.filter(c=>c.id!=='transform');passive.player_abilities=[{id:'demon_contract',name:'变身契约',trigger:'battle_start',effects:{apply_status:'demon',to:'self'}}];const ability=await run(passive);assert.ok(ability.trials.some(t=>t.outcome==='victory'));assert.ok(ability.trials.some(t=>t.statusUptime?.some(s=>s.id==='demon')));
+console.log('PASS real engine weak/strong separation, conditional form activation/payoff, appearance-carrying ability, save roundtrip, no live save access');
+

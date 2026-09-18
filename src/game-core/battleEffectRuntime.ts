@@ -95,6 +95,7 @@ export type BattleEffectRuntimeEvent =
     }
   | {
       type: 'attribute_logged';
+      source: BattleSide;
       target: BattleSide;
       attribute: BattleEffectAttribute;
       previousValue: number;
@@ -128,8 +129,33 @@ export interface BattleEffectStatePort {
 
 export interface BattleEffectRuntimePorts {
   readModifierSources(target: BattleSide, modifier: BattleModifierAttribute): readonly BattleModifierSource[];
+  /**
+   * Persist one resolved state transition before any trigger caused by that
+   * transition runs. The returned context binds ordinal/history filters to the
+   * exact stored event instead of predicting a future journal entry.
+   */
+  recordResolvedEvent?(event: Extract<BattleEffectRuntimeEvent, {
+    type: 'damage_resolved' | 'heal_resolved' | 'attribute_logged';
+  }>): BattleTriggerEventContext | undefined;
   dispatchTriggers(dispatches: readonly BattleTriggerDispatch[]): Promise<void>;
-  handleLustOverflow(target: BattleSide): Promise<void>;
+  handleLustOverflow(target: BattleSide, context: {
+    /** Stable enemy that caused a player overflow, when there is one. */
+    sourceEnemyId?: string;
+    /** Stable enemy whose own lust reached its maximum. */
+    targetEnemyId?: string;
+  }): Promise<void>;
+  protectDamage?(request: {
+    source: BattleSide;
+    target: BattleSide;
+    amount: number;
+    damageKind: import('./battleEventJournal').DamageKind;
+    sourceEnemyId?: string;
+    targetEnemyId?: string;
+    /** Preserve an independent attacker's outgoing modifier snapshot during redirects. */
+    sourceModifierSources?: Partial<Record<BattleModifierAttribute, readonly BattleModifierSource[]>>;
+    /** A bypass-block packet stays bypass-block while redirected to protectors. */
+    bypassBlock?: boolean;
+  }): Promise<{ remainingDamage: number; redirectedHpLost?: number }>;
   interceptDamage?(request: {
     source: BattleSide;
     target: BattleSide;
@@ -161,6 +187,10 @@ export interface BattleEffectRuntimeContext {
    * passive outgoing modifiers.
    */
   sourceModifierSources?: Partial<Record<BattleModifierAttribute, readonly BattleModifierSource[]>>;
+  /** Damage has already received the original attacker's outgoing modifiers. */
+  skipSourceDamageModifiers?: boolean;
+  /** Actual HP lost by recipients of a redirected attack; used only for lifesteal. */
+  redirectedHpLost?: number;
 }
 
 export interface BattleEffectRuntimeResult {
@@ -168,11 +198,15 @@ export interface BattleEffectRuntimeResult {
   target?: BattleSide;
   pendingDeath?: boolean;
   blocked?: number;
+  /** Damage after the actual recipient's modifiers and before that recipient's block. */
+  modified?: number;
   hpLost?: number;
   hpGained?: number;
   defeated?: boolean;
   fatal?: boolean;
   excludedBy?: string;
+  /** Journal identity of the health transition that caused this result. */
+  resolvedEventId?: string;
 }
 
 const BATTLE_EFFECT_COMMAND_TYPES = new Set<BattleEffectCommand['type']>([
@@ -208,6 +242,15 @@ function attributeUpdate(attribute: BattleEffectAttribute, value: number): Parti
   if (attribute === 'hp') return { currentHp: value };
   if (attribute === 'lust') return { currentLust: value };
   return { [attribute]: value };
+}
+
+function attributeEventKind(
+  attribute: BattleEffectAttribute,
+  change: number,
+): BattleTriggerEventContext['kind'] | undefined {
+  if (attribute === 'lust') return change > 0 ? 'lust_increased' : 'lust_decreased';
+  if (attribute === 'block') return change > 0 ? 'block_gained' : 'block_lost';
+  return undefined;
 }
 
 /** Host-independent execution for modern numeric battle commands. */
@@ -293,6 +336,7 @@ export class BattleEffectRuntime {
     const modifiers = command.type === 'damage' && damageKind === 'hp_loss'
       ? []
       : definition.modifiers;
+    const resolvedContext = { ...context, ...(damageKind ? { damageKind } : {}), ...(bypassBlock ? { bypassBlock: true } : {}) };
     const result = await this.executeAttribute(
       target,
       context.source,
@@ -300,15 +344,16 @@ export class BattleEffectRuntime {
       definition.operator,
       command.amount,
       modifiers,
-      { ...context, ...(damageKind ? { damageKind } : {}), ...(bypassBlock ? { bypassBlock: true } : {}) },
+      resolvedContext,
     );
-    if (command.type === 'damage' && result.applied && (command.lifesteal || 0) > 0 && (result.hpLost || 0) > 0) {
+    const actualHpLoss = roundBattleValue((result.hpLost || 0) + (resolvedContext.redirectedHpLost || 0));
+    if (command.type === 'damage' && result.applied && (command.lifesteal || 0) > 0 && actualHpLoss > 0) {
       await this.executeAttribute(
         context.source,
         context.source,
         'hp',
         '+',
-        roundBattleValue((result.hpLost || 0) * (command.lifesteal || 0)),
+        roundBattleValue(actualHpLoss * (command.lifesteal || 0)),
         [{ target: context.source, attribute: 'heal_modifier' }],
         context,
       );
@@ -344,15 +389,21 @@ export class BattleEffectRuntime {
     value: number,
     definitions: readonly { target: BattleSide; attribute: BattleModifierAttribute }[],
     context: BattleEffectRuntimeContext,
+    modifierRole: 'source' | 'recipient',
+    deferredReduction?: BattleModifierSource[],
   ): number {
     let result = value;
     for (const definition of definitions) {
+      // Side equality is not enough here: enemy self-damage has the same side
+      // for attacker and recipient, but damage_taken_modifier still belongs to
+      // the actual recipient. Redirects also deliberately skip only outgoing
+      // damage modifiers, never recipient mitigation.
       const enemyId = definition.target === 'enemy'
-        ? definition.target === context.source
-          ? context.sourceEnemyId || context.targetEnemyId
+        ? modifierRole === 'source'
+          ? context.sourceEnemyId
           : context.targetEnemyId
         : undefined;
-      const independentSourceModifiers = definition.target === context.source
+      const independentSourceModifiers = modifierRole === 'source'
         ? context.sourceModifierSources?.[definition.attribute]
         : undefined;
       const sources = independentSourceModifiers === undefined
@@ -360,7 +411,12 @@ export class BattleEffectRuntime {
         : [...independentSourceModifiers];
       for (const source of sources) {
         const previousValue = result;
-        result = applyModifierOperation(result, source.operation);
+        const next = applyModifierOperation(result, source.operation);
+        if (deferredReduction && definition.attribute === 'damage_taken_modifier' && next < result) {
+          deferredReduction.push(source);
+          continue;
+        }
+        result = next;
         this.ports.present?.({
           type: 'modifier_applied',
           target: definition.target,
@@ -400,32 +456,44 @@ export class BattleEffectRuntime {
           ? { kind: 'heal_resolved' as const }
           : {}),
     };
+    const recipientReductions: BattleModifierSource[] = [];
+    const interceptable = attribute === 'hp' && operator === '-' && context.damageKind === 'attack' && !!this.ports.interceptDamage;
+    // A redirect receives the attack after outgoing modifiers, but before the
+    // originally selected target's damage-taken modifiers. Classify by modifier
+    // attribute rather than side: source and recipient may both be enemies.
+    const outgoingModifierAttributes = new Set<BattleModifierAttribute>([
+      'damage_modifier', 'heal_modifier', 'lust_damage_modifier',
+    ]);
+    const sourceModifiers = (attribute === 'hp' && operator === '-' && context.skipSourceDamageModifiers)
+      ? []
+      : modifiers.filter(definition => outgoingModifierAttributes.has(definition.attribute));
+    const recipientModifiers = modifiers.filter(definition => !outgoingModifierAttributes.has(definition.attribute));
     let value = roundBattleValue(
-      this.applyModifiers(Number.isFinite(requestedValue) ? requestedValue : 0, modifiers, context),
+      this.applyModifiers(Number.isFinite(requestedValue) ? requestedValue : 0, sourceModifiers, context, 'source'),
     );
-    const modifiedRequested = value;
+    let redirectedHpLost = 0;
+    let modifiedRequested = value;
     let blocked = 0;
+    // Recipient-side modifiers for lust, block and other non-damage attributes
+    // still resolve normally. Damage delays only damage_taken_modifier so a
+    // protector, not the originally selected target, receives its mitigation.
+    if (!(attribute === 'hp' && operator === '-')) {
+      value = roundBattleValue(this.applyModifiers(value, recipientModifiers, context, 'recipient'));
+      modifiedRequested = value;
+    }
     if (attribute === 'hp' && operator === '-') {
-      const absorption = context.bypassBlock
-        ? { damage: value, blockUsed: 0, remainingBlock: entity.block }
-        : absorbDamageWithBlock(value, entity.block);
-      if (absorption.blockUsed > 0) {
-        blocked = absorption.blockUsed;
-        this.updateEntity(target, { block: absorption.remainingBlock }, enemyId);
-        this.ports.present?.({ type: 'block_absorbed', target, amount: absorption.blockUsed });
-        await this.ports.dispatchTriggers(
-          resolveAttributeTriggerDispatch({
-            attribute: 'block',
-            change: -absorption.blockUsed,
-            target,
-            source,
-            eventContext,
-          }),
-        );
-        entity = this.getEntity(target, enemyId);
-        if (!entity) return { applied: false, target };
+      if (value > 0 && context.damageKind === 'attack' && this.ports.protectDamage) {
+        const protectedDamage = await this.ports.protectDamage({
+          source, target, amount: value, damageKind: context.damageKind,
+          ...(context.sourceEnemyId ? { sourceEnemyId: context.sourceEnemyId } : {}),
+          ...(context.targetEnemyId ? { targetEnemyId: context.targetEnemyId } : {}),
+          ...(context.sourceModifierSources ? { sourceModifierSources: context.sourceModifierSources } : {}),
+          ...(context.bypassBlock ? { bypassBlock: true } : {}),
+        });
+        value = Math.max(0, roundBattleValue(protectedDamage.remainingDamage));
+        redirectedHpLost = Math.max(0, roundBattleValue(protectedDamage.redirectedHpLost || 0));
+        context.redirectedHpLost = redirectedHpLost;
       }
-      value = absorption.damage;
       if (value > 0 && context.damageKind === 'attack' && this.ports.interceptDamage) {
         const intercepted = await this.ports.interceptDamage({
           source,
@@ -435,7 +503,7 @@ export class BattleEffectRuntime {
           ...(context.sourceEnemyId ? { sourceEnemyId: context.sourceEnemyId } : {}),
           ...(context.targetEnemyId ? { targetEnemyId: context.targetEnemyId } : {}),
         });
-        if (intercepted.interceptedDamage > 0) {
+        if (intercepted.hits.length > 0) {
           this.ports.present?.({
             type: 'summon_intercepted',
             source,
@@ -448,6 +516,68 @@ export class BattleEffectRuntime {
         }
         value = Math.max(0, roundBattleValue(intercepted.remainingDamage));
       }
+      // A fully redirected/intercepted packet has no recipient-side packet
+      // left. In particular, additive vulnerability must not resurrect zero
+      // damage on the original target after a complete protection resolution.
+      value = value > 0
+        ? roundBattleValue(this.applyModifiers(
+          value, recipientModifiers, context, 'recipient', interceptable ? recipientReductions : undefined,
+        ))
+        : 0;
+      modifiedRequested = value;
+      for (const reduction of recipientReductions) {
+        if (value <= 0) break;
+        const previousValue = value;
+        value = Math.max(0, roundBattleValue(applyModifierOperation(value, reduction.operation)));
+        this.ports.present?.({ type: 'modifier_applied', target, modifier: 'damage_taken_modifier', source: reduction, previousValue, nextValue: value });
+      }
+      // The transfer result feeds later protectors/original-target overflow. It
+      // must include recipient reductions that were deferred only to preserve
+      // summon interception ordering, otherwise an absorbed guard reduction is
+      // incorrectly reintroduced as overflow.
+      modifiedRequested = value;
+      const absorption = context.bypassBlock
+        ? { damage: value, blockUsed: 0, remainingBlock: entity.block }
+        : absorbDamageWithBlock(value, entity.block);
+      if (absorption.blockUsed > 0) {
+        blocked = absorption.blockUsed;
+        const previousBlock = entity.block;
+        this.updateEntity(target, { block: absorption.remainingBlock }, enemyId);
+        this.ports.present?.({ type: 'block_absorbed', target, amount: absorption.blockUsed });
+        const recordedBlockContext = this.ports.recordResolvedEvent?.({
+          type: 'attribute_logged',
+          source,
+          target,
+          attribute: 'block',
+          previousValue: previousBlock,
+          nextValue: absorption.remainingBlock,
+        });
+        await this.ports.dispatchTriggers(
+          resolveAttributeTriggerDispatch({
+            attribute: 'block',
+            change: -absorption.blockUsed,
+            target,
+            source,
+            eventContext: {
+              ...eventContext,
+              ...(recordedBlockContext || {}),
+              kind: 'block_lost',
+            },
+          }),
+        );
+        this.ports.present?.({
+          type: 'attribute_logged',
+          source,
+          target,
+          attribute: 'block',
+          previousValue: previousBlock,
+          nextValue: absorption.remainingBlock,
+        });
+        entity = this.getEntity(target, enemyId);
+        if (!entity) return { applied: false, target };
+      }
+      value = absorption.damage;
+
     }
 
     entity = this.getEntity(target, enemyId);
@@ -463,38 +593,84 @@ export class BattleEffectRuntime {
     this.ports.present?.({ type: 'attribute_changed', target, attribute, previousValue, nextValue });
 
     const change = roundBattleValue(nextValue - previousValue);
+    const resolvedEventKind = attribute === 'hp'
+      ? change < 0 ? 'damage_resolved' : change > 0 ? 'heal_resolved' : eventContext.kind
+      : attributeEventKind(attribute, change);
+    const healthDirection = attribute !== 'hp'
+      ? null
+      : operator === '-'
+        ? 'damage'
+        : operator === '+'
+          ? 'heal'
+          : change < 0
+            ? 'damage'
+            : change > 0
+              ? 'heal'
+              : null;
+    const resolvedRuntimeEvent: Extract<BattleEffectRuntimeEvent, {
+      type: 'damage_resolved' | 'heal_resolved' | 'attribute_logged';
+    }> = healthDirection === 'damage'
+      ? {
+          type: 'damage_resolved',
+          source,
+          target,
+          requested: operator === '=' ? Math.max(0, -change) : baseRequested,
+          modified: operator === '=' ? Math.max(0, -change) : modifiedRequested,
+          blocked,
+          hpLost: Math.max(0, -change),
+          damageKind: context.damageKind || 'effect',
+        }
+      : healthDirection === 'heal'
+        ? {
+            type: 'heal_resolved',
+            source,
+            target,
+            requested: operator === '=' ? Math.max(0, change) : baseRequested,
+            modified: operator === '=' ? Math.max(0, change) : modifiedRequested,
+            hpGained: Math.max(0, change),
+          }
+        : {
+            type: 'attribute_logged',
+            source,
+            target,
+            attribute,
+            previousValue,
+            nextValue,
+          };
+    const recordedEventContext = this.ports.recordResolvedEvent?.(resolvedRuntimeEvent);
+    const dispatchedEventContext = resolvedEventKind
+      ? {
+          ...eventContext,
+          ...(recordedEventContext || {}),
+          kind: resolvedEventKind,
+          ...(resolvedEventKind === 'damage_resolved'
+            ? { damageKind: context.damageKind || 'effect' }
+            : {}),
+        }
+      : eventContext;
     await this.ports.dispatchTriggers(
-      resolveAttributeTriggerDispatch({ attribute, change, target, source, eventContext }),
+      resolveAttributeTriggerDispatch({ attribute, change, target, source, eventContext: dispatchedEventContext }),
     );
+
+    // Persist/log the completed attribute transition before a lust overflow
+    // starts a nested effect chain. Filtered trigger ordinals therefore see
+    // the same event order before and after a save restoration.
+    this.ports.present?.({ type: 'attribute_logged', source, target, attribute, previousValue, nextValue });
 
     if (attribute === 'lust') {
       const finalEntity = this.getEntity(target, enemyId);
       if (finalEntity && finalEntity.currentLust >= finalEntity.maxLust) {
-        await this.ports.handleLustOverflow(target);
+        await this.ports.handleLustOverflow(target, {
+          ...(context.sourceEnemyId ? { sourceEnemyId: context.sourceEnemyId } : {}),
+          ...(enemyId ? { targetEnemyId: enemyId } : {}),
+        });
       }
     }
-    this.ports.present?.({ type: 'attribute_logged', target, attribute, previousValue, nextValue });
 
-    if (attribute === 'hp' && operator === '-') {
-      this.ports.present?.({
-        type: 'damage_resolved',
-        source,
-        target,
-        requested: baseRequested,
-        modified: modifiedRequested,
-        blocked,
-        hpLost: Math.max(0, -change),
-        damageKind: context.damageKind || 'effect',
-      });
-    } else if (attribute === 'hp' && operator === '+') {
-      this.ports.present?.({
-        type: 'heal_resolved',
-        source,
-        target,
-        requested: baseRequested,
-        modified: modifiedRequested,
-        hpGained: Math.max(0, change),
-      });
+    if (healthDirection === 'damage') {
+      this.ports.present?.(resolvedRuntimeEvent);
+    } else if (healthDirection === 'heal') {
+      this.ports.present?.(resolvedRuntimeEvent);
     }
 
     if (attribute !== 'hp') return { applied: true, target };
@@ -503,8 +679,9 @@ export class BattleEffectRuntime {
       applied: true,
       target,
       pendingDeath: Boolean(finalEntity && finalEntity.currentHp <= 0),
-      ...(operator === '-' ? { blocked, hpLost: Math.max(0, -change) } : {}),
-      ...(operator === '+' ? { hpGained: Math.max(0, change) } : {}),
+      ...(recordedEventContext?.eventId ? { resolvedEventId: recordedEventContext.eventId } : {}),
+      ...(healthDirection === 'damage' ? { blocked, modified: modifiedRequested, hpLost: Math.max(0, -change) } : {}),
+      ...(healthDirection === 'heal' ? { hpGained: Math.max(0, change) } : {}),
     };
   }
 

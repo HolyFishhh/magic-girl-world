@@ -13,6 +13,8 @@ import {
 } from './combatResource';
 
 export interface CardPlayCard extends CardRuleCard {
+  /** Card-level pre-payment gate: a matching living summon must be present. */
+  requiresSummonTemplateId?: string;
   doubleEffect?: boolean;
   replayCount?: number;
   attachments?: CardAttachment[];
@@ -21,6 +23,7 @@ export interface CardPlayCard extends CardRuleCard {
 export interface CardPlayState<TCard extends CardPlayCard> {
   phase: string;
   hasOpponent: boolean;
+  summonTemplateIds?: Iterable<string>;
   hand: readonly TCard[];
   energy: number;
   /** Custom/current resource amounts; energy is always read from the dedicated compatibility field. */
@@ -49,7 +52,8 @@ export type CardPlayFailureCode =
   | 'RULE_DENIED'
   | 'RULE_LIMIT_REACHED'
   | 'INSUFFICIENT_ENERGY'
-  | 'INSUFFICIENT_RESOURCE';
+  | 'INSUFFICIENT_RESOURCE'
+  | 'REQUIRED_SUMMON_MISSING';
 
 export interface CardPlayFailure {
   ok: false;
@@ -101,6 +105,8 @@ function inspectCardPlay<TCard extends CardPlayCard>(
   if (state.phase !== 'player_turn') return { ok: false, code: 'WRONG_PHASE' };
   const card = state.hand.find(entry => entry.id === cardId);
   if (!card) return { ok: false, code: 'CARD_NOT_FOUND' };
+  if (card.requiresSummonTemplateId && !new Set(state.summonTemplateIds || []).has(card.requiresSummonTemplateId))
+    return { ok: false, code: 'REQUIRED_SUMMON_MISSING' };
   if (state.stunned) return { ok: false, code: 'STUNNED' };
   const activeRules = resolveActiveCardPlayRules(
     state.cardPlayRules || [],
@@ -109,11 +115,11 @@ function inspectCardPlay<TCard extends CardPlayCard>(
     state.playedCardsThisTurn || [],
   );
   const attachmentAccess = resolveCardAttachmentPlayAccess(card);
-  if (activeRules.denied || (attachmentAccess.denied && !attachmentAccess.explicitlyAllowed)) {
+  const explicitlyAllowed = activeRules.explicitlyAllowed || attachmentAccess.explicitlyAllowed;
+  if ((activeRules.denied || attachmentAccess.denied) && !explicitlyAllowed) {
     return { ok: false, code: 'RULE_DENIED' };
   }
-  if (activeRules.playLimitReached) return { ok: false, code: 'RULE_LIMIT_REACHED' };
-  const explicitlyAllowed = activeRules.explicitlyAllowed || attachmentAccess.explicitlyAllowed;
+  if (activeRules.playLimitReached && !explicitlyAllowed) return { ok: false, code: 'RULE_LIMIT_REACHED' };
   if (card.type === 'Curse' && !explicitlyAllowed) return { ok: false, code: 'CURSE_UNPLAYABLE' };
   const statuses = statusSet(state.statusIds);
   if (!explicitlyAllowed && card.type === 'Attack' && statuses.has('dominated')) return { ok: false, code: 'DOMINATED_ATTACK' };

@@ -13,12 +13,13 @@ function normalizeMvuList(value: unknown): unknown[] {
 function normalizeMvuEnemy(value: unknown): unknown {
   const source = value;
   if (!isRecord(source)) return source;
+  const lustEffect = normalizeCompactNamedEffectInput(source.lust_effect, '欲望爆发');
   return {
     ...source,
     actions: normalizeMvuList(source.actions),
     abilities: normalizeMvuList(source.abilities),
     status_effects: normalizeMvuList(source.status_effects),
-    lust_effect: normalizeCompactNamedEffectInput(source.lust_effect, '欲望爆发'),
+    ...(Object.hasOwn(source, 'lust_effect') ? { lust_effect: lustEffect || source.lust_effect } : {}),
   };
 }
 
@@ -35,6 +36,11 @@ export function createContentPackFromMvuBattle(battleData: unknown): ContentPack
     abilities: normalizeMvuList(normalizedBattle.player_abilities),
     activeStatuses: normalizeMvuList(normalizedBattle.player_status_effects),
     playerResources: normalizeMvuList(core.resources),
+    playerSummonGrowth: core.summon_growth,
+    playerCardPatches: core.card_patches,
+    playerStance: core.stance,
+    playerOrbSlots: core.orb_slots,
+    playerOrbs: normalizeMvuList(core.orbs),
     enemy: normalizeMvuEnemy(normalizedBattle.enemy),
     enemies: normalizeMvuList(normalizedBattle.enemies).map(normalizeMvuEnemy),
     playerDesireEffect: normalizeCompactNamedEffectInput(normalizedBattle.player_lust_effect, '欲望满溢'),

@@ -1,0 +1,3 @@
+.card-cast-flight[data-queue-state="waiting"] { filter: saturate(.7); }
+.card-cast-flight[data-queue-state="playing"] { z-index: 3010 !important; filter: drop-shadow(0 0 10px #ffd68b); }
+.card-cast-flight.card-queue-resolved { visibility: hidden; }

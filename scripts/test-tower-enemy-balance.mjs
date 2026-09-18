@@ -8,10 +8,7 @@ require('ts-node/register/transpile-only');
 require('tsconfig-paths/register');
 
 const { balanceTowerGeneratedBattle } = require(resolve('src/sillytavern-extension/towerEnemyBalance.ts'));
-const {
-  formatTowerBattleBalanceRepairPrompt,
-  parseTowerNodeResult,
-} = require(resolve('src/game-core/towerRequest.ts'));
+const { parseTowerNodeResult } = require(resolve('src/game-core/towerRequest.ts'));
 const { DEFAULT_DESIGN_ASSISTANT_SETTINGS } = require(resolve('src/sillytavern-extension/types.ts'));
 
 const variables = {
@@ -34,7 +31,7 @@ const variables = {
 function generatedEnemy(damage = 34) {
   return {
     enemy: {
-      id: 'clockwork_hunter', name: '发条猎手', emoji: '🦾', hp: 280, max_hp: 280, lust: 0, max_lust: 100,
+      id: 'clockwork_hunter', name: '发条猎手', emoji: '🤖', hp: 280, max_hp: 280, lust: 0, max_lust: 100,
       description: '沿用剧情身份与行动节奏的机械猎手。',
       actions: [
         { id: 'saw', name: '锯轮突进', weight: 2, description: `锯轮高速逼近，造成 ${damage} 点伤害。`, effects: { damage } },
@@ -49,56 +46,38 @@ function generatedEnemy(damage = 34) {
 
 const source = generatedEnemy();
 const sourceCopy = structuredClone(source);
-const balanced = balanceTowerGeneratedBattle({
+const assessed = balanceTowerGeneratedBattle({
   variables,
   generatedBattle: source,
   settings: { ...DEFAULT_DESIGN_ASSISTANT_SETTINGS, difficultyPercent: 80, simulationSeeds: 8 },
 });
-assert.equal(balanced.audit.spec, 'mwg.tower-enemy-balance/v1');
-assert.equal(balanced.audit.winnableAtCurrentResources, true);
-assert.equal(balanced.requiresModelRepair, false);
-assert.equal(balanced.generatedBattle.enemy.name, '发条猎手');
-assert.equal(balanced.generatedBattle.enemy.description, source.enemy.description);
-assert.equal(balanced.generatedBattle.enemy.actions[0].name, '锯轮突进');
-assert.equal(balanced.generatedBattle.enemy.actions[0].weight, 2, 'numeric calibration must preserve cadence');
-assert.ok(balanced.audit.changedPaths.length > 0);
-assert.ok(balanced.audit.finalEnemyScore < balanced.audit.originalEnemyScore);
-assert.equal(Number.isInteger(balanced.generatedBattle.enemy.hp), true, 'scaled enemy hp should remain an integer');
-assert.equal(Number.isInteger(balanced.generatedBattle.enemy.max_hp), true, 'scaled enemy max hp should remain an integer');
-assert.ok(
-  Math.abs(balanced.audit.finalRatio - balanced.audit.effectiveRatio) < 1.5,
-  'tower calibration must reach the requested/effective difficulty even when deck coverage is low',
-);
-assert.ok(
-  Math.abs(balanced.audit.finalRatio - balanced.calibration.appliedScale / balanced.calibration.frontierScale * 100) < 0.2,
-  'tower score must use the same simulated clean-play frontier as numeric calibration',
-);
-const balancedSawEffects = Array.isArray(balanced.generatedBattle.enemy.actions[0].effects)
-  ? balanced.generatedBattle.enemy.actions[0].effects[0]
-  : balanced.generatedBattle.enemy.actions[0].effects;
-assert.equal(Number.isInteger(balancedSawEffects.damage), true, 'scaled action values should remain integers');
-assert.match(
-  balanced.generatedBattle.enemy.actions[0].description,
-  new RegExp(String(balancedSawEffects.damage)),
-  'scaled action prose must show the calibrated damage',
-);
-assert.doesNotMatch(
-  balanced.generatedBattle.enemy.actions[0].description,
-  new RegExp(`(^|[^\\d.])${source.enemy.actions[0].effects.damage}(?=$|[^\\d.])`),
-  'scaled action prose must not keep the authored damage',
-);
-assert.deepEqual(source, sourceCopy, 'tower calibration must be pure over generated content');
+assert.equal(assessed.audit.spec, 'mwg.tower-enemy-balance/v1');
+assert.equal(assessed.requiresModelRepair, false);
+assert.equal(assessed.calibration.requestedRatio, 80);
+assert.equal(assessed.audit.appliedScale, 1, 'post-generation audit must not apply the counterfactual scale');
+assert.deepEqual(assessed.audit.changedPaths, []);
+assert.equal(assessed.audit.originalRatio, assessed.audit.finalRatio);
+assert.equal(assessed.audit.originalEnemyScore, assessed.audit.finalEnemyScore);
+assert.deepEqual(assessed.generatedBattle, sourceCopy, 'scoring must return the authored battle unchanged');
+assert.deepEqual(source, sourceCopy, 'scoring must be pure over its input');
+if (Math.abs(assessed.calibration.appliedScale - 1) >= 0.02) {
+  assert.match(assessed.audit.warnings.join('\n'), /建议倍率/);
+}
 
-const unscalable = generatedEnemy('999');
-unscalable.enemy.hp = 1_000_000_000;
-unscalable.enemy.max_hp = 1_000_000_000;
-const unsafe = balanceTowerGeneratedBattle({
+const extreme = generatedEnemy(999);
+extreme.enemy.hp = 1_000_000_000;
+extreme.enemy.max_hp = 1_000_000_000;
+const extremeCopy = structuredClone(extreme);
+const risky = balanceTowerGeneratedBattle({
   variables,
-  generatedBattle: unscalable,
+  generatedBattle: extreme,
   settings: { ...DEFAULT_DESIGN_ASSISTANT_SETTINGS, difficultyPercent: 80, simulationSeeds: 8 },
 });
-assert.equal(unsafe.requiresModelRepair, true, 'unscalable lethal mechanics must enter the single repair gate');
-assert.equal(unsafe.audit.winnableAtCurrentResources, false);
+assert.equal(risky.requiresModelRepair, false, 'numeric strength must never enter a model-repair gate');
+assert.equal(risky.audit.winnableAtCurrentResources, false);
+assert.equal(risky.audit.appliedScale, 1);
+assert.deepEqual(risky.audit.changedPaths, []);
+assert.deepEqual(risky.generatedBattle, extremeCopy, 'even an extreme but executable enemy must remain authored content');
 
 const nodeResult = {
   spec: 'mwg.tower-node-result/v1',
@@ -108,19 +87,13 @@ const nodeResult = {
   kind: 'battle',
   title: '猎手拦路',
   narrative: '发条声在窄路上逼近。',
-  payload: { battle: unscalable },
+  payload: { battle: extreme },
   reward: {
     card: [{ id: 'reward_a' }, { id: 'reward_b' }, { id: 'reward_c' }],
     artifact: [],
     item: [{ id: 'reward_potion' }],
   },
 };
-const prompt = formatTowerBattleBalanceRepairPrompt(nodeResult, unsafe.audit);
-assert.match(prompt, /只修复 payload\.battle/);
-assert.match(prompt, /保留敌人的剧情身份/);
-assert.match(prompt, /不得修改玩家、地图、run/);
-assert.match(prompt, /request-1/);
-
 const spoofed = `<TOWER_NODE_RESULT>${JSON.stringify({
   ...nodeResult,
   program_balance: { winnableAtCurrentResources: true },
@@ -133,6 +106,6 @@ const parsed = parseTowerNodeResult(spoofed, {
   act: 1,
   floor: 2,
 });
-assert.equal(parsed.program_balance, undefined, 'only the program may author the balance audit');
+assert.equal(parsed.program_balance, undefined, 'only the program may author the read-only balance audit');
 
-console.log('Tower enemies are scored after authorship, minimally calibrated, and gated by one constrained repair when still unwinnable.');
+console.log('Tower enemies are scored after authorship without numeric rewriting, rejection, or repair requests.');

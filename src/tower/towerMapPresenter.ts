@@ -1,6 +1,7 @@
-import type { RunMapAct, RunMapNode, RunMapNodeKind } from '../game-core/runMap';
+import { runMapContentKind, type RunMapAct, type RunMapNode, type RunMapNodeKind } from '../game-core/runMap';
 import type { RunState } from '../game-core/runState';
 import type { TowerContentPhase } from '../game-core/towerContentState';
+import { collectTowerPreparationWindow } from '../runtime/towerStateAdapter';
 
 export type TowerRouteState = 'current' | 'reachable' | 'visited' | 'locked';
 export type TowerActState = 'current' | 'cleared' | 'future';
@@ -18,6 +19,8 @@ export interface TowerNodePresentation {
   type: TowerNodeTypePresentation;
   interactive: boolean;
   error: string;
+  narrative: string;
+  inPreparationWindow: boolean;
   ariaLabel: string;
 }
 
@@ -39,6 +42,7 @@ export interface TowerMapPresentation {
   chapterLabel: string;
   chapterStateLabel: string;
   floorLabel: string;
+  playerHpLabel: string;
   goldLabel: string;
   difficultyLabel: string;
   mapError: string;
@@ -49,12 +53,15 @@ export interface TowerMapPresentationOptions {
   selectedAct?: number;
   /** Player-selected base difficulty from the design assistant. */
   difficultyPercent?: number;
+  /** Live MVU HP supplied by the host; it intentionally does not alter the saved route snapshot. */
+  playerHp?: number;
+  playerMaxHp?: number;
 }
 
 const NODE_TYPES: Readonly<Record<RunMapNodeKind, TowerNodeTypePresentation>> = {
   battle: { icon: '⚔', label: '战斗', description: '遭遇普通敌人' },
   elite: { icon: '♜', label: '精英', description: '挑战危险的精英敌人' },
-  event: { icon: '❔', label: '事件', description: '进入未知事件' },
+  event: { icon: '❔', label: '未知', description: '进入后揭晓遭遇' },
   rest: { icon: '♨', label: '篝火', description: '在篝火旁休整' },
   shop: { icon: '⚖', label: '商店', description: '拜访沿途商人' },
   treasure: { icon: '◆', label: '宝箱', description: '开启本幕宝箱' },
@@ -83,6 +90,13 @@ function clampDifficulty(value: number | undefined): number | null {
   return Math.max(10, Math.min(110, Math.round(Number(value))));
 }
 
+function playerHpLabel(current: number | undefined, maximum: number | undefined): string {
+  if (!Number.isFinite(current)) return '—';
+  const hp = Math.max(0, Math.floor(Number(current)));
+  if (!Number.isFinite(maximum) || Number(maximum) <= 0) return String(hp);
+  return `${hp}/${Math.floor(Number(maximum))}`;
+}
+
 function latestVisitedNodeId(snapshot: RunState): string | null {
   const nodes = new Map(snapshot.map?.nodes.map(node => [node.id, node]) ?? []);
   for (let index = snapshot.visitedNodeIds.length - 1; index >= 0; index -= 1) {
@@ -107,10 +121,39 @@ function chapterStateLabel(snapshot: RunState, selectedAct: number): string {
   const state = actState(snapshot, selectedAct);
   if (state === 'cleared') return '已通过';
   if (state === 'future') return '尚未抵达';
-  if (snapshot.phase === 'won') return '远征完成';
-  if (snapshot.phase === 'lost') return '远征结束';
+  if (snapshot.phase === 'won') return '冒险完成';
+  if (snapshot.phase === 'lost') return '冒险结束';
   if (snapshot.phase === 'in_node') return '正在探索';
   return '选择前路';
+}
+
+/**
+ * Only map nodes represented by the live, next-floor choices may be shown as
+ * reachable.  This deliberately mirrors the entry boundary before the UI adds
+ * a highlight or click handler, so a stale/corrupt choice cannot make a later
+ * prepared node appear to skip the route.
+ */
+function currentReachableNodeIds(snapshot: RunState): ReadonlySet<string> {
+  if (snapshot.routeMode !== 'map' || snapshot.phase !== 'awaiting_choice' || snapshot.currentNode) {
+    return new Set<string>();
+  }
+  const nodes = new Map(snapshot.map?.nodes.map(node => [node.id, node]) ?? []);
+  return new Set(
+    snapshot.choices
+      .filter(choice => {
+        const node = nodes.get(choice.id);
+        return Boolean(
+          node &&
+            choice.act === snapshot.act &&
+            choice.floor === snapshot.floor + 1 &&
+            node.act === choice.act &&
+            node.floor === choice.floor &&
+            node.column === choice.column &&
+            runMapContentKind(node) === choice.kind,
+        );
+      })
+      .map(choice => choice.id),
+  );
 }
 
 function routeStateFor(
@@ -132,14 +175,30 @@ function buildNodePresentation(
   currentNodeId: string | null,
   reachableIds: ReadonlySet<string>,
   visitedIds: ReadonlySet<string>,
+  preparationWindowIds: ReadonlySet<string>,
 ): TowerNodePresentation {
   const routeState = routeStateFor(node, snapshot, currentNodeId, reachableIds, visitedIds);
   const envelope = snapshot.nodeContent[node.id];
   const contentPhase = envelope?.phase ?? 'idle';
-  const type = NODE_TYPES[node.kind];
-  const error = contentPhase === 'failed' ? String(envelope?.error || '后台生成失败，请重试。').slice(0, 500) : '';
+  const hidden = node.kind === 'event' && routeState !== 'current' && routeState !== 'visited';
+  const type = NODE_TYPES[hidden ? 'event' : runMapContentKind(node)];
+  const error = contentPhase === 'failed' ? (hidden ? '未知遭遇生成失败，请重试。' : String(envelope?.error || '后台生成失败，请重试。').slice(0, 500)) : '';
   const interactive = routeState === 'reachable' && snapshot.phase === 'awaiting_choice' && contentPhase === 'ready';
   const stateCopy = `${ROUTE_STATE_LABELS[routeState]}，${CONTENT_PHASE_LABELS[contentPhase]}`;
+  const content = envelope?.content as { narrative?: unknown } | undefined;
+  const inPreparationWindow = preparationWindowIds.has(node.id);
+  // Lookahead may prepare several future rooms, but locked rooms must not
+  // reveal their prose before the player reaches the route frontier.
+  const previewEligible = inPreparationWindow && routeState === 'reachable' && contentPhase === 'ready';
+  const narrative = node.kind === 'rest'
+    ? ''
+    : previewEligible
+    ? hidden && node.kind === 'event'
+      ? '未知遭遇，进入后揭晓'
+      : typeof content?.narrative === 'string'
+        ? content.narrative.trim()
+        : ''
+    : '';
   return {
     node,
     routeState,
@@ -147,6 +206,8 @@ function buildNodePresentation(
     type,
     interactive,
     error,
+    narrative,
+    inPreparationWindow,
     ariaLabel: `第${node.floor}层，${type.label}，${type.description}，${stateCopy}`,
   };
 }
@@ -169,10 +230,18 @@ export function createTowerMapPresentation(
       : 1;
   const act = map?.acts.find(candidate => candidate.act === selectedAct) ?? null;
   const currentNodeId = determineCurrentNodeId(snapshot);
-  const reachableIds = new Set(snapshot.choices.map(choice => choice.id));
+  const reachableIds = currentReachableNodeIds(snapshot);
   const visitedIds = new Set(snapshot.visitedNodeIds);
+  let preparationWindowIds = new Set<string>();
+  if (snapshot.routeMode === 'map' && snapshot.map) {
+    try {
+      preparationWindowIds = new Set(collectTowerPreparationWindow(snapshot).map(target => target.nodeId));
+    } catch {
+      preparationWindowIds = new Set<string>();
+    }
+  }
   const nodes = (act?.nodes ?? []).map(node =>
-    buildNodePresentation(node, snapshot, currentNodeId, reachableIds, visitedIds),
+    buildNodePresentation(node, snapshot, currentNodeId, reachableIds, visitedIds, preparationWindowIds),
   );
   const difficulty = clampDifficulty(options.difficultyPercent);
   const actDifficultyPercent = Math.round((act?.difficultyMultiplier ?? 1) * 100);
@@ -180,7 +249,7 @@ export function createTowerMapPresentation(
     difficulty === null ? actDifficultyPercent : Math.round((difficulty * actDifficultyPercent) / 100);
   const mapError =
     snapshot.schemaVersion !== 3
-      ? '该存档不是爬塔模式所需的 v3 远征数据。'
+      ? '该存档不是爬塔模式所需的 v3 冒险数据。'
       : snapshot.routeMode !== 'map' || !map
         ? '当前存档尚未生成完整的三幕爬塔地图。'
         : !act
@@ -204,6 +273,7 @@ export function createTowerMapPresentation(
     chapterStateLabel: chapterStateLabel(snapshot, selectedAct),
     floorLabel:
       selectedAct === snapshot.act ? `${snapshot.floor}/${snapshot.floorsPerAct}` : `—/${snapshot.floorsPerAct}`,
+    playerHpLabel: playerHpLabel(options.playerHp, options.playerMaxHp),
     goldLabel: String(snapshot.gold),
     difficultyLabel:
       difficulty === null ? `${actDifficultyPercent}%` : `${effectiveDifficulty}%（基础 ${difficulty}%）`,

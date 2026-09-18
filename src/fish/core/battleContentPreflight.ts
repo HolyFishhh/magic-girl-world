@@ -4,7 +4,6 @@ import {
   compileCompactEffectList,
   contentPathToBattlePath,
   diagnoseDescriptionEffects,
-  extractContentMechanicFeatures,
   formatBoundedContentRepairPrompt,
   hasContentMetric,
   isCompactEffectList,
@@ -92,10 +91,10 @@ function validateSpecialContainers(
     source.orb_slots !== undefined &&
     (!Number.isInteger(source.orb_slots) || source.orb_slots < 0 || source.orb_slots > 20)
   ) {
-    issues.push({ path: `${path}.orb_slots`, code: 'INVALID_ORB_SLOTS', message: 'Orb 槽位必须是 0 到 20 的整数' });
+    issues.push({ path: `${path}.orb_slots`, code: 'INVALID_ORB_SLOTS', message: '姿态槽必须是 0 到 20 的整数' });
   }
   if (source.orbs !== undefined && !Array.isArray(source.orbs)) {
-    issues.push({ path: `${path}.orbs`, code: 'INVALID_ORBS', message: 'Orb 必须是数组' });
+    issues.push({ path: `${path}.orbs`, code: 'INVALID_ORBS', message: '姿态槽内容必须是数组' });
     return;
   }
   const authoredOrbs = normalizeMvuArray(source.orbs);
@@ -104,12 +103,12 @@ function validateSpecialContainers(
       issues.push({
         path: `${path}.orbs[${index}]`,
         code: 'INVALID_ORB',
-        message: 'Orb 需要稳定英文 ID、名称、非负数值和合法的被动/激发效果',
+        message: '姿态需要稳定英文 ID、名称、非负数值和合法的被动/激发效果',
       });
     }
   });
   if (Number.isInteger(source.orb_slots) && authoredOrbs.length > source.orb_slots) {
-    issues.push({ path: `${path}.orbs`, code: 'ORB_SLOT_OVERFLOW', message: '初始 Orb 数量不能超过槽位数' });
+    issues.push({ path: `${path}.orbs`, code: 'ORB_SLOT_OVERFLOW', message: '初始姿态数量不能超过姿态槽数量' });
   }
   validateCombatResourceDefinitions(source.resources, `${path}.resources`).forEach(issue => issues.push(issue));
 }
@@ -192,23 +191,23 @@ function validateProgramResourceUsage(
   scope: ResourceProgramScope,
   issues: BattleContentIssue[],
 ): void {
-  const visit = (value: unknown, valuePath: string, opponents: readonly ResourceOwner[]): void => {
+  const visit = (value: unknown, valuePath: string, opponents: readonly ResourceOwner[], activeScope = scope): void => {
     if (Array.isArray(value)) {
-      value.forEach((entry, index) => visit(entry, `${valuePath}[${index}]`, opponents));
+      value.forEach((entry, index) => visit(entry, `${valuePath}[${index}]`, opponents, activeScope));
       return;
     }
     if (!isRecord(value)) return;
 
-    const collectionOwners = scope.enemyCollection || scope.opponents;
+    const collectionOwners = activeScope.enemyCollection || activeScope.opponents;
     const selectedOpponents = 'targetSelector' in value
       ? selectResourceOpponents(collectionOwners, value.targetSelector)
       : [...opponents];
     if ((value.op === 'gain_resource' || value.op === 'set_resource') && typeof value.resource === 'string') {
-      const targets = value.target === scope.enemyCollectionTarget && 'targetSelector' in value
+      const targets = value.target === activeScope.enemyCollectionTarget && 'targetSelector' in value
         ? selectedOpponents
         : value.target === 'opponent'
-          ? scope.opponents
-          : scope.self;
+          ? activeScope.opponents
+          : activeScope.self;
       validateResourceOnOwners(value.resource, targets, `${valuePath}.resource`, issues);
     }
     if (value.op === 'var' && typeof value.path === 'string') {
@@ -216,17 +215,29 @@ function validateProgramResourceUsage(
       if (matched) {
         validateResourceOnOwners(
           matched[2],
-          matched[1] === 'self' ? scope.self : selectedOpponents,
+          matched[1] === 'self' ? activeScope.self : selectedOpponents,
           `${valuePath}.path`,
           issues,
         );
       }
     }
     Object.entries(value).forEach(([key, entry]) => {
-      if (key !== 'targetSelector') visit(entry, `${valuePath}.${key}`, selectedOpponents);
+      if (key === 'stance' && value.op === 'set_stance' && isRecord(entry)) {
+        const holderScope = stanceEventResourceScope(value, activeScope, selectedOpponents);
+        Object.entries(entry).forEach(([field, child]) => visit(child, `${valuePath}.stance.${field}`,
+          field === 'events' ? holderScope.opponents : selectedOpponents, field === 'events' ? holderScope : activeScope));
+      } else if (key !== 'targetSelector') visit(entry, `${valuePath}.${key}`, selectedOpponents, activeScope);
     });
   };
   visit(program, path, scope.opponents);
+}
+
+function stanceEventResourceScope(node: Record<string, any>, scope: ResourceProgramScope, selected: ResourceOwner[]): ResourceProgramScope {
+  return { ...scope,
+    self: node.target === scope.enemyCollectionTarget && 'targetSelector' in node ? selected : node.target === 'opponent' ? scope.opponents : scope.self,
+    opponents: node.target === 'opponent' ? scope.self : scope.opponents,
+    enemyCollectionTarget: node.target === 'opponent' ? scope.enemyCollectionTarget === 'self' ? 'opponent' : 'self' : scope.enemyCollectionTarget,
+  };
 }
 
 function compileDefinitionPrograms(
@@ -267,8 +278,8 @@ function validateDefinitionResourceUsage(
     validateProgramResourceUsage(program, `${path}.programs[${index}]`, scope, issues));
 }
 
-function collectAppliedStatusOwners(
-  value: unknown,
+function collectProgramAppliedStatusOwners(
+  program: EffectProgram,
   scope: ResourceProgramScope,
   ownersByStatus: Map<string, Map<string, ResourceOwner>>,
 ): number {
@@ -283,33 +294,45 @@ function collectAppliedStatusOwners(
     }
     ownersByStatus.set(status, current);
   };
-  const visit = (entry: unknown, opponents: readonly ResourceOwner[]): void => {
+  const visit = (entry: unknown, opponents: readonly ResourceOwner[], activeScope = scope): void => {
     if (Array.isArray(entry)) {
-      entry.forEach(item => visit(item, opponents));
+      entry.forEach(item => visit(item, opponents, activeScope));
       return;
     }
     if (!isRecord(entry)) return;
-    const collectionOwners = scope.enemyCollection || scope.opponents;
+    const collectionOwners = activeScope.enemyCollection || activeScope.opponents;
     const selectedOpponents = 'targetSelector' in entry
       ? selectResourceOpponents(collectionOwners, entry.targetSelector)
       : [...opponents];
     if (entry.op === 'apply_status' && typeof entry.status === 'string') {
       add(
         entry.status,
-        entry.target === scope.enemyCollectionTarget && 'targetSelector' in entry
+        entry.target === activeScope.enemyCollectionTarget && 'targetSelector' in entry
           ? selectedOpponents
           : entry.target === 'opponent'
-            ? scope.opponents
-            : scope.self,
+            ? activeScope.opponents
+            : activeScope.self,
       );
     }
     Object.entries(entry).forEach(([key, child]) => {
-      if (key !== 'targetSelector') visit(child, selectedOpponents);
+      if (key === 'stance' && entry.op === 'set_stance' && isRecord(child)) {
+        const holderScope = stanceEventResourceScope(entry, activeScope, selectedOpponents);
+        Object.entries(child).forEach(([field, nested]) => visit(nested,
+          field === 'events' ? holderScope.opponents : selectedOpponents, field === 'events' ? holderScope : activeScope));
+      } else if (key !== 'targetSelector') visit(child, selectedOpponents, activeScope);
     });
   };
-  compileDefinitionPrograms(value, { enemyCollectionTarget: scope.enemyCollectionTarget })
-    .forEach(program => visit(program, scope.enemyCollection || scope.opponents));
+  visit(program, scope.enemyCollection || scope.opponents);
   return added;
+}
+
+function collectAppliedStatusOwners(
+  value: unknown,
+  scope: ResourceProgramScope,
+  ownersByStatus: Map<string, Map<string, ResourceOwner>>,
+): number {
+  return compileDefinitionPrograms(value, { enemyCollectionTarget: scope.enemyCollectionTarget })
+    .reduce((added, program) => added + collectProgramAppliedStatusOwners(program, scope, ownersByStatus), 0);
 }
 
 function activeStatusIds(value: unknown): string[] {
@@ -323,7 +346,14 @@ function validateContainerResourceUsage(
   path: string,
   scope: ResourceProgramScope,
   issues: BattleContentIssue[],
+  statusOwners: Map<string, Map<string, ResourceOwner>>,
 ): void {
+  const validateEffects = (effects: EffectProgram['steps'] | undefined, effectsPath: string): void => {
+    if (!effects?.length) return;
+    const program: EffectProgram = { spec: 'mwg.effect/v1', steps: effects };
+    validateProgramResourceUsage(program, effectsPath, scope, issues);
+    collectProgramAppliedStatusOwners(program, scope, statusOwners);
+  };
   const containerOptions = { enemyCollectionTarget: scope.enemyCollectionTarget };
   const stance = convertMvuStance(source.stance, 1, containerOptions);
   if (stance) {
@@ -332,13 +362,11 @@ function validateContainerResourceUsage(
       ['exit', stance.exitEffects],
       ['passive', stance.passiveEffects],
     ] as const) {
-      if (effects?.length) validateProgramResourceUsage(
-        { spec: 'mwg.effect/v1', steps: effects },
-        `${path}.stance.${field}`,
-        scope,
-        issues,
-      );
+      validateEffects(effects, `${path}.stance.${field}`);
     }
+    (stance.events || []).forEach((event, index) => validateEffects(
+      event.effects, `${path}.stance.events[${index}].effects`,
+    ));
   }
   const orbs = convertMvuOrbContainer(source.orb_slots, source.orbs, containerOptions);
   orbs.orbs.forEach((orb, index) => {
@@ -346,12 +374,7 @@ function validateContainerResourceUsage(
       ['passive', orb.passiveEffects],
       ['evoke', orb.evokeEffects],
     ] as const) {
-      if (effects?.length) validateProgramResourceUsage(
-        { spec: 'mwg.effect/v1', steps: effects },
-        `${path}.orbs[${index}].${field}`,
-        scope,
-        issues,
-      );
+      validateEffects(effects, `${path}.orbs[${index}].${field}`);
     }
   });
 }
@@ -393,7 +416,7 @@ function validateBattleResourceUsage(battle: Record<string, any>, issues: Battle
   const playerDesire = normalizeCompactNamedEffectInput(battle.player_lust_effect, '欲望满溢');
   validateDefinitionResourceUsage(playerDesire, 'battle.player_lust_effect', playerScope, issues);
   collectAppliedStatusOwners(playerDesire, playerScope, statusOwners);
-  validateContainerResourceUsage(core, 'battle.core', playerScope, issues);
+  validateContainerResourceUsage(core, 'battle.core', playerScope, issues, statusOwners);
 
   enemyValues.forEach((enemy, index) => {
     if (!isRecord(enemy)) return;
@@ -424,7 +447,7 @@ function validateBattleResourceUsage(battle: Record<string, any>, issues: Battle
       issues,
     );
     collectAppliedStatusOwners(enemyDesire, scope, statusOwners);
-    validateContainerResourceUsage(enemy, path, scope, issues);
+    validateContainerResourceUsage(enemy, path, scope, issues, statusOwners);
   });
 
   const allOwners = [player, ...enemies];
@@ -590,22 +613,6 @@ function addPlayabilityWarnings(battle: Record<string, any>, warnings: BattleCon
         code: 'NO_ENEMY_PRESSURE',
         message: '敌人没有直接生命/欲望压力，可能形成无风险无限战斗',
       });
-    if (isRecord(enemy.lust_effect)) {
-      const desire = analyzeContentDefinition(enemy.lust_effect, { enemyCollectionTarget: 'self' });
-      const operations = new Set(extractContentMechanicFeatures(enemy.lust_effect).operations);
-      const decisiveOperation = ['kill', 'execute', 'spawn_summon', 'spawn_enemy', 'extra_turn']
-        .some(operation => operations.has(operation));
-      const targetMaxHp = Math.max(1, Number(battle.core?.max_hp) || 100);
-      const obviouslyWeak = desire.dynamicMetrics.size === 0 && desire.statusIds.length === 0 && !decisiveOperation &&
-        desire.damage < Math.max(14, targetMaxHp * 0.18) &&
-        desire.metrics.defense + desire.metrics.sustain < Math.max(16, targetMaxHp * 0.2) &&
-        !(desire.metrics.energy >= 2 && desire.metrics.draw >= 2);
-      if (obviouslyWeak) warnings.push({
-        path: `${path}.lust_effect`,
-        code: 'LUST_EFFECT_UNDERPOWERED',
-        message: '欲望满溢触发困难，但当前收益只相当于普通小效果；应提升为足以逆转或结束战局的终极效果',
-      });
-    }
   });
 }
 

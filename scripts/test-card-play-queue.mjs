@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import {createRequire} from 'node:module';
+const require=createRequire(import.meta.url);process.env.TS_NODE_COMPILER_OPTIONS=JSON.stringify({module:'CommonJS',moduleResolution:'node'});require('ts-node/register/transpile-only');
+const {CardPlayQueue}=require('../src/fish/ui/cardPlayQueue.ts');
+const q=new CardPlayQueue(), events=[];let release;const gate=new Promise(r=>release=r);
+const first=q.enqueue('one',async()=>{events.push('start1');await gate;events.push('end1');});
+const duplicate=q.enqueue('one',async()=>{throw Error('duplicate');});
+const second=q.enqueue('two',async()=>{events.push('start2');throw Error('failed2');}).catch(e=>assert.equal(e.message,'failed2'));
+const third=q.enqueue('three',async()=>{events.push('start3');});
+await Promise.resolve();assert.deepEqual(events,['start1']);assert.equal(q.busy,true);release();await Promise.all([first,duplicate,second,third]);assert.deepEqual(events,['start1','end1','start2','start3']);assert.equal(q.busy,false);
+const disposed=new CardPlayQueue();let finish;const running=disposed.enqueue('a',()=>new Promise(r=>finish=r));const waiting=disposed.enqueue('b',async()=>assert.fail('disposed queue ran pending transaction'));await Promise.resolve();disposed.dispose();finish();await Promise.all([running,waiting]);assert.equal(disposed.busy,false);
+console.log('PASS rapid intake, deduplication, ordered resolution, failure continuation and pending disposal');
+const {captureQueuedCardVisual}=require('../src/fish/ui/cardPlayQueue.ts');
+let arrive;const arrival=new Promise(resolve=>arrive=resolve);const visualEvents=[];
+const card={filter(){return this},first(){return this},data(){return arrival},attr(){visualEvents.push('playing');return this}};
+globalThis.$=()=>card;globalThis.requestAnimationFrame=callback=>{visualEvents.push('frame');callback()};
+const visual=captureQueuedCardVisual('card');const begun=visual.begin();await Promise.resolve();assert.deepEqual(visualEvents,[],'effect presentation waits for card arrival');arrive();await begun;assert.deepEqual(visualEvents,['playing','playing','frame']);
+console.log('PASS queued effect begins only after cast arrival');

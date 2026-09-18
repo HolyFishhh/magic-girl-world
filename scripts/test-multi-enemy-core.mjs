@@ -54,8 +54,16 @@ const planned = core.prepareEnemyActionQueue(
   [enemy('slow', 10, 1), enemy('fast', 10, 5), enemy('priority', 10, 0, 2)],
   core.createBattleRandomState(42),
 );
-assert.deepEqual(planned.entries.map(entry => entry.enemyId), ['priority', 'fast', 'slow']);
+assert.deepEqual(planned.entries.map(entry => entry.enemyId), ['slow', 'fast', 'priority'], 'automatic enemy turns keep the roster left-to-right despite speed/priority');
 assert.equal(planned.enemies.every(value => value.nextAction), true);
+
+const summonQueue = core.buildSummonActionQueue({
+  living: [
+    { instanceId: 'late', owner: 'player', createdSequence: 8, actionPriority: 99, speed: 99, hasHp: false, currentHp: 1, actionsPerActivation: 1, actionProgram: { steps: [{ op: 'damage' }] } },
+    { instanceId: 'early', owner: 'player', createdSequence: 2, actionPriority: -99, speed: -99, hasHp: false, currentHp: 1, actionsPerActivation: 2, actionProgram: { steps: [{ op: 'damage' }] } },
+  ], defeated: [], nextSequence: 9,
+}, 'player');
+assert.deepEqual(summonQueue.map(entry => `${entry.summonId}:${entry.actionIndex}`), ['early:0', 'early:1', 'late:0'], 'automatic player summons follow arrival order and preserve each unit action order');
 
 const alive = new Set(['priority', 'slow']);
 const actionOrder = [];
@@ -64,7 +72,7 @@ const run = await core.runEnemyActionQueue(planned.entries, {
   isTerminal: () => false,
   execute: entry => actionOrder.push(entry.enemyId),
 });
-assert.deepEqual(actionOrder, ['priority', 'slow']);
+assert.deepEqual(actionOrder, ['slow', 'priority']);
 assert.deepEqual(run.skipped.map(entry => entry.enemyId), ['fast'], 'dead enemies are skipped at their action slot');
 
 let terminal = false;
@@ -77,4 +85,4 @@ assert.equal(stopped.executed.length, 1);
 assert.equal(stopped.completed, false, 'player death stops the remaining enemy queue');
 
 assert.throws(() => core.createCombatantCollection([enemy('same', 1), enemy('same', 2)]), /duplicate/);
-console.log('Multi-enemy core covers identity, target modes, deterministic random hits, active fallback, death removal, speed, priority, and terminal queues.');
+console.log('Multi-enemy core covers identity, target modes, deterministic random hits, active fallback, death removal, stable roster turns, and terminal queues.');

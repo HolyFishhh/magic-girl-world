@@ -14,6 +14,7 @@ export interface CardIdentity {
     parentCombatInstanceId?: string;
 }
 export interface CardIdentityCarrier {
+    unique?: boolean;
     id?: string;
     originalId?: string;
     templateId?: string;

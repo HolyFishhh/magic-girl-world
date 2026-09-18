@@ -171,6 +171,41 @@ await core.runEffectCommandProgram(
 );
 assert.deepEqual(choiceCommands.map(command => command.type), ['choice_selected', 'damage']);
 assert.equal(choiceCommands[0].optionId, 'strike');
+const multiChoiceCommands = [];
+let multiChoiceBranches = 0;
+await core.runEffectCommandProgram(
+  {
+    spec: 'mwg.effect/v1',
+    steps: [{
+      op: 'choose_one', choiceId: 'multi_route', count: 2, options: [
+        { id: 'guard', label: '稳守', effects: [{ op: 'gain_block', target: 'self', amount: 6 }] },
+        { id: 'strike', label: '强攻', effects: [{ op: 'damage', target: 'opponent', amount: 7 }] },
+        { id: 'focus', label: '聚焦', effects: [{ op: 'gain_energy', target: 'self', amount: 1 }] },
+      ],
+    }],
+  },
+  { spentEnergy: 0 },
+  {
+    readState: () => structuredClone(state),
+    chooseEffectOption: () => ['focus', 'guard'],
+    runChoiceBranch: async execute => { multiChoiceBranches += 1; return execute(); },
+    execute: command => multiChoiceCommands.push(command),
+  },
+);
+assert.equal(multiChoiceBranches, 1, 'all selected effects share one rollback boundary');
+assert.deepEqual(
+  multiChoiceCommands.map(command => command.type === 'choice_selected' ? command.optionId : command.type),
+  ['guard', 'gain_block', 'focus', 'gain_energy'],
+  'selected effects execute in authored option order rather than click order',
+);
+await assert.rejects(core.runEffectCommandProgram(
+  { spec: 'mwg.effect/v1', steps: [{ op: 'choose_one', choiceId: 'duplicate_choice', count: 2, options: [
+    { id: 'a', label: '甲', effects: [{ op: 'draw_cards', amount: 1 }] },
+    { id: 'b', label: '乙', effects: [{ op: 'draw_cards', amount: 2 }] },
+  ] }] },
+  { spentEnergy: 0 },
+  { readState: () => structuredClone(state), chooseEffectOption: () => ['a', 'a'], execute: () => undefined },
+), /必须选择 2 个不同选项/);
 await assert.rejects(core.runEffectCommandProgram(
   { spec: 'mwg.effect/v1', steps: [{ op: 'choose_one', choiceId: 'missing_host', options: [
     { id: 'a', label: '甲', effects: [{ op: 'draw_cards', amount: 1 }] },
@@ -307,6 +342,7 @@ const commandHost = new TavernEffectCommandHost({
   executeCardCommand: command => hosted.push(['card', command.type]),
   presentCommand: command => hosted.push(['present', command.type]),
   executeBattleCommand: (command, sourceIsPlayer) => hosted.push(['battle', command.type, sourceIsPlayer]),
+  executePersistentGrowth: (command, sourceIsPlayer) => hosted.push(['persistent_growth', command.stat, command.operator, command.value, sourceIsPlayer]),
   executeSpecialCommand: (command, sourceIsPlayer) => hosted.push(['special', command.type, sourceIsPlayer]),
   executeSummonCommand: (command, sourceIsPlayer) => hosted.push(['summon', command.type, sourceIsPlayer]),
   applyStatus: (target, status, stacks) => hosted.push(['apply_status', target, status, stacks]),
@@ -318,6 +354,23 @@ const commandHost = new TavernEffectCommandHost({
   setCardDestination: () => Promise.resolve(),
   forEachEnemyTarget: async (_selector, execute) => execute(),
 });
+await commandHost.executeProgram(
+  {
+    spec: 'mwg.effect/v1',
+    steps: [{
+      op: 'if',
+      condition: { op: 'event_damage_kind', relation: 'eq', damageKind: 'attack' },
+      then: [{ op: 'gain_block', target: 'self', amount: 4 }],
+    }],
+  },
+  true,
+  { damageKind: 'attack' },
+);
+assert.deepEqual(
+  hosted.splice(0),
+  [['present', 'gain_block'], ['battle', 'gain_block', true]],
+  'the Tavern command boundary forwards the concrete trigger damage kind into condition evaluation',
+);
 await commandHost.executeProgram(
   {
     spec: 'mwg.effect/v1',
@@ -361,17 +414,75 @@ assert.deepEqual(hosted, [
   ['present', 'narration'],
   ['narrate', '离开战斗'],
 ]);
+hosted.splice(0);
+
+const persistentGrowth = core.compileCompactEffectList([{ persistent_growth: 'max_hp', add: 2 }]);
+assert.equal(persistentGrowth.ok, true, 'the compact contract admits the explicit permanent-growth operation');
+await commandHost.executeProgram(persistentGrowth.value, true, { spentEnergy: 3 });
+assert.deepEqual(hosted.splice(0), [
+  ['present', 'persistent_growth'],
+  ['persistent_growth', 'max_hp', 'add', 2, true],
+], 'the command boundary keeps permanent growth separate from transient battle commands');
+const invalidPersistentGrowth = core.compileCompactEffectList([{ persistent_growth: 'max_hp', add: 1, to: 'self' }]);
+assert.equal(invalidPersistentGrowth.ok, false, 'persistent growth is player-owned and cannot be retargeted');
+assert.equal(
+  core.validateEffectProgramPolicy(persistentGrowth.value).ok,
+  false,
+  'an unclassified or enemy-owned program cannot stage player permanent growth',
+);
+assert.equal(
+  core.validateEffectProgramPolicy(persistentGrowth.value, { allowPersistentGrowth: true }).ok,
+  true,
+  'player-owned program policy explicitly opts in to permanent growth',
+);
+
+// Sibling summon upgrades use one shared, selector-intersected choice cell.
+// The combat executor consumes this cell to show a single picker.
+const sharedSummonCalls = [];
+const sharedSummonHost = new TavernEffectCommandHost({
+  readState: () => structuredClone(state),
+  isTerminal: () => false,
+  executeCardCommand: async () => undefined,
+  presentCommand: () => undefined,
+  executeBattleCommand: async () => undefined,
+  executePersistentGrowth: async () => undefined,
+  executeSpecialCommand: async () => undefined,
+  executeSummonCommand: async (command, _sourceIsPlayer, sharedChoice) => sharedSummonCalls.push({ command, sharedChoice }),
+  executeEnemyCommand: async () => undefined,
+  executeSummonerProgram: async () => undefined,
+  forEachEnemyTarget: async () => undefined,
+  applyStatus: async () => undefined,
+  removeStatuses: async () => undefined,
+  registerAbility: async () => undefined,
+  scheduleEffect: async () => undefined,
+  setCardDestination: async () => undefined,
+  narrate: async () => undefined,
+  chooseEffectOption: async () => null,
+});
+await sharedSummonHost.executeProgram({
+  spec: 'mwg.effect/v1',
+  steps: [
+    { op: 'modify_summons', selector: { owner: 'self', pick: 'choose', count: 1, tags: ['familiar'] }, stat: 'speed', operator: 'add', value: 1 },
+    { op: 'modify_summon_effects', selector: { owner: 'self', pick: 'choose', count: 3, slot: 'companion' }, stat: 'damage', operator: 'add', value: 2 },
+  ],
+}, true);
+assert.equal(sharedSummonCalls.length, 2);
+assert.equal(sharedSummonCalls[0].sharedChoice, sharedSummonCalls[1].sharedChoice);
+assert.deepEqual(sharedSummonCalls[0].sharedChoice.requirements.map(entry => entry.selector), [
+  { owner: 'self', pick: 'choose', count: 1, tags: ['familiar'] },
+  { owner: 'self', pick: 'choose', count: 3, slot: 'companion' },
+]);
 
 const executorSource = readFileSync(resolve('src/fish/combat/unifiedEffectExecutor.ts'), 'utf8');
 const commandHostSource = readFileSync(resolve('src/fish/core/effectCommandHost.ts'), 'utf8');
 assert.match(commandHostSource, /runEffectCommandProgram\(/);
 assert.match(commandHostSource, /isCardEffectCommand\(command\)/);
-assert.match(commandHostSource, /ports\.executeCardCommand\(command\)/);
+assert.match(commandHostSource, /ports\.executeCardCommand\(command(?:, [^)]+)?\)/);
 assert.match(commandHostSource, /isBattleEffectCommand\(command\)/);
-assert.match(commandHostSource, /ports\.executeBattleCommand\(command, sourceIsPlayer, resolvedEnemyId\)/);
+assert.match(commandHostSource, /ports\.executeBattleCommand\(command, sourceIsPlayer, resolvedTarget\)/);
 assert.match(commandHostSource, /ports\.applyStatus\(/);
 assert.match(commandHostSource, /ports\.removeStatuses\(/);
-assert.match(commandHostSource, /ports\.executeSummonCommand\(command, sourceIsPlayer\)/);
+assert.match(commandHostSource, /ports\.executeSummonCommand\(command, sourceIsPlayer(?:, [^)]+)?\)/);
 assert.match(commandHostSource, /ports\.narrate\(command\.text\)/);
 assert.doesNotMatch(executorSource, /runEffectCommandProgram|adaptBattleEffectCommandForTavern/);
 assert.doesNotMatch(executorSource, /compileEffectCommandForTavern/);

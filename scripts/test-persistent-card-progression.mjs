@@ -11,12 +11,15 @@ const settlement = require(resolve('src/runtime/battleSettlementAdapter.ts'));
 const { TavernBattleEndHost } = require(resolve('src/fish/core/battleEndHost.ts'));
 
 const definitions = [{
-  id: 'echo_blade', name: '回响刃', emoji: 'E', type: 'Attack', rarity: 'Common', cost: 1, quantity: 1,
+  id: 'echo_blade', name: '回响刃', emoji: 'E', type: 'Attack', rarity: 'Common', cost: 1, quantity: 1, unique: false,
   description: '造成伤害。', effects: { damage: 6 },
 }];
 const [base] = adapter.convertMvuCards(definitions);
 assert.ok(base.runInstanceId);
 const expandedPair = core.migratePersistentRunDeck([{ ...definitions[0], quantity: 2 }]);
+assert.equal(expandedPair.length, 2, 'one exact non-unique definition expands into two owned copies');
+assert.equal(expandedPair[0].id, expandedPair[1].id, 'identical copies retain their shared template identity');
+assert.notEqual(expandedPair[0].runInstanceId, expandedPair[1].runInstanceId, 'identical copies still receive independent persistent identities');
 assert.equal(adapter.mergeMvuCards(expandedPair).length, 2, 'owned instances sharing one template are not collapsed');
 assert.equal(adapter.convertMvuCards(adapter.mergeMvuCards(expandedPair)).length, 2);
 

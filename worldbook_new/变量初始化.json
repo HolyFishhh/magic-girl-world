@@ -1,5 +1,6 @@
 {
   "$meta": { "extensible": false },
+  "selected_mechanics": "",
   "status": {
     "$meta": { "extensible": false },
     "time": "",
@@ -101,6 +102,7 @@
     "item": ["$__META_EXTENSIBLE__$"],
     "limits": { "$meta": { "extensible": true } },
     "request": null,
+    "card_choice_groups": null,
     "disabled_categories": ["$__META_EXTENSIBLE__$"],
     "pool_revision": 0,
     "reroll_count": 0

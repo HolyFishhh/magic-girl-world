@@ -1,8 +1,11 @@
+import { type TowerMysteryRoll } from './towerMystery';
 export declare const RUN_MAP_SCHEMA_VERSION: 1;
 export declare const DEFAULT_RUN_MAP_ACTS: 3;
-export declare const DEFAULT_RUN_MAP_COLUMNS: 7;
+export declare const DEFAULT_RUN_MAP_COLUMNS: 5;
 export declare const DEFAULT_RUN_MAP_ROUTE_FLOORS: 15;
-export declare const DEFAULT_RUN_MAP_PATHS: 6;
+/** Five route tracks form three visible main routes and may merge/split later. */
+export declare const DEFAULT_RUN_MAP_PATHS: 5;
+export declare const DEFAULT_RUN_MAP_MAIN_ROUTES: 3;
 export declare const RUN_MAP_ROOM_ASSIGNMENT_ATTEMPTS: 256;
 export type RunMapSeed = number | string;
 export type RunMapNodeKind = 'battle' | 'elite' | 'event' | 'rest' | 'shop' | 'treasure' | 'boss';
@@ -21,7 +24,10 @@ export interface RunMapNode {
     kind: RunMapNodeKind;
     contentSeed: number;
     rewardSeed: number;
+    /** Program-only resolution; kind remains event for the unrevealed map marker. */
+    mystery?: TowerMysteryRoll;
 }
+export declare function runMapContentKind(node: Pick<RunMapNode, 'kind' | 'mystery'>): RunMapNodeKind;
 export interface RunMapEdge {
     from: string;
     to: string;
@@ -34,7 +40,7 @@ export interface RunMapAct {
     roomAssignmentSeed: number;
     nodes: RunMapNode[];
     edges: RunMapEdge[];
-    /** Six independently generated routes. Shared ids represent route merges. */
+    /** Five route tracks carried by three main entrances. Shared ids represent route merges. */
     paths: string[][];
     startNodeIds: string[];
     bossNodeId: string;

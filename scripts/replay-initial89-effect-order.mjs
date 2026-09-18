@@ -1,0 +1,27 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {createRequire} from 'node:module';
+const require=createRequire(import.meta.url);
+process.env.TS_NODE_COMPILER_OPTIONS=JSON.stringify({module:'CommonJS',moduleResolution:'node'});
+require('ts-node/register/transpile-only');require('tsconfig-paths/register');
+const {extractTowerInitialRepairSlotTargets:plan,parseTowerInitialSlotRepairResponse:parse,mergeTowerInitialSlotRepair:merge}=require('../src/sillytavern-extension/controller.ts');
+const {parseStructuredRecord}=require('../src/sillytavern-extension/structuredRecord.ts');
+const {createContentPackFromMvuBattle}=require('../src/runtime/contentPackAdapter.ts');
+const {assessInitialPlayerContent}=require('../src/game-core/playerContentReadiness.ts');
+const file='tmp/initial89-final-browser-v173.json',bytes=readFileSync(file),capture=JSON.parse(bytes);
+const evidence=capture.evidence.find(e=>e.stage==='compiled-result');assert.ok(evidence&&!evidence.truncated);
+const original=parseStructuredRecord(evidence.text),targets=plan(original,capture.monitor.detail);
+assert.equal(targets.length,1);assert.equal(targets[0].slots.length,1);
+const slot=targets[0].slots[0];assert.equal(slot.kind,'effect_order_strategy');
+assert.equal(slot.path,'player.cards[4].effects');
+const order=[...slot.operationNames].reverse();
+const reply={spec:'mwg.tower-initial-slot-repair/v1',roots:{[targets[0].token]:{slots:{[slot.token]:{action:slot.action,value:order}}}},support_statuses:[],support_resources:[]};
+const fixed=merge(original,targets,parse(reply,targets)),expected=structuredClone(original);
+expected.player.cards[4].effects=order.map(key=>({[key]:original.player.cards[4].effects[key]}));
+assert.deepEqual(fixed,expected);
+const assess=value=>assessInitialPlayerContent(createContentPackFromMvuBattle(value.player));
+assert.equal(assess(original).ok,false);assert.equal(assess(fixed).ok,true);
+assert.deepEqual(readFileSync(file),bytes);
+console.log(JSON.stringify({result:'PASS',changedPath:slot.path,sha256:createHash('sha256').update(bytes).digest('hex'),
+ scope:'Offline exact-payload repair replay with fixture order, not an AI response, live retry or acceptance result.'}));

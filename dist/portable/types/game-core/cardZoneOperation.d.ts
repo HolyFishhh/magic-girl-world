@@ -13,6 +13,7 @@ export type CardZoneOperationRequest = {
     source: RecoverCardZone;
     pick: 'random' | 'choose' | 'all';
     amount: number;
+    filter?: CardSelector['filter'];
 };
 export type CardZoneOperationFailureCode = 'DUPLICATE_CARD_ID' | 'RANDOM_SOURCE_REQUIRED' | 'STALE_PLAN' | 'INVALID_SELECTION';
 export interface CardZoneOperationFailure {

@@ -873,41 +873,6 @@ function forecastEncounter(
   };
 }
 
-function strongStatusForDesire(pack: ContentPack, statusId: string): boolean {
-  const definition = pack.statuses.find(status => String(status.id || '') === statusId);
-  if (!definition) return false;
-  const analysis = analyzeContentScenarios(definition);
-  const features = extractContentMechanicFeatures(definition);
-  const decisiveOperation = features.operations.some(operation =>
-    ['kill', 'execute', 'spawn_summon', 'spawn_enemy', 'extra_turn'].includes(operation),
-  );
-  const strongModifier = analysis.modifiers.some(modifier =>
-    (modifier.operator === 'multiply' && Math.abs(modifier.value) >= 1.5) ||
-    ((modifier.operator === 'add' || modifier.operator === 'subtract') && Math.abs(modifier.value) >= 4) ||
-    modifier.operator === 'set',
-  );
-  return decisiveOperation || strongModifier || analysis.dynamicMetrics.size > 0 ||
-    analysis.damage >= 8 || analysis.metrics.defense >= 10 || analysis.metrics.sustain >= 10;
-}
-
-function desireEffectIsDecisive(
-  effect: ContentDefinition | null,
-  pack: ContentPack,
-  targetMaxHp: number,
-): boolean {
-  if (!effect) return false;
-  const analysis = analyzeContentScenarios(effect);
-  const features = extractContentMechanicFeatures(effect);
-  const operations = new Set(features.operations);
-  const threshold = Math.max(14, targetMaxHp * 0.18);
-  if (analysis.damage >= threshold) return true;
-  if (analysis.dynamicMetrics.has('attack') && operations.has('damage')) return true;
-  if (['kill', 'execute', 'spawn_summon', 'spawn_enemy', 'extra_turn'].some(operation => operations.has(operation))) return true;
-  if (analysis.metrics.defense + analysis.metrics.sustain >= Math.max(16, targetMaxHp * 0.2)) return true;
-  if (analysis.metrics.energy >= 2 && analysis.metrics.draw >= 2) return true;
-  return analysis.statusIds.some(statusId => strongStatusForDesire(pack, statusId));
-}
-
 function assessDiagnostics(
   pack: ContentPack,
   build: BuildDesignProfile,
@@ -993,30 +958,10 @@ function assessDiagnostics(
       suggestion: '保留欲望主题，为满溢效果或少量行动加入可持续的生命伤害、升级压力或其他实际终结渠道。',
     });
   }
-  const enemies = meaningfulEnemies(pack);
-  enemies.forEach((definition, index) => {
-    const desireEffect = isRecord(definition.lust_effect) ? definition.lust_effect : null;
-    if (desireEffectIsDecisive(desireEffect, pack, Math.max(1, Number(player.maxHp) || 100))) return;
-    diagnostics.push({
-      code: 'ENEMY_LUST_EFFECT_UNDERPOWERED',
-      severity: 'risk',
-      scope: 'enemy',
-      message: `${definitionLabel(definition, `敌人${index + 1}`)}的欲望满溢效果不足以形成决定战局的收益。`,
-      suggestion: '把欲望满溢效果提升为可执行的终极效果：高额伤害、强力状态、强力召唤、额外回合、处决或明确终局之一；不能只给少量普通数值。',
-    });
-  });
-  const enemyTargetHp = enemies.length
-    ? enemies.reduce((sum, definition) => sum + Math.max(1, Number(definition.max_hp) || 1), 0) / enemies.length
-    : 60;
-  if (pack.desireEffects.player && !desireEffectIsDecisive(pack.desireEffects.player, pack, enemyTargetHp)) {
-    diagnostics.push({
-      code: 'PLAYER_LUST_EFFECT_UNDERPOWERED',
-      severity: 'risk',
-      scope: 'build',
-      message: '玩家欲望满溢效果相对其高触发门槛过弱。',
-      suggestion: '保持现有构筑主题，把玩家欲望满溢效果提升为足以逆转或结束战局的终极收益。',
-    });
-  }
+  // A lust overflow effect is not required to be a standalone finisher. The
+  // encounter-wide ENEMY_NO_DEFEAT_PRESSURE check above is the only relevant
+  // advisory: it asks the complete enemy kit to retain a possible conclusion
+  // without forcing every optional overflow effect into the same power shape.
   if (enemy.maxActionProbability > 0.75 && enemy.actionEntropy < 1 && enemy.actionDiversity >= 3) {
     diagnostics.push({
       code: 'ENEMY_LOW_ACTION_ENTROPY',
@@ -1182,7 +1127,7 @@ function formatBrief(
     encounterPlan && encounterPlan.enemyCount > 1
       ? `多敌：${encounterPlan.roles.join('；')}${encounterPlan.synergies.length ? `；协同${encounterPlan.synergies.join('、')}` : ''}。`
       : '',
-    '双方欲望满溢都是高门槛终极节点，收益必须足以逆转或决定胜负，并由可执行效果落实。',
+    '欲望主轴的满溢须以可执行强力兑现推进胜负；副轴可提供资源、控制或节奏，不强制双方都作为终极节点。',
     priority
       ? `优先修正：${priority.suggestion}`
       : previousAdvice
@@ -1248,7 +1193,7 @@ export function assessContentDesign(input: ContentDesignAssistantInput): Content
         inheritedMechanics: previous.lineage?.recentEnemies?.at(-1)?.themeAxes,
       })
     : undefined;
-  const enemyPower = scoreEnemyPower(input.pack);
+  const enemyPower = scoreEnemyPower(input.pack, { maxHp: input.player.maxHp, maxLust: input.player.maxLust });
   const previousProgramCalibration = previous.balance?.programCalibration;
   const programCalibration = previousProgramCalibration && enemyPower
     && previousProgramCalibration.enemyFingerprint === enemyPower.fingerprint
