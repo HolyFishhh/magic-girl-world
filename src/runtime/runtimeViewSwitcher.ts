@@ -1,6 +1,7 @@
 export type MagicGirlRuntimeView = 'start' | 'common' | 'fish' | 'update';
 
 import { ensureRuntimeFrameHeightSync } from './runtimeFrameHeight';
+import { claimRuntimeMountEpoch } from './runtimeMountGuard';
 
 type RuntimeViewAsset = Readonly<{
   title: string;
@@ -22,6 +23,7 @@ type ViewLifecycle = {
 };
 
 const LIFECYCLE_KEY = '__MWG_ACTIVE_VIEW_LIFECYCLE__';
+const SWITCH_KEY = '__MWG_RUNTIME_VIEW_SWITCHING__';
 
 function isolatedRuntimeScript(source: string): string {
   // Removing a script element does not remove its top-level lexical bindings
@@ -83,12 +85,17 @@ export function registerRuntimeViewLifecycle(view: MagicGirlRuntimeView, destroy
 export function switchRuntimeView(view: MagicGirlRuntimeView): void {
   if (typeof document === 'undefined') throw new Error('当前环境不能切换游戏页面');
   const host = lifecycleHost();
+  if (host[SWITCH_KEY]) return;
   const current = host[LIFECYCLE_KEY] as ViewLifecycle | undefined;
   if (current?.switching) return;
   if (current?.view === view && document.documentElement.dataset.mwgView === view) return;
 
   const runtime = sharedRuntime();
   const asset = runtime.getViewAsset(view);
+  host[SWITCH_KEY] = true;
+  // Invalidate any first-bootstrap callback that is still waiting on the
+  // runtime. The replacement below owns this document synchronously.
+  claimRuntimeMountEpoch();
   // Keep the script that owns the current event callback attached until the
   // replacement bundle has executed. Tavern Helper's sandboxed message iframe
   // can otherwise suppress the next large inline bundle, leaving only the new
@@ -96,33 +103,37 @@ export function switchRuntimeView(view: MagicGirlRuntimeView): void {
   const previousScripts = [...document.querySelectorAll('[data-mwg-runtime-script]')];
   if (!asset?.bodyHtml || !asset?.styles || !asset?.script) throw new Error(`视图资源不完整: ${view}`);
 
-  if (current) {
-    current.switching = true;
-    try {
-      current.destroy();
-    } finally {
-      if (host[LIFECYCLE_KEY] === current) delete host[LIFECYCLE_KEY];
+  try {
+    if (current) {
+      current.switching = true;
+      try {
+        current.destroy();
+      } finally {
+        if (host[LIFECYCLE_KEY] === current) delete host[LIFECYCLE_KEY];
+      }
     }
+
+    document.querySelectorAll('[data-mwg-runtime-style]').forEach(node => node.remove());
+
+    document.title = asset.title;
+    const style = document.createElement('style');
+    style.dataset.mwgRuntimeStyle = view;
+    style.textContent = asset.styles;
+    document.head.appendChild(style);
+    document.body.innerHTML = asset.bodyHtml;
+    document.body.style.overflow = '';
+
+    document.documentElement.dataset.mwgMountedView = view;
+    document.documentElement.dataset.mwgView = view;
+    const script = document.createElement('script');
+    script.dataset.mwgRuntimeScript = view;
+    script.textContent = isolatedRuntimeScript(asset.script);
+    document.body.appendChild(script);
+    previousScripts.forEach(node => node.remove());
+    ensureRuntimeFrameHeightSync()?.request();
+  } finally {
+    delete host[SWITCH_KEY];
   }
-
-  document.querySelectorAll('[data-mwg-runtime-style]').forEach(node => node.remove());
-
-  document.title = asset.title;
-  const style = document.createElement('style');
-  style.dataset.mwgRuntimeStyle = view;
-  style.textContent = asset.styles;
-  document.head.appendChild(style);
-  document.body.innerHTML = asset.bodyHtml;
-  document.body.style.overflow = '';
-
-  document.documentElement.dataset.mwgMountedView = view;
-  document.documentElement.dataset.mwgView = view;
-  const script = document.createElement('script');
-  script.dataset.mwgRuntimeScript = view;
-  script.textContent = isolatedRuntimeScript(asset.script);
-  document.body.appendChild(script);
-  previousScripts.forEach(node => node.remove());
-  ensureRuntimeFrameHeightSync()?.request();
 }
 
 export function currentRuntimeView(): MagicGirlRuntimeView | null {

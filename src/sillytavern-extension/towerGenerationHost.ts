@@ -837,6 +837,16 @@ type TavernHelperGenerationApi = {
   stopGenerationById?: TowerGenerationPorts['stopGenerationById'];
 };
 
+/** Tavern Helper renamed the raw request method to `generate` in newer
+ * releases. Keep the raw path preferred because it bypasses preset history,
+ * but accept the current public name when `generateRaw` is absent. */
+function resolveRawGenerator(helper: TavernHelperGenerationApi | null | undefined): NonNullable<TavernHelperGenerationApi['generateRaw']> | null {
+  const raw = helper?.generateRaw;
+  if (typeof raw === 'function') return raw.bind(helper);
+  const current = helper?.generate;
+  return typeof current === 'function' ? current.bind(helper) : null;
+}
+
 const PROVIDER_SCHEMA_MAX_DEPTH = 9;
 
 /**
@@ -1830,9 +1840,10 @@ export function createGlobalTowerGenerationPorts(
   // request-body override. The queue owns its single additional-call budget.
   const canRecoverEmptyNarrative = (): boolean => typeof helper?.generate === 'function';
   const requireHelper = <K extends keyof TavernHelperGenerationApi>(name: K): NonNullable<TavernHelperGenerationApi[K]> => {
-    const value = helper?.[name];
+    const value = name === 'generateRaw' ? resolveRawGenerator(helper) : helper?.[name];
     if (typeof value !== 'function') {
-      throw new TowerGenerationHostError('missing_api', `Tavern Helper 接口缺失: ${String(name)}`);
+      const label = name === 'generateRaw' ? 'generateRaw/generate' : String(name);
+      throw new TowerGenerationHostError('missing_api', `Tavern Helper 接口缺失: ${label}`);
     }
     return value as NonNullable<TavernHelperGenerationApi[K]>;
   };

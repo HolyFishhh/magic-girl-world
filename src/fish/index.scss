@@ -2572,12 +2572,12 @@ html.is-history {
 @media (max-width: 760px) {
   html,
   body {
-    min-height: 640px;
+    min-height: 100%;
   }
 
   .card-game-container {
-    height: 640px;
-    min-height: 640px;
+    height: auto;
+    min-height: 100dvh;
   }
 
   #battle-scene {

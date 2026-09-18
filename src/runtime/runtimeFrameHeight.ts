@@ -52,13 +52,17 @@ function createRuntimeFrameHeightController(frame: HTMLElement): RuntimeFrameHei
   let destroyed = false;
   let scheduled = false;
   let animationFrame = 0;
+  let lastHeight = 0;
   const timers = new Set<number>();
 
   const sync = () => {
     scheduled = false;
     animationFrame = 0;
     if (destroyed || isFullscreen(frame)) return;
-    const nextHeight = `${measureDocumentHeight()}px`;
+    const measured = measureDocumentHeight();
+    if (Math.abs(measured - lastHeight) < 2) return;
+    lastHeight = measured;
+    const nextHeight = `${measured}px`;
     setRuntimeFrameHeight(frame, nextHeight);
   };
 
