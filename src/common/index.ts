@@ -2241,6 +2241,7 @@ function renderRunData(stat: any): void {
     // panels out of the way. They are restored automatically once the run
     // exists, so later tower messages still show the normal interface.
     document.querySelector<HTMLElement>('.statusbar-header')?.style.setProperty('display', towerSetup ? 'none' : '');
+    document.querySelector<HTMLElement>('.statusbar-panels')?.style.setProperty('display', towerSetup ? 'none' : '');
     document.getElementById('status-mechanics-help')?.style.setProperty('display', towerSetup ? 'none' : '');
     document.querySelector<HTMLElement>('.action-section')?.style.setProperty('display', towerSetup ? 'none' : '');
     section.classList.toggle('is-tower-setup', expeditionMode && isLatest);
@@ -2268,6 +2269,7 @@ function renderRunData(stat: any): void {
 
   section.classList.remove('is-tower-setup');
   document.querySelector<HTMLElement>('.statusbar-header')?.style.setProperty('display', '');
+  document.querySelector<HTMLElement>('.statusbar-panels')?.style.setProperty('display', '');
   document.getElementById('status-mechanics-help')?.style.setProperty('display', '');
   document.querySelector<HTMLElement>('.action-section')?.style.setProperty('display', '');
   renderTowerStartPanel(false);
