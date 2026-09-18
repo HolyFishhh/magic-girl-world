@@ -1,5 +1,33 @@
+import { documentViewportHeight, scrollUserNavigationTargetIntoView } from './userNavigationScroll';
+import { requestNavigationFocus, applyNavigationFocus } from '../runtime/navigationFocus';
+import { highlightFocusedSurface } from '../shared/focusHighlight';
+import { PendingCardRemoval } from './pendingCardRemoval';
+import { choosePendingCardRemoval, collectArtifactAcquisitionAnswers, collectNonCombatAnswers } from './nonCombatSelection';
+import { previewAcquisition } from './acquisitionPreview';
+import { readPendingInitialArtifactAcquisition } from './initialArtifactAcquisition';
+import { parseTowerEventFlow, requireTowerEventStage, towerEventRandomKey } from '../game-core/towerEventFlow';
+import { planTowerEventOutcome } from '../game-core/towerEventOutcome';
+import { currentTowerScreen, ensureTowerRunDom, renderTowerScreen } from './towerScreenPresentation';
+import { collectCardDisplayNames } from '../game-core/cardDisplayNames';
 // RPG UI - 动态版本入口文件
 import '../runtime/bootstrap';
+import { renderCardFace } from '../shared/cardFace';
+import { renderRulePills } from '../shared/rulePills';
+import { presentCompactContent } from '../game-core/contentPresentation';
+import type { ContentRuleReference } from '../game-core/contentDescription';
+import { installGenerationDiagnosticPanel } from '../shared/generationDiagnosticPanel';
+import { renderSupportDetails } from '../shared/supportPresentation';
+import { collectStanceDefinitions, collectStanceNames } from '../game-core/stanceIdentityDisplay';
+import { BATTLE_ITEM_USAGE_LABEL } from '../game-core/battleItemUsage';
+import { bindStatusReferenceDetails } from '../shared/statusReference';
+import { bindTowerStartPresets } from './towerStartPresets';
+import { bindTowerArchetypePicker } from '../shared/towerArchetypePicker';
+import { buildTowerArchetypePrompt } from '../game-core/towerArchetypePrompt';
+import { TOWER_ARCHETYPE_PRESETS } from '../game-core/towerArchetypeCatalog';
+import { collectSummonDisplayNames } from '../game-core/summonDisplayNames';
+import { renderStoryPanel } from '../runtime/storyPanel';
+import { bindRewardSelectionSurface, createRewardSelectionOption, refreshRewardSelectionSurfaces, rewardPreviewLabel } from '../shared/rewardSelectionInteraction';
+import { continueExpeditionStory } from './expeditionContinuation';
 import {
   getCurrentChatMessageText,
   getCurrentMessageVariableOptions,
@@ -8,7 +36,6 @@ import {
   isCurrentMessageLatest,
   isCurrentMessageWithinDepth,
   rerenderHistoricalMessageForDepth,
-  updateCurrentChatVariablesWith,
   updateCurrentMessageVariablesWith,
   watchCurrentMessageDepth,
 } from '../runtime/messageVariables';
@@ -36,9 +63,6 @@ import {
   describeCompactContent,
   describeCompactStatus,
   describeCardCost,
-  normalizeChinesePlayerDescription,
-  resolveCompactCardDescription,
-  resolveCompactContentDescription,
   formatBuildGuidance,
   formatShopBudget,
   formatEnemyBudget,
@@ -90,7 +114,9 @@ import {
   readRewardLimits,
   type RewardSelections,
 } from './rewardTransactions';
-import { createRewardPoolFingerprint, TavernRunActionHost } from './runActionHost';
+import { createRewardPoolFingerprint, createShopPurchaseQuote, TavernRunActionHost } from './runActionHost';
+import { renderShopMarket } from './shopMarket';
+import { renderBattleRewardsMenu } from './battleRewardsMenu';
 import {
   InitialContentCandidateRejectedError,
   runInitialContentRepairLoop,
@@ -110,6 +136,34 @@ let __DELTA__: any = null;
 let __PENDING_REWARD_SUMMARY: string | null = null;
 let __PENDING_RUN_SUMMARY: string | null = null;
 let __RUN_ERROR: string | null = null;
+let __PENDING_USER_FOCUS: string | null = null;
+document.addEventListener('mwg-user-navigate', event => {
+  if ((event as CustomEvent).detail !== '#tower-map-root') return;
+  requestUserFocus('#tower-map-root');
+});
+let __PENDING_OPENING_WAKE_KEY = '';
+
+/** Only explicit UI actions may move the reader; passive reloads preserve scroll. */
+function requestUserFocus(selector: string): void {
+  __PENDING_USER_FOCUS = selector;
+}
+
+function applyPendingUserFocus(): void {
+  let selector = __PENDING_USER_FOCUS;
+  if (!selector) { applyNavigationFocus(); return; }
+  if (selector === '@room') {
+    const run = readRunState(__STAT__);
+    if (run?.phase === 'in_node' && run.currentNode && isBattleRunNode(run.currentNode.kind)) {
+      requestNavigationFocus('#battle-stage');
+      __PENDING_USER_FOCUS = null;
+      return;
+    }
+    selector = document.body.dataset.towerScreen === 'map' ? '#tower-map-root'
+      : (hasSelectableRewards(__STAT__) || run?.currentNode?.kind === 'shop') ? '#choice-container' : '#tower-room-page';
+  }
+  requestNavigationFocus(selector);
+  if (applyNavigationFocus()) __PENDING_USER_FOCUS = null;
+}
 // Legacy bounded-repair bookkeeping remains for saved iframe compatibility;
 // automatic initialization is no longer scheduled after the first MVU pass.
 let __INITIAL_TOWER_REPAIR_TIMER: ReturnType<typeof setTimeout> | null = null;
@@ -268,10 +322,6 @@ async function ensureAndConsumeRunState(): Promise<void> {
     if (result.restTransform) {
       __USER_MUTATION_PILLS.push(`卡牌变形：${result.restTransform.cardName}`);
       __PENDING_RUN_SUMMARY = `{{user}}在营火将卡牌变形成了${result.restTransform.cardName}`;
-      __RUN_ERROR = null;
-    }
-    if (result.rewardReroll) {
-      __USER_MUTATION_PILLS.push('奖励候选已重投');
       __RUN_ERROR = null;
     }
   } catch (error) {
@@ -493,9 +543,15 @@ function computeChangePillsByDelta(delta: any, stat: any): string[] {
   return pills;
 }
 
-async function applyRewardSelectionsInline(selections: RewardSelections) {
+async function applyRewardSelectionsInline(
+  selections: RewardSelections,
+  options: { partial?: boolean; claimGold?: boolean; discardGold?: boolean; cardGroupId?: string; expectedReward?: ReturnType<typeof createRewardPoolFingerprint> } = {},
+) {
   const expectedReward = createRewardPoolFingerprint(__STAT__ || {});
-  const settlement = await runActionHost.settleRewardSelections(selections, { expectedReward });
+  const preview = previewAcquisition(__STAT__ || {}, { kind: 'reward', selections, ...options });
+  const acquisitionAnswers = await collectArtifactAcquisitionAnswers(preview);
+  if (acquisitionAnswers === null) return false;
+  const settlement = await runActionHost.settleRewardSelections(selections, { expectedReward, ...options, acquisitionAnswers });
   await synchronizeContentDesignContext();
   const settledSummary = settlement.summary;
   settledSummary.cards.forEach(name => __USER_MUTATION_PILLS.push(`新增卡牌：${name}`));
@@ -506,6 +562,7 @@ async function applyRewardSelectionsInline(selections: RewardSelections) {
   if (settledSummary.cards.length) parts.push(`卡牌[${settledSummary.cards.join('，')}]`);
   if (settledSummary.artifacts.length) parts.push(`遗物[${settledSummary.artifacts.join('，')}]`);
   if (settledSummary.items.length) parts.push(`道具[${settledSummary.items.join('，')}]`);
+  if (options.claimGold) parts.push('金币奖励');
   if (settlement.kind === 'shop') {
     __PENDING_REWARD_SUMMARY = parts.length
       ? `{{user}}在商店花费${settlement.spentGold}金币，购得：${parts.join(' ')}`
@@ -517,6 +574,7 @@ async function applyRewardSelectionsInline(selections: RewardSelections) {
   } else {
     __PENDING_REWARD_SUMMARY = parts.length ? `{{user}}已获得：${parts.join(' ')}` : '{{user}}没有领取奖励';
   }
+  return true;
 }
 
 // 渲染通知模块
@@ -542,8 +600,8 @@ function renderNotifyModule() {
   __USER_MUTATION_PILLS = [];
 
   // 检查经验/等级变化
-  const expDisp = __DELTA__?.battle?.exp;
-  const levelDisp = __DELTA__?.battle?.level;
+  const expDisp = readGameMode(stat)==='tower' ? undefined : __DELTA__?.battle?.exp;
+  const levelDisp = readGameMode(stat)==='tower' ? undefined : __DELTA__?.battle?.level;
   let hasExpChange = false;
   if (typeof expDisp === 'string' && expDisp.includes('->')) {
     const parts = expDisp.split('->');
@@ -634,8 +692,86 @@ function renderNotifyModule() {
 }
 
 // 渲染选择模块（浮动在选项之上）
+function renderRewardOptionList(
+  listEl: HTMLElement,
+  kind: 'cards' | 'artifacts' | 'items',
+  candidates: any[],
+  inspections: Array<{ ok: boolean; message?: string }>,
+  isShop: boolean,
+  run: any,
+): void {
+  listEl.replaceChildren();
+  listEl.classList.toggle('mwg-card-choice-list', kind === 'cards');
+  const defaults = { cards: ['🃏', '卡牌', 'collection-card'], artifacts: ['✦', '遗物', 'collection-support'], items: ['🧪', '道具', 'collection-support'] } as const;
+  const [fallbackEmoji, fallbackName, surfaceClass] = defaults[kind];
+  candidates.forEach((candidate, idx) => {
+    const inspection = inspections[idx];
+    const invalid = !inspection?.ok;
+    const { option, preview, details } = createRewardSelectionOption(document, {
+      value: String(idx),
+      label: `${candidate.emoji || fallbackEmoji} ${candidate.name || fallbackName}`,
+      previewLabel: rewardPreviewLabel(kind === 'cards' ? 'card' : kind === 'artifacts' ? 'relic' : 'item', candidate),
+      disabled: invalid,
+      className: invalid ? 'option-invalid' : '',
+    });
+    if (kind === 'cards') {
+      // Classic reward selection keeps its checkbox transaction, but its card
+      // face is already the selectable surface; do not wrap it in a second
+      // label or collapsed preview.
+      option.classList.add('mwg-card-choice');
+      option.querySelector('.reward-pick')?.setAttribute('hidden', '');
+      details.open = true;
+      details.querySelector('summary')?.setAttribute('hidden', '');
+    }
+    const surface = document.createElement('div');
+    surface.className = `text ${surfaceClass}`;
+    const price = isShop ? `价格: ${recommendShopPrice(kind, candidate, run.act)} 金币` : '';
+    surface.innerHTML = `${kind === 'cards' ? renderCollectionCard(candidate) : renderCollectionSupport(candidate, fallbackName)}${price ? `<div class="cost">${escapeHtml(price)}</div>` : ''}${invalid ? `<div class="reward-validation">不可领取：${escapeHtml(inspection?.message || '候选无效')}</div>` : ''}`;
+    preview.append(surface);
+    if (isShop) details.open = true;
+    listEl.append(option);
+  });
+}
+
+/**
+ * Ordinary combat spoils are intentionally claimed one category at a time.
+ * Shops own a separate market. Event, treasure and opening offers retain
+ * their chooser because their settlement rules complete different nodes.
+ */
+function renderBattleRewardMenu(choiceOverlay: HTMLElement, choiceCard: HTMLElement, stat: Record<string, any>): void {
+  choiceOverlay.classList.add('is-battle-reward-menu');
+  choiceOverlay.style.display = 'flex';
+  const expectedReward = createRewardPoolFingerprint(stat);
+  renderBattleRewardsMenu({
+    root: choiceCard, stat, enabled: isCurrentMessageLatest() && !__isMutating,
+    renderCard: renderCollectionCard, renderSupport: renderCollectionSupport,
+    claim: async request => {
+      if (__isMutating) return;
+      __isMutating = true;
+      try {
+        const selections: RewardSelections = { cards: [], artifacts: [], items: [] };
+        if (request.kind !== 'gold' && request.kind !== 'discard') selections[request.kind] = request.indexes || [];
+        const applied = await applyRewardSelectionsInline(selections, {
+          partial: request.kind !== 'discard', claimGold: request.kind === 'gold',
+          discardGold: request.kind === 'discard', cardGroupId: request.cardGroupId, expectedReward,
+        });
+        if (!applied) return;
+        requestUserFocus('@room');
+      } finally { __isMutating = false; }
+      await loadGameData();
+    },
+  });
+}
+
 function renderChoiceModule() {
   const stat = __STAT__ || {};
+  const activeRun = readRunState(stat);
+  if (!hasSelectableRewards(stat) && !(activeRun?.phase === 'in_node' && activeRun.currentNode?.kind === 'shop')) {
+    const overlay = document.getElementById('choice-container');
+    if (overlay) { overlay.style.display = 'none'; overlay.classList.remove('is-battle-reward-menu', 'is-shop-market'); }
+    __REWARD_SELECTION_MEMORY = null;
+    return;
+  }
   const reward = readRewardRoot(stat) || {};
   const limits = getRewardLimits(stat);
 
@@ -650,15 +786,60 @@ function renderChoiceModule() {
   };
 
   const choiceOverlay = document.getElementById('choice-container');
+  const choiceCard = document.getElementById('choice-card');
+  const run = readRunState(stat);
+  const isShop = run?.phase === 'in_node' && run.currentNode?.kind === 'shop';
+  const isEventReward = run?.phase === 'in_node' && run.currentNode?.kind === 'event' && stat?.run_result != null;
+  // Tower victory completes the route before it exposes its reward pool, so
+  // the normal post-battle menu has no currentNode by the time it renders.
+  const isOrdinaryBattleReward = currentTowerScreen(stat, hasSelectableRewards(stat)) === 'battle-reward';
+  if (choiceCard && !choiceCard.dataset.classicRewardMarkup) choiceCard.dataset.classicRewardMarkup = choiceCard.innerHTML;
+  if (isShop && choiceOverlay && choiceCard) {
+    __REWARD_SELECTION_MEMORY = null;
+    choiceOverlay.classList.add('is-shop-market');
+    choiceOverlay.classList.remove('is-battle-reward-menu');
+    choiceOverlay.style.display = 'block';
+    const expected = stat.reward ? createShopPurchaseQuote(stat) : null;
+    renderShopMarket({root:choiceCard,stat,run,enabled:isCurrentMessageLatest()&&!__isMutating,
+      renderCard:renderCollectionCard,renderSupport:renderCollectionSupport,
+      purchase:async(category,index)=>{
+        if(!expected)throw new Error('商品尚未准备好');
+        if(__isMutating)return;
+        __isMutating=true;
+        try {
+          const selections: RewardSelections = { cards: [], artifacts: [], items: [] };
+          selections[category] = [index];
+          const acquisitionAnswers = await collectArtifactAcquisitionAnswers(previewAcquisition(stat, { kind: 'shop', selections }));
+          if (acquisitionAnswers === null) return;
+          const result=await runActionHost.purchaseShopItem(category,index,expected,acquisitionAnswers);
+          const names=[...result.summary.cards,...result.summary.artifacts,...result.summary.items].join('、');
+          __USER_MUTATION_PILLS.push(`购买：${names} · ${result.spentGold}金币`);
+          __RUN_ERROR=null;
+        } finally {__isMutating=false;}
+        await loadGameData();
+      },
+      removeCard:async id=>{await runActionHost.removeCardAtShop(id);await loadGameData();},
+      leave:async()=>{await runActionHost.leaveShop(); requestUserFocus('#tower-map-root');__REWARD_SELECTION_MEMORY=null;__PENDING_RUN_SUMMARY='{{user}}离开了商店';__RUN_ERROR=null;await loadGameData();},
+    });
+    return;
+  }
+  choiceCard?.classList.remove('shop-market');
+  choiceOverlay?.classList.remove('is-shop-market');
+  if (isOrdinaryBattleReward && hasSelectableRewards(stat) && choiceOverlay && choiceCard) {
+    renderBattleRewardMenu(choiceOverlay, choiceCard, stat);
+    return;
+  }
+  if (choiceCard?.dataset.classicRewardMarkup && choiceCard.innerHTML !== choiceCard.dataset.classicRewardMarkup) {
+    choiceCard.innerHTML = choiceCard.dataset.classicRewardMarkup;
+  }
   const choiceTitle = document.getElementById('choice-title');
   const cardSection = document.getElementById('card-rewards-section');
   const artifactSection = document.getElementById('artifact-rewards-section');
   const itemSection = document.getElementById('item-rewards-section');
 
   if (!choiceOverlay || !cardSection || !artifactSection || !itemSection) return;
-  const run = readRunState(stat);
-  const isShop = run?.phase === 'in_node' && run.currentNode?.kind === 'shop';
-  const isEventReward = run?.phase === 'in_node' && run.currentNode?.kind === 'event' && stat?.run_result != null;
+  choiceOverlay.classList.toggle('is-shop-market', isShop);
+  choiceOverlay.classList.remove('is-battle-reward-menu');
   if (choiceTitle) {
     choiceTitle.textContent = isShop ? `商店 · ${run.gold} 金币` : isEventReward ? '事件奖励' : '奖励结算';
   }
@@ -674,45 +855,7 @@ function renderChoiceModule() {
       cardCount.textContent = `${cards.length}选${usableLimits.cards}`;
       cardMax.textContent = String(usableLimits.cards);
 
-      const inputType = 'checkbox';
-      const inputName = '';
-
-      cardOptions.innerHTML = cards
-        .map((card, idx) => {
-          const inspection = inspections.cards[idx];
-          const invalid = !inspection?.ok;
-          // 处理费用显示
-          const cost = card.cost;
-          const costDisplay =
-            cost === undefined || cost === null
-              ? ''
-              : `消耗: ${describeCardCost(cost, contentDescriptionResourceDefinitions())}`;
-          const priceDisplay = isShop ? `价格: ${recommendShopPrice('cards', card, run.act)} 金币` : '';
-          const cardDescription =
-            normalizeChinesePlayerDescription(card.description) ||
-            describeCompactCard(card, {
-              statusNames: contentDescriptionStatusNames(card),
-              resourceNames: contentDescriptionResourceNames(),
-            }) ||
-            '效果见卡牌规则';
-          const effectTags = compactContentEffectTagsHtml(card);
-
-          return `
-        <label class="option${invalid ? ' option-invalid' : ''}">
-          <input type="${inputType}" ${inputName ? `name="${inputName}"` : ''} value="${idx}" ${invalid ? 'disabled' : ''} />
-          <span class="icon">${escapeHtml(card.emoji || '🃏')}</span>
-          <span class="text">
-            <div class="name">${escapeHtml(card.name || '未知')}</div>
-            ${costDisplay ? `<div class="cost">${escapeHtml(costDisplay)}</div>` : ''}
-            ${priceDisplay ? `<div class="cost">${escapeHtml(priceDisplay)}</div>` : ''}
-            ${effectTags}
-            <div class="desc">${escapeHtml(cardDescription)}</div>
-            ${invalid ? `<div class="reward-validation">不可领取：${escapeHtml(inspection.message)}</div>` : ''}
-          </span>
-        </label>
-      `;
-        })
-        .join('');
+      renderRewardOptionList(cardOptions, 'cards', cards, inspections.cards, isShop, run);
     }
   } else {
     cardSection.style.display = 'none';
@@ -730,29 +873,7 @@ function renderChoiceModule() {
       artifactCount.textContent = `${artifacts.length}选${usableLimits.artifacts}`;
       artifactMax.textContent = String(usableLimits.artifacts);
 
-      const inputType = 'checkbox';
-      const inputName = '';
-
-      artifactOptions.innerHTML = artifacts
-        .map((artifact, idx) => {
-          const inspection = inspections.artifacts[idx];
-          const invalid = !inspection?.ok;
-          const effectTags = compactContentEffectTagsHtml(artifact);
-          return `
-        <label class="option${invalid ? ' option-invalid' : ''}">
-          <input type="${inputType}" ${inputName ? `name="${inputName}"` : ''} value="${idx}" ${invalid ? 'disabled' : ''} />
-          <span class="icon">${escapeHtml(artifact.emoji || '💎')}</span>
-          <span class="text">
-            <div class="name">${escapeHtml(artifact.name || '未知')}</div>
-            ${isShop ? `<div class="cost">价格: ${escapeHtml(recommendShopPrice('artifacts', artifact, run.act))} 金币</div>` : ''}
-            ${effectTags}
-            <div class="desc">${escapeHtml(contentRuleDescription(artifact, '效果见规则'))}</div>
-            ${invalid ? `<div class="reward-validation">不可领取：${escapeHtml(inspection.message)}</div>` : ''}
-          </span>
-        </label>
-      `;
-        })
-        .join('');
+      renderRewardOptionList(artifactOptions, 'artifacts', artifacts, inspections.artifacts, isShop, run);
     }
   } else {
     artifactSection.style.display = 'none';
@@ -770,36 +891,14 @@ function renderChoiceModule() {
       itemCount.textContent = `${items.length}选${usableLimits.items}`;
       itemMax.textContent = String(usableLimits.items);
 
-      const inputType = 'checkbox';
-      const inputName = '';
-
-      itemOptions.innerHTML = items
-        .map((item, idx) => {
-          const inspection = inspections.items[idx];
-          const invalid = !inspection?.ok;
-          const effectTags = compactContentEffectTagsHtml(item);
-          return `
-        <label class="option${invalid ? ' option-invalid' : ''}">
-          <input type="${inputType}" ${inputName ? `name="${inputName}"` : ''} value="${idx}" ${invalid ? 'disabled' : ''} />
-          <span class="icon">${escapeHtml(item.emoji || '🧪')}</span>
-          <span class="text">
-            <div class="name">${escapeHtml(item.name || '未知')}</div>
-            ${isShop ? `<div class="cost">价格: ${escapeHtml(recommendShopPrice('items', item, run.act))} 金币</div>` : ''}
-            ${effectTags}
-            <div class="desc">${escapeHtml(contentRuleDescription(item, '效果见规则'))}</div>
-            ${invalid ? `<div class="reward-validation">不可领取：${escapeHtml(inspection.message)}</div>` : ''}
-          </span>
-        </label>
-      `;
-        })
-        .join('');
+      renderRewardOptionList(itemOptions, 'items', items, inspections.items, isShop, run);
     }
   } else {
     itemSection.style.display = 'none';
   }
 
   // 显示选择模块
-  const hasChoices = cards.length > 0 || artifacts.length > 0 || items.length > 0;
+  const hasChoices = hasSelectableRewards(stat);
   choiceOverlay.style.display = hasChoices ? 'flex' : 'none';
 
   // 设置选择事件
@@ -807,38 +906,6 @@ function renderChoiceModule() {
     setupChoiceEvents(cards, artifacts, items, usableLimits);
   } else {
     __REWARD_SELECTION_MEMORY = null;
-  }
-}
-
-function rewardRerollPrompt(
-  categories: Array<'cards' | 'artifacts' | 'items'>,
-  counts: Record<string, number>,
-): string {
-  const run = readRunState(__STAT__);
-  const nodeId = run?.currentNode?.id || 'reward';
-  return [
-    `[奖励重投] node_id=${nodeId} categories=${categories.join(',')}`,
-    `[重投数量] ${categories.map(category => `${category}=${counts[category]}`).join(' ')}`,
-    '只重新生成指定类别的候选并更新变量，不续写剧情，不修改金币、牌组、选择上限或其他类别。',
-  ].join('\n');
-}
-
-async function requestRewardRerollFromUi(
-  categories: Array<'cards' | 'artifacts' | 'items'>,
-  counts: Record<string, number>,
-  retry: boolean,
-): Promise<void> {
-  if (__IS_SENDING_ACTION || categories.length === 0) return;
-  setSendingState(true);
-  try {
-    const prompt = rewardRerollPrompt(categories, counts);
-    if (retry) await runActionHost.retryPendingRewardReroll(prompt);
-    else await runActionHost.requestRewardReroll(categories, prompt, 0);
-    __RUN_ERROR = null;
-  } catch (error) {
-    showRunError(error, retry ? '重试奖励重投失败' : '请求奖励重投失败');
-  } finally {
-    setSendingState(false);
   }
 }
 
@@ -863,30 +930,6 @@ function setupChoiceEvents(cards: any[], artifacts: any[], items: any[], limits:
     };
   }
   const selections = __REWARD_SELECTION_MEMORY.selections;
-  const rerollCategories = (
-    [
-      cards.length > 0 ? 'cards' : null,
-      artifacts.length > 0 ? 'artifacts' : null,
-      items.length > 0 ? 'items' : null,
-    ] as const
-  ).filter((value): value is 'cards' | 'artifacts' | 'items' => value !== null);
-  const rerollCounts = { cards: cards.length, artifacts: artifacts.length, items: items.length };
-  const pendingReroll = __STAT__?.run_reward_reroll;
-
-  const oldReroll = document.getElementById('reroll-reward-btn') as HTMLButtonElement | null;
-  if (oldReroll) {
-    const rerollButton = oldReroll.cloneNode(true) as HTMLButtonElement;
-    oldReroll.parentNode?.replaceChild(rerollButton, oldReroll);
-    rerollButton.style.display = activeRun && rerollCategories.length > 0 ? '' : 'none';
-    rerollButton.textContent = pendingReroll ? '重试重投' : '重投候选';
-    rerollButton.disabled = __isMutating || __IS_SENDING_ACTION;
-    rerollButton.addEventListener('click', () => {
-      const categories = pendingReroll?.categories || rerollCategories;
-      const counts = pendingReroll?.expected_counts || rerollCounts;
-      void requestRewardRerollFromUi(categories, counts, Boolean(pendingReroll));
-    });
-  }
-
   const idFor = (type: 'cards' | 'artifacts' | 'items', part: 'options' | 'selected') => {
     if (type === 'cards') return `card-${part}`;
     if (type === 'artifacts') return `artifact-${part}`;
@@ -915,12 +958,7 @@ function setupChoiceEvents(cards: any[], artifacts: any[], items: any[], limits:
       // when the player taps the card body, leaving the card visually inert.
       // Forward a non-input label click to the real control so keyboard,
       // mouse and touch all take the same `change` transaction path.
-      const option = inp.closest('label.option');
-      option?.addEventListener('click', event => {
-        if (event.target === inp || inp.disabled) return;
-        event.preventDefault();
-        inp.click();
-      });
+      bindRewardSelectionSurface(inp);
       inp.addEventListener('change', ev => {
         const t = ev.target as HTMLInputElement;
         const idx = parseInt(t.value);
@@ -948,9 +986,11 @@ function setupChoiceEvents(cards: any[], artifacts: any[], items: any[], limits:
         }
 
         if (selEl) selEl.textContent = String(selections[type].length);
+        refreshRewardSelectionSurfaces(listEl);
         updateConfirmButtonState(selections, cards, artifacts, items, limits);
       });
     });
+    refreshRewardSelectionSurfaces(listEl);
   }
 
   setupOne('cards', limits.cards);
@@ -1030,7 +1070,10 @@ function setupChoiceEvents(cards: any[], artifacts: any[], items: any[], limits:
           const choiceOverlay = document.getElementById('choice-container');
           if (choiceOverlay) choiceOverlay.style.display = 'none';
 
-          await applyRewardSelectionsInline(selections);
+          if (!(await applyRewardSelectionsInline(selections))) {
+            if (choiceOverlay) choiceOverlay.style.display = '';
+            return;
+          }
           __REWARD_SELECTION_MEMORY = null;
 
           // 立即重新渲染通知模块以显示用户操作（不要立刻刷新，避免闪烁）
@@ -1039,11 +1082,11 @@ function setupChoiceEvents(cards: any[], artifacts: any[], items: any[], limits:
           if (typeof toastr !== 'undefined') {
             if (isShop) {
               if (selectedRewardCount > 0) toastr.success('交易已完成！', '商店结算');
-              else toastr.info('未购买任何商品。', '已离开商店');
+              else toastr.info('请先选择商品，或点击离开商店。', '商店');
             } else if (selectedRewardCount > 0) {
               toastr.success('奖励已成功领取！', '恭喜！');
             } else {
-              toastr.info('已跳过本次奖励。', '继续远征');
+              toastr.info('已跳过本次奖励。', '继续冒险');
             }
           }
           // 领取奖励后需要刷新页面数据
@@ -1111,7 +1154,7 @@ function applyHistoricalReadOnlyMode(): boolean {
   if (runActions) runActions.replaceChildren();
   const runCurrent = document.getElementById('run-current');
   if (runCurrent && !runCurrent.textContent?.startsWith('历史记录')) {
-    runCurrent.textContent = `历史记录 · ${runCurrent.textContent || '远征状态'}`;
+    runCurrent.textContent = `历史记录 · ${runCurrent.textContent || '冒险状态'}`;
   }
   const deleteToggle = document.getElementById('delete-mode-toggle') as HTMLButtonElement | null;
   if (deleteToggle) {
@@ -1141,8 +1184,8 @@ function startLatestMessageGuard(): void {
   );
 }
 
-function contentDescriptionStatusNames(content?: Record<string, any>): Record<string, string> {
-  const names: Record<string, string> = {};
+function contentDescriptionStatusDefinitions(content?: Record<string, any>): Record<string, Record<string, unknown>> {
+  const definitions: Record<string, Record<string, unknown>> = Object.create(null);
   const visit = (value: unknown): void => {
     if (Array.isArray(value)) {
       value.forEach(visit);
@@ -1151,21 +1194,29 @@ function contentDescriptionStatusNames(content?: Record<string, any>): Record<st
     if (!value || typeof value !== 'object') return;
     const status = value as Record<string, unknown>;
     if (typeof status.id === 'string' && typeof status.name === 'string' && status.name.trim()) {
-      names[status.id] = status.name.trim();
+      definitions[status.id] = status;
+    } else {
+      Object.values(status).filter(value => value && typeof value === 'object').forEach(visit);
     }
   };
   visit(__STAT__?.battle?.statuses);
   visit(content?.status);
-  return names;
+  visit(content?.statuses);
+  return definitions;
 }
 
-function contentDescriptionResourceDefinitions(): Record<string, { name: string; emoji: string }> {
-  const definitions: Record<string, { name: string; emoji: string }> = {};
+function contentDescriptionStatusNames(content?: Record<string, any>): Record<string, string> {
+  return Object.fromEntries(Object.entries(contentDescriptionStatusDefinitions(content))
+    .map(([id, status]) => [id, String(status.name).trim()]));
+}
+
+function contentDescriptionResourceDefinitions(): Record<string, { name: string; emoji: string; description: string }> {
+  const definitions: Record<string, { name: string; emoji: string; description: string }> = {};
   for (const resource of normalizeOptionsList<any>(__STAT__?.battle?.core?.resources)) {
     const id = typeof resource?.id === 'string' ? resource.id : '';
     const name = typeof resource?.name === 'string' ? resource.name.trim() : '';
     if (!id || !name) continue;
-    definitions[id] = { name, emoji: typeof resource?.emoji === 'string' ? resource.emoji : '' };
+    definitions[id] = { name, emoji: typeof resource?.emoji === 'string' ? resource.emoji : '', description: typeof resource.description === 'string' ? resource.description : '战斗资源，可通过对应卡牌或能力获得和消耗。' };
   }
   return definitions;
 }
@@ -1176,16 +1227,65 @@ function contentDescriptionResourceNames(): Record<string, string> {
   );
 }
 
-function contentRuleDescription(content: Record<string, any>, fallback = ''): string {
+function contentCardCostLabel(card: Record<string, any>): string {
+  return card.type === 'Curse' || card.cost === undefined
+    ? '—'
+    : describeCardCost(card.cost, contentDescriptionResourceDefinitions());
+}
+
+function contentRuleDescription(content: Record<string, any>, fallback = '', references?: ContentRuleReference[]): string {
   const options = {
+    ...(references ? { inlineStatusDetails: false, onSummonReference: (value: {id:string;name:string;rules:string}) => references.push(value) } : {}),
     statusNames: contentDescriptionStatusNames(content),
+    statusDefinitions: contentDescriptionStatusDefinitions(content),
     resourceNames: contentDescriptionResourceNames(),
+    resourceEmojis: Object.fromEntries(Object.entries(contentDescriptionResourceDefinitions()).map(([id, resource]) => [id, resource.emoji])),
+    cardNames: collectCardDisplayNames(__STAT__?.battle, content),
+    summonNames: collectSummonDisplayNames(__STAT__?.battle, content),
+    stanceNames: collectStanceNames(__STAT__?.battle, content),
+    stanceDefinitions: collectStanceDefinitions(__STAT__?.battle, content),
   };
   const description =
     typeof content?.type === 'string'
-      ? resolveCompactCardDescription(content, { ...options, includeKeywords: false })
-      : resolveCompactContentDescription(content, options);
+      ? describeCompactCard(content, options)
+      : describeCompactContent(content, options);
   return description || fallback;
+}
+
+function renderCollectionSupport(value: Record<string, any>, kind: string, extraHtml = ''): string {
+  return renderSupportDetails(value, {
+    kind, rulesHtml: kind === '资源' && !value.effects ? renderRulePills(['用于支付卡牌或能力的资源费用。']) : contentRulesHtml(value),
+    extraHtml: (kind === '道具' ? battleItemUsageHtml() : '') + extraHtml,
+  });
+}
+
+function battleItemUsageHtml(): string {
+  return `<p class="item-usage content-rules">${escapeHtml(BATTLE_ITEM_USAGE_LABEL)}</p>`;
+}
+
+function contentDescriptionEnemyNames(): Record<string, string> {
+  const battle = __STAT__?.battle;
+  const enemies = Array.isArray(battle?.enemies) ? battle.enemies : battle?.enemy ? [battle.enemy] : [];
+  return Object.fromEntries(enemies.filter((enemy: any) => typeof enemy?.id === 'string' && typeof enemy?.name === 'string').map((enemy: any) => [enemy.id, enemy.name]));
+}
+
+function contentRulesHtml(value: Record<string, any>): string {
+  const definitions = contentDescriptionStatusDefinitions(value);
+  const references: ContentRuleReference[] = [];
+  const presentation = presentCompactContent(value, value.triggers ? 'status' : typeof value.type === 'string' && ['Attack', 'Skill', 'Power', 'Curse', 'Event'].includes(value.type) ? 'card' : 'content', {
+    enemyNames: contentDescriptionEnemyNames(), inlineStatusDetails: false, onSummonReference: reference => references.push(reference),
+    statusDefinitions: definitions, statusNames: contentDescriptionStatusNames(value),
+    resourceNames: contentDescriptionResourceNames(),
+    resourceEmojis: Object.fromEntries(Object.entries(contentDescriptionResourceDefinitions()).map(([id, resource]) => [id, resource.emoji])),
+    cardNames: collectCardDisplayNames(__STAT__?.battle, value),
+    summonNames: collectSummonDisplayNames(__STAT__?.battle, value),
+    stanceNames: collectStanceNames(__STAT__?.battle, value),
+    stanceDefinitions: collectStanceDefinitions(__STAT__?.battle, value),
+  });
+  return renderRulePills(presentation.rulesGroups.length ? presentation.rulesGroups : ['暂无可显示的结构化规则'],
+    [...Object.entries(contentDescriptionResourceDefinitions()).map(([id, resource]) => ({id, name: resource.name, rules: resource.description, kind: 'resource' as const})), ...references, ...Object.entries(definitions).map(([id, status]) => ({ id, name: String(status.name),
+      rules: describeCompactStatus(status, { enemyNames: contentDescriptionEnemyNames(), statusDefinitions: definitions, statusNames: contentDescriptionStatusNames(value) }),
+      flavor: String(status.description || '') }))]);
 }
 
 function effectTagsHtml(tags: readonly EffectDisplayTag[]): string {
@@ -1198,20 +1298,12 @@ function effectTagsHtml(tags: readonly EffectDisplayTag[]): string {
     .join('')}</div>`;
 }
 
-function compactContentEffectTagsHtml(content: Record<string, any>): string {
-  return effectTagsHtml(
-    compactContentToDisplayTags(content, {
-      statusNames: contentDescriptionStatusNames(content),
-      resourceNames: contentDescriptionResourceNames(),
-    }),
-  );
-}
-
 function compactStatusEffectTagsHtml(status: Record<string, any>): string {
   const names = contentDescriptionStatusNames(status);
   const tags = Object.entries(status?.triggers || {}).flatMap(([trigger, effects]) =>
-    compactContentToDisplayTags({ trigger: { on: trigger, effects } }, { statusNames: names }),
+    compactContentToDisplayTags({ trigger: { on: trigger, effects }, creates: status.creates }, { statusNames: names }),
   );
+  tags.push(...compactContentToDisplayTags({ protection: status.protection }, { enemyNames: contentDescriptionEnemyNames() }));
   return effectTagsHtml(tags);
 }
 
@@ -1228,10 +1320,66 @@ function translateCardType(type: string): string {
 }
 
 // 初始化UI
+let towerStartSelectedMechanics: string[] = [];
+
+function towerStartDifficulty(): HTMLSelectElement | null {
+  return document.getElementById('tower-start-difficulty') as HTMLSelectElement | null;
+}
+
+function persistTowerDifficultyPercent(value: number): void {
+  const difficultyPercent = Math.max(10, Math.min(110, Math.round(Number(value) || 80)));
+  try {
+    const storage = window.localStorage;
+    const current = JSON.parse(String(storage.getItem('mwg:settings-center:v2') || '{}')) as Record<string, unknown>;
+    storage.setItem('mwg:settings-center:v2', JSON.stringify({ ...current, difficultyPercent }));
+  } catch {
+    // Restricted embedded documents can omit localStorage; the extension API remains authoritative.
+  }
+  try {
+    const scope = ((window.parent && window.parent !== window) ? window.parent : window) as any;
+    scope.MagicGirlDesignAssistant?.updateSettings?.({ difficultyPercent });
+  } catch {
+    // The settings orb may not be mounted yet; the persisted value is picked up on its next render.
+  }
+}
+
 function initializeUI() {
+  const mechanicsHelp = document.getElementById('status-mechanics-help');
+  mechanicsHelp?.replaceChildren();
+  let refreshArchetypePicker = () => {};
+  const pickerHost = document.getElementById('tower-archetype-picker');
+  const pickerTarget = document.getElementById('tower-start-card') as HTMLTextAreaElement | null;
+  refreshArchetypePicker = bindTowerArchetypePicker(pickerHost, pickerTarget, {
+    getSelectedMechanics: () => towerStartSelectedMechanics,
+    onSelectionChange: ids => {
+      towerStartSelectedMechanics = ids;
+      pickerHost?.dispatchEvent(new CustomEvent('tower-archetype-selection-change', { bubbles: true }));
+    },
+  });
+  try { bindTowerStartPresets(document, window.localStorage, {
+    onApplied: refreshArchetypePicker,
+    getSelectedMechanics: () => towerStartSelectedMechanics,
+    setSelectedMechanics: ids => { towerStartSelectedMechanics = ids.filter(id => TOWER_ARCHETYPE_PRESETS.some(preset => preset.id === id)); },
+  }); }
+  catch { /* Storage may be unavailable in a restricted embedding. */ }
   document.getElementById('delete-mode-toggle')?.addEventListener('click', toggleDeleteMode);
   document.querySelector('.battle-book-btn')?.addEventListener('click', toggleBattleBook);
   document.getElementById('tower-start-button')?.addEventListener('click', () => void startTowerFromPanel());
+  const difficulty = towerStartDifficulty();
+  if (difficulty) {
+    difficulty.value = String(readRuntimeContentDesignSettings().difficultyPercent);
+    difficulty.addEventListener('change', () => {
+      persistTowerDifficultyPercent(Number(difficulty.value));
+      difficulty.value = String(readRuntimeContentDesignSettings().difficultyPercent);
+    });
+  }
+  document.getElementById('tower-start-cancel')?.addEventListener('click', () => {
+    if (!__towerStartInFlight || !isCurrentMessageLatest()) return;
+    const cancelled = (globalThis as any).MagicGirlWorld?.cancelTowerInitialStart?.({
+      sourceMessageId: getCurrentMessageVariableOptions().message_id,
+    });
+    setTowerStartStatus(cancelled ? '正在取消本次生成，不会自动重试。' : '当前正在准备或保存开局，此阶段不能取消。');
+  });
   document.getElementById('tower-start-extension-button')?.addEventListener('click', () => {
     void installTowerExtensionFromPanel();
   });
@@ -1241,6 +1389,7 @@ function initializeUI() {
 function handleCommonDocumentClick(event: MouseEvent): void {
   const target = event.target;
   if (!(target instanceof Element)) return;
+  if (target.closest('#tower-player-resolve-removals')) { event.preventDefault(); void offerPendingCardRemovals(true); return; }
   if (!target.closest('#run-repair-btn')) return;
   event.preventDefault();
   const readiness = currentInitialContentReadiness();
@@ -1293,7 +1442,7 @@ function showRunError(error: unknown, fallback: string): void {
       ? String((error as Record<string, unknown>).message)
       : '';
   __RUN_ERROR = error instanceof Error ? error.message : crossRealmMessage || fallback;
-  for (const id of ['run-error', 'run-opt-in-error']) {
+  for (const id of selectedGameMode(__STAT__) === 'tower' ? ['run-error'] : ['run-error', 'run-opt-in-error']) {
     const errorEl = document.getElementById(id);
     if (!errorEl) continue;
     errorEl.textContent = __RUN_ERROR;
@@ -1325,6 +1474,7 @@ async function activateTowerNode(node: RunNodeChoice): Promise<void> {
   setRunButtonsDisabled(true);
   try {
     await runActionHost.activateTowerRunNode(node.id);
+    requestUserFocus('@room');
     __PENDING_REWARD_SUMMARY = null;
     __PENDING_RUN_SUMMARY = null;
     __RUN_ERROR = null;
@@ -1336,6 +1486,23 @@ async function activateTowerNode(node: RunNodeChoice): Promise<void> {
     setSendingState(false);
     setRunButtonsDisabled(false);
   }
+}
+
+async function settleInitialArtifacts(): Promise<void> {
+  if (__IS_SENDING_ACTION) return;
+  setSendingState(true);
+  setRunButtonsDisabled(true);
+  try {
+    const receipt = readPendingInitialArtifactAcquisition(__STAT__);
+    if (!receipt) return;
+    const answers = await collectArtifactAcquisitionAnswers({ stat: __STAT__ || {}, artifacts: receipt.artifacts });
+    if (answers === null) return;
+    await runActionHost.settleInitialArtifactAcquisition(receipt.generationId, answers);
+    __USER_MUTATION_PILLS.push('初始遗物效果已领取');
+    __RUN_ERROR = null;
+    await loadGameData();
+  } catch (error) { showRunError(error, '初始遗物领取失败'); }
+  finally { setSendingState(false); setRunButtonsDisabled(false); }
 }
 
 async function settleTowerOpeningChoice(choiceId: string): Promise<void> {
@@ -1351,13 +1518,16 @@ async function settleTowerOpeningChoice(choiceId: string): Promise<void> {
     const choice = Array.isArray(content?.choices)
       ? content.choices.find((entry: any) => entry?.id === choiceId)
       : null;
-    const result = await runActionHost.settleTowerOpeningChoice(choiceId);
+    const acquisitionAnswers = await collectArtifactAcquisitionAnswers(previewAcquisition(__STAT__ || {}, { kind: 'opening', choiceId }));
+    if (acquisitionAnswers === null) return;
+    const result = await runActionHost.settleTowerOpeningChoice(choiceId, acquisitionAnswers);
     __USER_MUTATION_PILLS.push(`开局馈赠：${String(choice?.label || choiceId)}`);
     __PENDING_RUN_SUMMARY = `{{user}}选择了开局馈赠：${String(choice?.label || choiceId)}`;
     if (result.cards.length) __USER_MUTATION_PILLS.push(`新增卡牌：${result.cards.join('、')}`);
     if (result.artifacts.length) __USER_MUTATION_PILLS.push(`新增遗物：${result.artifacts.join('、')}`);
     if (result.items.length) __USER_MUTATION_PILLS.push(`新增道具：${result.items.join('、')}`);
     __RUN_ERROR = null;
+    requestUserFocus('#tower-map-root');
     await loadGameData();
   } catch (error) {
     showRunError(error, '开局馈赠结算失败');
@@ -1389,13 +1559,30 @@ async function settleTowerEventChoice(choiceId: string): Promise<void> {
   setRunButtonsDisabled(true);
   try {
     const event = __STAT__?.run_event;
-    const choice = Array.isArray(event?.choices) ? event.choices.find((entry: any) => entry?.id === choiceId) : null;
-    const result = await runActionHost.settleTowerEventChoice(choiceId);
+    const flow = parseTowerEventFlow(event, planTowerEventOutcome);
+    const state = __STAT__?.run_event_state;
+    const stage = requireTowerEventStage(flow, state?.stage_id ?? flow.startStage);
+    const choice = stage.choices.find(entry => entry.id === choiceId);
+    if (!choice) throw new Error('事件选项已经变化');
+    const plan = planTowerEventOutcome(choice.outcome);
+    const settlement = { ...choice.outcome };
+    delete settlement.outcome; delete settlement.reward;
+    const seed = JSON.stringify([__STAT__?.run?.seed, __STAT__?.run?.currentNode?.id, stage.id, choiceId]);
+    const expectedRevision = __STAT__?.run_transaction_revision ?? 0;
+    const answers = await collectNonCombatAnswers({ stat: __STAT__ || {}, settlement, seed,
+      randomSeeds: Object.fromEntries(plan.deckActions.filter(action => action.pick === 'random')
+        .map(action => [action.id, state?.random_seeds?.[towerEventRandomKey(choiceId, action.id)]])),
+      randomTargets: Object.fromEntries(plan.deckActions.filter(action => action.pick === 'random')
+        .map(action => [action.id, state?.random_targets?.[towerEventRandomKey(choiceId, action.id)]])) });
+    if (answers === null) return;
+    const result = await runActionHost.settleTowerEventChoice(choiceId, { answers, stageId: stage.id,
+      expectedEventRevision: state?.revision, expectedRevision });
     const label = String(choice?.label || choiceId);
     __USER_MUTATION_PILLS.push(`事件选择：${label}`);
     __PENDING_RUN_SUMMARY = `{{user}}在事件中选择了：${label}`;
     if (result.pendingReward) __PENDING_REWARD_SUMMARY = `{{user}}完成事件选择：${label}`;
     __RUN_ERROR = null;
+    requestUserFocus('@room');
     await loadGameData();
   } catch (error) {
     showRunError(error, '事件选择结算失败');
@@ -1723,21 +1910,38 @@ async function duplicateRestCard(card: Record<string, any>): Promise<void> {
   }
 }
 
+async function actAtCampfire(action: 'train' | 'scavenge' | 'recall', cardId?: string): Promise<void> {
+  try {
+    const summary = await runActionHost.actAtCampfire(action, cardId);
+    __USER_MUTATION_PILLS.push(summary); __PENDING_RUN_SUMMARY = summary; __RUN_ERROR = null;
+    requestUserFocus('@room');
+    await loadGameData();
+  } catch (error) { showRunError(error, '营火行动失败'); }
+}
+
 async function healAtRest(): Promise<void> {
   try {
     const result = await runActionHost.healAtRest();
     __USER_MUTATION_PILLS.push(`营火恢复：${result.healed}生命`);
     __PENDING_RUN_SUMMARY = `{{user}}在营火恢复了${result.healed}点生命`;
     __RUN_ERROR = null;
+    requestUserFocus('@room');
     await loadGameData();
   } catch (error) {
     showRunError(error, '营火恢复失败');
   }
 }
 
+async function removeCardAtShop(id: string): Promise<void> {
+  try {
+    await runActionHost.removeCardAtShop(id);
+    __RUN_ERROR = null; await loadGameData();
+  } catch (error) { showRunError(error, '商店删卡失败'); }
+}
+
 async function leaveCurrentShop(): Promise<void> {
   try {
-    await runActionHost.leaveShop();
+    await runActionHost.leaveShop(); requestUserFocus('#tower-map-root');
     __PENDING_RUN_SUMMARY = '{{user}}离开了商店';
     __RUN_ERROR = null;
     await loadGameData();
@@ -1753,7 +1957,7 @@ async function restartCurrentRun(): Promise<void> {
     __RUN_ERROR = null;
     await loadGameData();
   } catch (error) {
-    showRunError(error, '新远征初始化失败');
+    showRunError(error, '新冒险初始化失败');
   }
 }
 
@@ -1781,12 +1985,55 @@ function renderTowerMap(stat: any, run: RunState, selectionEnabled: boolean): bo
   const root = document.getElementById('tower-map-root');
   const section = document.getElementById('run-section');
   if (!root || !section) return false;
+  if (currentTowerScreen(stat, hasSelectableRewards(stat)) !== 'map') {
+    __TOWER_MAP_APP?.destroy(); __TOWER_MAP_APP = null;
+    root.style.display = 'none';
+    section.classList.add('has-tower-map');
+    return true;
+  }
+  document.getElementById('tower-route-notice')?.remove();
   root.style.display = '';
   section.classList.add('has-tower-map');
   const heading = section.querySelector<HTMLElement>(':scope > .run-heading');
   if (heading) heading.style.display = 'none';
 
   const callbacks: TowerAppCallbacks = {
+    onBlockedNode: () => {
+      const current = readRunState(__STAT__);
+      let message = '下一层内容正在准备，请稍候。';
+      let selector = '#tower-route-notice';
+      if (!isCurrentMessageLatest()) message = '请在最新消息中继续冒险。';
+      else if (__IS_SENDING_ACTION) message = '正在处理当前选择，请稍候。';
+      else if (current?.opening && !['consumed', 'skipped'].includes(current.opening.phase)) {
+        message = '请先选择并领取开局馈赠，再进入下一层。'; selector = '#tower-node-panel-root';
+      } else if (hasSelectableRewards(__STAT__)) {
+        message = '请先完成战利品选择，并点击确认领取，再进入下一层。'; selector = '.action-section';
+      }
+      else if (current?.phase === 'in_node') {
+        message = '请先完成当前地点的选择或结算，再进入下一层。'; selector = '#tower-node-panel-root';
+      }
+      let notice = document.getElementById('tower-route-notice');
+      if (!notice) {
+        notice = document.createElement('div'); notice.id = 'tower-route-notice'; notice.className = 'tower-route-notice'; notice.setAttribute('role', 'status');
+        root.before(notice);
+      }
+      notice.replaceChildren();
+      if (selector === '#tower-route-notice' && isCurrentMessageLatest() && !__IS_SENDING_ACTION) {
+        const progress = document.createElement('button');
+        progress.type = 'button';
+        progress.className = 'tower-route-progress';
+        progress.textContent = `${message} 查看生成进度 ›`;
+        progress.addEventListener('click', () => {
+          (globalThis as any).MagicGirlWorld?.openGenerationDiagnostics?.();
+        });
+        notice.append(progress);
+      } else notice.textContent = message;
+      notice.hidden = false;
+      const target = document.querySelector<HTMLElement>(selector);
+      if (target) scrollUserNavigationTargetIntoView(target, documentViewportHeight(document));
+      highlightFocusedSurface(target);
+      target?.querySelector<HTMLElement>('button:not(:disabled)')?.focus({ preventScroll: true });
+    },
     ...(selectionEnabled
       ? {
           onNodeSelect: (node: { id: string }) => {
@@ -1809,6 +2056,8 @@ function renderTowerMap(stat: any, run: RunState, selectionEnabled: boolean): bo
   };
   const options = {
     difficultyPercent: readRuntimeContentDesignSettings().difficultyPercent,
+    playerHp: Number(stat?.battle?.core?.hp),
+    playerMaxHp: Number(stat?.battle?.core?.max_hp),
     error: __RUN_ERROR || '',
   };
   if (!__TOWER_MAP_APP) {
@@ -1829,6 +2078,7 @@ function renderTowerNodeContent(stat: any, run: RunState, active: boolean): bool
     }
     return false;
   }
+  root.hidden = false;
   const node = run.currentNode;
   return renderTowerNodePanel({
     root,
@@ -1838,9 +2088,11 @@ function renderTowerNodeContent(stat: any, run: RunState, active: boolean): bool
     busy: __IS_SENDING_ACTION,
     callbacks: {
       onOpeningChoice: choiceId => void settleTowerOpeningChoice(choiceId),
+      onInitialArtifactAcquisition: () => void settleInitialArtifacts(),
       onRetryOpening: () => void retryTowerOpening(),
       onEventChoice: choiceId => void settleTowerEventChoice(choiceId),
       onRestHeal: () => void healAtRest(),
+      onRestAction: (action, cardId) => void actAtCampfire(action, cardId),
       ...(node?.kind === 'rest'
         ? {
             onRestCardAction: (action: TowerRestCardAction, card: Record<string, any>) =>
@@ -1848,7 +2100,12 @@ function renderTowerNodeContent(stat: any, run: RunState, active: boolean): bool
           }
         : {}),
       onLeaveShop: () => void leaveCurrentShop(),
+      onShopRemove: id => void removeCardAtShop(id),
       onRestart: () => void restartCurrentRun(),
+      onContinueStory: async input => {
+        if (!isCurrentMessageLatest()) throw new Error('请在最新楼层继续剧情');
+        await continueExpeditionStory(input);
+      },
     },
   });
 }
@@ -1856,6 +2113,21 @@ function renderTowerNodeContent(stat: any, run: RunState, active: boolean): bool
 function towerRarity(value: unknown): string {
   const rarity = String(value || 'Common');
   return ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Corrupt'].includes(rarity) ? rarity : 'Common';
+}
+
+/** Same face as the hand, with full text and no combat input handlers. */
+function renderCollectionCard(card: Record<string, any>): string {
+  return renderCardFace({
+    ...card, id: card.id || '', name: card.name || '未命名卡牌',
+    rarity: towerRarity(card.rarity), type: card.type || 'Skill', emoji: card.emoji || '🃏',
+  }, {
+    costLabel: card.type === 'Curse' ? '—' : contentCardCostLabel(card),
+    rarityLabel: CARD_RARITY_LABELS[towerRarity(card.rarity)],
+    typeLabel: translateCardType(card.type || 'Skill'),
+    compositeCost: typeof card.cost === 'object' && card.cost !== null,
+    rulesHtml: contentRulesHtml(card),
+    quantity: Math.max(1, Number(card.quantity) || 1),
+  });
 }
 
 function renderTowerPlayerSummary(stat: any, active: boolean): void {
@@ -1878,10 +2150,10 @@ function renderTowerPlayerSummary(stat: any, active: boolean): void {
   setText('tower-player-ability', profession.ability, '能力会随起始牌组一同建立');
   setText('tower-player-hp', `${core.hp ?? 0}/${core.max_hp ?? 0}`);
   setText('tower-player-lust', `${core.lust ?? 0}/${core.max_lust ?? 0}`);
-  setText('tower-player-level', `LV ${battle.level ?? 1}`);
-  setText('tower-player-exp', battle.exp ?? 0);
   setText('tower-player-energy', core.max_energy ?? core.energy ?? 3);
   setText('tower-player-removals', core.card_removal_count ?? 0);
+  const removalButton = document.getElementById('tower-player-resolve-removals') as HTMLButtonElement | null;
+  if (removalButton) { removalButton.hidden = !(Number(core.card_removal_count) > 0); removalButton.disabled = !isCurrentMessageLatest(); }
   setText('tower-player-item-slots', `${towerItemSlotsUsed(battle.items)}/${MAX_TOWER_ITEM_SLOTS}`);
 
   const cards = migratePersistentRunDeck(normalizeOptionsList<Record<string, any>>(battle.cards));
@@ -1890,40 +2162,21 @@ function renderTowerPlayerSummary(stat: any, active: boolean): void {
   const deckRoot = document.getElementById('tower-player-deck');
   if (deckRoot) {
     deckRoot.innerHTML = cards.length
-      ? cards.map(card => {
-          const rarity = towerRarity(card.rarity);
-          const rules = contentRuleDescription(card, card.description || '查看卡牌效果');
-          const description = String(card.description || '').trim();
-          const cost = card.type === 'Curse' || card.cost === undefined
-            ? '—'
-            : card.cost === 'energy'
-              ? 'X'
-              : String(card.cost);
-          const source = String(card.source || card.origin_name || '').trim();
-          return `<article class="tower-player-card" data-rarity="${rarity}">
-            <header class="tower-player-card-head">
-              <b class="tower-player-card-cost" title="能量费用">${escapeHtml(cost)}</b>
-              <div class="tower-player-card-title"><strong>${escapeHtml(card.emoji || '🃏')} ${escapeHtml(card.name || card.id || '未命名卡牌')}</strong><span><i>${escapeHtml(translateCardType(card.type || 'Skill'))}</i><i>${escapeHtml(rarity)}</i>${source ? `<i>来源：${escapeHtml(source)}</i>` : ''}</span></div>
-              <em>×${escapeHtml(card.quantity || 1)}</em>
-            </header>
-            ${description ? `<p class="tower-player-card-flavor">${escapeHtml(description)}</p>` : ''}
-            <p class="tower-player-card-rules">${escapeHtml(rules)}</p>
-          </article>`;
-        }).join('')
+      ? cards.map(card => renderCollectionCard(card)).join('')
       : '<p class="tower-player-empty">正在初始化起始牌组…</p>';
   }
 
-  const renderResources = (rootId: string, values: Record<string, any>[], empty: string) => {
+  const renderResources = (rootId: string, values: Record<string, any>[], empty: string, battleOnly: ReadonlySet<Record<string, any>> = new Set()) => {
     const root = document.getElementById(rootId);
     if (!root) return;
+    const isItem = rootId === 'tower-player-items';
     root.innerHTML = values.length
-      ? values.map(value => `<article class="tower-player-resource"><header><strong>${escapeHtml(value.emoji || '✦')} ${escapeHtml(value.name || value.id || '未命名')}</strong>${value.count ? `<em>×${escapeHtml(value.count)}</em>` : ''}</header><p>${escapeHtml(contentRuleDescription(value, value.description || '效果见规则'))}</p></article>`).join('')
+      ? values.map(value => `<details class="tower-support-detail"><summary title="${escapeHtml(value.name || value.id || '查看详情')}" aria-label="${escapeHtml(value.name || value.id || '查看详情')}"><span aria-hidden="true">${escapeHtml(value.emoji || '✦')}</span><span>${escapeHtml(value.name || value.id || '查看详情')}</span>${value.count ? `<small>×${escapeHtml(value.count)}</small>` : ''}</summary><div class="collection-support">${renderCollectionSupport(value, isItem ? '道具' : rootId === 'tower-player-artifacts' ? '遗物' : rootId === 'tower-player-lust-effects' ? '欲望效果' : rootId === 'tower-player-resources' ? '资源' : '能力与状态', battleOnly.has(value) ? '<p>本场 · 战斗结算后移除</p>' : '')}</div></details>`).join('')
       : `<p class="tower-player-empty">${escapeHtml(empty)}</p>`;
   };
   const artifacts = normalizeOptionsList<Record<string, any>>(battle.artifacts);
   const items = normalizeOptionsList<Record<string, any>>(battle.items);
   setText('tower-player-artifact-count', artifacts.length);
-  setText('tower-player-item-count', towerItemSlotsUsed(items));
   renderResources('tower-player-artifacts', artifacts, '暂无遗物');
   renderResources('tower-player-items', items, '暂无道具');
   const abilities = normalizeOptionsList<Record<string, any>>(battle.player_abilities);
@@ -1938,19 +2191,34 @@ function renderTowerPlayerSummary(stat: any, active: boolean): void {
   const permanentStatuses = normalizeOptionsList<Record<string, any>>(stat?.status?.permanent_status);
   const resources = normalizeOptionsList<Record<string, any>>(core.resources).map(value => ({
     ...value,
-    description: `${value.current ?? 0}/${value.max ?? 0}${value.refresh ? ` · ${value.refresh}` : ''}`,
+    description: `${value.current ?? value.start ?? 0}/${value.max ?? 0} · ${value.refresh === 'reset' ? '回合开始补满' : '回合间保留'} · ${value.end_of_battle === 'reset' ? `战后恢复至 ${value.start ?? 0}` : '战后保留结余'}${value.description ? `。${value.description}` : ''}`,
   }));
   const lustEffect = battle.player_lust_effect && typeof battle.player_lust_effect === 'object'
     ? [{ emoji: '💗', ...battle.player_lust_effect }]
     : [];
   renderResources(
     'tower-player-effects',
-    [...lustEffect, ...abilities, ...activeStatuses, ...permanentStatuses, ...resources],
+    [...abilities, ...activeStatuses, ...permanentStatuses],
     '暂无额外战斗能力或状态',
+    new Set([...abilities, ...activeStatuses]),
   );
+  renderResources('tower-player-lust-effects', lustEffect, '暂无欲望效果');
+  renderResources('tower-player-resources', resources, '暂无特殊资源');
+  renderResources('tower-player-status-library', [...statusDefinitions.values()], '暂无状态定义');
 }
 
 function renderRunData(stat: any): void {
+  const run = readRunState(stat);
+  if (run && isLockedTowerMapRun(stat, run)) ensureTowerRunDom();
+  // A same-message act transition has no new assistant message to wake the
+  // coordinator. Retry the idempotent wake once per pending act, after render.
+  if (run && isCurrentMessageLatest() && !hasSelectableRewards(stat) && run.opening.phase === 'pending') {
+    const key = `${run.seed}:${run.act}`;
+    if (__PENDING_OPENING_WAKE_KEY !== key) {
+      __PENDING_OPENING_WAKE_KEY = key;
+      queueMicrotask(() => { void Promise.resolve((globalThis as any).MagicGirlWorld?.scheduleTowerGeneration?.('pending-act-visible')).catch(error => console.warn('幕间接续唤醒失败', error)); });
+    }
+  }
   const section = document.getElementById('run-section');
   const currentEl = document.getElementById('run-current');
   const actions = document.getElementById('run-actions');
@@ -1959,7 +2227,6 @@ function renderRunData(stat: any): void {
   const repairButton = document.getElementById('run-repair-btn') as HTMLButtonElement | null;
   const optInError = document.getElementById('run-opt-in-error');
   const actionSection = document.querySelector('.action-section') as HTMLElement | null;
-  const run = readRunState(stat);
   if (!section || !currentEl || !actions || !errorEl) {
     if (section) section.style.display = 'none';
     return;
@@ -1973,7 +2240,7 @@ function renderRunData(stat: any): void {
     section.style.display = expeditionMode && isLatest ? '' : 'none';
     renderTowerStartPanel(expeditionMode && isLatest);
     if (expeditionMode && isLatest) {
-      currentEl.textContent = '建立本次远征';
+      currentEl.textContent = '建立本次冒险';
       if (actionSection) actionSection.style.display = 'none';
       return;
     }
@@ -2019,6 +2286,35 @@ function renderRunData(stat: any): void {
     if (actionSection) actionSection.style.display = 'none';
     return;
   }
+  const publication = lockedTowerMap && isLatest
+    ? (globalThis as any).MagicGirlWorld?.getTowerInitialPublicationStatus?.() : null;
+  if (publication?.ready === false) {
+    teardownTowerMap();
+    currentEl.textContent = publication.busy ? '正在确认开局保存' : '开局保存尚未确认';
+    errorEl.textContent = __RUN_ERROR || publication.message;
+    errorEl.style.display = '';
+    if (actionSection) actionSection.style.display = 'none';
+    const recover = document.createElement('button');
+    recover.type = 'button';
+    recover.className = 'run-choice';
+    recover.textContent = '完成开局保存（不重新生成）';
+    recover.disabled = publication.busy === true;
+    recover.addEventListener('click', () => {
+      recover.disabled = true;
+      void (async () => {
+        try {
+          __RUN_ERROR = '';
+          await (globalThis as any).MagicGirlWorld.resumeTowerInitialCommit();
+        } catch (error) {
+          showRunError(error, '开局保存恢复失败');
+        } finally {
+          await loadGameData();
+        }
+      })();
+    });
+    actions.appendChild(recover);
+    return;
+  }
   const needsStoryChoice = !lockedTowerMap && run.phase === 'in_node' && run.currentNode?.kind === 'event';
   // Initial deck/enemy readiness is a one-time gate for the beginning of Act 1.
   // Later acts also begin at floor 0, but their routes are already backed by
@@ -2027,7 +2323,6 @@ function renderRunData(stat: any): void {
   const needsInitialContentGate =
     run.act === 1 && run.floor === 0 && run.phase === 'awaiting_choice' && !hasRewards;
   const readiness = needsInitialContentGate ? currentInitialContentReadiness() : null;
-  const pendingReroll = stat?.run_reward_reroll;
   const openingResolved = !lockedTowerMap || run.opening?.phase === 'consumed' || run.opening?.phase === 'skipped';
   const towerMapActive = renderTowerMap(
     stat,
@@ -2035,12 +2330,11 @@ function renderRunData(stat: any): void {
     isLatest &&
       run.phase === 'awaiting_choice' &&
       !hasRewards &&
-      !pendingReroll &&
       openingResolved &&
       (!readiness || readiness.ok),
   );
   renderTowerNodeContent(stat, run, towerMapActive);
-  if (actionSection) actionSection.style.display = isLatest && (hasRewards || needsStoryChoice) ? '' : 'none';
+  if (actionSection) actionSection.style.display = isLatest && (hasRewards || needsStoryChoice || (run.phase==='in_node'&&run.currentNode?.kind==='shop')) ? '' : 'none';
 
   const addButton = (text: string, className: string, handler: () => void) => {
     const button = document.createElement('button');
@@ -2058,7 +2352,7 @@ function renderRunData(stat: any): void {
         ? `历史记录 · Act ${run.act} 第 ${run.floor + 1} 层前`
         : run.currentNode
           ? `历史记录 · ${runNodeSummary(run.currentNode)}`
-          : `历史记录 · ${run.phase === 'won' ? '远征完成' : '远征失败'}`;
+          : `历史记录 · ${run.phase === 'won' ? '冒险完成' : '冒险失败'}`;
     return;
   }
 
@@ -2070,16 +2364,6 @@ function renderRunData(stat: any): void {
     errorEl.textContent = formatPlayerContentReadiness(readiness);
     errorEl.style.display = '';
     addButton('请求 AI 修复', 'run-choice run-repair', () => void requestInitialContentRepair(readiness));
-    return;
-  }
-
-  if (pendingReroll && Array.isArray(pendingReroll.categories)) {
-    currentEl.textContent = __RUN_ERROR ? '奖励重投需要重试' : '正在等待奖励重投结果';
-    addButton(
-      '重试重投',
-      'run-choice',
-      () => void requestRewardRerollFromUi(pendingReroll.categories, pendingReroll.expected_counts || {}, true),
-    );
     return;
   }
 
@@ -2095,7 +2379,7 @@ function renderRunData(stat: any): void {
     } else if (run.phase === 'in_node' && run.currentNode) {
       currentEl.textContent = runNodeSummary(run.currentNode);
     } else {
-      currentEl.textContent = run.phase === 'won' ? '远征完成' : '远征失败';
+      currentEl.textContent = run.phase === 'won' ? '冒险完成' : '冒险失败';
     }
     return;
   }
@@ -2113,8 +2397,8 @@ function renderRunData(stat: any): void {
     return;
   }
   if (run.phase === 'won' || run.phase === 'lost') {
-    currentEl.textContent = run.phase === 'won' ? '远征完成' : '远征失败';
-    addButton('开始新远征', 'run-choice', () => void restartCurrentRun());
+    currentEl.textContent = run.phase === 'won' ? '冒险完成' : '冒险失败';
+    addButton('开始新冒险', 'run-choice', () => void restartCurrentRun());
     return;
   }
 
@@ -2152,6 +2436,7 @@ function renderRunData(stat: any): void {
 
 // 基于经验的升级结算：经验阈值为 100 + 50×(当前等级-1)，每到偶数级发放一次删卡次数。
 async function settleLevelByExp(): Promise<ProgressionSettlement | null> {
+  if (readGameMode(__STAT__) === 'tower') return null;
   if (!isCurrentMessageLatest()) return null;
   if (!needsProgressionSettlement(__STAT__?.battle)) return null;
   let settlement: ProgressionSettlement | null = null;
@@ -2190,15 +2475,18 @@ function setTowerStartStatus(message: string, error = false): void {
 
 function setTowerStartBusy(active: boolean): void {
   __towerStartInFlight = active;
+  const cancel = document.getElementById('tower-start-cancel');
+  if (cancel) cancel.hidden = !active || !(globalThis as any).MagicGirlWorld
+    ?.getDesignAssistantCapabilities?.()?.initialStartCancellation;
   document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
-    '#tower-start-panel input, #tower-start-panel textarea',
+    '#tower-start-panel input, #tower-start-panel textarea, #tower-start-panel select, #tower-start-panel .tower-preset-controls button, #tower-start-panel .tower-archetype-picker button',
   ).forEach(control => {
     control.disabled = active;
   });
   const button = document.getElementById('tower-start-button') as HTMLButtonElement | null;
   if (button) {
     button.disabled = active || !towerExtensionReadiness().ready;
-    button.textContent = active ? '正在建立远征…' : '开始爬塔';
+    button.textContent = active ? '正在建立冒险…' : '开始爬塔';
   }
 }
 
@@ -2216,6 +2504,7 @@ function readTowerStartConfig(): CharacterConfig {
     opening: towerStartField('tower-start-opening') || undefined,
     card: towerStartField('tower-start-card') || undefined,
     towerRequirements: towerStartField('tower-start-requirements') || undefined,
+    selectedMechanics: buildTowerArchetypePrompt(TOWER_ARCHETYPE_PRESETS.filter(preset => towerStartSelectedMechanics.includes(preset.id))) || undefined,
   };
 }
 
@@ -2225,10 +2514,14 @@ async function persistTowerMode(config?: CharacterConfig): Promise<void> {
     lockGameModeInStat(variables.stat_data, 'tower');
     if (config?.towerRequirements) variables.stat_data.tower_requirements = config.towerRequirements;
     else if (config) delete variables.stat_data.tower_requirements;
+    if (config) variables.stat_data.selected_mechanics = config.selectedMechanics?.trim() || '';
     return variables;
   };
   await updateCurrentMessageVariablesWith(update);
-  await updateCurrentChatVariablesWith(update);
+  // This single-floor flow owns the latest message's complete MVU state.
+  // Do not also create a chat-scope stat_data copy: MVU deliberately removes
+  // that copy on reload when chat-variable compatibility is disabled. Reads,
+  // generation, and commits already use the authoritative message snapshot.
 }
 
 async function installTowerExtensionFromPanel(): Promise<void> {
@@ -2271,10 +2564,14 @@ async function startTowerFromPanel(): Promise<void> {
     setTowerStartStatus('爬塔组件没有加载单层启动功能，请更新组件并刷新酒馆。', true);
     return;
   }
-  const config = readTowerStartConfig();
   setTowerStartBusy(true);
-  setTowerStartStatus('正在一次生成引导剧情、初始牌组与启程馈赠…');
   try {
+    const messageId = getCurrentMessageVariableOptions().message_id;
+    if (!isCurrentMessageLatest() || getCurrentMessageVariableOptions().message_id !== messageId) {
+      setTowerStartBusy(false); return;
+    }
+    const config = readTowerStartConfig();
+    setTowerStartStatus('正在生成引导剧情，再据此建立初始牌组与启程馈赠…');
     await ensureMvuRuntimeReady({ mvuTimeoutMs: 30_000, battleDataTimeoutMs: 30_000, requireBattleData: false });
     await persistTowerMode(config);
     await runtime.startTowerSingleFloor({
@@ -2283,21 +2580,25 @@ async function startTowerFromPanel(): Promise<void> {
       prompt: createCharacterStartMessage(config),
       config,
     });
-    setTowerStartStatus('远征已建立，正在显示馈赠与程序地图。');
+    setTowerStartStatus('冒险已建立，正在显示馈赠与程序地图。');
     if (__commonViewInitialized) void loadGameData();
   } catch (error) {
     setTowerStartStatus(error instanceof Error ? error.message : '爬塔初始化失败，请重试。', true);
+    runtime.reportMvuValidationFailure?.(error);
     setTowerStartBusy(false);
   }
 }
 
 function renderTowerStartPanel(active: boolean): void {
   const panel = document.getElementById('tower-start-panel');
+  if (panel) installGenerationDiagnosticPanel(panel);
   const detail = document.getElementById('tower-start-extension-text');
   const extensionButton = document.getElementById('tower-start-extension-button') as HTMLButtonElement | null;
   const startButton = document.getElementById('tower-start-button') as HTMLButtonElement | null;
   if (panel) panel.style.display = active ? '' : 'none';
   if (!active) return;
+  const difficulty = towerStartDifficulty();
+  if (difficulty) difficulty.value = String(readRuntimeContentDesignSettings().difficultyPercent);
   const readiness = towerExtensionReadiness();
   if (detail) detail.textContent = readiness.ready ? '爬塔组件已就绪。' : readiness.message;
   if (extensionButton) extensionButton.style.display = readiness.ready ? 'none' : '';
@@ -2314,9 +2615,7 @@ function towerExtensionReadiness(): { ready: boolean; message: string } {
   const version = String(capabilities.version || '0.0.0')
     .split('.')
     .map((part: string) => Number(part) || 0);
-  const supported = (version[0] || 0) > 0
-    || (version[1] || 0) > 3
-    || (version[1] || 0) === 3 && (version[2] || 0) >= 3;
+  const supported = (version[0] || 0) >= 1;
   if (
     !supported
     || capabilities.towerGeneration !== true
@@ -2325,7 +2624,7 @@ function towerExtensionReadiness(): { ready: boolean; message: string } {
   ) {
     return {
       ready: false,
-      message: `设计辅助器版本过低（当前 ${capabilities.version || '未知'}，至少需要 0.3.3）。`,
+      message: `设计辅助器版本过低（当前 ${capabilities.version || '未知'}，至少需要 1.0）。`,
     };
   }
   return { ready: true, message: '' };
@@ -2392,6 +2691,10 @@ function scheduleBackgroundDeckPowerProfile(): void {
 
 async function synchronizeContentDesignContext(): Promise<void> {
   if (!isCurrentMessageLatest()) return;
+  // The persistent extension owns this analysis when enabled. In particular,
+  // mounting an iframe during initial publication must not write a second
+  // version of the same derived context into the committed MVU snapshot.
+  if (isExternalDesignAssistantActive()) return;
   let diagnosticText = '';
   try {
     await commonActionHost.updateVariablesWith((variables: any) => {
@@ -2410,6 +2713,46 @@ async function synchronizeContentDesignContext(): Promise<void> {
 }
 
 // 加载游戏数据
+const pendingCardRemoval = new PendingCardRemoval();
+let pendingRemovalAbort: AbortController | null = null;
+async function offerPendingCardRemovals(force = false): Promise<void> {
+  if (__IS_SENDING_ACTION || !__commonViewInitialized || !isCurrentMessageLatest()) return;
+  if ((globalThis as any).MagicGirlWorld?.getTowerInitialPublicationStatus?.()?.ready === false) return;
+  const sequence = __commonViewSequence;
+  const controller = new AbortController();
+  pendingRemovalAbort = controller;
+  setSendingState(true); setRunButtonsDisabled(true);
+  try {
+    await pendingCardRemoval.offer({
+      read: () => getStatRootRef(getCurrentMessageVariables()) || {},
+      active: () => __commonViewInitialized && sequence === __commonViewSequence && isCurrentMessageLatest(),
+      choose: (stat, remaining) => choosePendingCardRemoval(stat, remaining, controller.signal),
+      commit: async (id, revision) => {
+        const result = await runActionHost.removeCardWithAllowance(id, revision);
+        __USER_MUTATION_PILLS.push(`永久移除：${result.cardName}`);
+      },
+      changed: loadGameData,
+    }, force);
+  } catch (error) { showRunError(error, '删卡未完成，次数已保留'); }
+  finally {
+    if (pendingRemovalAbort === controller) pendingRemovalAbort = null;
+    if (sequence === __commonViewSequence) { setSendingState(false); setRunButtonsDisabled(false); }
+  }
+}
+let pendingRemovalTimer: ReturnType<typeof setTimeout> | null = null;
+function schedulePendingCardRemovals(): void {
+  if (pendingRemovalTimer !== null) clearTimeout(pendingRemovalTimer);
+  const sequence = __commonViewSequence;
+  pendingRemovalTimer = setTimeout(async () => {
+    pendingRemovalTimer = null;
+    if (sequence !== __commonViewSequence || !__commonViewInitialized) return;
+    if (__IS_SENDING_ACTION) { schedulePendingCardRemovals(); return; }
+    await offerPendingCardRemovals();
+    if (sequence === __commonViewSequence && __commonViewInitialized)
+      maybeOpenTowerBattle(getStatRootRef(getCurrentMessageVariables()) || {});
+  }, 100);
+}
+
 async function loadGameData() {
   const viewSequence = __commonViewSequence;
   const viewIsActive = () => __commonViewInitialized && viewSequence === __commonViewSequence;
@@ -2440,6 +2783,8 @@ async function loadGameData() {
       rpgData = __STAT__;
     } catch (msgError) {
       console.warn('获取变量失败：', msgError);
+      const loading = document.getElementById('common-loading-status');
+      if (loading) loading.textContent = '正在等待游戏数据…数据就绪后将显示当前页面。';
       return;
     }
 
@@ -2463,8 +2808,10 @@ async function loadGameData() {
     }
 
     if (selectedGameMode(rpgData) === 'tower' && !readRunState(rpgData)) {
+      renderStoryPanel('common');
       renderTowerPlayerSummary(rpgData, true);
       renderRunData(rpgData);
+      renderTowerScreen(rpgData, hasSelectableRewards(rpgData), () => { void loadGameData(); });
       startLatestMessageGuard();
       return;
     }
@@ -2485,7 +2832,7 @@ async function loadGameData() {
 
     // 先结算基于经验的升级（AI只会增加 exp）
     try {
-      await settleLevelByExp();
+      if (readGameMode(__STAT__) !== 'tower') await settleLevelByExp();
       if (!viewIsActive()) return;
     } catch (e) {
       console.warn('结算升级异常:', e);
@@ -2507,16 +2854,18 @@ async function loadGameData() {
     if (!viewIsActive()) return;
 
     const loadedRun = readRunState(rpgData);
-    const towerOnly = selectedGameMode(rpgData) === 'tower'
-      && (!loadedRun || isLockedTowerMapRun(rpgData, loadedRun));
+    const towerOnly = selectedGameMode(rpgData) === 'tower';
     renderTowerPlayerSummary(rpgData, towerOnly);
     if (towerOnly) {
+      renderStoryPanel('common');
       // Tower mode is a self-contained single-floor game surface. Avoid the
       // story-only NPC/faction/outfit renderers and their growing DOM cost.
       if (!applyHistoricalReadOnlyMode()) renderActionArea();
       renderRunData(rpgData);
+      renderTowerScreen(rpgData, hasSelectableRewards(rpgData), () => { void loadGameData(); });
       startLatestMessageGuard();
-      maybeOpenTowerBattle(rpgData);
+      schedulePendingCardRemovals();
+      applyPendingUserFocus();
       return;
     }
 
@@ -2528,11 +2877,16 @@ async function loadGameData() {
 
     // 渲染行动与通知
     if (!applyHistoricalReadOnlyMode()) renderActionArea();
+    renderStoryPanel('common');
     renderRunData(rpgData);
+    document.getElementById('common-loading-status')?.remove();
     startLatestMessageGuard();
-    maybeOpenTowerBattle(rpgData);
+    schedulePendingCardRemovals();
+    applyPendingUserFocus();
   } catch (error) {
     console.error('加载游戏数据失败:', error);
+    const loading = document.getElementById('common-loading-status');
+    if (loading) loading.textContent = '页面加载失败，请查看生成进度或刷新后重试。';
   }
 }
 
@@ -2837,11 +3191,6 @@ function renderBattleData(rpgData: any) {
     if (deck.length > 0) {
       const cardsHtml = deck
         .map((card: any) => {
-          const description = contentRuleDescription(card, '');
-          const effectTags = compactContentEffectTagsHtml(card);
-          const cost = card.cost === 'energy' ? '全部能量' : (card.cost ?? 0);
-          const rarity = String(card.rarity || 'Common');
-          const rarityLabel = CARD_RARITY_LABELS[rarity] || rarity;
           const profile = cardArchetypeProfiles.get(String(card.id || ''));
           const score = Number(profile?.scoreContribution);
           const affinityChips = Array.isArray(profile?.affinities)
@@ -2858,18 +3207,10 @@ function renderBattleData(rpgData: any) {
               ? `<div class="card-archetype-meta">${Number.isFinite(score) ? `<strong title="移除一张后与当前构筑总分的差值">构筑贡献 ${score > 0 ? '+' : ''}${escapeHtml(score)}</strong>` : ''}${affinityChips}</div>`
               : '';
           return `
-          <div class="card rarity-${escapeHtml(rarity)}" data-card-id="${escapeHtml(card.id || '')}">
-            <button type="button" class="card-delete-btn" data-card-id="${escapeHtml(card.id || '')}" title="删除一张" style="display: none;">
-              🗑️
-            </button>
-            <div class="card-name-row">
-              <div class="card-name">${escapeHtml(card.emoji || '🃏')} ${escapeHtml(card.name || '未知')}</div>
-              <span class="card-rarity-chip"><i aria-hidden="true"></i>${escapeHtml(rarityLabel)}</span>
-            </div>
-            <div class="card-meta"><span>消耗 ${escapeHtml(cost)}</span><span>${escapeHtml(translateCardType(card.type || 'Skill'))}</span><span>数量 ${escapeHtml(card.quantity || 1)}</span></div>
+          <div class="collection-card" data-card-id="${escapeHtml(card.id || '')}">
+            <button type="button" class="card-delete-btn" data-card-id="${escapeHtml(card.id || '')}" title="删除一张" style="display: none;">🗑️</button>
+            ${renderCollectionCard(card)}
             ${archetypeMeta}
-            ${effectTags}
-            ${description ? `<div class="card-description">${escapeHtml(description)}</div>` : ''}
           </div>`;
         })
         .join('');
@@ -2889,13 +3230,8 @@ function renderBattleData(rpgData: any) {
     if (filteredArtifacts.length > 0) {
       artifactsContainer.innerHTML = filteredArtifacts
         .map((artifact: any) => {
-          const description = contentRuleDescription(artifact, '');
           return `
-          <article class="battle-resource-card">
-            <div class="battle-resource-name">${escapeHtml(artifact.emoji || '💎')} ${escapeHtml(artifact.name || '未知')}</div>
-            ${compactContentEffectTagsHtml(artifact)}
-            ${description ? `<div class="item-description">${escapeHtml(description)}</div>` : ''}
-          </article>`;
+          <article class="battle-resource-card collection-support">${renderCollectionSupport(artifact, '遗物')}</article>`;
         })
         .join('');
     } else {
@@ -2909,13 +3245,8 @@ function renderBattleData(rpgData: any) {
     if (filteredItems.length > 0) {
       itemsContainer.innerHTML = filteredItems
         .map((item: any) => {
-          const description = contentRuleDescription(item, '');
           return `
-          <article class="battle-resource-card">
-            <div class="battle-resource-name">${escapeHtml(item.emoji || '🧪')} ${escapeHtml(item.name || '未知')} <span class="battle-resource-count">×${escapeHtml(item.count || 1)}</span></div>
-            ${compactContentEffectTagsHtml(item)}
-            ${description ? `<div class="item-description">${escapeHtml(description)}</div>` : ''}
-          </article>`;
+          <article class="battle-resource-card collection-support">${renderCollectionSupport(item, '道具')}</article>`;
         })
         .join('');
     } else {
@@ -3212,13 +3543,14 @@ function renderBattleBookContent() {
       .filter((status: any) => typeof status?.id === 'string')
       .map((status: any) => {
         const generated = canGenerateCompactStatusDescription(status)
-          ? describeCompactStatus(status, { statusNames })
+          ? describeCompactStatus(status, { statusNames, enemyNames: contentDescriptionEnemyNames() })
           : '';
         return [
           status.id,
           {
             ...status,
-            description: (typeof status.description === 'string' && status.description.trim()) || generated,
+            description: generated,
+            flavorText: typeof status.description === 'string' ? status.description.trim() : '',
           },
         ];
       }),
@@ -3232,7 +3564,7 @@ function renderBattleBookContent() {
     playerStatusEffects.forEach((status: any) => {
       const definition = statusDefinitions.get(status.id) as Record<string, any> | undefined;
       const name = status.name || definition?.name || status.id || '未知状态';
-      const description = status.description || definition?.description || '无描述';
+      const description = definition?.description || '未找到可执行状态定义，无法确认规则';
       const effectTags = definition ? compactStatusEffectTagsHtml(definition) : '';
       html += `
         <div class="status-effect-item">
@@ -3243,6 +3575,7 @@ function renderBattleBookContent() {
             ${status.duration ? `<span class="status-duration">(${escapeHtml(status.duration)}回合)</span>` : ''}
           </div>
           <div class="status-description">${escapeHtml(description)}</div>
+          ${definition?.flavorText ? `<div class="status-description status-flavor">${escapeHtml(definition.flavorText)}</div>` : ''}
           ${effectTags}
         </div>
       `;
@@ -3256,9 +3589,8 @@ function renderBattleBookContent() {
     allStatuses.forEach((status: any) => {
       const statusType = status.type === 'buff' || status.type === 'debuff' ? status.type : 'neutral';
       const description =
-        (typeof status.description === 'string' && status.description.trim()) ||
-        (canGenerateCompactStatusDescription(status) ? describeCompactStatus(status, { statusNames }) : '') ||
-        '无描述';
+        (canGenerateCompactStatusDescription(status) ? describeCompactStatus(status, { statusNames, enemyNames: contentDescriptionEnemyNames() }) : '') ||
+        '未找到可执行状态定义，无法确认规则';
       const effectTags = compactStatusEffectTagsHtml(status);
       html += `
         <div class="status-effect-item">
@@ -3268,6 +3600,7 @@ function renderBattleBookContent() {
             <span class="status-type ${statusType}">${statusType === 'buff' ? 'BUFF' : statusType === 'debuff' ? 'DEBUFF' : 'NEUTRAL'}</span>
           </div>
           <div class="status-description">${escapeHtml(description)}</div>
+          ${typeof status.description === 'string' && status.description.trim() ? `<div class="status-description status-flavor">${escapeHtml(status.description)}</div>` : ''}
           ${effectTags}
         </div>
       `;
@@ -3346,11 +3679,19 @@ function toggleStatusDetail(detailId: string): void {
 let __commonViewInitialized = false;
 let __commonViewSequence = 0;
 let __disposeCardRepairHandler: (() => void) | null = null;
+let __storyRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
 function destroyCommonView(): void {
   if (!__commonViewInitialized) return;
+  pendingCardRemoval.resetDismissal();
+  pendingRemovalAbort?.abort();
+  pendingRemovalAbort = null;
+  if (pendingRemovalTimer !== null) clearTimeout(pendingRemovalTimer);
+  pendingRemovalTimer = null;
   __commonViewInitialized = false;
   __commonViewSequence += 1;
+  if (__storyRefreshTimer !== null) clearInterval(__storyRefreshTimer);
+  __storyRefreshTimer = null;
   __CONTENT_PROFILE_SEQUENCE += 1;
   if (__CONTENT_PROFILE_TIMER !== null) clearTimeout(__CONTENT_PROFILE_TIMER);
   __CONTENT_PROFILE_TIMER = null;
@@ -3380,6 +3721,7 @@ function listenForTowerGenerationUpdates(): void {
 }
 
 function initializeCommonView(): void {
+  bindStatusReferenceDetails(document);
   if (__commonViewInitialized) return;
   __commonViewInitialized = true;
   __commonViewSequence += 1;
@@ -3395,6 +3737,10 @@ function initializeCommonView(): void {
   setSendingState(false);
   initializeUI();
   void loadGameData();
+  // Prose can be committed after the room UI; refresh its read-only view alone.
+  __storyRefreshTimer = setInterval(() => {
+    if (__commonViewInitialized) renderStoryPanel('common');
+  }, 750);
 }
 
 // Both the exported Tavern asset and the direct HTML build place this script
