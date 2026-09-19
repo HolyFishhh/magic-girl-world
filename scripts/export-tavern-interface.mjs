@@ -69,8 +69,12 @@ const interfaces = [
     scriptName: '战斗模块',
     source: 'dist/src/fish/index.html',
     output: 'dist/tavern/fish-interface.json',
+    // Story battle prose stays in Tavern's native message renderer. Replace
+    // only the validated battle handoff tail with the latest shared battle UI.
+    // Tower battles switch the already mounted TOWER_STATUS view in place and
+    // therefore never use this message-level marker.
     findRegex:
-      '^(?=[\\s\\S]*<BATTLE_START>)[\\s\\S]*$',
+      '(?:<(?:CHARACTER_INIT_PENDING|CONTENT_PENDING)>\\s*)*(?:<UpdateVariable>[\\s\\S]*?<\\/UpdateVariable>\\s*)?(?:<(?:CHARACTER_INIT_PENDING|CONTENT_PENDING)>\\s*)*(?:<StatusPlaceHolderImpl\\s*\\/?>\\s*)?<BATTLE_START>(?:\\s*<StatusPlaceHolderImpl\\s*\\/?>)?',
     placement: [2],
     minDepth: 0,
     maxDepth: 0,

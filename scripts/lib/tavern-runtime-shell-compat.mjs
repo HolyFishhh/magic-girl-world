@@ -55,11 +55,12 @@ export function planScopedFishShellCompatibility(data,globalRegex) {
   assert.ok(old.includes('var view = "fish";')&&old.includes("waitGlobalInitialized('MagicGirlWorld')")&&old.includes('.getViewAsset('),'not a recognized shared-runtime fish shell');
   assert.ok(!/\{\{|\$(?:\d|<)/.test(old),'dynamic legacy replacement cannot be recovered as an exact literal');
   const knownLegacy = '(?:<UpdateVariable>[\\s\\S]*?<\\/UpdateVariable>\\s*)?(?:<StatusPlaceHolderImpl\\s*\\/?>\\s*)?<BATTLE_START>\\s*(?:<StatusPlaceHolderImpl\\s*\\/?>)?';
-  assert.ok(source.findRegex === target.findRegex || (source.findRegex === knownLegacy && target.findRegex === '^(?=[\\s\\S]*<BATTLE_START>)[\\s\\S]*$'), 'legacy fish marker contract differs; do not guess');
+  const nativeStoryBattle = '(?:<(?:CHARACTER_INIT_PENDING|CONTENT_PENDING)>\\s*)*(?:<UpdateVariable>[\\s\\S]*?<\\/UpdateVariable>\\s*)?(?:<(?:CHARACTER_INIT_PENDING|CONTENT_PENDING)>\\s*)*(?:<StatusPlaceHolderImpl\\s*\\/?>\\s*)?<BATTLE_START>(?:\\s*<StatusPlaceHolderImpl\\s*\\/?>)?';
+  assert.ok(source.findRegex === target.findRegex || (source.findRegex === knownLegacy && target.findRegex === nativeStoryBattle), 'legacy fish marker contract differs; do not guess');
   assert.equal(source.markdownOnly,true);assert.equal(source.promptOnly,false);
   assert.deepEqual(source.placement,[2]);assert.equal(Number(source.substituteRegex),0);
   const rule={id:COMPAT_ID,scriptName:'魔法少女世界 · 旧战斗壳隔离',
-    findRegex:`/${escapeRegex(old)}/g`,replaceString:'<BATTLE_START>',trimStrings:[],placement:[2],
+    findRegex:`/${escapeRegex(old)}/g`,replaceString:'<BATTLE_START>\n',trimStrings:[],placement:[2],
     disabled:false,markdownOnly:true,promptOnly:false,runOnEdit:true,substituteRegex:0,
     minDepth:target.minDepth??null,maxDepth:target.maxDepth??null};
   const provenance={spec:COMPAT_SPEC,sourceId:GLOBAL_ID,sourceVersion,sourceHash:hash(old),targetVersion:version,ruleHash:ruleHash(rule)};

@@ -319,6 +319,7 @@ assert.ok(
 );
 const displayBattleMatch = new RegExp(exported.findRegex).exec(displayBattleResponse);
 assert.equal(displayBattleMatch?.length, 1, 'battle regex must not transport message data through capture groups');
+assert.ok(!displayBattleMatch?.[0].includes('battle lead-in'), 'battle regex must leave story prose to Tavern');
 assert.ok(!new RegExp(exported.findRegex).test(ordinaryResponse));
 assert.ok(exported.replaceString.startsWith('```\n<body>'));
 assert.ok(exported.replaceString.endsWith('</body>\n```'));
@@ -350,8 +351,9 @@ assert.ok(
 );
 
 const tavernRendered = displayBattleResponse.replace(new RegExp(exported.findRegex), exported.replaceString);
-assert.ok(tavernRendered.startsWith('```\n<body>'));
+assert.ok(tavernRendered.startsWith('battle lead-in\n```\n<body>'));
 assert.ok(!tavernRendered.includes('<BATTLE_START>'));
+assert.equal((tavernRendered.match(/```/g) || []).length, 2, 'story battle renders one battle iframe after native prose');
 
 function extractFencedHtml(rendered) {
   const start = rendered.indexOf('```\n');

@@ -60,6 +60,9 @@ let ws;try{
   for(let i=0;i<100;i++){if(await evaluate('Boolean(window.fixture)'))break;await new Promise(r=>setTimeout(r,100));}
   assert.equal(await evaluate('Boolean(window.fixture)'),true);
   assert.equal(await evaluate("Boolean(document.querySelector('#mwg-status-fold'))"),false,'story keeps original panels instead of a tower replacement');
+  assert.equal(await evaluate("document.querySelector('.mwg-statusbar').classList.contains('is-tower-mode')"),false,'story status never receives the tower presentation class');
+  assert.equal(await evaluate("getComputedStyle(document.getElementById('tower-player-panel')).display==='none'"),true,'story status never exposes the tower player panel');
+  assert.equal(await evaluate("getComputedStyle(document.getElementById('run-section')).display==='none'"),true,'story status never exposes tower route controls');
   assert.equal(await evaluate("getComputedStyle(document.querySelector('.statusbar-panels')).display==='none'"),false);
   assert.equal(await evaluate("document.querySelector('.statusbar-header').hidden"),false);
   assert.equal(await evaluate("Boolean(document.querySelector('#tower-screen-host'))"),false,'story must not reparent actions/rewards into a tower host');
