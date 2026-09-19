@@ -4963,7 +4963,7 @@ export class DesignAssistantController {
           assertPublication();
           await this.host.verifyTowerInitialPersistence({
             chatId: input.chatId, messageId: input.messageId, swipeId,
-            message: `${receipt.narrative.trim()}\n\n<StatusPlaceHolderImpl/>`,
+            message: `${receipt.narrative.trim()}\n\n<TOWER_STATUS/>`,
             variables: clone(draft), requireChatCache: false, publication,
           });
           assertPublication();
@@ -5023,7 +5023,7 @@ export class DesignAssistantController {
     if (!context || !message || message.is_user === true || message.is_system === true) {
       throw new Error('原始助手开场楼层不可写入');
     }
-    const nextMessage = `${narrative.trim()}\n\n<StatusPlaceHolderImpl/>`;
+    const nextMessage = `${narrative.trim()}\n\n<TOWER_STATUS/>`;
     if (typeof context.updateMessageBlock === 'function') {
       message.mes = nextMessage;
       context.updateMessageBlock(expectedMessageId, message, { rerenderMessage: true });

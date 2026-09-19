@@ -9,7 +9,7 @@ export function cleanDisplayedStory(value: unknown): string {
   return String(value || '')
     .replace(/<(UpdateVariable|VariableUpdate|Update|think|thinking|analysis|reasoning)\b[^>]*>[\s\S]*?<\/\1>/gi, '')
     .replace(/<(?:think|thinking|analysis|reasoning)\b[^>]*>[\s\S]*$/gi, '')
-    .replace(/<\/?(?:StatusPlaceHolderImpl|BATTLE_START|BATTLE_PENDING|CONTENT_PENDING|CHARACTER_INIT_PENDING)\s*\/?\s*>/gi, '')
+    .replace(/<\/?(?:StatusPlaceHolderImpl|TOWER_STATUS|BATTLE_START|BATTLE_PENDING|CONTENT_PENDING|CHARACTER_INIT_PENDING)\s*\/?\s*>/gi, '')
     .replace(/\[(?:开始游戏|剧情模式开场|爬塔模式开场)\]/g, '').trim();
 }
 

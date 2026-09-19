@@ -1705,7 +1705,7 @@ try {
     { draw: 1 },
   ]);
   assert.match(context.chat[0].mes, /只有连续越过三幕试炼/);
-  assert.match(context.chat[0].mes, /<StatusPlaceHolderImpl\/>/);
+  assert.match(context.chat[0].mes, /<TOWER_STATUS\/>/);
   assert.ok(saveChatCalls >= 1, 'the rewritten greeting and MVU snapshot must be saved');
 
   controller.deactivate();

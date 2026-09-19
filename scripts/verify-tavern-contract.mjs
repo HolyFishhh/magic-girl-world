@@ -10,6 +10,7 @@ import PNGtext from 'png-chunk-text';
 import ts from 'typescript';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const buildRoot = resolve(process.env.MWG_BUILD_OUTPUT_ROOT || resolve(root, 'dist'));
 const releaseConfig = JSON.parse(await readFile(resolve(root, 'release.config.json'), 'utf8'));
 const expectedWorldbookName = `${releaseConfig.worldbookPrefix}${releaseConfig.cardVersion}`;
 const fishSourceHtml = await readFile(resolve(root, 'src/fish/index.html'), 'utf8');
@@ -165,12 +166,12 @@ assert.equal(globalThis.Mvu, stableMvu, 'MUV polling must also work without the 
 
 const [startExported, updateExported, commonExported, exported] = await Promise.all(
   ['start', 'update', 'common', 'fish'].map(async name =>
-    JSON.parse(await readFile(resolve(root, `dist/tavern/${name}-interface.json`), 'utf8')),
+    JSON.parse(await readFile(resolve(buildRoot, `tavern/${name}-interface.json`), 'utf8')),
   ),
 );
-const characterRuntimeSource = await readFile(resolve(root, 'dist/tavern/character-runtime.js'), 'utf8');
+const characterRuntimeSource = await readFile(resolve(buildRoot, 'tavern/character-runtime.js'), 'utf8');
 const characterRuntimeManifest = JSON.parse(
-  await readFile(resolve(root, 'dist/tavern/character-runtime-manifest.json'), 'utf8'),
+  await readFile(resolve(buildRoot, 'tavern/character-runtime-manifest.json'), 'utf8'),
 );
 assert.equal(startExported.scriptName, '开始模块');
 assert.deepEqual(startExported.placement, [2]);
@@ -213,17 +214,21 @@ const displayOrdinaryResponse = 'normal story\n<StatusPlaceHolderImpl/>';
 const displayOrdinaryUpdateResponse =
   "normal story\n<UpdateVariable>_.set('status.time', '新时间');</UpdateVariable>\n<StatusPlaceHolderImpl/>";
 const displayBattleResponse = 'battle lead-in\n<BATTLE_START>\n<StatusPlaceHolderImpl/>';
+const towerResponse = 'tower opening\n<TOWER_STATUS/>';
 assert.ok(new RegExp(commonExported.findRegex).test(ordinaryResponse));
 const displayOrdinaryUpdateMatch = new RegExp(commonExported.findRegex).exec(displayOrdinaryUpdateResponse);
 assert.ok(displayOrdinaryUpdateMatch?.[0].includes('<UpdateVariable>'));
 assert.ok(displayOrdinaryUpdateMatch?.[0].includes('<StatusPlaceHolderImpl/>'));
+assert.ok(!displayOrdinaryUpdateMatch?.[0].includes('normal story'));
 assert.ok(
   new RegExp(commonExported.findRegex).test(`normal story\n${mvuPlaceholder}`),
   'common regex must tolerate the display placeholder appended by MUV',
 );
 const displayOrdinaryMatch = new RegExp(commonExported.findRegex).exec(displayOrdinaryResponse);
 assert.ok(displayOrdinaryMatch?.[0].includes('<StatusPlaceHolderImpl/>'));
+assert.ok(!displayOrdinaryMatch?.[0].includes('normal story'));
 assert.equal(displayOrdinaryMatch?.length, 1, 'common regex must not transport message data through capture groups');
+assert.equal(new RegExp(commonExported.findRegex).exec(towerResponse)?.[0], towerResponse);
 assert.ok(!new RegExp(commonExported.findRegex).test('[开始游戏]'));
 assert.ok(
   new RegExp(startExported.findRegex).test('[开始游戏]\n<StatusPlaceHolderImpl/>'),
@@ -253,7 +258,7 @@ const renderedCommonMessage = displayOrdinaryResponse.replace(
   new RegExp(commonExported.findRegex),
   commonExported.replaceString,
 );
-assert.ok(renderedCommonMessage.startsWith('```\n<body>'));
+assert.ok(renderedCommonMessage.startsWith('normal story\n```\n<body>'));
 assert.ok(!renderedCommonMessage.includes('<StatusPlaceHolderImpl/>'));
 const renderedCommonUpdateMessage = displayOrdinaryUpdateResponse.replace(
   new RegExp(commonExported.findRegex),
@@ -264,10 +269,11 @@ assert.equal(
   2,
   'a story update must render exactly one fenced interface document',
 );
+assert.ok(renderedCommonUpdateMessage.startsWith('normal story\n```\n<body>'));
 assert.ok(!renderedCommonUpdateMessage.includes('<UpdateVariable>'));
 assert.ok(!renderedCommonUpdateMessage.includes('<StatusPlaceHolderImpl/>'));
 const firstGeneratedTowerResponse =
-  '简短开场剧情\n<CHARACTER_INIT_PENDING>\n<UpdateVariable>_.set(\'battle.cards\', []);</UpdateVariable>\n<StatusPlaceHolderImpl/>';
+  '简短开场剧情\n<TOWER_STATUS/>';
 let renderedFirstGeneratedTowerResponse = firstGeneratedTowerResponse;
 for (const payload of [startExported, updateExported, commonExported, exported]) {
   renderedFirstGeneratedTowerResponse = renderedFirstGeneratedTowerResponse.replace(
@@ -282,7 +288,8 @@ assert.equal(
 );
 assert.match(renderedFirstGeneratedTowerResponse, /(?:const|var) view = "common"/);
 assert.doesNotMatch(renderedFirstGeneratedTowerResponse, /(?:const|var) view = "start"/);
-assert.doesNotMatch(renderedFirstGeneratedTowerResponse, /CHARACTER_INIT_PENDING|StatusPlaceHolderImpl|UpdateVariable/);
+assert.doesNotMatch(renderedFirstGeneratedTowerResponse, /TOWER_STATUS|CHARACTER_INIT_PENDING|StatusPlaceHolderImpl|UpdateVariable/);
+assert.doesNotMatch(renderedFirstGeneratedTowerResponse, /简短开场剧情/);
 assert.ok(!commonExported.replaceString.includes('class="story-text"'), 'common iframe must not wrap story text');
 assert.ok(
   !commonExported.replaceString.includes('tab-navigation'),

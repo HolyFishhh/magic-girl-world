@@ -51,8 +51,12 @@ const interfaces = [
     scriptName: '通用模块',
     source: 'dist/src/common/index.html',
     output: 'dist/tavern/common-interface.json',
+    // Story prose is ordinary Tavern message content. Consume only its MVU
+    // tail and mount the status view in place of the protocol marker. Tower's
+    // controller owns a dedicated marker because its prose and history stay
+    // inside the single-floor tower screen.
     findRegex:
-      '^(?![\\s\\S]*<BATTLE_START>)(?=[\\s\\S]*(?:<StatusPlaceHolderImpl\\s*\\/?>|<CONTENT_PENDING>))[\\s\\S]*$',
+      '^(?![\\s\\S]*<BATTLE_START>)(?=[\\s\\S]*<TOWER_STATUS\\s*\\/?>)[\\s\\S]*$|(?<![\\s\\S]*<BATTLE_START>[\\s\\S]*)(?![\\s\\S]*<BATTLE_START>)(?:<CHARACTER_INIT_PENDING>\\s*)?(?:<UpdateVariable>[\\s\\S]*?<\\/UpdateVariable>\\s*)?(?:(?:<CONTENT_PENDING>\\s*)?<StatusPlaceHolderImpl\\s*\\/?>|<CONTENT_PENDING>)',
     placement: [2],
     minDepth: 0,
     maxDepth: 2,

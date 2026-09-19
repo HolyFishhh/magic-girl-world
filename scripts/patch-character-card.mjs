@@ -8,6 +8,7 @@ import extract from 'png-chunks-extract';
 import { buildMvuCardLoader } from './lib/mvu-card-loader.mjs';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
+const buildRoot = resolve(process.env.MWG_BUILD_OUTPUT_ROOT || resolve(root, 'dist'));
 const cliArgs = process.argv.slice(2);
 const characterNameOptionIndex = cliArgs.indexOf('--character-name');
 const characterNameOverride =
@@ -17,18 +18,18 @@ const positionalArgs = cliArgs.filter(
 );
 const inputPath = resolve(positionalArgs[0] || resolve(root, '魔法少女世界.png'));
 const outputPath = resolve(positionalArgs[1] || inputPath);
-const legacyOutputPath = resolve(root, 'dist/tavern/魔法少女世界-酒馆兼容版.png');
+const legacyOutputPath = resolve(buildRoot, 'tavern/魔法少女世界-酒馆兼容版.png');
 const interfacePaths = [
-  resolve(root, 'dist/tavern/start-interface.json'),
-  resolve(root, 'dist/tavern/update-interface.json'),
-  resolve(root, 'dist/tavern/common-interface.json'),
-  resolve(root, 'dist/tavern/fish-interface.json'),
+  resolve(buildRoot, 'tavern/start-interface.json'),
+  resolve(buildRoot, 'tavern/update-interface.json'),
+  resolve(buildRoot, 'tavern/common-interface.json'),
+  resolve(buildRoot, 'tavern/fish-interface.json'),
 ];
 const worldbookRoot = resolve(root, 'worldbook_new');
 const worldbookManifestPath = resolve(worldbookRoot, 'manifest.json');
 const worldbookEntryConfigPath = resolve(worldbookRoot, 'entry-config.json');
 const releaseConfigPath = resolve(root, 'release.config.json');
-const characterRuntimePath = resolve(root, 'dist/tavern/character-runtime.js');
+const characterRuntimePath = resolve(buildRoot, 'tavern/character-runtime.js');
 const RETRYABLE_WRITE_CODES = new Set(['UNKNOWN', 'EBUSY', 'EPERM']);
 
 async function writeFileWithRetry(path, data, attempts = 8, delayMs = 250) {
