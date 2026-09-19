@@ -1,3 +1,5 @@
+@use './mobileCard' as mobile-card;
+
 @mixin theme {
   // A choice owns focus and selection; the complete card face remains the
   // visual surface, without adding a second card-shaped border around it.
@@ -72,11 +74,15 @@
   @media (max-width: 540px) {
     #card-options.mwg-card-choice-list,
     .mwg-card-choice-list {
-      grid-template-columns: none;
-      grid-auto-flow: column;
-      grid-auto-columns: minmax(180px, 72vw);
-      overflow-x: auto;
-      overscroll-behavior-inline: contain;
+      @include mobile-card.strip;
+      padding: 8px;
+    }
+    .mwg-card-choice {
+      width: mobile-card.$width;
+      min-width: mobile-card.$width;
+    }
+    .mwg-card-choice .mwg-card.enhanced-card {
+      @include mobile-card.face;
     }
   }
 }

@@ -45,9 +45,14 @@ export function bindCardPreview(doc: Document): void {
   doc.addEventListener('click', event => {
     const el = event.target as Element;
     if (el.closest('.mwg-status-reference')) return;
+    const trigger = el.closest<HTMLElement>('.card-preview-trigger');
+    const triggerCard = trigger?.closest<HTMLElement>('.mwg-card');
+    if (triggerCard) {
+      event.preventDefault(); event.stopPropagation(); show(triggerCard, true); return;
+    }
     const card = el.closest<HTMLElement>('.mwg-card');
-    // Reward faces select their owning option on a normal click. Long-press
-    // remains available for reading full details without an extra checkbox.
+    // Reward faces select their owning option on a normal click. Their
+    // explicit detail button is handled above without changing selection.
     if (card?.closest('.option,.battle-reward-option,.mwg-card-choice')) return;
     if (card && !card.closest('#hand-cards,.mwg-card-preview,.shop-product,.shop-detail')) {
       event.preventDefault(); event.stopPropagation(); show(card, true);

@@ -54,6 +54,10 @@ assert.match(root.innerHTML, /<div class="reward-actions reward-choice-actions">
 assert.equal(root.querySelectorAll('.battle-reward-option').length, 4, 'four candidates render as four complete selectable card faces');
 assert.ok(root.querySelector('.battle-reward-option-list').className.includes('mwg-card-choice-list'), 'the reward surface uses the shared responsive card-choice layout');
 assert.equal(confirm.disabled, true);
+const detailButton = option.querySelector('.card-preview-trigger');
+assert.ok(detailButton, 'every selectable card exposes the shared full-detail control');
+detailButton.dispatchClick();
+assert.equal(confirm.disabled, true, 'opening full details does not select the card candidate');
 option.querySelector('[data-content-reference]').dispatchClick();
 assert.equal(confirm.disabled, true, 'a detail reference does not select its card candidate');
 const nestedCardButton = option.querySelector('.nested-card-button');
@@ -104,4 +108,5 @@ const adventureFold=new Element('details');adventureFold.append(effectOption);
 assert.equal(isCardFaceDetailInteraction(effectOption.querySelector('.card-name')),false,'outer adventure fold does not intercept card selection');
 const innerDetails=new Element('details');const innerText=new Element('span');innerDetails.append(innerText);effectOption.append(innerDetails);
 assert.equal(isCardFaceDetailInteraction(innerText),true,'a real detail control inside the choice retains its click');
+assert.equal(isCardFaceDetailInteraction(effectOption.querySelector('.card-preview-trigger')),true,'the explicit full-detail button never selects its choice');
 console.log('PASS production adventure fold does not block choice clicks; nested detail controls remain independent.');

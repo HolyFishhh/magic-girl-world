@@ -41,6 +41,7 @@ export function renderCardFace(cardData: CardDisplayMetadata & {
         ${options.rules || options.rulesHtml || options.rulesGroups?.length ? `<div class="card-rules content-rules" tabindex="0" aria-label="卡牌规则">${options.rulesHtml ?? renderRulePills(options.rulesGroups ?? [options.rules || ''])}</div>` : ''}
         ${cardData.description ? `<div class="card-flavor-footer" aria-label="卡牌描述"><div class="card-description card-flavor-text content-flavor">${escapeHtml(cardData.description)}</div></div>` : ''}
         ${options.quantity ? `<div class="card-quantity">×${escapeHtml(String(options.quantity))}</div>` : ''}
+        <button type="button" class="card-preview-trigger" aria-label="查看${escapeHtmlAttribute(cardData.name || '卡牌')}完整详情">详情</button>
         <div class="card-glow"></div>
       </div>
     `;

@@ -6,6 +6,7 @@
 @use '../shared/pileCards' as pile-cards;
 @use '../shared/cardFace' as card-face;
 @use '../shared/cardChoice' as card-choice;
+@use '../shared/mobileCard' as mobile-card;
 
 
 :root {
@@ -2993,20 +2994,19 @@ body[data-tower-screen='battle-reward'] .mwg-statusbar.is-tower-mode .action-sec
   #choice-card .options.mwg-card-choice-list,
   #card-options.mwg-card-choice-list,
   .battle-reward-option-list.mwg-card-choice-list {
-    grid-template-columns: repeat(4, minmax(0, 1fr)); grid-auto-flow: row; grid-auto-columns: auto;
-    gap: 5px; padding: 8px; overflow-x: visible;
+    @include mobile-card.strip;
+    padding: 8px;
   }
   .mwg-card-choice .mwg-card.enhanced-card {
-    width: 100%; height: 148px; min-height: 0; aspect-ratio: auto;
+    @include mobile-card.face;
   }
-  .mwg-card-choice .mwg-card.enhanced-card .card-name { font-size: 9px; }
-  .mwg-card-choice .mwg-card.enhanced-card .card-rules { flex: 1 1 auto; overflow-y: auto; font-size: 8px; }
-}
-
-@media (min-width: 430px) and (max-width: 540px) {
-  #choice-card .options.mwg-card-choice-list,
-  #card-options.mwg-card-choice-list,
-  .battle-reward-option-list.mwg-card-choice-list { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .collection-card { width: mobile-card.$width; }
+  .collection-card .mwg-card.enhanced-card { @include mobile-card.face; }
+  .tower-player-card-grid,
+  .story-player-card-grid,
+  .battle-deck,
+  .pile-viewer-body,
+  #card-options { @include mobile-card.strip; }
 }
 
 @include cardFlavor.layout;

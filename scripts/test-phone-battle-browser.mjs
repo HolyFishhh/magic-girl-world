@@ -31,25 +31,36 @@ try {
     await call('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:1});
     await navigate('tmp/ui-v466/index.html');
     await evaluate("document.getElementById('fixture-controls').style.display='none';fixture.formation(5);enablePhoneCards()");
-    const dimensions=await evaluate(`(()=>{const rect=s=>{const r=document.querySelector(s).getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,bottom:r.bottom,right:r.right}};const cards=[...document.querySelectorAll('#hand-cards>.mwg-card')].map(e=>{const r=e.getBoundingClientRect();return {x:r.x,right:r.right,w:r.width,scroll:e.scrollWidth,client:e.clientWidth}});const title=document.querySelector('#hand-cards>.mwg-card .card-name'),rules=document.querySelector('#hand-cards>.mwg-card .card-rules');return {stage:rect('#battle-stage'),hand:rect('#hand-cards'),center:rect('.center-battle-area'),scene:rect('#battle-scene'),pile:rect('.battle-pile-dock'),controls:rect('.bottom-controls'),endTurn:rect('.end-turn-button'),overflow:document.documentElement.scrollWidth,innerWidth:innerWidth,card:cards[0],cards,title:{scroll:title.scrollWidth,client:title.clientWidth,height:title.clientHeight,fullHeight:title.scrollHeight,text:title.textContent},rules:{height:rules.clientHeight,fullHeight:rules.scrollHeight,overflow:getComputedStyle(rules).overflowY},touch:getComputedStyle(document.querySelector('#hand-cards .mwg-card')).touchAction,actors:[...document.querySelectorAll('#stage-enemy-party [data-enemy-id]')].map(e=>{const r=e.getBoundingClientRect();return {x:r.x,right:r.right,w:r.width}})};})()`);
+    const dimensions=await evaluate(`(()=>{const rect=s=>{const r=document.querySelector(s).getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,bottom:r.bottom,right:r.right}};const cards=[...document.querySelectorAll('#hand-cards>.mwg-card')].map(e=>{const r=e.getBoundingClientRect();return {x:r.x,right:r.right,w:r.width,h:r.height,scroll:e.scrollWidth,client:e.clientWidth}});const title=document.querySelector('#hand-cards>.mwg-card .card-name'),rules=document.querySelector('#hand-cards>.mwg-card .card-rules'),detail=document.querySelector('#hand-cards>.mwg-card .card-preview-trigger');return {stage:rect('#battle-stage'),hand:rect('#hand-cards'),center:rect('.center-battle-area'),scene:rect('#battle-scene'),pile:rect('.battle-pile-dock'),controls:rect('.bottom-controls'),endTurn:rect('.end-turn-button'),overflow:document.documentElement.scrollWidth,innerWidth:innerWidth,card:cards[0],cards,title:{scroll:title.scrollWidth,client:title.clientWidth,height:title.clientHeight,fullHeight:title.scrollHeight,text:title.textContent},rules:{height:rules.clientHeight,fullHeight:rules.scrollHeight,overflow:getComputedStyle(rules).overflowY,font:parseFloat(getComputedStyle(rules).fontSize)},detail:{text:detail.textContent,w:detail.getBoundingClientRect().width,h:detail.getBoundingClientRect().height},touch:getComputedStyle(document.querySelector('#hand-cards .mwg-card')).touchAction,actors:[...document.querySelectorAll('#stage-enemy-party [data-enemy-id]')].map(e=>{const r=e.getBoundingClientRect();return {x:r.x,right:r.right,w:r.width}})};})()`);
     assert.ok(dimensions.overflow<=width,JSON.stringify({width,dimensions}));
     if(width<=760){
-      assert.ok(dimensions.hand.h<=166,JSON.stringify({width,dimensions}));
-      assert.ok(dimensions.scene.h<=800&&dimensions.controls.bottom<=844,JSON.stringify({width,dimensions}));
+      assert.ok(dimensions.hand.h<=222,JSON.stringify({width,dimensions}));
+      assert.ok(dimensions.scene.h<=844&&dimensions.controls.bottom<=844,JSON.stringify({width,dimensions}));
       assert.ok(dimensions.hand.y<=410,JSON.stringify({width,dimensions}));
       assert.ok(dimensions.actors.every(a=>a.x>=dimensions.stage.x&&a.right<=dimensions.stage.right+1),JSON.stringify({width,dimensions}));
       assert.ok(dimensions.stage.h<300,JSON.stringify({width,dimensions}));
       assert.ok(dimensions.hand.y<520,JSON.stringify({width,dimensions}));
-      assert.ok(dimensions.card.w<=92 && dimensions.card.w>=60,JSON.stringify({width,dimensions}));
+      assert.ok(Math.abs(dimensions.card.w-140)<1&&Math.abs(dimensions.card.h-210)<1,JSON.stringify({width,dimensions}));
       assert.ok(dimensions.card.x>=dimensions.hand.x&&dimensions.card.right<=dimensions.hand.right+1,JSON.stringify({width,dimensions}));
-      const visibleCards=width>=430?5:4;
-      assert.ok(dimensions.cards[visibleCards-1].right<=dimensions.hand.right+1,JSON.stringify({width,dimensions}));
+      assert.ok(dimensions.cards[1].right<=dimensions.hand.right+1,JSON.stringify({width,dimensions}));
       assert.ok(dimensions.card.scroll<=dimensions.card.client+1,JSON.stringify({width,dimensions}));
-      assert.ok(dimensions.title.height>=20&&dimensions.title.height<=30,JSON.stringify({width,dimensions}));
-      assert.ok(dimensions.rules.height>30&&dimensions.rules.overflow==='auto',JSON.stringify({width,dimensions}));
+      assert.ok(dimensions.title.height>=26&&dimensions.title.height<=30,JSON.stringify({width,dimensions}));
+      assert.ok(dimensions.rules.height>30&&dimensions.rules.overflow==='auto'&&dimensions.rules.font>=10,JSON.stringify({width,dimensions}));
+      assert.equal(dimensions.detail.text,'详情');assert.ok(dimensions.detail.w>=36&&dimensions.detail.h>=24,JSON.stringify({width,dimensions}));
       assert.match(dimensions.title.text,/长名称/);assert.equal(dimensions.touch,'pan-x');
       assert.ok(dimensions.endTurn.w>=76&&dimensions.endTurn.h>=36,JSON.stringify({width,dimensions}));
       assert.ok(dimensions.pile.h<=80&&dimensions.controls.h>=40,JSON.stringify({width,dimensions}));
+      if(width===390){
+        await evaluate("document.querySelector('#hand-cards .card-preview-trigger').click()");await pause(100);
+        const preview=await evaluate(`(()=>{const p=document.querySelector('.mwg-card-preview'),r=p.getBoundingClientRect(),rules=p.querySelector('.card-rules');return {x:r.x,right:r.right,w:r.width,h:r.height,font:parseFloat(getComputedStyle(rules).fontSize),text:p.textContent}})()`);
+        assert.ok(preview.x>=0&&preview.right<=width&&preview.w>=280&&preview.font>=13,JSON.stringify(preview));assert.match(preview.text,/完整长名称/);
+        await evaluate("document.querySelector('.mwg-card-preview > button').click()");
+        await evaluate("window.statusLinkFixture()");await pause(100);
+        const statusCard=await evaluate(`(()=>{const e=document.querySelector('#mwg-status-fold .collection-card .mwg-card'),r=e.getBoundingClientRect(),rules=e.querySelector('.card-rules');return {w:r.width,h:r.height,font:parseFloat(getComputedStyle(rules).fontSize),detail:e.querySelector('.card-preview-trigger')?.textContent,page:document.documentElement.scrollWidth}})()`);
+        assert.ok(Math.abs(statusCard.w-dimensions.card.w)<1&&Math.abs(statusCard.h-dimensions.card.h)<1,JSON.stringify({dimensions,statusCard}));
+        assert.ok(statusCard.font>=10);assert.equal(statusCard.detail,'详情');assert.ok(statusCard.page<=width);
+        evidence.push({width,preview,statusCard});
+      }
       const h=dimensions.hand;
       await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:h.x+h.w-35,y:h.y+35}]});
       for(let step=1;step<=12;step++){await call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:h.x+h.w-35-h.w*.62*step/12,y:h.y+35}]});await pause(25);}
@@ -96,8 +107,8 @@ try {
   for(const width of [320,390,430]){
     await call('Emulation.setDeviceMetricsOverride',{width,height:844,deviceScaleFactor:1,mobile:false});
     await navigate('tmp/mobile-rewards.html');
-    const rewards=await evaluate(`(()=>{const el=document.querySelector('.mwg-card-choice'),card=el.querySelector('.mwg-card');el.classList.add('is-selected');const e=getComputedStyle(el),c=getComputedStyle(card);return {page:document.documentElement.scrollWidth,width:innerWidth,outerShadow:e.boxShadow,outerBorder:e.borderWidth,cardShadow:c.boxShadow,cardWidth:card.getBoundingClientRect().width,count:document.querySelectorAll('.mwg-card-choice').length};})()`);
-    assert.ok(rewards.page<=width);assert.equal(rewards.count,3);assert.equal(rewards.outerShadow,'none');assert.equal(rewards.outerBorder,'0px');assert.notEqual(rewards.cardShadow,'none');assert.ok(rewards.cardWidth>=55&&rewards.cardWidth<=110,JSON.stringify({width,rewards}));evidence.push({width,rewards});
+    const rewards=await evaluate(`(()=>{const list=document.querySelector('.mwg-card-choice-list'),el=document.querySelector('.mwg-card-choice'),card=el.querySelector('.mwg-card'),rules=card.querySelector('.card-rules'),detail=card.querySelector('.card-preview-trigger');el.classList.add('is-selected');const e=getComputedStyle(el),c=getComputedStyle(card),r=card.getBoundingClientRect();return {page:document.documentElement.scrollWidth,width:innerWidth,outerShadow:e.boxShadow,outerBorder:e.borderWidth,cardShadow:c.boxShadow,cardWidth:r.width,cardHeight:r.height,rulesFont:parseFloat(getComputedStyle(rules).fontSize),rulesOverflow:getComputedStyle(rules).overflowY,detail:detail?.textContent,detailHeight:detail?.getBoundingClientRect().height,listScroll:list.scrollWidth,listClient:list.clientWidth,count:document.querySelectorAll('.mwg-card-choice').length};})()`);
+    assert.ok(rewards.page<=width);assert.equal(rewards.count,3);assert.equal(rewards.outerShadow,'none');assert.equal(rewards.outerBorder,'0px');assert.notEqual(rewards.cardShadow,'none');assert.ok(Math.abs(rewards.cardWidth-140)<1&&Math.abs(rewards.cardHeight-210)<1,JSON.stringify({width,rewards}));assert.ok(rewards.rulesFont>=10&&rewards.rulesOverflow==='auto');assert.equal(rewards.detail,'详情');assert.ok(rewards.detailHeight>=24&&rewards.listScroll>rewards.listClient);evidence.push({width,rewards});
     fs.writeFileSync('tmp/mobile-reward-'+width+'.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
   }
   fs.writeFileSync('tmp/mobile-final.json',JSON.stringify(evidence,null,2));console.log(JSON.stringify(evidence));

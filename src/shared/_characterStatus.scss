@@ -1,4 +1,5 @@
 @use './unifiedCard';
+@use './mobileCard' as mobile-card;
 // Explicitly scoped tokens prevent common/story palettes bleeding into status.
 #mwg-status-fold.mwg-character-status {
   color-scheme: dark; color: #edf3ff; background: linear-gradient(135deg,#24233d,#171e32); border: 1px solid #646080;
@@ -100,12 +101,18 @@ body:not(.mwg-story-mode):has(.mwg-character-status) .statusbar-panels { display
     .character-metric strong { font-size:14px; }
     .character-detail-grid,.character-inventory { grid-template-columns:minmax(0,1fr); }
     .character-detail-grid > section,.character-inventory > section { padding:12px; }
+    .tower-player-card-grid,
+    .story-player-card-grid { @include mobile-card.strip; }
+    .tower-player-card-grid .collection-card,
+    .story-player-card-grid .collection-card { width:mobile-card.$width; }
+    .tower-player-card-grid .collection-card .mwg-card.enhanced-card,
+    .story-player-card-grid .collection-card .mwg-card.enhanced-card { @include mobile-card.face; }
     &.mwg-story-status {
       .story-status-panel > :not(summary),
       .story-status-panel .character-story-facts,
       .story-player-card-grid { margin:10px; }
-      .story-player-card-grid { grid-template-columns:minmax(0,1fr); }
-      .story-player-card-grid .mwg-card.enhanced-card { min-height:260px; }
+      .story-player-card-grid { @include mobile-card.strip; }
+      .story-player-card-grid .mwg-card.enhanced-card { @include mobile-card.face; }
     }
   }
 }

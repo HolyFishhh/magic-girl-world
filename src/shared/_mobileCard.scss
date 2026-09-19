@@ -1,0 +1,86 @@
+$width: 140px;
+$height: 210px;
+$gap: 8px;
+
+// Every phone surface uses this same readable poker-card geometry. Containers
+// may scroll horizontally, but must not shrink the face to fit more columns.
+@mixin strip {
+  display: grid;
+  grid-template-columns: none;
+  grid-auto-flow: column;
+  grid-auto-columns: $width;
+  gap: $gap;
+  justify-content: start;
+  justify-items: stretch;
+  align-items: stretch;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  scroll-snap-type: x proximity;
+}
+
+@mixin face {
+  width: $width;
+  min-width: $width;
+  max-width: $width;
+  height: $height;
+  min-height: $height;
+  max-height: $height;
+  padding-bottom: 0;
+  aspect-ratio: auto;
+  border-radius: 7px;
+  scroll-snap-align: start;
+
+  .card-header { flex: 0 0 23px; min-height: 23px; padding: 2px 3px; }
+  .card-cost { min-width: 18px; padding: 1px 3px; font-size: 9px; }
+  .card-cost-component { font-size: 9px; }
+  .card-rarity-badge { gap: 2px; font-size: 8px; }
+  .card-artwork { flex: 0 0 27px; height: 27px; min-height: 27px; }
+  .card-emoji { font-size: 21px; }
+  .card-body { flex: 0 0 auto; padding: 3px 5px; }
+  .card-title-row { height: 28px; min-height: 28px; }
+  .card-name {
+    display: -webkit-box;
+    overflow: hidden;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    font-size: 10px;
+    line-height: 1.35;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+  .card-type-row { height: 20px; min-height: 20px; gap: 2px; }
+  .card-type-row .card-type-indicator,
+  .card-trait { font-size: 8px; }
+  .card-type-row .card-traits { height: 20px; gap: 2px; }
+  .card-trait { padding: 1px 3px; }
+  .card-rules {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+    margin: 0 5px;
+    padding: 4px 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    font-size: 10px;
+    line-height: 1.35;
+    scrollbar-width: thin;
+    overscroll-behavior: contain;
+  }
+  .mwg-rule-pills,
+  .effect-tags-container { gap: 3px; }
+  .mwg-rule-pill,
+  .effect-tag { padding: 2px 4px; border-radius: 5px; }
+  .card-description.card-flavor-text { display: none; }
+  .card-preview-trigger {
+    flex: 0 0 auto;
+    align-self: flex-start;
+    min-width: 36px;
+    min-height: 24px;
+    margin: 1px 4px 3px;
+    padding: 2px 5px;
+    font-size: 9px;
+    line-height: 1.4;
+  }
+  .card-quantity { right: 5px; bottom: 3px; font-size: 9px; }
+}
