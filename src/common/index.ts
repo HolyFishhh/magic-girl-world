@@ -17,6 +17,7 @@ import { presentCompactContent } from '../game-core/contentPresentation';
 import type { ContentRuleReference } from '../game-core/contentDescription';
 import { installGenerationDiagnosticPanel } from '../shared/generationDiagnosticPanel';
 import { renderSupportDetails } from '../shared/supportPresentation';
+import { renderStancePanel } from '../shared/stancePresentation';
 import { collectStanceDefinitions, collectStanceNames } from '../game-core/stanceIdentityDisplay';
 import { BATTLE_ITEM_USAGE_LABEL } from '../game-core/battleItemUsage';
 import { bindStatusReferenceDetails } from '../shared/statusReference';
@@ -2208,7 +2209,7 @@ function renderTowerPlayerSummary(stat: any, active: boolean): void {
 }
 
 function renderRunData(stat: any): void {
-  const run = readRunState(stat);
+  const run = readGameMode(stat) === 'tower' ? readRunState(stat) : null;
   if (run && isLockedTowerMapRun(stat, run)) ensureTowerRunDom();
   // A same-message act transition has no new assistant message to wake the
   // coordinator. Retry the idempotent wake once per pending act, after render.
@@ -2829,7 +2830,7 @@ async function loadGameData() {
     }
 
     // 剧情模式不触发远征事务；远征模式仅在开始页选择后由程序初始化。
-    if (readRunState(__STAT__)) {
+    if (readGameMode(__STAT__) === 'tower' && readRunState(__STAT__)) {
       await ensureAndConsumeRunState();
       if (!viewIsActive()) return;
       try {
@@ -3266,11 +3267,64 @@ function renderBattleData(rpgData: any) {
     }
   }
 
+  renderStoryBattleSupport(battle);
+
   // 战斗之书数据准备（不立即渲染，等用户点击时再渲染）
   __BATTLE_BOOK_DATA = {
     playerStatusEffects: battle.player_status_effects || [],
     statuses: battle.statuses || [],
   };
+}
+
+// Keep the original story panels while exposing current executable mechanics.
+function renderStoryBattleSupport(battle: Record<string, any>): void {
+  const render = (id: string, values: Record<string, any>[], kind: string) => {
+    const container = document.getElementById(id);
+    if (!container) return;
+    container.innerHTML = values.map(value => {
+      const amount = kind === '资源'
+        ? `<p class="content-rules">当前 ${escapeHtml(value.current ?? value.start ?? 0)} / 上限 ${escapeHtml(value.max ?? 0)}</p>`
+        : kind === '状态' && value.stacks != null
+          ? `<p class="content-rules">层数 ${escapeHtml(value.stacks)}${value.duration != null ? ` · 持续 ${escapeHtml(value.duration)} 回合` : ''}</p>`
+        : '';
+      return `<article class="battle-resource-card collection-support">${renderCollectionSupport(value, kind, amount)}</article>`;
+    }).join('') || '<span class="value">暂无</span>';
+  };
+  render('story-player-abilities', flattenMvuArray(battle.player_abilities, { objectsOnly: true }), '能力');
+  const statusDefinitions = new Map(
+    flattenMvuArray<Record<string, any>>(battle.statuses, { objectsOnly: true })
+      .map(value => [String(value.id || value.name || ''), value] as const),
+  );
+  const activeStatuses = flattenMvuArray<Record<string, any>>(battle.player_status_effects, { objectsOnly: true })
+    .map(value => ({ ...(statusDefinitions.get(String(value.id || value.name || '')) || {}), ...value }));
+  render('story-player-statuses', activeStatuses, '状态');
+  render('story-player-resources', flattenMvuArray(battle.core?.resources, { objectsOnly: true }), '资源');
+  render('story-player-lust-effect', battle.player_lust_effect ? [battle.player_lust_effect] : [], '欲望效果');
+  const stanceContainer = document.getElementById('story-player-stance');
+  if (stanceContainer) {
+    stanceContainer.innerHTML = battle.core?.stance
+      ? `<article class="battle-resource-card collection-support">${renderStancePanel(battle.core.stance, {
+          statusNames: contentDescriptionStatusNames(battle.core.stance),
+          summonNames: collectSummonDisplayNames(battle),
+          stanceNames: collectStanceNames(battle),
+        }) || '<span class="value">姿态数据无法显示</span>'}</article>`
+      : '<span class="value">暂无</span>';
+  }
+  const growthContainer = document.getElementById('story-player-summon-growth');
+  if (growthContainer) {
+    const summonNames = collectSummonDisplayNames(battle);
+    const statNames: Record<string, string> = { max_hp: '最大生命', damage: '伤害', lust: '欲望伤害' };
+    const operatorNames: Record<string, string> = { add: '增加', subtract: '减少', set: '设为' };
+    growthContainer.innerHTML = flattenMvuArray<Record<string, any>>(battle.core?.summon_growth, { objectsOnly: true })
+      .map(entry => {
+        const summonName = summonNames[entry.summonTemplateId] || entry.summonTemplateId || '未解析召唤物';
+        const rule = `${summonName}的${statNames[entry.stat] || entry.stat || '数值'}${operatorNames[entry.operator] || entry.operator || '调整'} ${entry.value}`;
+        return `<article class="battle-resource-card collection-support">${renderSupportDetails(
+          { name: summonName, emoji: '◆' },
+          { kind: '召唤成长', rulesHtml: renderRulePills([rule]) },
+        )}</article>`;
+      }).join('') || '<span class="value">暂无</span>';
+  }
 }
 
 // 渲染NPC数据

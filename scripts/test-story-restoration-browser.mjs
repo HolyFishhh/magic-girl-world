@@ -5,21 +5,43 @@ import assert from 'node:assert/strict';
 import webpack from 'webpack';
 import {compile} from 'sass';
 import WebSocket from 'ws';
+import ts from 'typescript';
+// Extract unchanged production renderers: exercise real story data/controls without
+// starting the writable common-view lifecycle or a live Tavern connection.
+const commonSource=fs.readFileSync('src/common/index.ts','utf8');
+const ast=ts.createSourceFile('common.ts',commonSource,ts.ScriptTarget.Latest,true);
+const rendererNames=['escapeHtml','renderStatusData','renderNPCData','renderFactionData','renderAlignmentGrid','toggleStatusDetail','renderStoryBattleSupport','renderCollectionSupport','contentRulesHtml','contentDescriptionStatusDefinitions','contentDescriptionStatusNames','contentDescriptionResourceDefinitions','contentDescriptionResourceNames','contentDescriptionEnemyNames','normalizeOptionsList'];
+const renderers=ast.statements.filter(n=>ts.isFunctionDeclaration(n)&&rendererNames.includes(n.name?.text)).map(n=>n.getText(ast)).join('\n');
+assert.equal(ast.statements.filter(n=>ts.isFunctionDeclaration(n)&&rendererNames.includes(n.name?.text)).length,rendererNames.length);
 const out=resolve('tmp/story-restoration-browser');fs.mkdirSync(out,{recursive:true});
 fs.writeFileSync(resolve(out,'loader.cjs'), "const ts=require('typescript');module.exports=function(source){return ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText}");
 fs.writeFileSync(resolve(out,'entry.ts'), `
 import {renderStoryPanel} from '../../src/runtime/storyPanel';
+import {readStatusLocation,readStatusProfession} from '../../src/common/statusAdapter';
+import {flattenMvuArray} from '../../src/runtime/mvuArrays';
+import {normalizeMvuList} from '../../src/common/rewardTransactions';
+import {renderSupportDetails} from '../../src/shared/supportPresentation';
+import {renderStancePanel} from '../../src/shared/stancePresentation';
+import {renderRulePills} from '../../src/shared/rulePills';
+import {presentCompactContent} from '../../src/game-core/contentPresentation';
+import {describeCompactStatus} from '../../src/game-core';
+import {collectCardDisplayNames} from '../../src/game-core/cardDisplayNames';
+import {collectSummonDisplayNames} from '../../src/game-core/summonDisplayNames';
+import {collectStanceDefinitions,collectStanceNames} from '../../src/game-core/stanceIdentityDisplay';
+let __STAT__:any;
+${renderers}
 import {renderCharacterStatus} from '../../src/shared/characterStatus';
-let variables:any={stat_data:{game_mode:'story',game_mode_lock:{schemaVersion:1,mode:'story'},status:{profession:{name:'星火旅者',ability:'操纵星火'},time:'清晨',location:'钟楼',clothing:{upper_body:'银色披风'},inventory:['旧钥匙'],permanent_status:['魔法契约'],temporary_status:['疲惫']},npcs:{guide:{name:'引路人',affection:42,affection_level:'信赖',relationship:'同行的伙伴',appearance:'银发'.repeat(80)}},factions:{player_alignment:'中立',invasion:1,relations:[]},battle:{core:{hp:60,max_hp:80,lust:0,max_lust:100},cards:[]}}};
+let variables:any={stat_data:{game_mode:'story',game_mode_lock:{schemaVersion:1,mode:'story'},status:{profession:{name:'星火旅者',ability:'操纵星火'},time:'清晨',location:'钟楼',clothing:{upper_body:'银色披风'},inventory:['旧钥匙'],permanent_status:[{name:'魔法契约',description:'契约详情应可展开'}],temporary_status:['疲惫']},npcs:{guide:{name:'引路人',affection:42,affection_level:'信赖',relationship:'同行的伙伴',appearance:'银发'.repeat(80)}},factions:{player_alignment:'中立',invasion:1,relations:[{name:'守望者',reputation:12,status:'友善',note:'钟楼的同盟'}]},battle:{core:{hp:60,max_hp:80,lust:0,max_lust:100,resources:[{id:'starlight',name:'星辉',emoji:'🌟',current:2,start:1,max:6}],stance:{id:'guarded',name:'守势',description:'降低受到的伤害。',passiveEffects:[{op:'gain_block',target:'self',amount:2}]},summon_growth:[{summonTemplateId:'spirit',stat:'damage',operator:'add',value:2}]},statuses:[{id:'heated',name:'灼热',description:'每回合造成伤害。'}],player_abilities:[{id:'star_guard',name:'星辉庇佑',trigger:{on:'turn_start',effects:{block:3}}}],player_status_effects:[{id:'heated',stacks:2}],player_lust_effect:{name:'意志反击',effects:{damage:7,to:'opponent'}},cards:[{id:'call_spirit',name:'呼唤灵契',type:'Skill',rarity:'Common',cost:1,effects:{spawn_summon:{id:'spirit',name:'灵契'}}}]}}};
 Object.assign(window,{getVariables:()=>variables,replaceVariables:()=>{throw Error('read only')},updateVariablesWith:()=>{throw Error('read only')},insertOrAssignVariables:()=>{},getCurrentMessageId:()=>0,getLastMessageId:()=>0,getChatMessages:()=>[{message:'清晨，你来到钟楼。'}]});
-const render=()=>{renderStoryPanel('common');const fold=document.querySelector<HTMLDetailsElement>('#mwg-status-fold')!;fold.open=true;renderCharacterStatus(variables.stat_data);};
-const tower=()=>{Object.assign(variables.stat_data,{game_mode:'tower',game_mode_lock:{schemaVersion:1,mode:'tower'},run:{seed:7,phase:'awaiting_choice',act:1,floor:2,opening:{phase:'consumed'},visitedNodeIds:['battle'],nodeContent:{battle:{kind:'battle',content:{narrative:'魔偶挡住去路。'}}}},tower_battle_stories:[{seed:7,nodeId:'battle',phase:'pending',summary:'斩击造成6点伤害，胜利',narrative:''}]});render();};
+const render=()=>{__STAT__=variables.stat_data;renderStoryBattleSupport(__STAT__.battle);renderStatusData(variables.stat_data);renderNPCData(variables.stat_data);renderFactionData(variables.stat_data);renderStoryPanel('common');const fold=document.querySelector<HTMLDetailsElement>('#mwg-status-fold');if(fold){fold.open=true;renderCharacterStatus(variables.stat_data);}};
+const tower=()=>{delete variables.stat_data.run_node;delete variables.mwg_tower_initial_commit;Object.assign(variables.stat_data,{game_mode:'tower',game_mode_lock:{schemaVersion:1,mode:'tower'},run:{seed:7,phase:'awaiting_choice',act:1,floor:2,opening:{phase:'consumed'},visitedNodeIds:['battle'],nodeContent:{battle:{kind:'battle',content:{narrative:'魔偶挡住去路。'}}}},tower_battle_stories:[{seed:7,nodeId:'battle',phase:'pending',summary:'斩击造成6点伤害，胜利',narrative:''}]});render();};
 const complete=()=>{variables.stat_data.tower_battle_stories[0].phase='ready';variables.stat_data.tower_battle_stories[0].narrative='魔偶倒下，星火照亮前路。'.repeat(40);render();};
 const next=()=>{variables.stat_data.run.phase='in_node';variables.stat_data.run_node={node_id:'next',narrative:'你走进新的房间。'};render();};
-(window as any).fixture={render,tower,complete,next,variables:()=>variables,restore:()=>{variables=JSON.parse(JSON.stringify(variables));render();}};render();
+(window as any).fixture={render,tower,complete,next,combat:()=>{renderStoryPanel('fish');const fold=renderCharacterStatus(variables.stat_data);document.body.append(fold);fold.open=true;renderCharacterStatus(variables.stat_data);},variables:()=>variables,restore:()=>{variables=JSON.parse(JSON.stringify(variables));render();}};render();
 `);
 const css=compile('src/common/index.scss',{style:'expanded'}).css;
-fs.writeFileSync(resolve(out,'index.html'),`<!doctype html><html><meta charset="utf-8"><style>${css}</style><body><div id="tower-player-panel"></div><div id="tower-node-panel-root"></div><div id="tower-map-root">路线图</div><div id="choice-container"></div><script src="bundle.js"></script></body></html>`);
+const commonHtml=fs.readFileSync('src/common/index.html','utf8').replace('</head>',`<style>${css}</style></head>`).replace('</body>','<script src="bundle.js"></script></body>');
+fs.writeFileSync(resolve(out,'index.html'),commonHtml);
 await new Promise((done,fail)=>{const compiler=webpack({mode:'development',devtool:false,entry:resolve(out,'entry.ts'),output:{path:out,filename:'bundle.js'},resolve:{extensions:['.ts','.js'],alias:{'@':resolve('src')}},module:{rules:[{test:/\.ts$/,use:resolve(out,'loader.cjs')}]}});compiler.run((e,s)=>compiler.close(()=>e||s.hasErrors()?fail(e||s.toString({all:false,errors:true})):done()));});
 const port=18179;
 const edge=spawn('C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',['--headless=new','--disable-gpu','--no-first-run',`--remote-debugging-port=${port}`,`--user-data-dir=${resolve(out,'profile')}`,'about:blank'],{windowsHide:true,stdio:'ignore'});
@@ -36,10 +58,31 @@ let ws;try{
   await call('Page.navigate',{url:'file:///'+resolve(out,'index.html').replaceAll('\\','/')});
   for(let i=0;i<100;i++){if(await evaluate('Boolean(window.fixture)'))break;await new Promise(r=>setTimeout(r,100));}
   assert.equal(await evaluate('Boolean(window.fixture)'),true);
+  assert.equal(await evaluate("Boolean(document.querySelector('#mwg-status-fold'))"),false,'story keeps original panels instead of a tower replacement');
+  assert.equal(await evaluate("getComputedStyle(document.querySelector('.statusbar-panels')).display==='none'"),false);
+  assert.equal(await evaluate("document.querySelector('.statusbar-header').hidden"),false);
+  assert.equal(await evaluate("Boolean(document.querySelector('#tower-screen-host'))"),false,'story must not reparent actions/rewards into a tower host');
+  assert.equal(await evaluate("document.querySelector('.story-steps').hidden"),true,'no tower floor in free story');
+  assert.equal(await evaluate("document.querySelector('.story-prose').textContent"),'清晨，你来到钟楼。');
+  await evaluate("document.querySelectorAll('.status-panel').forEach(p=>p.open=true);document.getElementById('common-loading-status').remove()");
+  for(const text of ['银色披风','旧钥匙','42','信赖','魔法契约','疲惫','守望者','钟楼的同盟'])assert.ok((await evaluate("document.querySelector('.statusbar-panels').textContent")).includes(text),text);
+  for(const [id,words] of [['story-player-resources',['星辉','🌟','当前 2','上限 6']],['story-player-abilities',['星辉庇佑','3']],['story-player-statuses',['灼热','2']],['story-player-lust-effect',['意志反击','7']],['story-player-stance',['守势','格挡']],['story-player-summon-growth',['灵契','伤害','增加','2']]]){
+    const text=await evaluate(`document.getElementById('${id}').textContent`);for(const word of words)assert.ok(text.includes(word),id+': '+word);
+  }
+  await evaluate("document.querySelector('[data-status-detail-id]').click()");
+  assert.equal(await evaluate("document.getElementById('permanent-status-0').style.display"),'block','original story status detail remains interactive');
+  assert.equal(await evaluate("[...document.querySelectorAll('.statusbar-header *, .statusbar-panels *')].filter(e=>e.getClientRects().length && e.getBoundingClientRect().right>document.documentElement.clientWidth+1).length"),0,'visible content is not clipped by an overflow-hidden ancestor');
+  assert.equal(await evaluate('document.documentElement.scrollWidth>innerWidth'),false,'original panels wrap on narrow screen');await shot('story-'+width);
+  await evaluate("Object.assign(fixture.variables().stat_data,{run_node:{narrative:'不能展示的旧塔节点'},completed_expedition:{run:{act:3,visitedNodeIds:[]}}});fixture.variables().mwg_tower_initial_commit={narrative:'不能展示的旧塔开局'};fixture.render()");
+  assert.equal(await evaluate("document.querySelector('.story-prose').textContent"),'清晨，你来到钟楼。','story prose ignores tower caches without rewriting them');
+  const before=await evaluate('JSON.stringify(fixture.variables())');
+  await evaluate('fixture.restore()');assert.equal(await evaluate('JSON.stringify(fixture.variables())'),before,'render and save restore are read only');
+  // Battle still uses the latest shared status renderer, including story facts.
+  await evaluate('fixture.combat()');
   const story=await evaluate("document.querySelector('.character-story-facts').textContent");for(const text of ['银色披风','旧钥匙','42','信赖','魔法契约','疲惫'])assert.ok(story.includes(text),text);
-  await evaluate("document.querySelector('.character-story-facts details').open=true");
-  assert.equal(await evaluate('document.documentElement.scrollWidth>innerWidth'),false,'story content wraps on narrow screen');await shot('story-'+width);
-  await evaluate('fixture.restore()');assert.equal(await evaluate("document.querySelector('.character-story-facts').textContent.includes('42')"),true);
+  await evaluate('fixture.render()');
+  assert.equal(await evaluate("Boolean(document.querySelector('#mwg-status-fold'))"),false);
+  await evaluate("const map=document.createElement('div');map.id='tower-map-root';document.body.append(map)");
   await evaluate('fixture.tower()');assert.equal(await evaluate("Boolean(document.querySelector('.character-story-facts'))"),false,'tower hides story simulation');
   assert.match(await evaluate("document.querySelector('.post-battle-story-status').textContent"),/正在生成/);
   await evaluate('fixture.complete()');assert.equal(await evaluate("document.querySelector('#mwg-story-panel h2').textContent"),'战后剧情');

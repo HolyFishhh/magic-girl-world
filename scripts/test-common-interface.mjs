@@ -397,7 +397,7 @@ const loadGameData = scriptSource.match(/async function loadGameData\(\)[\s\S]*?
 assert.ok(loadGameData.includes('await ensureMvuRuntimeReady('), 'restored view waits for MVU');
 assert.ok(loadGameData.indexOf('await ensureMvuRuntimeReady(') < loadGameData.indexOf('variables = getCurrentMessageVariables();'), 'MVU is ready before the first variable read');
 assert.doesNotMatch(scriptSource, /\$jq\(\(\) =>/);
-assert.match(scriptSource, /if \(readRunState\(__STAT__\)\) \{/);
+assert.match(scriptSource, /if \(readGameMode\(__STAT__\) === 'tower' && readRunState\(__STAT__\)\) \{/);
 assert.doesNotMatch(scriptSource, /\btriggerSlash\b/);
 const persistTowerMode = scriptSource.match(/async function persistTowerMode\([\s\S]*?(?=\n(?:async )?function )/)?.[0] || '';
 assert.match(persistTowerMode, /await updateCurrentMessageVariablesWith\(update\)/);

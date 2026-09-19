@@ -18,13 +18,15 @@ export function renderStoryPanel(view: 'common' | 'fish'): void {
   const nodePanel = document.getElementById('tower-node-panel-root');
   const variables = getCurrentMessageVariables();
   const stat = variables?.stat_data || {};
-  const run = stat.run || stat.completed_expedition?.run;
-  const terminal = view === 'common' && ['won', 'lost'].includes(stat.run?.phase);
+  const storyMode = readGameMode(stat) === 'story';
+  document.body.classList.toggle('mwg-story-mode', storyMode);
+  const run = storyMode ? undefined : stat.run || stat.completed_expedition?.run;
+  const terminal = !storyMode && view === 'common' && ['won', 'lost'].includes(stat.run?.phase);
   document.documentElement.classList.toggle('mwg-expedition-terminal', terminal);
-  const introduction = cleanDisplayedStory(variables?.mwg_tower_initial_commit?.narrative || getCurrentChatMessageText());
+  const introduction = cleanDisplayedStory((!storyMode && variables?.mwg_tower_initial_commit?.narrative) || getCurrentChatMessageText());
   const currentNodeId = String(stat.run_node?.node_id || run?.currentNode?.id || run?.currentNodeId || '');
-  const current = cleanDisplayedStory(stat.run_node?.narrative || run?.nodeContent?.[currentNodeId]?.content?.narrative);
-  const battleTitle = String(stat.run_node?.title || run?.nodeContent?.[currentNodeId]?.content?.title || stat.battle?.name || '').trim() || '战斗';
+  const current = storyMode ? '' : cleanDisplayedStory(stat.run_node?.narrative || run?.nodeContent?.[currentNodeId]?.content?.narrative);
+  const battleTitle = String((!storyMode && (stat.run_node?.title || run?.nodeContent?.[currentNodeId]?.content?.title)) || stat.battle?.name || '').trim() || '战斗';
   const opening = run?.opening;
   const openingNarrative = cleanDisplayedStory(opening?.content?.narrative);
   const openingIsActive = opening && opening.phase !== 'consumed' && opening.phase !== 'skipped';
@@ -42,7 +44,7 @@ export function renderStoryPanel(view: 'common' | 'fish'): void {
   const latestVisitedId = [...(run?.visitedNodeIds || [])].reverse().find((id: string) =>
     cleanDisplayedStory(run?.nodeContent?.[id]?.content?.narrative));
   const latestVisitedStory = latestVisitedId ? cleanDisplayedStory(run.nodeContent[latestVisitedId].content.narrative) : '';
-  const battleStories: any[] = Array.isArray(stat.tower_battle_stories) ? stat.tower_battle_stories : [];
+  const battleStories: any[] = !storyMode && Array.isArray(stat.tower_battle_stories) ? stat.tower_battle_stories : [];
   const latestBattleStory = [...battleStories].reverse().find(entry => entry.seed === run?.seed && entry.nodeId === (run?.visitedNodeIds || []).at(-1));
   const showBattleStory = view === 'common' && run?.phase !== 'in_node' && latestBattleStory;
   const postBattleText = showBattleStory && latestBattleStory.phase === 'ready' ? cleanDisplayedStory(latestBattleStory.narrative) : '';
@@ -50,7 +52,7 @@ export function renderStoryPanel(view: 'common' | 'fish'): void {
     ? (initialScene || (isLaterAct ? '正在生成本幕开场剧情…' : ''))
     : latestVisitedStory || initialScene);
   const nodeId = currentNodeId;
-  const renderKey = JSON.stringify([battleStories, view, terminal, nodeId, battleTitle, displayedStory, initialScene, openingIsActive,
+  const renderKey = JSON.stringify([storyMode, battleStories, view, terminal, nodeId, battleTitle, displayedStory, initialScene, openingIsActive,
     run?.act, run?.floor, (run?.visitedNodeIds || []).map((id: string) => [id, run.nodeContent?.[id]?.content?.narrative])]);
   let root = document.getElementById('mwg-story-panel');
   if (!root) {
@@ -73,12 +75,13 @@ export function renderStoryPanel(view: 'common' | 'fish'): void {
   const heading = root.querySelector('h2') || document.createElement('h2');
   heading.textContent = view === 'fish'
     ? battleTitle
-    : current
+    : storyMode ? '当前剧情' : current
       ? '当前剧情'
       : openingIsActive
         ? String(opening?.content?.title || '').trim() || '启程剧情'
         : latestVisitedStory ? '最新剧情' : '启程剧情';
-  const steps = root.querySelector('.story-steps') || document.createElement('p'); steps.className = 'story-steps';
+  const steps = root.querySelector<HTMLElement>('.story-steps') || document.createElement('p'); steps.className = 'story-steps';
+  steps.hidden = storyMode;
   steps.textContent = openingIsActive ? '启程' : `第 ${run?.act || 1} 幕 · 第 ${run?.currentNode?.floor || run?.floor || 0} 层`;
   let reading = root.querySelector<HTMLElement>('.story-reading-pane');
   if (!reading) { reading = document.createElement('div'); reading.className = 'story-reading-pane'; reading.tabIndex = 0; reading.setAttribute('aria-label', '剧情与历史'); root.replaceChildren(steps, heading, reading); }
@@ -109,6 +112,7 @@ export function renderStoryPanel(view: 'common' | 'fish'): void {
     if (story.phase === 'ready' && story.narrative && cleanDisplayedStory(story.narrative) !== displayedStory)
       entries.push(['战后剧情', cleanDisplayedStory(story.narrative)]);
   }
+  history.hidden = storyMode;
   const archiveKey = JSON.stringify(entries);
   if (history.dataset.archiveKey !== archiveKey) {
   history.dataset.archiveKey = archiveKey;
@@ -122,6 +126,16 @@ export function renderStoryPanel(view: 'common' | 'fish'): void {
   }
   // The same top section remains present after settlement as well.
   if (terminal) heading.textContent = '旅程回顾';
+  }
+  // Story retains its original outfit/inventory/NPC/faction panels and action
+  // controls. Only tower owns the unified screen and relocates reward nodes.
+  if (view === 'common' && storyMode) {
+    document.getElementById('mwg-status-fold')?.remove();
+    const header = document.querySelector<HTMLElement>('.statusbar-header');
+    if (header) header.hidden = false;
+    const main = document.querySelector<HTMLElement>('.mwg-statusbar');
+    if (main && root.nextElementSibling !== main) main.before(root);
+    return;
   }
   const playerPanel = document.getElementById('tower-player-panel');
   if (view === 'common' && playerPanel) {

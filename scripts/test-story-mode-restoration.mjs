@@ -33,3 +33,7 @@ assert.equal(JSON.stringify(story),saved,'rendering is read-only');
 assert.deepEqual(buildSecondStageSemanticMvuContext({stat_data:story}).stat_data.npcs,story.npcs);
 assert.equal(renderStoryCharacterStatus({...story, game_mode_lock:{schemaVersion:1,mode:'tower'}}),'');
 console.log('PASS mode-specific new-game MVU, existing-save preservation, story UI facts and second-stage continuity');
+
+const commonSource = readFileSync('src/common/index.ts', 'utf8');
+assert.match(commonSource, /if \(readGameMode\(__STAT__\) === 'tower' && readRunState\(__STAT__\)\)/, 'only tower consumes tower transactions');
+assert.match(commonSource, /function renderRunData\(stat: any\): void \{\s+const run = readGameMode\(stat\) === 'tower' \? readRunState\(stat\) : null/, 'story never schedules a pending tower opening');

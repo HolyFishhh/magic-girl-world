@@ -2653,6 +2653,11 @@ summary:focus-visible {
 .collection-support .content-rules { padding: 10px 0; white-space: pre-wrap; line-height: 1.65; overflow-wrap: anywhere; }
 .content-flavor { font-style: italic; opacity: .85; line-height: 1.6; white-space: pre-wrap; }
 .collection-support .content-flavor { border-top: 1px solid var(--border); padding-top: 8px; }
+#story-player-stance .mwg-stance-panel { color: var(--text); }
+#story-player-stance .mwg-stance-panel .support-details-heading > strong { color: var(--text); }
+#story-player-stance .mwg-stance-panel .support-details-heading > small,
+#story-player-stance .mwg-stance-panel .support-details-description,
+#story-player-stance .mwg-stance-panel .special-details-group > strong { color: var(--text-muted); }
 .option .text, .option .desc { min-width: 0; max-height: none; overflow: visible; white-space: normal; -webkit-line-clamp: unset; }
 .collection-card, .tower-player-card-grid {
   @include card-face.face;

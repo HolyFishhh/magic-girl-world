@@ -33,10 +33,10 @@
   .collection-card .card-flavor-footer { color:#bed0e7; }
   [hidden] { display:none !important; }
 }
-body:has(.mwg-character-status) #tower-player-panel,
-body:has(.mwg-character-status) #status-mechanics-help,
-body:has(.mwg-character-status) .statusbar-header,
-body:has(.mwg-character-status) .statusbar-panels { display:none !important; }
+body:not(.mwg-story-mode):has(.mwg-character-status) #tower-player-panel,
+body:not(.mwg-story-mode):has(.mwg-character-status) #status-mechanics-help,
+body:not(.mwg-story-mode):has(.mwg-character-status) .statusbar-header,
+body:not(.mwg-story-mode):has(.mwg-character-status) .statusbar-panels { display:none !important; }
 
 #mwg-status-fold.mwg-character-status {
   > summary { color:#d4ceef; padding-bottom:0; font-size:15px; }
