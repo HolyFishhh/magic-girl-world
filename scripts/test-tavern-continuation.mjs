@@ -211,13 +211,14 @@ const towerBattleHost = new TavernBattleEndHost(
     }),
   ),
   battlePorts(towerBox, towerLifecycle, {
+    scheduleTowerNarrative: async () => towerLifecycle.push('schedule-story'),
     openCommonView: () => towerLifecycle.push('open-common'),
   }),
 );
 await towerBattleHost.confirmTowerBattleEnd('victory');
 await towerBattleHost.confirmTowerBattleEnd('victory');
 assert.equal(towerContinuationCalls, 0);
-assert.deepEqual(towerLifecycle, ['clear', 'settle:victory', 'open-common']);
+assert.deepEqual(towerLifecycle, ['clear', 'settle:victory', 'schedule-story', 'open-common']);
 
 function presentationState(route) {
   return {

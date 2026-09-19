@@ -1,7 +1,7 @@
 #mwg-story-panel[hidden], #mwg-status-fold[hidden] { display: none !important; }
 
 #mwg-story-panel {
-  box-sizing: border-box; width: min(100%, 1040px); height: 320px; margin: 12px auto; padding: 20px;
+  box-sizing: border-box; width: min(100%, 1040px); height: 460px; margin: 12px auto; padding: 20px;
   display: flex; flex-direction: column; overflow: hidden; overflow-anchor: none;
   border: 1px solid #555475; border-radius: 14px; background: linear-gradient(135deg,#22233b,#191c30); color: #e5eaf4;
   font: 15px/1.9 system-ui, sans-serif;
@@ -16,4 +16,4 @@
   details > article { margin-top: 16px; padding: 16px; border: 1px solid #64779260; border-radius: 12px; background: #111c3040; }
   details > article h3 { margin: 0 0 12px; color: #b9dafa; }
 }
-@media(max-width:540px) { #mwg-story-panel { height:280px; padding:14px; font-size:14px; } }
+@media(max-width:540px) { #mwg-story-panel { height:380px; padding:14px; font-size:14px; } }

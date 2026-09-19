@@ -283,6 +283,7 @@ function createBattleHarness(variables, continuationCalls) {
       },
       settleBattle: async input => lifecycle.push(`settle:${input.result}`),
       reloadPage: () => lifecycle.push('reload'),
+      scheduleTowerNarrative: async () => lifecycle.push('schedule-story'),
       openCommonView: () => runtimeViews.switchRuntimeView('common'),
     },
     {
@@ -307,7 +308,7 @@ for (const [index, result] of ['victory', 'defeat'].entries()) {
   await dialog.onConfirm('这段文本在爬塔结算中必须被忽略');
   assert.equal(runtimeViews.currentRuntimeView(), 'common', `${result} must return fish to common in place`);
   assert.deepEqual(continuationCalls, [], 'tower settlement must not create a floor or invoke /trigger');
-  assert.deepEqual(harness.lifecycle, ['save', 'clear', `settle:${result}`]);
+  assert.deepEqual(harness.lifecycle, ['save', 'clear', `settle:${result}`, 'schedule-story']);
 }
 
 runtimeViews.switchRuntimeView('fish');

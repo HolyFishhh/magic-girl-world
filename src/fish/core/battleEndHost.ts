@@ -281,11 +281,17 @@ export class TavernBattleEndHost {
       if (persistentCards) settlement.persistentCards = persistentCards;
       await this.ports.clearBattleSession();
       await this.ports.settleBattle(settlement);
+      // The fish iframe can be torn down by the view switch. Hand the pending
+      // story to the extension while this runtime is still alive; the
+      // extension only acknowledges scheduling here and generates prose in
+      // its independent background queue.
+      try {
+        await this.ports.scheduleTowerNarrative?.();
+      } catch (error) {
+        console.warn('战后剧情唤醒失败；战斗结算已保留', error);
+      }
       this.ports.openCommonView?.();
       this.settledTowerBattleKey = key;
-      // Never await prose, and never roll back a settled battle on prose failure.
-      void Promise.resolve().then(() => this.ports.scheduleTowerNarrative?.())
-        .catch(error => console.warn('战后剧情唤醒失败；战斗结算已保留', error));
     } catch (error) {
       try {
         if (snapshot) await this.restoreBeforeSend(snapshot);
