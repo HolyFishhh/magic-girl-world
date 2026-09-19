@@ -658,7 +658,7 @@ function summarizeMvuUpdate(result) {
             }
         }
     };
-    const requiredTowerExtensionVersion = '1.0.2';
+    const requiredTowerExtensionVersion = '1.0.3';
     const towerExtensionRepositoryUrl = 'https://github.com/HolyFishhh/magic-girl-world.git';
     const towerExtensionManifestUrl = 'https://raw.githubusercontent.com/HolyFishhh/magic-girl-world/extension/manifest.json';
     const compareTowerExtensionVersions = (left, right) => {
@@ -773,26 +773,8 @@ function summarizeMvuUpdate(result) {
             const extensionName = installedExtensionName.split(/[\\/]/).filter(Boolean).pop()
                 || 'magic-girl-world';
             const globalExtension = extensionModule?.extensionTypes?.[installedExtensionName] === 'global';
-            // Early ZIP releases were copied as `magic-girl-design-assistant` and
-            // therefore have no .git directory. SillyTavern's update endpoint can
-            // only pull Git repositories. Migrate that known legacy folder once to
-            // the official extension-branch installation; all later updates then
-            // use the normal update endpoint.
             if (/^magic-girl-design-assistant$/i.test(extensionName)) {
-                const removed = await parentWindow.fetch('/api/extensions/delete', {
-                    method: 'POST',
-                    headers: scriptModule.getRequestHeaders(),
-                    body: JSON.stringify({ extensionName, global: globalExtension }),
-                });
-                if (!removed?.ok) {
-                    const detail = await removed?.text?.();
-                    throw new Error(detail || `旧版组件迁移失败（${removed?.status || 'network'}）`);
-                }
-                const installed = await extensionModule.installExtension(towerExtensionRepositoryUrl, globalExtension, 'extension');
-                if (!installed)
-                    throw new Error('旧版组件已移除，但新版组件安装没有完成，请重新点击安装');
-                towerExtensionVersionCache = null;
-                return true;
+                throw new Error('旧手动安装不支持自动迁移，请手动安装当前版本组件后刷新酒馆。现有组件未改动。');
             }
             const response = await parentWindow.fetch('/api/extensions/update', {
                 method: 'POST',
@@ -821,6 +803,7 @@ function summarizeMvuUpdate(result) {
             designAssistantEnabled: true,
             simulationSeeds: 8,
             showNotifications: true,
+            towerBattleNarrative: true,
             debug: false,
         };
         let settings = { ...defaultSettings };
@@ -835,6 +818,7 @@ function summarizeMvuUpdate(result) {
                 ? Number(settings.simulationSeeds)
                 : 8;
             settings.showNotifications = settings.showNotifications !== false;
+            settings.towerBattleNarrative = settings.towerBattleNarrative !== false;
             settings.debug = settings.debug === true;
             if (Number.isFinite(stored?.orbPosition?.x) && Number.isFinite(stored?.orbPosition?.y)) {
                 orbPosition = { x: Number(stored.orbPosition.x), y: Number(stored.orbPosition.y) };
@@ -948,6 +932,7 @@ function summarizeMvuUpdate(result) {
                     ? Number(remote.simulationSeeds)
                     : settings.simulationSeeds,
                 showNotifications: remote.showNotifications !== false,
+                towerBattleNarrative: remote.towerBattleNarrative !== false,
                 debug: remote.debug === true,
             };
             const changed = Object.keys(next).some(key => next[key] !== settings[key]);
@@ -1746,6 +1731,7 @@ function summarizeMvuUpdate(result) {
         <label class="mwg-difficulty-row"><span class="mwg-setting-copy"><strong>剧情战斗强度</strong><small>爬塔以80%为标准档，调节敌人耐久与出招压力；不是胜率，也不是双方评分的比例</small></span><select class="mwg-difficulty-select" data-mwg-difficulty aria-label="剧情战斗强度"><option value="10">10% 剧情体验</option><option value="50">50% 轻松</option><option value="80">80% 标准</option><option value="100">100% 困难</option><option value="110">110% 高压</option></select></label>
         <label class="mwg-setting-row"><span class="mwg-setting-copy"><strong>强度分析建议</strong><small>生成前提供数值范围，生成后只评分记录，不自动改写或拒绝敌人</small></span><input type="checkbox" data-mwg-design-setting="autoCalibration"><span class="mwg-switch" aria-hidden="true"></span></label>
         <label class="mwg-difficulty-row"><span class="mwg-setting-copy"><strong>模拟精度</strong><small>精度越高，随机牌序覆盖越多，后台计算耗时也会增加</small></span><select class="mwg-difficulty-select" data-mwg-design-setting="simulationSeeds" aria-label="模拟精度"><option value="8">快速 · 8组</option><option value="12">均衡 · 12组</option><option value="16">精细 · 16组</option><option value="24">深入 · 24组</option></select></label>
+        <label class="mwg-setting-row"><span class="mwg-setting-copy"><strong>爬塔战后剧情</strong><small>默认开启：按战斗日志生成剧情，在路线图上方显示；不阻塞后续节点生成</small></span><input type="checkbox" data-mwg-design-setting="towerBattleNarrative"><span class="mwg-switch" aria-hidden="true"></span></label>
         <label class="mwg-setting-row"><span class="mwg-setting-copy"><strong>显示强度提示</strong><small>在评分发现明显强弱偏差时显示建议，不修改当前敌人</small></span><input type="checkbox" data-mwg-design-setting="showNotifications"><span class="mwg-switch" aria-hidden="true"></span></label>
         <label class="mwg-setting-row"><span class="mwg-setting-copy"><strong>调试日志</strong><small>在控制台输出本轮注入的紧凑设计上下文和失败原因</small></span><input type="checkbox" data-mwg-design-setting="debug"><span class="mwg-switch" aria-hidden="true"></span></label>
         <button class="mwg-refresh-design" type="button" data-action="refresh-design">立即重新评估卡组</button>
@@ -1780,7 +1766,7 @@ function summarizeMvuUpdate(result) {
     <details class="mwg-settings-group" data-mwg-component="tower-install" open>
       <summary>爬塔组件需要安装</summary>
       <div class="mwg-group-body">
-        <div class="mwg-design-status-card"><strong data-mwg-tower-extension>需要设计辅助器 1.0.2 或更高版本</strong><small data-mwg-tower-requirement>安装完整扩展包后刷新酒馆；剧情模式不受影响。</small></div>
+        <div class="mwg-design-status-card"><strong data-mwg-tower-extension>需要设计辅助器 1.0.3 或更高版本</strong><small data-mwg-tower-requirement>安装完整扩展包后刷新酒馆；剧情模式不受影响。</small></div>
         <button class="mwg-extension-download" type="button" data-action="install-tower-extension">快捷安装爬塔组件</button>
         <a class="mwg-extension-download" href="${towerExtensionReleaseUrl}" target="_blank" rel="noopener noreferrer">安装失败时打开手动下载页面</a>
       </div>
