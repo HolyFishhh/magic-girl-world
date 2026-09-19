@@ -7,6 +7,7 @@ process.env.TS_NODE_COMPILER_OPTIONS = JSON.stringify({ module: 'CommonJS', modu
 require('ts-node/register/transpile-only');
 
 const runtimeViews = require('../src/runtime/runtimeViewSwitcher.ts');
+const mountGuard = require('../src/runtime/runtimeMountGuard.ts');
 const { TavernContinuationHost } = require('../src/runtime/tavernContinuation.ts');
 const { TavernBattleEndHost } = require('../src/fish/core/battleEndHost.ts');
 const { createRunState, enterRunNode } = require('../src/game-core/runState.ts');
@@ -168,6 +169,8 @@ globalThis.MagicGirlWorld = {
 
 fakeDocument.documentElement.dataset.mwgView = 'common';
 fakeDocument.documentElement.dataset.mwgMountedView = 'common';
+const pendingBootstrapEpoch = mountGuard.claimRuntimeMountEpoch();
+assert.equal(mountGuard.isRuntimeMountEpochCurrent(pendingBootstrapEpoch), true);
 const initialCommonScript = fakeDocument.createElement('script');
 initialCommonScript.dataset.mwgRuntimeScript = 'common';
 fakeDocument.body.appendChild(initialCommonScript);
@@ -177,6 +180,8 @@ assert.equal(fakeWindow.listenerCount('pagehide'), 1);
 assert.equal(fakeWindow.listenerCount('mwg-test-pulse'), 1);
 
 runtimeViews.switchRuntimeView('fish');
+assert.equal(mountGuard.isRuntimeMountEpochCurrent(pendingBootstrapEpoch), false,
+  'switching views invalidates a bootstrap that is still waiting on the runtime');
 assert.equal(runtimeViews.currentRuntimeView(), 'fish');
 assert.equal(fakeDocument.title, 'view:fish');
 assert.equal(fakeDocument.body.innerHTML, '<main>fish</main>');

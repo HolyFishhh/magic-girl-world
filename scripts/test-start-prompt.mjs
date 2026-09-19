@@ -51,11 +51,7 @@ assert.equal(
 );
 assert.doesNotMatch(towerMessage, /爬塔开局要求|中文字符|短段落|不直接开战/);
 assert.doesNotMatch(message, /爬塔开局要求|中文字符/, '剧情模式不能继承爬塔开局衔接说明');
-const legacyExpeditionMessage = createCharacterStartMessage({ mode: 'expedition' });
-assert.equal(
-  legacyExpeditionMessage,
-  '[角色创建]\n{"mode":"tower"}\n[爬塔模式]\n[开始游戏]',
-);
+assert.throws(() => createCharacterStartMessage({ mode: 'expedition' }), /不支持的开局模式/);
 
 const startHtml = await readFile(resolve('src/start/index.html'), 'utf8');
 assert.doesNotMatch(startHtml, /setup-tab|story-config|偏好|阵营/);

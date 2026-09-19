@@ -105,6 +105,14 @@ FakeObserver.instances[0].fire();
 flushAnimationFrame();
 assert.equal(frame.style.height, '1409px', 'dynamic common/reward content must resize the message iframe');
 
+document.body.scrollHeight = 1410;
+document.body.offsetHeight = 1410;
+controller.request();
+flushAnimationFrame();
+assert.equal(frame.style.height, '1409px', 'one-pixel measurement jitter must not rewrite frame height');
+document.body.scrollHeight = 1409;
+document.body.offsetHeight = 1409;
+
 frame.style.height = '';
 FakeObserver.instances.at(-1).fire();
 flushAnimationFrame();

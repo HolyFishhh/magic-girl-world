@@ -433,7 +433,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
     debug: boolean;
   };
 
-  const requiredTowerExtensionVersion = '1.0.2';
+  const requiredTowerExtensionVersion = '1.0.3';
   const towerExtensionRepositoryUrl = 'https://github.com/HolyFishhh/magic-girl-world.git';
   const towerExtensionManifestUrl =
     'https://raw.githubusercontent.com/HolyFishhh/magic-girl-world/extension/manifest.json';
@@ -555,29 +555,8 @@ function summarizeMvuUpdate(result: unknown): string[] {
       const extensionName = installedExtensionName.split(/[\\/]/).filter(Boolean).pop()
         || 'magic-girl-world';
       const globalExtension = extensionModule?.extensionTypes?.[installedExtensionName] === 'global';
-      // Early ZIP releases were copied as `magic-girl-design-assistant` and
-      // therefore have no .git directory. SillyTavern's update endpoint can
-      // only pull Git repositories. Migrate that known legacy folder once to
-      // the official extension-branch installation; all later updates then
-      // use the normal update endpoint.
       if (/^magic-girl-design-assistant$/i.test(extensionName)) {
-        const removed = await parentWindow.fetch('/api/extensions/delete', {
-          method: 'POST',
-          headers: scriptModule.getRequestHeaders(),
-          body: JSON.stringify({ extensionName, global: globalExtension }),
-        });
-        if (!removed?.ok) {
-          const detail = await removed?.text?.();
-          throw new Error(detail || `旧版组件迁移失败（${removed?.status || 'network'}）`);
-        }
-        const installed = await extensionModule.installExtension(
-          towerExtensionRepositoryUrl,
-          globalExtension,
-          'extension',
-        );
-        if (!installed) throw new Error('旧版组件已移除，但新版组件安装没有完成，请重新点击安装');
-        towerExtensionVersionCache = null;
-        return true;
+        throw new Error('旧手动安装不支持自动迁移，请手动安装当前版本组件后刷新酒馆。现有组件未改动。');
       }
       const response = await parentWindow.fetch('/api/extensions/update', {
         method: 'POST',
@@ -1568,7 +1547,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
     <details class="mwg-settings-group" data-mwg-component="tower-install" open>
       <summary>爬塔组件需要安装</summary>
       <div class="mwg-group-body">
-        <div class="mwg-design-status-card"><strong data-mwg-tower-extension>需要设计辅助器 1.0.2 或更高版本</strong><small data-mwg-tower-requirement>安装完整扩展包后刷新酒馆；剧情模式不受影响。</small></div>
+        <div class="mwg-design-status-card"><strong data-mwg-tower-extension>需要设计辅助器 1.0.3 或更高版本</strong><small data-mwg-tower-requirement>安装完整扩展包后刷新酒馆；剧情模式不受影响。</small></div>
         <button class="mwg-extension-download" type="button" data-action="install-tower-extension">快捷安装爬塔组件</button>
         <a class="mwg-extension-download" href="${towerExtensionReleaseUrl}" target="_blank" rel="noopener noreferrer">安装失败时打开手动下载页面</a>
       </div>

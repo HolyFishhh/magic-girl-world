@@ -1,10 +1,8 @@
-import { validateRunState } from './runState';
-
 export const GAME_MODE_LOCK_SCHEMA_VERSION = 1 as const;
 
 export const GAME_MODES = ['story', 'tower'] as const;
 export type GameMode = (typeof GAME_MODES)[number];
-export type GameModeInput = GameMode | 'expedition';
+export type GameModeInput = GameMode;
 
 export interface GameModeLock {
   schemaVersion: typeof GAME_MODE_LOCK_SCHEMA_VERSION;
@@ -21,10 +19,10 @@ function requireStatRecord(value: unknown): Record<string, any> {
   return stat;
 }
 
-/** Map the retired expedition name onto the canonical tower mode. */
+/** Only the current public mode names are accepted. */
 export function normalizeGameMode(value: unknown): GameMode | null {
   if (value === 'story') return 'story';
-  if (value === 'tower' || value === 'expedition') return 'tower';
+  if (value === 'tower') return 'tower';
   return null;
 }
 
@@ -37,21 +35,15 @@ export function readGameModeLock(statValue: unknown): GameModeLock | null {
   return mode ? { schemaVersion: GAME_MODE_LOCK_SCHEMA_VERSION, mode } : null;
 }
 
-function hasValidLegacyRun(stat: Record<string, any>): boolean {
-  return validateRunState(stat.run).ok;
-}
-
-/**
- * Resolve the effective mode without consulting chat text.
- * A lock always wins; an unlocked valid old run migrates to tower, followed by
- * the retired expedition value. Old chats without either remain story mode.
- */
+/** Read the current lock or explicit mode without inferring from saved route content. */
 export function readGameMode(statValue: unknown): GameMode {
   const stat = asRecord(statValue);
   if (!stat) return 'story';
   const lock = readGameModeLock(stat);
   if (lock) return lock.mode;
-  if (hasValidLegacyRun(stat)) return 'tower';
+  if (stat.game_mode === 'expedition' || asRecord(stat.game_mode_lock)?.mode === 'expedition') {
+    throw new Error('此旧版模式存档不受支持，请使用1.0.3角色卡新开局；原存档未修改。');
+  }
   return normalizeGameMode(stat.game_mode) ?? 'story';
 }
 
@@ -76,8 +68,8 @@ export function lockGameModeInStat(statValue: unknown, requestedMode: GameModeIn
   return persistCanonicalLock(stat, mode);
 }
 
-/** Lock and canonicalize an old save using program-owned state only. */
-export function migrateGameModeInStat(statValue: unknown): GameModeLock {
+/** Synchronize current mode mirrors without converting retired modes or guessing from a run. */
+export function synchronizeGameModeInStat(statValue: unknown): GameModeLock {
   const stat = requireStatRecord(statValue);
   const existing = readGameModeLock(stat);
   return persistCanonicalLock(stat, existing?.mode ?? readGameMode(stat));

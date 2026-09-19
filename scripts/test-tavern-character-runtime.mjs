@@ -529,14 +529,10 @@ extensionCapabilitiesVersion = '0.2.2';
 installedExtensionNames = ['third-party/magic-girl-design-assistant'];
 installedExtensionTypes = { 'third-party/magic-girl-design-assistant': 'global' };
 assert.equal((await sharedRuntime.checkTowerExtensionVersion(true)).status, 'outdated');
-assert.equal(await sharedRuntime.installTowerExtension(), true);
-assert.deepEqual(extensionDeleteRequests, [{ extensionName: 'magic-girl-design-assistant', global: true }]);
-assert.deepEqual(officialInstallCalls, [[
-  'https://github.com/HolyFishhh/magic-girl-world.git',
-  true,
-  'extension',
-]]);
-assert.equal(extensionUpdateRequests.length, 1, 'a copied legacy folder must migrate instead of calling git update');
+await assert.rejects(() => sharedRuntime.installTowerExtension(), /旧手动安装不支持自动迁移/);
+assert.deepEqual(extensionDeleteRequests, [], 'unsupported installations must remain untouched');
+assert.deepEqual(officialInstallCalls, []);
+assert.equal(extensionUpdateRequests.length, 1);
 
 extensionCapabilitiesVersion = extensionVersion;
 extensionSupportsSingleFloor = true;

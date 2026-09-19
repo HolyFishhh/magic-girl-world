@@ -10,7 +10,7 @@ const {
   GAME_MODE_LOCK_SCHEMA_VERSION,
   createRunState,
   lockGameModeInStat,
-  migrateGameModeInStat,
+  synchronizeGameModeInStat,
   normalizeGameMode,
   readGameMode,
   readGameModeLock,
@@ -19,7 +19,7 @@ const {
 assert.equal(GAME_MODE_LOCK_SCHEMA_VERSION, 1);
 assert.equal(normalizeGameMode('story'), 'story');
 assert.equal(normalizeGameMode('tower'), 'tower');
-assert.equal(normalizeGameMode('expedition'), 'tower');
+assert.equal(normalizeGameMode('expedition'), null);
 assert.equal(normalizeGameMode('unknown'), null);
 
 const newStory = { game_mode: 'story', run: { invalid: true }, game_mode_lock: null };
@@ -35,22 +35,20 @@ assert.equal(readGameMode(newStory), 'story');
 assert.equal(newStory.game_mode, 'story');
 
 const newTower = { game_mode: 'story', run: null, game_mode_lock: null };
-lockGameModeInStat(newTower, 'expedition');
+assert.throws(() => lockGameModeInStat(newTower, 'expedition'), /unsupported/);
+lockGameModeInStat(newTower, 'tower');
 assert.deepEqual(newTower.game_mode_lock, { schemaVersion: 1, mode: 'tower' });
 assert.equal(newTower.game_mode, 'tower');
 
 const legacyRun = { game_mode: 'story', run: createRunState({ seed: 42 }) };
-assert.equal(readGameMode(legacyRun), 'tower');
-migrateGameModeInStat(legacyRun);
-assert.deepEqual(legacyRun.game_mode_lock, { schemaVersion: 1, mode: 'tower' });
-assert.equal(legacyRun.game_mode, 'tower');
-
+assert.equal(readGameMode(legacyRun), 'story', 'route content cannot override explicit current mode');
 const legacyNamed = { game_mode: 'expedition', run: null };
-migrateGameModeInStat(legacyNamed);
-assert.deepEqual(legacyNamed.game_mode_lock, { schemaVersion: 1, mode: 'tower' });
+const original = JSON.stringify(legacyNamed);
+assert.throws(() => synchronizeGameModeInStat(legacyNamed), /旧版模式存档不受支持/);
+assert.equal(JSON.stringify(legacyNamed), original, 'unsupported save remains untouched');
 
 const oldStory = { run: null };
-migrateGameModeInStat(oldStory);
+synchronizeGameModeInStat(oldStory);
 assert.deepEqual(oldStory.game_mode_lock, { schemaVersion: 1, mode: 'story' });
 assert.equal(oldStory.game_mode, 'story');
 
@@ -62,10 +60,10 @@ const lockedStoryWithOldRun = {
   game_mode_lock: { schemaVersion: 1, mode: 'story' },
   run: createRunState({ seed: 7 }),
 };
-migrateGameModeInStat(lockedStoryWithOldRun);
+synchronizeGameModeInStat(lockedStoryWithOldRun);
 assert.equal(lockedStoryWithOldRun.game_mode, 'story');
 assert.equal(lockedStoryWithOldRun.run, null);
 
 console.log(
-  'Game mode selection is canonical, legacy-compatible, migrated once, and permanently locked without chat-text inference.',
+  'Game mode selection is canonical, current-only, retired modes rejected without mutation, and permanently locked without chat-text inference.',
 );

@@ -1,7 +1,6 @@
 // 角色创建配置
 export interface CharacterConfig {
-  /** `expedition` is accepted only for old callers and is normalized to `tower`. */
-  mode: 'story' | 'tower' | 'expedition';
+  mode: 'story' | 'tower';
   name?: string;
   customDescription?: string;
   world?: string;

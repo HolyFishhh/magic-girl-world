@@ -90,7 +90,7 @@ function buildViewBootstrap(view) {
   if (script.includes('`') || script.includes('?.') || script.includes('</script') || script.includes('<')) {
     throw new Error(`${view} bootstrap contains syntax that can be reparsed by Tavern Helper`);
   }
-  return script;
+  return script.replace(/^[ \t]+/gm, '');
 }
 
 function createRuntimeShell(view) {

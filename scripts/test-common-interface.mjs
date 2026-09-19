@@ -428,7 +428,7 @@ assert.doesNotMatch(scriptSource, /\[路线节点\]|\[事件选择\]|非战斗�
 assert.match(runPromptSource, /\[事件选择\]/);
 assert.match(runPromptSource, /gold\/hp 用实际 JSON 整数变化量/);
 assert.match(scriptSource, /return readGameMode\(stat\)/);
-assert.match(scriptSource, /migrateGameModeInStat\(stat\)/);
+assert.match(scriptSource, /synchronizeGameModeInStat\(stat\)/);
 assert.doesNotMatch(scriptSource, /context\.includes\('\[远征模式\]'\)/);
 assert.doesNotMatch(exportSource, /findRegex:[\s\S]*?<Options>/);
 assert.doesNotMatch(exportSource, /<Story>/);

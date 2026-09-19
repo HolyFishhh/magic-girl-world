@@ -84,7 +84,7 @@ import {
   type RunState,
   type PlayerContentReadiness,
   type EffectDisplayTag,
-  migrateGameModeInStat,
+  synchronizeGameModeInStat,
   lockGameModeInStat,
   readGameMode,
   readGameModeLock,
@@ -2627,7 +2627,7 @@ function towerExtensionReadiness(): { ready: boolean; message: string } {
   const version = String(capabilities.version || '0.0.0')
     .split('.')
     .map((part: string) => Number(part) || 0);
-  const supported = (version[0] || 0) >= 1;
+  const supported = version[0] > 1 || (version[0] === 1 && (version[1] > 0 || (version[1] === 0 && version[2] >= 3)));
   if (
     !supported
     || capabilities.towerGeneration !== true
@@ -2636,7 +2636,7 @@ function towerExtensionReadiness(): { ready: boolean; message: string } {
   ) {
     return {
       ready: false,
-      message: `设计辅助器版本过低（当前 ${capabilities.version || '未知'}，至少需要 1.0）。`,
+      message: `设计辅助器版本过低（当前 ${capabilities.version || '未知'}，至少需要 1.0.3）。`,
     };
   }
   return { ready: true, message: '' };
@@ -2651,7 +2651,7 @@ async function synchronizeSelectedGameMode(): Promise<void> {
   if (needsSync) {
     await commonActionHost.updateVariablesWith((variables: any) => {
       const stat = getStatRootRef(variables) || {};
-      migrateGameModeInStat(stat);
+      synchronizeGameModeInStat(stat);
       return variables;
     });
     __STAT__.game_mode = mode;

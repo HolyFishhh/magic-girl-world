@@ -9,7 +9,8 @@ type StartProfile = Partial<Record<typeof PROFILE_FIELDS[number][0], string>> & 
 
 /** Code-owned UI envelope. Kept shared so deduplication never guesses at user prose. */
 export function createCharacterStartMessage(config: StartProfile): string {
-  const mode = normalizeGameMode(config.mode) ?? 'story';
+  const mode = config.mode == null ? 'story' : normalizeGameMode(config.mode);
+  if (!mode) throw new Error('不支持的开局模式，请使用剧情或爬塔模式新开局。');
   const profile: Record<string, string> = { mode };
   for (const [source, target] of PROFILE_FIELDS) {
     const value = config[source];

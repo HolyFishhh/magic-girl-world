@@ -15,6 +15,21 @@ type SharedRuntime = Readonly<{
   getMessageVariables?: (messageId?: number | 'latest') => Record<string, any>;
 }>;
 
+const RUNTIME_MOUNT_EPOCH_KEY = '__MWG_RUNTIME_MOUNT_EPOCH__';
+
+function claimRuntimeMountEpoch(): number {
+  const host = globalThis as typeof globalThis & Record<string, unknown>;
+  const previous = Number(host[RUNTIME_MOUNT_EPOCH_KEY]);
+  const next = Number.isFinite(previous) && previous >= 0 ? previous + 1 : 1;
+  host[RUNTIME_MOUNT_EPOCH_KEY] = next;
+  return next;
+}
+
+function isRuntimeMountEpochCurrent(epoch: number): boolean {
+  const host = globalThis as typeof globalThis & Record<string, unknown>;
+  return Number(host[RUNTIME_MOUNT_EPOCH_KEY]) === epoch;
+}
+
 declare const __MWG_VIEW_NAME__: RuntimeViewName;
 declare const __MWG_CARD_VERSION__: string;
 declare function waitGlobalInitialized<T>(global: string): Promise<T>;
@@ -29,6 +44,7 @@ function isolatedRuntimeScript(source: string): string {
   const view = __MWG_VIEW_NAME__;
   const expectedVersion = __MWG_CARD_VERSION__;
   const timeoutMs = 15000;
+  const mountEpoch = claimRuntimeMountEpoch();
 
   const currentMessageId = (): number | null => {
     const helper = globalThis as typeof globalThis & { getCurrentMessageId?: () => unknown };
@@ -91,6 +107,7 @@ function isolatedRuntimeScript(source: string): string {
 
   Promise.race([Promise.resolve(sharedRuntime), timeout])
     .then(runtime => {
+      if (!isRuntimeMountEpochCurrent(mountEpoch)) return;
       const api = runtime || (globalThis as any).MagicGirlWorld;
       if (!api || api.spec !== 'mwg.tavern-runtime/v1') throw new Error('角色运行时接口无效');
       if (api.version !== expectedVersion) {
@@ -135,6 +152,7 @@ function isolatedRuntimeScript(source: string): string {
           // to the marker-selected view preserves story-mode compatibility.
         }
       }
+      if (!isRuntimeMountEpochCurrent(mountEpoch)) return;
       if (document.documentElement.dataset.mwgMountedView === resolvedView) return;
       document.documentElement.dataset.mwgMountedView = resolvedView;
 

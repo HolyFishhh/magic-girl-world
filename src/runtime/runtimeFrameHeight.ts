@@ -60,7 +60,7 @@ function createRuntimeFrameHeightController(frame: HTMLElement): RuntimeFrameHei
     animationFrame = 0;
     if (destroyed || isFullscreen(frame)) return;
     const measured = measureDocumentHeight();
-    if (Math.abs(measured - lastHeight) < 2) return;
+    if (Math.abs(measured - lastHeight) < 2 && frame.style.height === `${lastHeight}px`) return;
     lastHeight = measured;
     const nextHeight = `${measured}px`;
     setRuntimeFrameHeight(frame, nextHeight);
