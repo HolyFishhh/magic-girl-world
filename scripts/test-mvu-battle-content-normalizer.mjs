@@ -77,10 +77,21 @@ assert.equal(implicitOwnedQuantity.cards[0].quantity, 1, 'the runtime default fo
 for (const emptyLustShell of [
   { name: '温存', effects: [] },
   { name: '温存', emoji: '💗', effects: {} },
+  { $meta: { extensible: true }, name: '', description: '' },
 ]) {
   const normalizedEmptyLust = normalizeMvuBattleContent({ player_lust_effect: emptyLustShell });
   assert.equal('player_lust_effect' in normalizedEmptyLust, false, 'a strict empty optional lust shell is omitted');
 }
+const nullTypoCard = normalizeMvuBattleContent({
+  cards: [{ id: 'clean_strike', name: '干净斩击', type: 'Attack', rarity: 'Common', cost: 1, eff果s: null, effects: { damage: 6 } }],
+});
+assert.equal('eff果s' in nullTypoCard.cards[0], false, 'an observed null typo beside canonical effects is inert and removed');
+assert.equal(validateAuthoredCard(nullTypoCard.cards[0]).ok, true);
+const meaningfulTypoCard = normalizeMvuBattleContent({
+  cards: [{ id: 'bad_strike', name: '冲突斩击', type: 'Attack', rarity: 'Common', cost: 1, eff果s: { damage: 9 }, effects: { damage: 6 } }],
+});
+assert.equal('eff果s' in meaningfulTypoCard.cards[0], true, 'non-null unknown content must remain an error');
+assert.equal(validateAuthoredCard(meaningfulTypoCard.cards[0]).ok, false);
 for (const meaningfulLustShell of [
   { name: '温存', description: '欲望满溢时获得力量。', effects: [] },
   { name: '温存', effects: [], creates: [{ id: 'temptation' }] },

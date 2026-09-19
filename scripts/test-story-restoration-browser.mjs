@@ -19,6 +19,7 @@ fs.writeFileSync(resolve(out,'entry.ts'), `
 import {renderStoryPanel} from '../../src/runtime/storyPanel';
 import {readStatusLocation,readStatusProfession} from '../../src/common/statusAdapter';
 import {flattenMvuArray} from '../../src/runtime/mvuArrays';
+import {normalizeOptionalMvuNamedEffect} from '../../src/runtime/contentPackAdapter';
 import {normalizeMvuList} from '../../src/common/rewardTransactions';
 import {renderSupportDetails} from '../../src/shared/supportPresentation';
 import {renderStancePanel} from '../../src/shared/stancePresentation';
@@ -62,8 +63,7 @@ let ws;try{
   assert.equal(await evaluate("getComputedStyle(document.querySelector('.statusbar-panels')).display==='none'"),false);
   assert.equal(await evaluate("document.querySelector('.statusbar-header').hidden"),false);
   assert.equal(await evaluate("Boolean(document.querySelector('#tower-screen-host'))"),false,'story must not reparent actions/rewards into a tower host');
-  assert.equal(await evaluate("document.querySelector('.story-steps').hidden"),true,'no tower floor in free story');
-  assert.equal(await evaluate("document.querySelector('.story-prose').textContent"),'清晨，你来到钟楼。');
+  assert.equal(await evaluate("Boolean(document.querySelector('#mwg-story-panel'))"),false,'ordinary story prose stays in the Tavern message and is never rendered again');
   await evaluate("document.querySelectorAll('.status-panel').forEach(p=>p.open=true);document.getElementById('common-loading-status').remove()");
   for(const text of ['银色披风','旧钥匙','42','信赖','魔法契约','疲惫','守望者','钟楼的同盟'])assert.ok((await evaluate("document.querySelector('.statusbar-panels').textContent")).includes(text),text);
   for(const [id,words] of [['story-player-resources',['星辉','🌟','当前 2','上限 6']],['story-player-abilities',['星辉庇佑','3']],['story-player-statuses',['灼热','2']],['story-player-lust-effect',['意志反击','7']],['story-player-stance',['守势','格挡']],['story-player-summon-growth',['灵契','伤害','增加','2']]]){
@@ -74,11 +74,12 @@ let ws;try{
   assert.equal(await evaluate("[...document.querySelectorAll('.statusbar-header *, .statusbar-panels *')].filter(e=>e.getClientRects().length && e.getBoundingClientRect().right>document.documentElement.clientWidth+1).length"),0,'visible content is not clipped by an overflow-hidden ancestor');
   assert.equal(await evaluate('document.documentElement.scrollWidth>innerWidth'),false,'original panels wrap on narrow screen');await shot('story-'+width);
   await evaluate("Object.assign(fixture.variables().stat_data,{run_node:{narrative:'不能展示的旧塔节点'},completed_expedition:{run:{act:3,visitedNodeIds:[]}}});fixture.variables().mwg_tower_initial_commit={narrative:'不能展示的旧塔开局'};fixture.render()");
-  assert.equal(await evaluate("document.querySelector('.story-prose').textContent"),'清晨，你来到钟楼。','story prose ignores tower caches without rewriting them');
+  assert.equal(await evaluate("Boolean(document.querySelector('#mwg-story-panel'))"),false,'tower caches cannot create a story wrapper in story mode');
   const before=await evaluate('JSON.stringify(fixture.variables())');
   await evaluate('fixture.restore()');assert.equal(await evaluate('JSON.stringify(fixture.variables())'),before,'render and save restore are read only');
   // Battle still uses the latest shared status renderer, including story facts.
   await evaluate('fixture.combat()');
+  assert.equal(await evaluate("Boolean(document.querySelector('#mwg-story-panel'))"),false,'story battle renders the battle page without a duplicate prose panel');
   const story=await evaluate("document.querySelector('.character-story-facts').textContent");for(const text of ['银色披风','旧钥匙','42','信赖','魔法契约','疲惫'])assert.ok(story.includes(text),text);
   await evaluate('fixture.render()');
   assert.equal(await evaluate("Boolean(document.querySelector('#mwg-status-fold'))"),false);

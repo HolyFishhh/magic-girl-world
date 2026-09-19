@@ -10,16 +10,27 @@ function normalizeMvuList(value: unknown): unknown[] {
   return flattenMvuArray(value);
 }
 
+/** Empty MVU template scaffolds mean that this optional mechanic was omitted. */
+export function normalizeOptionalMvuNamedEffect(value: unknown, fallbackName: string): unknown {
+  if (isRecord(value)) {
+    const authored = Object.entries(value).filter(([key]) => key !== '$meta');
+    const isEmptyScaffold = authored.every(([key, entry]) =>
+      ['name', 'emoji', 'description'].includes(key) && typeof entry === 'string' && !entry.trim());
+    if (isEmptyScaffold) return undefined;
+  }
+  return normalizeCompactNamedEffectInput(value, fallbackName);
+}
+
 function normalizeMvuEnemy(value: unknown): unknown {
   const source = value;
   if (!isRecord(source)) return source;
-  const lustEffect = normalizeCompactNamedEffectInput(source.lust_effect, '欲望爆发');
+  const lustEffect = normalizeOptionalMvuNamedEffect(source.lust_effect, '欲望爆发');
   return {
     ...source,
     actions: normalizeMvuList(source.actions),
     abilities: normalizeMvuList(source.abilities),
     status_effects: normalizeMvuList(source.status_effects),
-    ...(Object.hasOwn(source, 'lust_effect') ? { lust_effect: lustEffect || source.lust_effect } : {}),
+    ...(lustEffect !== undefined ? { lust_effect: lustEffect } : {}),
   };
 }
 
@@ -43,6 +54,6 @@ export function createContentPackFromMvuBattle(battleData: unknown): ContentPack
     playerOrbs: normalizeMvuList(core.orbs),
     enemy: normalizeMvuEnemy(normalizedBattle.enemy),
     enemies: normalizeMvuList(normalizedBattle.enemies).map(normalizeMvuEnemy),
-    playerDesireEffect: normalizeCompactNamedEffectInput(normalizedBattle.player_lust_effect, '欲望满溢'),
+    playerDesireEffect: normalizeOptionalMvuNamedEffect(normalizedBattle.player_lust_effect, '欲望满溢'),
   });
 }

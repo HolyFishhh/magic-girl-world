@@ -48,7 +48,7 @@ import {
 import { registerNaturalLanguageCardRepairHandler } from '../runtime/naturalLanguageCardRepair';
 import { registerRuntimeViewLifecycle, switchRuntimeView } from '../runtime/runtimeViewSwitcher';
 import { ensureRuntimeFrameHeightSync } from '../runtime/runtimeFrameHeight';
-import { createContentPackFromMvuBattle } from '../runtime/contentPackAdapter';
+import { createContentPackFromMvuBattle, normalizeOptionalMvuNamedEffect } from '../runtime/contentPackAdapter';
 import {
   isMvuDeckPowerProfileCurrent,
   profileMvuDeckPower,
@@ -3299,7 +3299,8 @@ function renderStoryBattleSupport(battle: Record<string, any>): void {
     .map(value => ({ ...(statusDefinitions.get(String(value.id || value.name || '')) || {}), ...value }));
   render('story-player-statuses', activeStatuses, '状态');
   render('story-player-resources', flattenMvuArray(battle.core?.resources, { objectsOnly: true }), '资源');
-  render('story-player-lust-effect', battle.player_lust_effect ? [battle.player_lust_effect] : [], '欲望效果');
+  const lustEffect = normalizeOptionalMvuNamedEffect(battle.player_lust_effect, '欲望满溢');
+  render('story-player-lust-effect', lustEffect && typeof lustEffect === 'object' ? [lustEffect as Record<string, any>] : [], '欲望效果');
   const stanceContainer = document.getElementById('story-player-stance');
   if (stanceContainer) {
     stanceContainer.innerHTML = battle.core?.stance

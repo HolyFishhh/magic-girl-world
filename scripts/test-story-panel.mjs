@@ -9,6 +9,8 @@ assert.equal(cleanDisplayedStory('<think>private</think>开场\n<UpdateVariable>
 assert.equal(cleanDisplayedStory('[开始游戏]\n[剧情模式开场]'), '');
 assert.equal(cleanDisplayedStory('正文<thinking>unfinished'), '正文');
 const source = readFileSync('src/runtime/storyPanel.ts','utf8');
+assert.match(source,/if \(storyMode\) \{[\s\S]*getElementById\('mwg-story-panel'\)\?\.remove\(\);[\s\S]*return;/,
+  'ordinary story mode removes duplicate prose rendering before tower layout work');
 assert.match(source,/run\?\.visitedNodeIds/);
 assert.match(source,/textContent = narrative/);
 assert.doesNotMatch(source,/innerHTML|updateVariables|setChatMessages/);

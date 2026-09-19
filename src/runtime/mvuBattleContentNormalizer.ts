@@ -821,6 +821,12 @@ function rewriteNode(
   // other quantity remains visible for strict validation.
   if (parentKey === 'creates' && result.quantity === 1) delete result.quantity;
 
+  // A current story-generation response emitted both canonical `effects` and
+  // the inert typo `eff果s:null`. The null field carries no rule and its
+  // canonical sibling is already present, so removing only this exact shape
+  // is lossless. Non-null typo fields remain visible to strict validation.
+  if (result.effects !== undefined && result['eff果s'] === null) delete result['eff果s'];
+
   // A status hold modifier's stack variable is the current status' bare
   // `stacks`. `self.stacks` is a common provider spelling of the same local
   // value, but it is not a public formula path. Restrict this alias to hold
@@ -1702,7 +1708,14 @@ function pruneUnreachablePlayerTemplates(battle: Record<string, any>): void {
 
 function pruneStrictEmptyPlayerLustEffect(battle: Record<string, any>): void {
   const effect = battle.player_lust_effect;
-  if (!isRecord(effect) || typeof effect.name !== 'string' || !effect.name.trim()) return;
+  if (!isRecord(effect)) return;
+  const scaffoldEntries = Object.entries(effect).filter(([key]) => key !== '$meta');
+  if (scaffoldEntries.every(([key, value]) =>
+    ['name', 'emoji', 'description'].includes(key) && typeof value === 'string' && !value.trim())) {
+    delete battle.player_lust_effect;
+    return;
+  }
+  if (typeof effect.name !== 'string' || !effect.name.trim()) return;
   if (Object.keys(effect).some(key => !['name', 'emoji', 'effects'].includes(key))) return;
   const empty = (Array.isArray(effect.effects) && effect.effects.length === 0)
     || (isRecord(effect.effects) && Object.keys(effect.effects).length === 0);
