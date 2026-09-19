@@ -1,6 +1,6 @@
 # 魔法少女世界发布文档
 
-> **2026-09-18：1.0.2 修复发布。** 角色卡、设计辅助器及卡图仓库同步更新；角色卡要求设计辅助器至少 `1.0.2`。
+> **2026-09-20：准备发布 1.0.3。** 角色卡、设计辅助器及卡图仓库同步更新；角色卡要求设计辅助器至少 `1.0.3`。
 
 这份文档是每次正式发布必须参考的长期清单。玩家可见的完整版本历史以 `docs/player-release-notes.md` 为唯一来源；单次论坛发布稿从该文件复制，不单独改写历史。
 
@@ -41,12 +41,12 @@
 
 ## 本次发布
 
-- 角色卡版本：`1.0.2`
-- 玩家更新阶段：`1.0.2`
+- 角色卡版本：`1.0.3`
+- 玩家更新阶段：`1.0.3`
 - 主卡：`魔法少女世界.png`
-- 爬塔扩展：`dist/release/magic-girl-design-assistant-1.0.2.zip`
+- 爬塔扩展：`dist/release/magic-girl-design-assistant-1.0.3.zip`
 - 卡图仓库目标：`cards/魔法少女世界.png`
 - 完整玩家记录：`docs/player-release-notes.md`
-- 单次论坛快照：`docs/forum-update-1.0.2.md`
+- 单次论坛快照：`docs/forum-update-1.0.3.md`
 - 卡图仓库工作区：`D:/project/oldproject/card-upstream`
 - 扩展发布工作区：`D:/project/oldproject/magic-girl-extension-publish`
