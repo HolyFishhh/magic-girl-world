@@ -4306,26 +4306,35 @@ body.mwg-fullscreen-active .center-battle-area {
   .hand-actions { margin-left:auto; }
   .hand-actions .end-turn-button { min-width:82px; min-height:40px; padding:7px 10px; }
   #hand-cards.player-hand {
-    height:280px; min-height:0; padding:8px; gap:8px; align-items:stretch;
-    scroll-padding-inline:10px; scroll-snap-type:x mandatory; scrollbar-width:thin;
+    height:166px; min-height:0; padding:6px; gap:4px; align-items:stretch;
+    scroll-padding-inline:6px; scroll-snap-type:x mandatory; scrollbar-width:thin;
   }
   #hand-cards > .mwg-card,
   .card-play-unified #hand-cards > .card-drag-slot {
-    flex:0 0 calc((100% - 8px)/2); width:calc((100% - 8px)/2); height:260px; min-height:0; max-width:180px; box-sizing:border-box;
-    scroll-snap-align:start; scroll-snap-stop:always; border-radius:8px;
+    flex:0 0 calc((100% - 12px)/4); width:calc((100% - 12px)/4); height:154px; min-height:0; max-width:92px; box-sizing:border-box;
+    scroll-snap-align:start; scroll-snap-stop:always; border-radius:6px;
   }
-  #hand-cards > .mwg-card .card-header { min-height:24px; flex-shrink:0; font-size:10px; }
-  #hand-cards > .mwg-card .card-body { min-height:0; padding:5px; gap:4px; }
-  #hand-cards > .mwg-card .card-artwork { height:24px; min-height:24px; font-size:22px; }
+  #hand-cards > .mwg-card .card-header { min-height:20px; padding:2px; flex-shrink:0; font-size:8px; }
+  #hand-cards > .mwg-card .card-cost { min-width:16px; padding:1px 2px; font-size:8px; }
+  #hand-cards > .mwg-card .card-rarity-badge { gap:2px; font-size:7px; }
+  #hand-cards > .mwg-card .card-body { min-height:0; padding:3px; gap:2px; }
+  #hand-cards > .mwg-card .card-artwork { height:20px; min-height:20px; font-size:18px; }
+  #hand-cards > .mwg-card .card-emoji { font-size:18px; }
   #hand-cards > .mwg-card .card-name {
-    display:-webkit-box; min-height:34px; overflow:hidden; white-space:normal;
+    display:-webkit-box; min-height:25px; overflow:hidden; white-space:normal;
     overflow-wrap:anywhere; -webkit-box-orient:vertical; -webkit-line-clamp:2;
-    font-size:13px; line-height:1.3;
+    font-size:9px; line-height:1.35;
   }
-  #hand-cards > .mwg-card .card-type-row { height:22px; min-height:22px; font-size:10px; }
+  #hand-cards > .mwg-card .card-type-row { height:18px; min-height:18px; gap:2px; font-size:8px; }
+  #hand-cards > .mwg-card .card-type-row .card-type-indicator { font-size:8px; }
+  #hand-cards > .mwg-card .card-type-row .card-traits { height:18px; gap:1px; }
+  #hand-cards > .mwg-card .card-trait { padding:1px 3px; font-size:7px; }
   #hand-cards > .mwg-card .card-rules {
-    flex:1 1 auto; min-height:0; max-height:none; overflow:auto; font-size:11px; line-height:1.4; touch-action:pan-x; overscroll-behavior:contain;
+    flex:1 1 auto; min-height:0; max-height:none; margin:0 3px; padding:3px 0; overflow:auto;
+    font-size:8px; line-height:1.3; touch-action:pan-x; overscroll-behavior:contain;
   }
+  #hand-cards > .mwg-card .mwg-rule-pills { gap:2px; }
+  #hand-cards > .mwg-card .mwg-rule-pill { padding:2px 3px; border-radius:5px; }
   #hand-cards > .mwg-card .card-description.card-flavor-text {
     display:none;
   }
@@ -4342,6 +4351,13 @@ body.mwg-fullscreen-active .center-battle-area {
   .bottom-controls { padding:4px; }
   .battle-controls { grid-template-columns:repeat(3,minmax(0,1fr)); width:100%; gap:4px; }
   .control-button { min-width:0; min-height:40px; padding-inline:4px; overflow-wrap:anywhere; }
+}
+
+@media (min-width: 430px) and (max-width: 599px) {
+  #hand-cards > .mwg-card,
+  .card-play-unified #hand-cards > .card-drag-slot {
+    flex-basis:calc((100% - 16px)/5); width:calc((100% - 16px)/5);
+  }
 }
 
 @media (min-width: 600px) and (max-width: 760px) {
