@@ -3,6 +3,8 @@ import {spawn} from 'node:child_process';
 import {resolve} from 'node:path';
 import assert from 'node:assert/strict';
 import WebSocket from 'ws';
+await import('./build-player-feedback-fixture.mjs');
+await import('./build-common-removal-fixture.mjs');
 process.env.MWG_PRESENTATION_HTML='tmp/mobile-rewards.html';
 await import('./test-unified-content-presentation.mjs');
 delete process.env.MWG_PRESENTATION_HTML;
@@ -40,13 +42,15 @@ try {
       assert.ok(dimensions.actors.every(a=>a.x>=dimensions.stage.x&&a.right<=dimensions.stage.right+1),JSON.stringify({width,dimensions}));
       assert.ok(dimensions.stage.h<300,JSON.stringify({width,dimensions}));
       assert.ok(dimensions.hand.y<520,JSON.stringify({width,dimensions}));
-      assert.ok(Math.abs(dimensions.card.w-140)<1&&Math.abs(dimensions.card.h-210)<1,JSON.stringify({width,dimensions}));
+      assert.ok(Math.abs(dimensions.card.w-84)<1&&Math.abs(dimensions.card.h-126)<1,JSON.stringify({width,dimensions}));
       assert.ok(dimensions.card.x>=dimensions.hand.x&&dimensions.card.right<=dimensions.hand.right+1,JSON.stringify({width,dimensions}));
       assert.ok(dimensions.cards[1].right<=dimensions.hand.right+1,JSON.stringify({width,dimensions}));
       assert.ok(dimensions.card.scroll<=dimensions.card.client+1,JSON.stringify({width,dimensions}));
-      assert.ok(dimensions.title.height>=26&&dimensions.title.height<=30,JSON.stringify({width,dimensions}));
-      assert.ok(dimensions.rules.height>30&&dimensions.rules.overflow==='auto'&&dimensions.rules.font>=10,JSON.stringify({width,dimensions}));
-      assert.equal(dimensions.detail.text,'详情');assert.ok(dimensions.detail.w>=36&&dimensions.detail.h>=24,JSON.stringify({width,dimensions}));
+      assert.ok(dimensions.title.height>=20&&dimensions.title.height<=24,JSON.stringify({width,dimensions}));
+      assert.ok(dimensions.rules.height>=18&&dimensions.rules.overflow==='auto'&&dimensions.rules.font>=8,JSON.stringify({width,dimensions}));
+      assert.equal(dimensions.detail.text,'详情');assert.ok(dimensions.detail.w>=34&&dimensions.detail.h>=20,JSON.stringify({width,dimensions}));
+      if(width===390) assert.ok(dimensions.cards.slice(0,4).every(card=>card.right<=dimensions.hand.right+1),JSON.stringify({width,dimensions}));
+      if(width===540) assert.ok(dimensions.cards.every(card=>card.right<=dimensions.hand.right+1),JSON.stringify({width,dimensions}));
       assert.match(dimensions.title.text,/长名称/);assert.equal(dimensions.touch,'pan-x');
       assert.ok(dimensions.endTurn.w>=76&&dimensions.endTurn.h>=36,JSON.stringify({width,dimensions}));
       assert.ok(dimensions.pile.h<=80&&dimensions.controls.h>=40,JSON.stringify({width,dimensions}));
@@ -58,7 +62,7 @@ try {
         await evaluate("window.statusLinkFixture()");await pause(100);
         const statusCard=await evaluate(`(()=>{const e=document.querySelector('#mwg-status-fold .collection-card .mwg-card'),r=e.getBoundingClientRect(),rules=e.querySelector('.card-rules');return {w:r.width,h:r.height,font:parseFloat(getComputedStyle(rules).fontSize),detail:e.querySelector('.card-preview-trigger')?.textContent,page:document.documentElement.scrollWidth}})()`);
         assert.ok(Math.abs(statusCard.w-dimensions.card.w)<1&&Math.abs(statusCard.h-dimensions.card.h)<1,JSON.stringify({dimensions,statusCard}));
-        assert.ok(statusCard.font>=10);assert.equal(statusCard.detail,'详情');assert.ok(statusCard.page<=width);
+        assert.ok(statusCard.font>=8);assert.equal(statusCard.detail,'详情');assert.ok(statusCard.page<=width);
         evidence.push({width,preview,statusCard});
       }
       const h=dimensions.hand;
@@ -108,7 +112,7 @@ try {
     await call('Emulation.setDeviceMetricsOverride',{width,height:844,deviceScaleFactor:1,mobile:false});
     await navigate('tmp/mobile-rewards.html');
     const rewards=await evaluate(`(()=>{const list=document.querySelector('.mwg-card-choice-list'),el=document.querySelector('.mwg-card-choice'),card=el.querySelector('.mwg-card'),rules=card.querySelector('.card-rules'),detail=card.querySelector('.card-preview-trigger');el.classList.add('is-selected');const e=getComputedStyle(el),c=getComputedStyle(card),r=card.getBoundingClientRect();return {page:document.documentElement.scrollWidth,width:innerWidth,outerShadow:e.boxShadow,outerBorder:e.borderWidth,cardShadow:c.boxShadow,cardWidth:r.width,cardHeight:r.height,rulesFont:parseFloat(getComputedStyle(rules).fontSize),rulesOverflow:getComputedStyle(rules).overflowY,detail:detail?.textContent,detailHeight:detail?.getBoundingClientRect().height,listScroll:list.scrollWidth,listClient:list.clientWidth,count:document.querySelectorAll('.mwg-card-choice').length};})()`);
-    assert.ok(rewards.page<=width);assert.equal(rewards.count,3);assert.equal(rewards.outerShadow,'none');assert.equal(rewards.outerBorder,'0px');assert.notEqual(rewards.cardShadow,'none');assert.ok(Math.abs(rewards.cardWidth-140)<1&&Math.abs(rewards.cardHeight-210)<1,JSON.stringify({width,rewards}));assert.ok(rewards.rulesFont>=10&&rewards.rulesOverflow==='auto');assert.equal(rewards.detail,'详情');assert.ok(rewards.detailHeight>=24&&rewards.listScroll>rewards.listClient);evidence.push({width,rewards});
+    assert.ok(rewards.page<=width);assert.equal(rewards.count,3);assert.equal(rewards.outerShadow,'none');assert.equal(rewards.outerBorder,'0px');assert.notEqual(rewards.cardShadow,'none');assert.ok(Math.abs(rewards.cardWidth-84)<1&&Math.abs(rewards.cardHeight-126)<1,JSON.stringify({width,rewards}));assert.ok(rewards.rulesFont>=8&&rewards.rulesOverflow==='auto');assert.equal(rewards.detail,'详情');assert.ok(rewards.detailHeight>=20&&rewards.listScroll<=rewards.listClient+1);evidence.push({width,rewards});
     fs.writeFileSync('tmp/mobile-reward-'+width+'.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
   }
   for(const width of [320,390,430]){
@@ -117,7 +121,7 @@ try {
     await navigate('tmp/ui-v466/index.html');
     await evaluate("document.getElementById('fixture-controls').style.display='none';fixture.formation(5);enablePhoneCards()");
     const compactBattle=await evaluate(`(()=>{const hand=document.querySelector('#hand-cards'),card=hand.querySelector('.mwg-card'),r=card.getBoundingClientRect(),rules=card.querySelector('.card-rules'),detail=card.querySelector('.card-preview-trigger'),h=hand.getBoundingClientRect();return {page:document.documentElement.scrollWidth,width:innerWidth,height:innerHeight,handHeight:h.height,cardWidth:r.width,cardHeight:r.height,rulesFont:parseFloat(getComputedStyle(rules).fontSize),detailWidth:detail.getBoundingClientRect().width,detailHeight:detail.getBoundingClientRect().height,flavor:getComputedStyle(card.querySelector('.card-flavor-footer')).display};})()`);
-    assert.ok(compactBattle.page<=width);assert.equal(compactBattle.height,640);assert.ok(Math.abs(compactBattle.cardWidth-96)<1&&Math.abs(compactBattle.cardHeight-144)<1,JSON.stringify({width,compactBattle}));assert.ok(compactBattle.handHeight<=156&&compactBattle.rulesFont>=8);assert.ok(compactBattle.detailWidth>=34&&compactBattle.detailHeight>=20);assert.equal(compactBattle.flavor,'none');
+    assert.ok(compactBattle.page<=width);assert.equal(compactBattle.height,640);assert.ok(Math.abs(compactBattle.cardWidth-84)<1&&Math.abs(compactBattle.cardHeight-126)<1,JSON.stringify({width,compactBattle}));assert.ok(compactBattle.handHeight<=138&&compactBattle.rulesFont>=8);assert.ok(compactBattle.detailWidth>=34&&compactBattle.detailHeight>=20);assert.equal(compactBattle.flavor,'none');
     if(width===390){
       await evaluate('window.statusLinkFixture()');await pause(100);
       const compactStatus=await evaluate(`(()=>{const card=document.querySelector('#mwg-status-fold .collection-card .mwg-card'),r=card.getBoundingClientRect();return {w:r.width,h:r.height,page:document.documentElement.scrollWidth}})()`);
@@ -126,7 +130,7 @@ try {
     } else evidence.push({width,compactBattle});
     await navigate('tmp/mobile-rewards.html');
     const compactReward=await evaluate(`(()=>{const list=document.querySelector('.mwg-card-choice-list'),card=list.querySelector('.mwg-card'),r=card.getBoundingClientRect(),rules=card.querySelector('.card-rules');return {page:document.documentElement.scrollWidth,w:r.width,h:r.height,font:parseFloat(getComputedStyle(rules).fontSize),flavor:getComputedStyle(card.querySelector('.card-flavor-footer')).display,scroll:list.scrollWidth,client:list.clientWidth}})()`);
-    assert.ok(compactReward.page<=width);assert.ok(Math.abs(compactReward.w-compactBattle.cardWidth)<1&&Math.abs(compactReward.h-compactBattle.cardHeight)<1,JSON.stringify({compactBattle,compactReward}));assert.ok(compactReward.font>=8);assert.equal(compactReward.flavor,'none');if(width===320)assert.ok(compactReward.scroll>compactReward.client);else assert.ok(compactReward.scroll<=compactReward.client+1);evidence.push({width,compactReward});
+    assert.ok(compactReward.page<=width);assert.ok(Math.abs(compactReward.w-compactBattle.cardWidth)<1&&Math.abs(compactReward.h-compactBattle.cardHeight)<1,JSON.stringify({compactBattle,compactReward}));assert.ok(compactReward.font>=8);assert.equal(compactReward.flavor,'none');assert.ok(compactReward.scroll<=compactReward.client+1);evidence.push({width,compactReward});
     if(width===390)fs.writeFileSync('tmp/mobile-low-reward-390.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
     if(width===390){
       await navigate('tmp/common-removal-v461/index.html');

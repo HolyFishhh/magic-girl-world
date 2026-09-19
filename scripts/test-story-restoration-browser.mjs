@@ -102,6 +102,13 @@ let ws;try{
   assert.match(await evaluate("document.querySelector('.post-battle-story-status').textContent"),/正在生成/);
   await evaluate('fixture.complete()');assert.equal(await evaluate("document.querySelector('#mwg-story-panel h2').textContent"),'战后剧情');
   assert.equal(await evaluate("document.querySelector('.story-prose').textContent.length"),'魔偶倒下，星火照亮前路。'.repeat(40).length,'full prose not truncated');
+  const collapsedStory=await evaluate(`(()=>{const root=document.getElementById('mwg-story-panel'),reading=root.querySelector('.story-reading-pane'),button=root.querySelector('.story-panel-toggle');return {height:root.offsetHeight,reading:reading.clientHeight,scroll:reading.scrollHeight,label:button.textContent,expanded:button.getAttribute('aria-expanded')}})()`);
+  assert.equal(collapsedStory.label,'展开全部');assert.equal(collapsedStory.expanded,'false');
+  await evaluate("document.querySelector('.story-panel-toggle').click()");
+  const expandedStory=await evaluate(`(()=>{const root=document.getElementById('mwg-story-panel'),reading=root.querySelector('.story-reading-pane'),button=root.querySelector('.story-panel-toggle');return {height:root.offsetHeight,overflow:getComputedStyle(reading).overflowY,label:button.textContent,expanded:button.getAttribute('aria-expanded')}})()`);
+  assert.equal(expandedStory.label,'收起');assert.equal(expandedStory.expanded,'true');assert.equal(expandedStory.overflow,'visible');if(width===390)assert.ok(expandedStory.height>collapsedStory.height);
+  await shot('post-battle-expanded-'+width);
+  await evaluate("document.querySelector('.story-panel-toggle').click()");assert.equal(await evaluate("document.querySelector('.story-panel-toggle').textContent"),'展开全部');
   assert.equal(await evaluate("document.querySelector('#mwg-story-panel').compareDocumentPosition(document.querySelector('#tower-map-root')) & Node.DOCUMENT_POSITION_FOLLOWING"),4,'story above map');
   assert.equal(await evaluate('document.documentElement.scrollWidth>innerWidth'),false);await shot('post-battle-'+width);
   await evaluate('fixture.next()');assert.equal(await evaluate("document.querySelector('.story-prose').textContent"),'你走进新的房间。');assert.match(await evaluate("document.querySelector('.story-reading-pane details').textContent"),/魔偶倒下/,'old prose remains in history');

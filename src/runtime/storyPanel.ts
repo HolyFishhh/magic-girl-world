@@ -93,7 +93,25 @@ export function renderStoryPanel(view: 'common' | 'fish'): void {
   const steps = root.querySelector<HTMLElement>('.story-steps') || document.createElement('p'); steps.className = 'story-steps';
   steps.textContent = openingIsActive ? '启程' : `第 ${run?.act || 1} 幕 · 第 ${run?.currentNode?.floor || run?.floor || 0} 层`;
   let reading = root.querySelector<HTMLElement>('.story-reading-pane');
-  if (!reading) { reading = document.createElement('div'); reading.className = 'story-reading-pane'; reading.tabIndex = 0; reading.setAttribute('aria-label', '剧情与历史'); root.replaceChildren(steps, heading, reading); }
+  if (!reading) { reading = document.createElement('div'); reading.className = 'story-reading-pane'; reading.id = 'mwg-story-reading-pane'; reading.tabIndex = 0; reading.setAttribute('aria-label', '剧情与历史'); }
+  reading.id = 'mwg-story-reading-pane';
+  let panelHeader = root.querySelector<HTMLElement>(':scope > .story-panel-header');
+  if (!panelHeader) { panelHeader = document.createElement('header'); panelHeader.className = 'story-panel-header'; }
+  let panelToggle = panelHeader.querySelector<HTMLButtonElement>('.story-panel-toggle');
+  if (!panelToggle) {
+    panelToggle = document.createElement('button'); panelToggle.type = 'button'; panelToggle.className = 'story-panel-toggle'; panelToggle.setAttribute('aria-controls', 'mwg-story-reading-pane');
+    const syncExpandedState = () => {
+      const expanded = root!.dataset.storyExpanded === 'true';
+      root!.classList.toggle('is-expanded', expanded);
+      panelToggle!.textContent = expanded ? '收起' : '展开全部';
+      panelToggle!.setAttribute('aria-expanded', String(expanded));
+    };
+    panelToggle.addEventListener('click', () => { root!.dataset.storyExpanded = root!.dataset.storyExpanded === 'true' ? 'false' : 'true'; syncExpandedState(); });
+    syncExpandedState();
+  }
+  panelHeader.replaceChildren(heading, panelToggle);
+  if (steps.parentElement !== root || panelHeader.parentElement !== root || reading.parentElement !== root)
+    root.replaceChildren(steps, panelHeader, reading);
   let body = reading.querySelector<HTMLElement>(':scope > .story-prose');
   if (!body) { body = document.createElement('div'); body.className = 'story-prose'; reading.prepend(body); }
   if (body.textContent !== displayedStory) body.textContent = displayedStory || '等待当前剧情…';

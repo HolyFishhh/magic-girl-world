@@ -3012,7 +3012,7 @@ body[data-tower-screen='battle-reward'] .mwg-statusbar.is-tower-mode .action-sec
 
 @include cardFlavor.layout;
 
-@media (max-width: 599px) and (max-height: 720px) {
+@media (max-width: 599px) {
   :root { @include mobile-card.compact-tokens; }
   .mwg-card.enhanced-card > .card-flavor-footer { display: none; }
 }
