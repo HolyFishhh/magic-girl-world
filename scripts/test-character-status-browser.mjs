@@ -21,6 +21,7 @@ try {
     await call('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:false});
     await call('Page.navigate',{url:'file:///'+resolve('tmp/common-removal-v461/index.html').replaceAll('\\','/')});await waitForFixture();
     const stat=await evalJs('fixture.stat()');
+    Object.assign(stat,{game_mode:'tower',game_mode_lock:{schemaVersion:1,mode:'tower'}});
     const probe=()=>evalJs(`(()=>{const s=document.querySelector('#mwg-status-fold'),c=s.querySelector('.character-detail-container'),b=s.querySelector('#status-build-details'),r=s.getBoundingClientRect();return {open:s.open,visible:getComputedStyle(s).display!=='none',outside:!s.closest('#tower-screen-host'),analysis:c.contains(b),desire:c.textContent.includes('欲望效果'),text:b.textContent,headings:[...s.querySelectorAll('h3,h4')].map(e=>e.textContent),color:getComputedStyle(b).color,background:getComputedStyle(b).backgroundColor,pageOverflow:document.documentElement.scrollWidth>innerWidth,cards:s.querySelectorAll('.collection-card').length,summary:s.querySelector('summary').textContent}})()`);
     const initial=await probe();
     const contrast=(fg,bg)=>{const luminance=c=>c.match(/[0-9.]+/g).slice(0,3).map(Number).map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4).reduce((n,v,i)=>n+v*[.2126,.7152,.0722][i],0);const a=luminance(fg),b=luminance(bg);return (Math.max(a,b)+.05)/(Math.min(a,b)+.05)};

@@ -4255,3 +4255,91 @@ body.mwg-fullscreen-active .center-battle-area {
 .battle-loading-spinner { width:18px; height:18px; border:2px solid #9084b64d; border-top-color:#d2beff; border-radius:50%; animation:battle-loading-spin .8s linear infinite; }
 @keyframes battle-loading-spin { to { transform:rotate(360deg); } }
 @media(prefers-reduced-motion:reduce){.battle-loading-spinner{animation:none}}
+
+/* Final phone contract: one complete card per page, compact controls, and no
+   geometry inherited from the desktop fan layout. */
+@media (max-width: 599px) {
+  .card-game-container { width:100%; margin-inline:0; border-radius:8px; }
+  #battle-scene { padding:4px; overflow-x:hidden; }
+  .top-info-bar {
+    grid-template-columns:minmax(0,1fr) auto; min-height:42px; padding:4px 6px;
+  }
+  .turn-info { min-width:0; flex-wrap:wrap; }
+  .fullscreen-toggle-btn { min-width:44px; padding-inline:8px; }
+  .fullscreen-text { display:none; }
+  .battle-main-grid,
+  .battle-main-grid.multi-enemy-battle,
+  html.mwg-fullscreen-active .battle-main-grid,
+  html:fullscreen .battle-main-grid { grid-template-rows:auto auto auto; }
+  .battle-main-grid .battle-stage,
+  .battle-main-grid.multi-enemy-battle .battle-stage {
+    min-height:178px; padding:44px 4px 6px;
+    grid-template-columns:minmax(64px,.85fr) minmax(0,2.15fr); gap:4px;
+  }
+  .battle-stage .stage-combatant { min-width:0; min-height:122px; }
+  .battle-stage .stage-player { flex-wrap:wrap; }
+  .battle-stage .stage-enemy.has-enemy-party .stage-enemy-party { gap:2px; }
+  .battle-stage .stage-enemy .stage-enemy-member { min-height:112px; }
+  .battle-stage .stage-enemy-member .stage-emoji { height:36px; min-height:36px; font-size:26px; }
+  .battle-stage .stage-main-unit,
+  .battle-stage .stage-enemy .stage-enemy-member,
+  .battle-stage .stage-summons.is-inline .stage-summon-unit { min-width:0; }
+  .enemy-card,.player-card { grid-template-columns:minmax(0,1fr); }
+  .compact-support-row {
+    display:grid; grid-template-columns:minmax(0,1fr); height:auto; max-height:none; gap:5px;
+  }
+  .compact-support-row > *,
+  .compact-support-row .status-effects,
+  .compact-support-row .abilities-grid,
+  .compact-support-row .relic-grid,
+  .compact-support-row .lust-effect-display { max-height:none; }
+  .hand-section { min-height:0; grid-template-rows:auto auto; }
+  .hand-header { min-height:44px; padding:5px 6px; }
+  .hand-meta { min-width:0; flex-wrap:wrap; }
+  .hand-actions { margin-left:auto; }
+  .hand-actions .end-turn-button { min-width:82px; min-height:40px; padding:7px 10px; }
+  #hand-cards.player-hand {
+    height:auto; min-height:330px; padding:10px; gap:12px; align-items:stretch;
+    scroll-padding-inline:10px; scroll-snap-type:x mandatory; scrollbar-width:thin;
+  }
+  #hand-cards > .mwg-card,
+  .card-play-unified #hand-cards > .card-drag-slot {
+    flex:0 0 100%; width:100%; height:auto; min-height:310px; max-width:100%; box-sizing:border-box;
+    scroll-snap-align:start; scroll-snap-stop:always; border-radius:8px;
+  }
+  #hand-cards > .mwg-card .card-header { min-height:30px; }
+  #hand-cards > .mwg-card .card-artwork { height:42px; min-height:42px; }
+  #hand-cards > .mwg-card .card-name {
+    display:-webkit-box; min-height:40px; overflow:hidden; white-space:normal;
+    overflow-wrap:anywhere; -webkit-box-orient:vertical; -webkit-line-clamp:2;
+    font-size:16px; line-height:1.25;
+  }
+  #hand-cards > .mwg-card .card-type-row { height:28px; }
+  #hand-cards > .mwg-card .card-rules {
+    flex:0 0 auto; max-height:none; overflow:visible; font-size:13px; line-height:1.5;
+  }
+  #hand-cards > .mwg-card .card-description.card-flavor-text {
+    display:block; max-height:none; overflow:visible; -webkit-line-clamp:unset; font-size:11px;
+  }
+  .battle-pile-dock.deck-info {
+    min-height:76px; gap:8px; padding:6px 2px; flex-wrap:nowrap;
+  }
+  .battle-pile-dock.deck-info .deck-stat {
+    grid-template-columns:auto auto; min-width:0; min-height:64px; flex:1 1 0; padding:3px;
+  }
+  .battle-pile-dock.deck-info .pile-stack { grid-column:1; grid-row:1 / span 2; width:34px; height:48px; margin:0; }
+  .battle-pile-dock.deck-info .pile-label { align-self:end; font-size:10px; }
+  .battle-pile-dock.deck-info strong { align-self:start; font-size:12px; }
+  #battle-scene .center-battle-area { grid-template-rows:auto auto 76px; }
+  .bottom-controls { padding:4px; }
+  .battle-controls { grid-template-columns:repeat(3,minmax(0,1fr)); width:100%; gap:4px; }
+  .control-button { min-width:0; min-height:40px; padding-inline:4px; overflow-wrap:anywhere; }
+}
+
+@media (min-width: 600px) and (max-width: 760px) {
+  #hand-cards.player-hand { gap:12px; scroll-snap-type:x mandatory; }
+  #hand-cards > .mwg-card,
+  .card-play-unified #hand-cards > .card-drag-slot {
+    flex-basis:calc(50% - 6px); width:calc(50% - 6px); scroll-snap-align:start;
+  }
+}

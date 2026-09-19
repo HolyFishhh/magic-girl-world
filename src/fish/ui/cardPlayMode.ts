@@ -169,6 +169,8 @@ export class CardPlayMode {
     const originalStyle = element.getAttribute('style');
     if (originalStyle === null) placeholder.removeAttribute('style');
     else placeholder.setAttribute('style', originalStyle);
+    placeholder.style.width = `${rect.width}px`;
+    placeholder.style.height = `${rect.height}px`;
     parent.insertBefore(placeholder, element);
     this.dragSlot = { parent, placeholder, originalStyle };
 

@@ -24,7 +24,7 @@
   #status-build-details span { display:flex; flex-wrap:wrap; gap:8px; }
   #status-build-details:hover,#status-build-details:focus-visible { outline:2px solid #b4d9ff; outline-offset:2px; }
   @include unifiedCard.layout;
-  .tower-player-card-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr)); gap:12px; margin-top:12px; align-items:stretch;  }
+  .tower-player-card-grid,.story-player-card-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr)); gap:12px; margin-top:12px; align-items:stretch;  }
   .collection-card { min-width:0; width:100%; max-width:none; justify-self:stretch; }
   .collection-card .mwg-card.enhanced-card { position:relative; inset:auto; transform:none; width:100%; height:auto; min-height:300px; max-height:none; margin:0; padding:0; overflow:visible; }
   .collection-card .mwg-card.enhanced-card .card-rules { flex:0 0 auto; overflow:visible; max-height:none; font-size:13px; }
@@ -74,6 +74,20 @@ body:not(.mwg-story-mode):has(.mwg-character-status) .statusbar-panels { display
   .battle-overview-metrics > span { padding:5px 8px; border-radius:6px; background:#30395466; }
   .character-inventory { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin:16px 0 22px; }
   .character-deck-heading small { font-size:12px; font-weight:400; }
+  &.mwg-story-status {
+    background:#142033;
+    border-color:#657a96;
+    > summary { color:#c7def6; }
+    .story-status-panels { display:grid; gap:10px; }
+    .story-status-panel { min-width:0; border:1px solid #657a9666; border-radius:8px; background:#18263a; }
+    .story-status-panel > summary { padding:11px 13px; cursor:pointer; color:#e5eef9; font-weight:700; }
+    .story-status-panel[open] > summary { border-bottom:1px solid #657a9644; }
+    .story-status-panel > :not(summary) { margin:14px; }
+    .story-status-panel .character-story-facts { margin:14px; }
+    .story-status-panel .character-story-facts > h3:first-child { display:none; }
+    .story-growth-rule { padding:7px 9px; border-radius:6px; background:#26364d; }
+    .story-player-card-grid { margin:14px; }
+  }
 }
 @media(max-width:540px) {
   #mwg-status-fold.mwg-character-status {
@@ -86,6 +100,13 @@ body:not(.mwg-story-mode):has(.mwg-character-status) .statusbar-panels { display
     .character-metric strong { font-size:14px; }
     .character-detail-grid,.character-inventory { grid-template-columns:minmax(0,1fr); }
     .character-detail-grid > section,.character-inventory > section { padding:12px; }
+    &.mwg-story-status {
+      .story-status-panel > :not(summary),
+      .story-status-panel .character-story-facts,
+      .story-player-card-grid { margin:10px; }
+      .story-player-card-grid { grid-template-columns:minmax(0,1fr); }
+      .story-player-card-grid .mwg-card.enhanced-card { min-height:260px; }
+    }
   }
 }
 // The middle slot remains in document flow; only explicit fullscreen may float.

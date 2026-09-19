@@ -1,5 +1,6 @@
 import { renderStoryCharacterStatus } from './storyCharacterStatus';
 import { type GameState, effectProgramToDisplayTags, triggeredEffectProgramToDisplayTags, cardAttachmentsToDisplayTags, compactContentToDisplayTags, describeCardCost } from '../game-core';
+import { readGameMode } from '../game-core/towerMode';
 import { presentCompactContent } from '../game-core/contentPresentation';
 import { isTowerInitialSetup } from './initialPresentation';
 import { collectStanceDefinitions, collectStanceNames } from '../game-core/stanceIdentityDisplay';
@@ -12,6 +13,8 @@ import { openMechanicsHelp } from './mechanicsHelpPanel';
 import { bindStatusReferenceDetails } from './statusReference';
 import { escapeHtml } from '../fish/shared/html';
 import { BATTLE_ITEM_USAGE_LABEL } from '../game-core/battleItemUsage';
+import { normalizeOptionalMvuNamedEffect } from '../runtime/contentPackAdapter';
+import { renderStancePanel } from './stancePresentation';
 
 const cache = new WeakMap<Document, { input: string; latest: () => void }>();
 const list = (v: any): any[] => flattenMvuArray(v, { objectsOnly: true });
@@ -20,11 +23,14 @@ const names = (values: any[], field = 'name') => Object.fromEntries(values.filte
 /** One read-only status surface for combat, rooms, rewards and story. */
 export function renderCharacterStatus(stat: Record<string, any>, live?: GameState): HTMLDetailsElement {
   const doc = document;
+  const storyMode = readGameMode(stat) === 'story';
   let fold = doc.getElementById('mwg-status-fold') as HTMLDetailsElement | null;
   if (!fold) { fold = doc.createElement('details'); fold.id = 'mwg-status-fold'; fold.append(doc.createElement('summary')); }
   fold.classList.add('mwg-section-fold', 'mwg-character-status');
+  fold.classList.toggle('mwg-story-status', storyMode);
+  fold.classList.toggle('mwg-tower-status', !storyMode);
   fold.hidden = !live && isTowerInitialSetup(stat);
-  fold.querySelector(':scope > summary')!.textContent = '状态栏';
+  fold.querySelector(':scope > summary')!.textContent = storyMode ? '剧情状态栏' : '角色总览';
   const battle = stat.battle || {}, core = battle.core || {}, player = live?.player;
   const cards = player?.deck || list(battle.cards);
   if (cards.length && !fold.dataset.initialDeckShown) { fold.open = true; fold.dataset.initialDeckShown = 'true'; }
@@ -37,16 +43,19 @@ export function renderCharacterStatus(stat: Record<string, any>, live?: GameStat
   }
   record.latest = () => renderCharacterStatus(stat, live);
   let summary: any;
-  try { const api = (window.parent as any)?.MagicGirlDesignAssistant; summary = api?.getCharacterBuildSummary ? api.getCharacterBuildSummary() : api?.getDashboard?.()?.snapshot?.deckProfile; } catch { /* standalone frame */ }
+  if (!storyMode) {
+    try { const api = (window.parent as any)?.MagicGirlDesignAssistant; summary = api?.getCharacterBuildSummary ? api.getCharacterBuildSummary() : api?.getDashboard?.()?.snapshot?.deckProfile; } catch { /* standalone frame */ }
+  }
   const profile = summary || battle.design_context?.balance?.deckProfile;
   const hp = player?.currentHp ?? core.hp ?? 0, maxHp = player?.maxHp ?? core.max_hp ?? 0;
   const lust = player?.currentLust ?? core.lust ?? 0, maxLust = player?.maxLust ?? core.max_lust ?? 0;
   const metric = (label: string, value: unknown, kind = '') => `<div class="character-metric ${kind}"><small>${label}</small><strong>${escapeHtml(value)}</strong></div>`;
-  const vitalsHTML = `<div class="character-vitals">${metric('生命', `${hp} / ${maxHp}`, 'is-health')}${metric('欲望', `${lust} / ${maxLust}`, 'is-desire')}${metric('能量', `${player?.energy ?? core.energy ?? 0} / ${player?.maxEnergy ?? core.max_energy ?? 0}`)}${metric('金币', stat.run?.gold ?? stat.completed_expedition?.run?.gold ?? 0)}${metric('卡组', `${cards.reduce((n,c) => n + (player ? 1 : Math.max(1, Number(c.quantity) || 1)), 0)} 张`)}</div>`;
+  const cardCount = cards.reduce((n,c) => n + (player ? 1 : Math.max(1, Number(c.quantity) || 1)), 0);
+  const vitalsHTML = `<div class="character-vitals">${metric('生命', `${hp} / ${maxHp}`, 'is-health')}${metric('欲望', `${lust} / ${maxLust}`, 'is-desire')}${metric('能量', `${player?.energy ?? core.energy ?? 0} / ${player?.maxEnergy ?? core.max_energy ?? 0}`)}${storyMode ? `${metric('等级', battle.level ?? 1)}${metric('经验', battle.exp ?? 0)}` : `${metric('金币', stat.run?.gold ?? stat.completed_expedition?.run?.gold ?? 0)}${metric('卡组', `${cardCount} 张`)}`}</div>`;
   const previousVitals = panel.querySelector('.character-vitals');
   if (previousVitals && previousVitals.outerHTML !== vitalsHTML) previousVitals.outerHTML = vitalsHTML;
   const playerView = player && { deck: player.deck, abilities: player.abilities, relics: player.relics, items: player.items, statusEffects: player.statusEffects, resources: player.resources };
-  const next = JSON.stringify([{emoji: core.emoji, resources: core.resources}, battle.statuses, battle.player_lust_effect, playerView || [battle.cards, battle.player_abilities, battle.player_status_effects, battle.artifacts, battle.items], stat.status, stat.npcs, stat.factions, stat.game_mode, stat.game_mode_lock, battle.level, battle.exp, profile]);
+  const next = JSON.stringify([{emoji: core.emoji, resources: core.resources, stance: core.stance, summon_growth: core.summon_growth}, battle.statuses, battle.player_lust_effect, playerView || [battle.cards, battle.player_abilities, battle.player_status_effects, battle.artifacts, battle.items], stat.status, stat.npcs, stat.factions, stat.game_mode, stat.game_mode_lock, battle.level, battle.exp, profile]);
   if (!fold.open || (record.input === next && panel.childElementCount)) return fold;
   record.input = next;
   const expanded = new Set(Array.from(panel.querySelectorAll<HTMLDetailsElement>('details[open][data-detail-key]')).map(e => e.dataset.detailKey));
@@ -85,17 +94,45 @@ export function renderCharacterStatus(stat: Record<string, any>, live?: GameStat
     typeLabel: ({Attack:'攻击',Skill:'技能',Power:'能力',Curse:'诅咒',Event:'事件'} as Record<string,string>)[card.type] || card.type,
     rarityLabel: ({Common:'普通',Uncommon:'罕见',Rare:'稀有',Epic:'史诗',Legendary:'传说',Corrupt:'腐化'} as Record<string,string>)[card.rarity] || card.rarity,
     rulesHtml: rules(card, 'card'), quantity: !player && card.quantity > 1 ? card.quantity : undefined })}</div>`).join('');
+  const normalizedLustEffect = normalizeOptionalMvuNamedEffect(battle.player_lust_effect, '欲望满溢');
+  if (storyMode) {
+    const stanceHTML = core.stance
+      ? renderStancePanel(core.stance, context) || '<span class="battle-overview-empty">姿态数据无法显示</span>'
+      : '<span class="battle-overview-empty">暂无</span>';
+    const summonGrowth = list(core.summon_growth).map(entry => {
+      const statNames: Record<string, string> = { max_hp: '最大生命', damage: '伤害', lust: '欲望伤害' };
+      const operatorNames: Record<string, string> = { add: '增加', subtract: '减少', set: '设为' };
+      const summonName = context.summonNames?.[entry.summonTemplateId] || entry.summonTemplateId || '未解析召唤物';
+      return `<p class="story-growth-rule"><strong>${escapeHtml(summonName)}</strong> ${escapeHtml(statNames[entry.stat] || entry.stat || '数值')}${escapeHtml(operatorNames[entry.operator] || entry.operator || '调整')} ${escapeHtml(entry.value)}</p>`;
+    }).join('') || '<span class="battle-overview-empty">暂无</span>';
+    panel.innerHTML = `<header class="character-status-header"><div class="character-identity"><span class="character-portrait" aria-hidden="true">${escapeHtml(core.emoji || '✨')}</span><div><small>剧情模式 · 当前状态</small><strong>${escapeHtml(stat.status?.profession?.name || '角色状态')}</strong></div></div><button type="button" class="character-help-button" aria-haspopup="dialog">? 规则帮助</button></header>
+      ${vitalsHTML}
+      <div class="story-status-panels">
+        <details class="story-status-panel" data-detail-key="story:world" open><summary>角色、人物与世界</summary>${renderStoryCharacterStatus(stat)}</details>
+        <details class="story-status-panel" data-detail-key="story:combat"${expanded.has('story:combat') ? ' open' : ''}><summary>战斗资料</summary><div class="character-detail-grid">
+          <section class="character-desire"><h4>我方欲望效果</h4><p>敌方欲望满时触发；没有配置时不强制生成。</p>${support(normalizedLustEffect && typeof normalizedLustEffect === 'object' ? [normalizedLustEffect] : [], '欲望效果')}</section>
+          <section><h4>能力与当前状态</h4>${support(player?.abilities || list(battle.player_abilities), '能力')}${support(player?.statusEffects || list(battle.player_status_effects), '状态')}</section>
+          <section><h4>资源</h4><div class="battle-overview-metrics">${resources.map(r => `<span>${escapeHtml(r.emoji || '◆')} ${escapeHtml(r.name || r.id)} <b>${escapeHtml(r.current ?? r.start ?? 0)}/${escapeHtml(r.max ?? 0)}</b></span>`).join('') || '<span class="battle-overview-empty">暂无</span>'}</div></section>
+          <section><h4>当前姿态</h4>${stanceHTML}</section>
+          <section><h4>召唤成长</h4>${summonGrowth}</section>
+        </div></details>
+        <details class="story-status-panel" data-detail-key="story:cards"${expanded.has('story:cards') ? ' open' : ''}><summary>卡牌与物品</summary><div class="character-inventory"><section><h3>遗物</h3>${support(player?.relics || list(battle.artifacts), '遗物')}</section><section><h3>道具</h3>${support(player?.items || list(battle.items), '道具')}</section></div>
+          <h3 class="character-deck-heading">牌组 <small>${cardCount} 张</small></h3><div class="story-player-card-grid">${cardHTML || '<span class="battle-overview-empty">暂无卡牌</span>'}</div></details>
+      </div>`;
+    panel.querySelector<HTMLButtonElement>('.character-help-button')!.addEventListener('click', event => openMechanicsHelp(event.currentTarget as HTMLElement));
+    bindStatusReferenceDetails(doc);
+    return fold;
+  }
   panel.innerHTML = `<header class="character-status-header"><div class="character-identity"><span class="character-portrait" aria-hidden="true">${escapeHtml(core.emoji || '✨')}</span><div><small>旅途中的你</small><strong>${escapeHtml(stat.status?.profession?.name || '角色状态')}</strong></div></div><button type="button" class="character-help-button" aria-haspopup="dialog">? 规则帮助</button></header>
     ${vitalsHTML}
-    ${renderStoryCharacterStatus(stat)}
     <section class="character-detail-container" aria-label="角色详情"><h3>角色详情</h3><div class="character-detail-grid">
       <section class="character-build-analysis"><h4>卡组分析</h4><button id="status-build-details" type="button"><span>主要流派 <b id="status-build-archetype">${escapeHtml(affinities.join(' · ') || '等待分析')}</b></span><span>卡组估算 <b id="status-build-score">${escapeHtml(score)}</b></span><small>详细评分与流派分析 ↗</small></button><p>综合能力估算，不是胜率。</p></section>
-      <section class="character-desire"><h4>欲望效果</h4><p>敌方欲望满时触发</p>${support(battle.player_lust_effect ? [battle.player_lust_effect] : [], '欲望效果')}</section>
+      <section class="character-desire"><h4>欲望效果</h4><p>敌方欲望满时触发</p>${support(normalizedLustEffect && typeof normalizedLustEffect === 'object' ? [normalizedLustEffect] : [], '欲望效果')}</section>
       <section><h4>能力与状态</h4>${support(player?.abilities || list(battle.player_abilities), '能力')}${support(player?.statusEffects || list(battle.player_status_effects), '状态')}</section>
       <section><h4>资源</h4><div class="battle-overview-metrics">${resources.map(r => `<span>${escapeHtml(r.emoji || '◆')} ${escapeHtml(r.name || r.id)} <b>${escapeHtml(r.current ?? r.start ?? 0)}/${escapeHtml(r.max ?? 0)}</b></span>`).join('') || '<span class="battle-overview-empty">暂无</span>'}</div></section>
     </div></section>
     <div class="character-inventory"><section><h3>遗物</h3>${support(player?.relics || list(battle.artifacts), '遗物')}</section><section><h3>道具</h3>${support(player?.items || list(battle.items), '道具')}</section></div>
-    <h3 class="character-deck-heading">我的卡组 <small>${cards.reduce((n,c) => n + (player ? 1 : Math.max(1, Number(c.quantity) || 1)), 0)} 张</small></h3><div class="tower-player-card-grid">${cardHTML || '<span class="battle-overview-empty">暂无卡牌</span>'}</div>`;
+    <h3 class="character-deck-heading">我的卡组 <small>${cardCount} 张</small></h3><div class="tower-player-card-grid">${cardHTML || '<span class="battle-overview-empty">暂无卡牌</span>'}</div>`;
   panel.querySelector<HTMLButtonElement>('.character-help-button')!.addEventListener('click', event => openMechanicsHelp(event.currentTarget as HTMLElement));
   panel.querySelector('#status-build-details')!.addEventListener('click', () => { try { (window.parent as any)?.MagicGirlWorldMvuMonitor?.openSettings?.('build'); } catch { /* no host */ } });
   bindStatusReferenceDetails(doc);

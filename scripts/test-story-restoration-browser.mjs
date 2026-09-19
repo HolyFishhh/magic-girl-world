@@ -80,10 +80,21 @@ let ws;try{
   assert.equal(await evaluate("Boolean(document.querySelector('#mwg-story-panel'))"),false,'tower caches cannot create a story wrapper in story mode');
   const before=await evaluate('JSON.stringify(fixture.variables())');
   await evaluate('fixture.restore()');assert.equal(await evaluate('JSON.stringify(fixture.variables())'),before,'render and save restore are read only');
-  // Battle still uses the latest shared status renderer, including story facts.
+  // Battle keeps the original story status structure below the latest combat UI.
   await evaluate('fixture.combat()');
   assert.equal(await evaluate("Boolean(document.querySelector('#mwg-story-panel'))"),false,'story battle renders the battle page without a duplicate prose panel');
+  assert.equal(await evaluate("document.querySelector('#mwg-status-fold > summary').textContent"),'剧情状态栏');
+  assert.equal(await evaluate("document.querySelector('#mwg-status-fold').classList.contains('mwg-story-status')"),true);
+  assert.equal(await evaluate("document.querySelector('#mwg-status-fold').classList.contains('mwg-tower-status')"),false);
+  assert.equal(await evaluate("Boolean(document.querySelector('#mwg-status-fold #status-build-details, #mwg-status-fold .tower-player-card-grid'))"),false,'story combat never renders tower build analysis or tower deck structure');
+  assert.equal(await evaluate("Boolean(document.querySelector('#mwg-status-fold .story-player-card-grid'))"),true);
+  const battleStatus=await evaluate("document.querySelector('#mwg-status-fold').textContent");for(const text of ['我方欲望效果','意志反击','守势','召唤成长','灵契'])assert.ok(battleStatus.includes(text),text);
   const story=await evaluate("document.querySelector('.character-story-facts').textContent");for(const text of ['银色披风','旧钥匙','42','信赖','魔法契约','疲惫'])assert.ok(story.includes(text),text);
+  await evaluate("document.querySelector('#mwg-status-fold').scrollIntoView({block:'start'})");await shot('story-battle-status-'+width);
+  await evaluate("fixture.variables().stat_data.battle.player_lust_effect={name:'',description:'',$meta:{extensible:true}};fixture.combat()");
+  assert.equal(await evaluate("document.querySelector('.character-desire').textContent.includes('欲望满溢')"),false,'empty optional desire scaffold is not invented in the story status');
+  assert.match(await evaluate("document.querySelector('.character-desire').textContent"),/暂无/);
+  await evaluate("fixture.variables().stat_data.battle.player_lust_effect={name:'意志反击',effects:{damage:7,to:'opponent'}};fixture.combat()");
   await evaluate('fixture.render()');
   assert.equal(await evaluate("Boolean(document.querySelector('#mwg-status-fold'))"),false);
   await evaluate("const map=document.createElement('div');map.id='tower-map-root';document.body.append(map)");

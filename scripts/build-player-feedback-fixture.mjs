@@ -139,7 +139,7 @@ const units=Array.from({length:4},(_,i)=>({instanceId:'unit_'+i,templateId:'robo
 document.getElementById('three').onclick=()=>ui.updateSummonDisplays({living:units.slice(0,3)});
 document.getElementById('four').onclick=()=>ui.updateSummonDisplays({living:units});
 ui.updateSummonDisplays({living:units.slice(0,1)});
-ui.updateHandCardsDisplay(Array.from({length:5},(_,i)=>({id:'hand'+i,name:'测试卡牌'+i,type:'Skill',cost:1,rarity:'Common',emoji:'🛡️',description:'以鲜血写下誓约，让微弱的光芒成为守护同伴的力量。',effectProgram:program([{op:'gain_block',target:'self',amount:6}])})));
+ui.updateHandCardsDisplay(Array.from({length:5},(_,i)=>({id:'hand'+i,name:i===0?'守护同伴直到长夜尽头的完整长名称':'测试卡牌'+i,type:'Skill',cost:1,rarity:'Common',emoji:'🛡️',description:'以鲜血写下誓约，让微弱的光芒成为守护同伴的力量。',effectProgram:program(i===0?Array.from({length:7},(_,step)=>({op:'gain_block',target:'self',amount:step+2})):[{op:'gain_block',target:'self',amount:6}])})));
 
 const result=document.getElementById('result');
 (window as any).fixture={

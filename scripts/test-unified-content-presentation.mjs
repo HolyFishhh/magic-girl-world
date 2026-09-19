@@ -71,7 +71,7 @@ const context = {
   getRewardLimits:()=>({cards:1,artifacts:1,items:1}),
   inspectRewardCandidates:()=>({cards:[{ok:true}],artifacts:[{ok:true}],items:[{ok:true}]}),
   normalizeOptionsList:value=>value, document:{getElementById:element,createElement:tag=>new FakeElement(tag)},readRunState:()=>null,
-  currentTowerScreen:()=> 'room',hasSelectableRewards:()=>false,
+  currentTowerScreen:()=> 'room',hasSelectableRewards:()=>true,
   setupChoiceEvents:()=>{bound=true;},renderCardFace,renderSupportDetails,
   CARD_RARITY_LABELS:{Rare:'稀有'},translateCardType:()=> '攻击',contentCardCostLabel:()=> '1能量 + 2墨水',
   contentDescriptionEnemyNames:()=>({}),collectStanceDefinitions:()=>({}),contentDescriptionStatusNames:()=>({}),contentDescriptionStatusDefinitions:()=>({}),

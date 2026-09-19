@@ -31,15 +31,23 @@ try {
     await call('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:1});
     await navigate('tmp/ui-v466/index.html');
     await evaluate("document.getElementById('fixture-controls').style.display='none';fixture.formation(5);enablePhoneCards()");
-    const dimensions=await evaluate(`(()=>{const rect=s=>{const r=document.querySelector(s).getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,bottom:r.bottom,right:r.right}};return {stage:rect('#battle-stage'),hand:rect('#hand-cards'),center:rect('.center-battle-area'),scene:rect('#battle-scene'),overflow:document.documentElement.scrollWidth,innerWidth:innerWidth,card:rect('#hand-cards .mwg-card'),touch:getComputedStyle(document.querySelector('#hand-cards .mwg-card')).touchAction,actors:[...document.querySelectorAll('#stage-enemy-party [data-enemy-id]')].map(e=>{const r=e.getBoundingClientRect();return {x:r.x,right:r.right,w:r.width}})};})()`);
+    const dimensions=await evaluate(`(()=>{const rect=s=>{const r=document.querySelector(s).getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,bottom:r.bottom,right:r.right}};const cards=[...document.querySelectorAll('#hand-cards>.mwg-card')].map(e=>{const r=e.getBoundingClientRect();return {x:r.x,right:r.right,w:r.width,scroll:e.scrollWidth,client:e.clientWidth}});const title=document.querySelector('#hand-cards>.mwg-card .card-name'),rules=document.querySelector('#hand-cards>.mwg-card .card-rules');return {stage:rect('#battle-stage'),hand:rect('#hand-cards'),center:rect('.center-battle-area'),scene:rect('#battle-scene'),pile:rect('.battle-pile-dock'),controls:rect('.bottom-controls'),endTurn:rect('.end-turn-button'),overflow:document.documentElement.scrollWidth,innerWidth:innerWidth,card:cards[0],cards,title:{scroll:title.scrollWidth,client:title.clientWidth,height:title.clientHeight,fullHeight:title.scrollHeight,text:title.textContent},rules:{height:rules.clientHeight,fullHeight:rules.scrollHeight,overflow:getComputedStyle(rules).overflowY},touch:getComputedStyle(document.querySelector('#hand-cards .mwg-card')).touchAction,actors:[...document.querySelectorAll('#stage-enemy-party [data-enemy-id]')].map(e=>{const r=e.getBoundingClientRect();return {x:r.x,right:r.right,w:r.width}})};})()`);
     assert.ok(dimensions.overflow<=width,JSON.stringify({width,dimensions}));
     if(width<=760){
       assert.ok(dimensions.stage.h<300,JSON.stringify({width,dimensions}));
       assert.ok(dimensions.hand.y<520,JSON.stringify({width,dimensions}));
-      assert.ok(dimensions.card.w>=140);assert.equal(dimensions.touch,'pan-x');
+      assert.ok(dimensions.card.w>=dimensions.hand.w-24,JSON.stringify({width,dimensions}));
+      assert.ok(dimensions.card.x>=dimensions.hand.x&&dimensions.card.right<=dimensions.hand.right+1,JSON.stringify({width,dimensions}));
+      assert.ok(dimensions.cards[1].x>=dimensions.hand.right,JSON.stringify({width,dimensions}));
+      assert.ok(dimensions.card.scroll<=dimensions.card.client+1,JSON.stringify({width,dimensions}));
+      assert.ok(dimensions.title.fullHeight<=dimensions.title.height+1,JSON.stringify({width,dimensions}));
+      assert.ok(dimensions.rules.fullHeight<=dimensions.rules.height+1&&dimensions.rules.overflow==='visible',JSON.stringify({width,dimensions}));
+      assert.match(dimensions.title.text,/长名称/);assert.equal(dimensions.touch,'pan-x');
+      assert.ok(dimensions.endTurn.w>=76&&dimensions.endTurn.h>=36,JSON.stringify({width,dimensions}));
+      assert.ok(dimensions.pile.h<=80&&dimensions.controls.h>=40,JSON.stringify({width,dimensions}));
       const h=dimensions.hand;
       await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:h.x+h.w-35,y:h.y+80}]});
-      for(let step=1;step<=8;step++){await call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:h.x+h.w-35-step*20,y:h.y+80}]});await pause(25);}
+      for(let step=1;step<=12;step++){await call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:h.x+h.w-35-h.w*.62*step/12,y:h.y+80}]});await pause(25);}
       await call('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await pause(500);
       const swipe=await evaluate(`({scroll:document.querySelector('#hand-cards').scrollLeft,count:document.querySelectorAll('#hand-cards>.mwg-card').length,flights:document.querySelectorAll('.card-cast-flight').length})`);
       assert.ok(swipe.scroll>30,JSON.stringify({width,swipe}));assert.equal(swipe.count,5);assert.equal(swipe.flights,0);
