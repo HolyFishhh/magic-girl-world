@@ -78,8 +78,8 @@
       padding: 8px;
     }
     .mwg-card-choice {
-      width: mobile-card.$width;
-      min-width: mobile-card.$width;
+      width: var(--mwg-mobile-card-width, #{mobile-card.$width});
+      min-width: var(--mwg-mobile-card-width, #{mobile-card.$width});
     }
     .mwg-card-choice .mwg-card.enhanced-card {
       @include mobile-card.face;

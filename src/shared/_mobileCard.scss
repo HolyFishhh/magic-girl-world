@@ -1,6 +1,51 @@
 $width: 140px;
 $height: 210px;
 $gap: 8px;
+$compact-width: 96px;
+$compact-height: 144px;
+$compact-gap: 5px;
+
+@mixin tokens {
+  --mwg-mobile-card-width: #{$width};
+  --mwg-mobile-card-height: #{$height};
+  --mwg-mobile-card-gap: #{$gap};
+  --mwg-mobile-card-header: 23px;
+  --mwg-mobile-card-cost-font: 9px;
+  --mwg-mobile-card-rarity-font: 8px;
+  --mwg-mobile-card-art: 27px;
+  --mwg-mobile-card-emoji: 21px;
+  --mwg-mobile-card-body-x: 5px;
+  --mwg-mobile-card-title: 28px;
+  --mwg-mobile-card-name-font: 10px;
+  --mwg-mobile-card-type-row: 20px;
+  --mwg-mobile-card-meta-font: 8px;
+  --mwg-mobile-card-rules-x: 5px;
+  --mwg-mobile-card-rules-font: 10px;
+  --mwg-mobile-card-detail-width: 36px;
+  --mwg-mobile-card-detail-height: 24px;
+  --mwg-mobile-card-detail-font: 9px;
+}
+
+@mixin compact-tokens {
+  --mwg-mobile-card-width: #{$compact-width};
+  --mwg-mobile-card-height: #{$compact-height};
+  --mwg-mobile-card-gap: #{$compact-gap};
+  --mwg-mobile-card-header: 19px;
+  --mwg-mobile-card-cost-font: 8px;
+  --mwg-mobile-card-rarity-font: 7px;
+  --mwg-mobile-card-art: 18px;
+  --mwg-mobile-card-emoji: 16px;
+  --mwg-mobile-card-body-x: 3px;
+  --mwg-mobile-card-title: 22px;
+  --mwg-mobile-card-name-font: 9px;
+  --mwg-mobile-card-type-row: 16px;
+  --mwg-mobile-card-meta-font: 7px;
+  --mwg-mobile-card-rules-x: 3px;
+  --mwg-mobile-card-rules-font: 8px;
+  --mwg-mobile-card-detail-width: 34px;
+  --mwg-mobile-card-detail-height: 20px;
+  --mwg-mobile-card-detail-font: 8px;
+}
 
 // Every phone surface uses this same readable poker-card geometry. Containers
 // may scroll horizontally, but must not shrink the face to fit more columns.
@@ -8,8 +53,8 @@ $gap: 8px;
   display: grid;
   grid-template-columns: none;
   grid-auto-flow: column;
-  grid-auto-columns: $width;
-  gap: $gap;
+  grid-auto-columns: var(--mwg-mobile-card-width, #{$width});
+  gap: var(--mwg-mobile-card-gap, #{$gap});
   justify-content: start;
   justify-items: stretch;
   align-items: stretch;
@@ -20,49 +65,49 @@ $gap: 8px;
 }
 
 @mixin face {
-  width: $width;
-  min-width: $width;
-  max-width: $width;
-  height: $height;
-  min-height: $height;
-  max-height: $height;
+  width: var(--mwg-mobile-card-width, #{$width});
+  min-width: var(--mwg-mobile-card-width, #{$width});
+  max-width: var(--mwg-mobile-card-width, #{$width});
+  height: var(--mwg-mobile-card-height, #{$height});
+  min-height: var(--mwg-mobile-card-height, #{$height});
+  max-height: var(--mwg-mobile-card-height, #{$height});
   padding-bottom: 0;
   aspect-ratio: auto;
   border-radius: 7px;
   scroll-snap-align: start;
 
-  .card-header { flex: 0 0 23px; min-height: 23px; padding: 2px 3px; }
-  .card-cost { min-width: 18px; padding: 1px 3px; font-size: 9px; }
-  .card-cost-component { font-size: 9px; }
-  .card-rarity-badge { gap: 2px; font-size: 8px; }
-  .card-artwork { flex: 0 0 27px; height: 27px; min-height: 27px; }
-  .card-emoji { font-size: 21px; }
-  .card-body { flex: 0 0 auto; padding: 3px 5px; }
-  .card-title-row { height: 28px; min-height: 28px; }
+  .card-header { flex: 0 0 var(--mwg-mobile-card-header, 23px); min-height: var(--mwg-mobile-card-header, 23px); padding: 2px 3px; }
+  .card-cost { min-width: 18px; padding: 1px 3px; font-size: var(--mwg-mobile-card-cost-font, 9px); }
+  .card-cost-component { font-size: var(--mwg-mobile-card-cost-font, 9px); }
+  .card-rarity-badge { gap: 2px; font-size: var(--mwg-mobile-card-rarity-font, 8px); }
+  .card-artwork { flex: 0 0 var(--mwg-mobile-card-art, 27px); height: var(--mwg-mobile-card-art, 27px); min-height: var(--mwg-mobile-card-art, 27px); }
+  .card-emoji { font-size: var(--mwg-mobile-card-emoji, 21px); }
+  .card-body { flex: 0 0 auto; padding: 3px var(--mwg-mobile-card-body-x, 5px); }
+  .card-title-row { height: var(--mwg-mobile-card-title, 28px); min-height: var(--mwg-mobile-card-title, 28px); }
   .card-name {
     display: -webkit-box;
     overflow: hidden;
     white-space: normal;
     overflow-wrap: anywhere;
-    font-size: 10px;
+    font-size: var(--mwg-mobile-card-name-font, 10px);
     line-height: 1.35;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
   }
-  .card-type-row { height: 20px; min-height: 20px; gap: 2px; }
+  .card-type-row { height: var(--mwg-mobile-card-type-row, 20px); min-height: var(--mwg-mobile-card-type-row, 20px); gap: 2px; }
   .card-type-row .card-type-indicator,
-  .card-trait { font-size: 8px; }
-  .card-type-row .card-traits { height: 20px; gap: 2px; }
+  .card-trait { font-size: var(--mwg-mobile-card-meta-font, 8px); }
+  .card-type-row .card-traits { height: var(--mwg-mobile-card-type-row, 20px); gap: 2px; }
   .card-trait { padding: 1px 3px; }
   .card-rules {
     flex: 1 1 auto;
     min-height: 0;
     max-height: none;
-    margin: 0 5px;
+    margin: 0 var(--mwg-mobile-card-rules-x, 5px);
     padding: 4px 0;
     overflow-x: hidden;
     overflow-y: auto;
-    font-size: 10px;
+    font-size: var(--mwg-mobile-card-rules-font, 10px);
     line-height: 1.35;
     scrollbar-width: thin;
     overscroll-behavior: contain;
@@ -75,11 +120,11 @@ $gap: 8px;
   .card-preview-trigger {
     flex: 0 0 auto;
     align-self: flex-start;
-    min-width: 36px;
-    min-height: 24px;
+    min-width: var(--mwg-mobile-card-detail-width, 36px);
+    min-height: var(--mwg-mobile-card-detail-height, 24px);
     margin: 1px 4px 3px;
     padding: 2px 5px;
-    font-size: 9px;
+    font-size: var(--mwg-mobile-card-detail-font, 9px);
     line-height: 1.4;
   }
   .card-quantity { right: 5px; bottom: 3px; font-size: 9px; }

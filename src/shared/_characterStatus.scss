@@ -104,7 +104,7 @@ body:not(.mwg-story-mode):has(.mwg-character-status) .statusbar-panels { display
     .tower-player-card-grid,
     .story-player-card-grid { @include mobile-card.strip; }
     .tower-player-card-grid .collection-card,
-    .story-player-card-grid .collection-card { width:mobile-card.$width; }
+    .story-player-card-grid .collection-card { width:var(--mwg-mobile-card-width, #{mobile-card.$width}); }
     .tower-player-card-grid .collection-card .mwg-card.enhanced-card,
     .story-player-card-grid .collection-card .mwg-card.enhanced-card { @include mobile-card.face; }
     &.mwg-story-status {

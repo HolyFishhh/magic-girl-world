@@ -10,6 +10,7 @@
 
 
 :root {
+  @include mobile-card.tokens;
   color-scheme: light;
   --surface: #fffaf7;
   --surface-raised: #fff;
@@ -3000,7 +3001,7 @@ body[data-tower-screen='battle-reward'] .mwg-statusbar.is-tower-mode .action-sec
   .mwg-card-choice .mwg-card.enhanced-card {
     @include mobile-card.face;
   }
-  .collection-card { width: mobile-card.$width; }
+  .collection-card { width: var(--mwg-mobile-card-width, #{mobile-card.$width}); }
   .collection-card .mwg-card.enhanced-card { @include mobile-card.face; }
   .tower-player-card-grid,
   .story-player-card-grid,
@@ -3010,3 +3011,8 @@ body[data-tower-screen='battle-reward'] .mwg-statusbar.is-tower-mode .action-sec
 }
 
 @include cardFlavor.layout;
+
+@media (max-width: 599px) and (max-height: 720px) {
+  :root { @include mobile-card.compact-tokens; }
+  .mwg-card.enhanced-card > .card-flavor-footer { display: none; }
+}

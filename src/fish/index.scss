@@ -11,6 +11,7 @@
 @use '../common/diary-theme';
 
 :root {
+  @include mobile-card.tokens;
   color-scheme: light;
   --paper: var(--mwg-paper);
   --paper-raised: var(--mwg-paper-raised);
@@ -4328,12 +4329,13 @@ body.mwg-fullscreen-active .center-battle-area {
   .hand-actions { margin-left:auto; }
   .hand-actions .end-turn-button { min-width:82px; min-height:40px; padding:7px 10px; }
   #hand-cards.player-hand {
-    height:222px; min-height:0; padding:6px; gap:mobile-card.$gap; align-items:stretch;
+    height:calc(var(--mwg-mobile-card-height, #{mobile-card.$height}) + 12px); min-height:0; padding:6px;
+    gap:var(--mwg-mobile-card-gap, #{mobile-card.$gap}); align-items:stretch;
     scroll-padding-inline:6px; scroll-snap-type:x mandatory; scrollbar-width:thin;
   }
   #hand-cards > .mwg-card,
   .card-play-unified #hand-cards > .card-drag-slot {
-    flex:0 0 mobile-card.$width; box-sizing:border-box; scroll-snap-stop:always;
+    flex:0 0 var(--mwg-mobile-card-width, #{mobile-card.$width}); box-sizing:border-box; scroll-snap-stop:always;
     @include mobile-card.face;
   }
   .effect-choice-dialog .effect-choice-option > .mwg-card,
@@ -4352,6 +4354,11 @@ body.mwg-fullscreen-active .center-battle-area {
   .bottom-controls { padding:1px 4px; }
   .battle-controls { grid-template-columns:repeat(3,minmax(0,1fr)); width:100%; gap:4px; }
   .control-button { min-width:0; min-height:40px; padding-inline:4px; overflow-wrap:anywhere; }
+}
+
+@media (max-width: 599px) and (max-height: 720px) {
+  :root { @include mobile-card.compact-tokens; }
+  .mwg-card.enhanced-card > .card-flavor-footer { display:none; }
 }
 
 @media (min-width: 600px) and (max-width: 760px) {

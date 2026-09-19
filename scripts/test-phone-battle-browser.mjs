@@ -111,6 +111,30 @@ try {
     assert.ok(rewards.page<=width);assert.equal(rewards.count,3);assert.equal(rewards.outerShadow,'none');assert.equal(rewards.outerBorder,'0px');assert.notEqual(rewards.cardShadow,'none');assert.ok(Math.abs(rewards.cardWidth-140)<1&&Math.abs(rewards.cardHeight-210)<1,JSON.stringify({width,rewards}));assert.ok(rewards.rulesFont>=10&&rewards.rulesOverflow==='auto');assert.equal(rewards.detail,'详情');assert.ok(rewards.detailHeight>=24&&rewards.listScroll>rewards.listClient);evidence.push({width,rewards});
     fs.writeFileSync('tmp/mobile-reward-'+width+'.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
   }
+  for(const width of [320,390,430]){
+    await call('Emulation.setDeviceMetricsOverride',{width,height:640,deviceScaleFactor:1,mobile:false});
+    await call('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:1});
+    await navigate('tmp/ui-v466/index.html');
+    await evaluate("document.getElementById('fixture-controls').style.display='none';fixture.formation(5);enablePhoneCards()");
+    const compactBattle=await evaluate(`(()=>{const hand=document.querySelector('#hand-cards'),card=hand.querySelector('.mwg-card'),r=card.getBoundingClientRect(),rules=card.querySelector('.card-rules'),detail=card.querySelector('.card-preview-trigger'),h=hand.getBoundingClientRect();return {page:document.documentElement.scrollWidth,width:innerWidth,height:innerHeight,handHeight:h.height,cardWidth:r.width,cardHeight:r.height,rulesFont:parseFloat(getComputedStyle(rules).fontSize),detailWidth:detail.getBoundingClientRect().width,detailHeight:detail.getBoundingClientRect().height,flavor:getComputedStyle(card.querySelector('.card-flavor-footer')).display};})()`);
+    assert.ok(compactBattle.page<=width);assert.equal(compactBattle.height,640);assert.ok(Math.abs(compactBattle.cardWidth-96)<1&&Math.abs(compactBattle.cardHeight-144)<1,JSON.stringify({width,compactBattle}));assert.ok(compactBattle.handHeight<=156&&compactBattle.rulesFont>=8);assert.ok(compactBattle.detailWidth>=34&&compactBattle.detailHeight>=20);assert.equal(compactBattle.flavor,'none');
+    if(width===390){
+      await evaluate('window.statusLinkFixture()');await pause(100);
+      const compactStatus=await evaluate(`(()=>{const card=document.querySelector('#mwg-status-fold .collection-card .mwg-card'),r=card.getBoundingClientRect();return {w:r.width,h:r.height,page:document.documentElement.scrollWidth}})()`);
+      assert.ok(Math.abs(compactStatus.w-compactBattle.cardWidth)<1&&Math.abs(compactStatus.h-compactBattle.cardHeight)<1,JSON.stringify({compactBattle,compactStatus}));assert.ok(compactStatus.page<=width);evidence.push({width,compactBattle,compactStatus});
+      fs.writeFileSync('tmp/mobile-low-battle-390.png',Buffer.from((await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true})).data,'base64'));
+    } else evidence.push({width,compactBattle});
+    await navigate('tmp/mobile-rewards.html');
+    const compactReward=await evaluate(`(()=>{const list=document.querySelector('.mwg-card-choice-list'),card=list.querySelector('.mwg-card'),r=card.getBoundingClientRect(),rules=card.querySelector('.card-rules');return {page:document.documentElement.scrollWidth,w:r.width,h:r.height,font:parseFloat(getComputedStyle(rules).fontSize),flavor:getComputedStyle(card.querySelector('.card-flavor-footer')).display,scroll:list.scrollWidth,client:list.clientWidth}})()`);
+    assert.ok(compactReward.page<=width);assert.ok(Math.abs(compactReward.w-compactBattle.cardWidth)<1&&Math.abs(compactReward.h-compactBattle.cardHeight)<1,JSON.stringify({compactBattle,compactReward}));assert.ok(compactReward.font>=8);assert.equal(compactReward.flavor,'none');if(width===320)assert.ok(compactReward.scroll>compactReward.client);else assert.ok(compactReward.scroll<=compactReward.client+1);evidence.push({width,compactReward});
+    if(width===390)fs.writeFileSync('tmp/mobile-low-reward-390.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    if(width===390){
+      await navigate('tmp/common-removal-v461/index.html');
+      const compactCommonStatus=await evaluate(`(()=>{const card=document.querySelector('#mwg-status-fold .collection-card .mwg-card'),r=card.getBoundingClientRect(),rules=card.querySelector('.card-rules');return {w:r.width,h:r.height,font:parseFloat(getComputedStyle(rules).fontSize),page:document.documentElement.scrollWidth}})()`);
+      assert.ok(Math.abs(compactCommonStatus.w-compactBattle.cardWidth)<1&&Math.abs(compactCommonStatus.h-compactBattle.cardHeight)<1,JSON.stringify({compactBattle,compactCommonStatus}));assert.ok(compactCommonStatus.font>=8&&compactCommonStatus.page<=width);evidence.push({width,compactCommonStatus});
+      fs.writeFileSync('tmp/mobile-low-common-status-390.png',Buffer.from((await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true})).data,'base64'));
+    }
+  }
   fs.writeFileSync('tmp/mobile-final.json',JSON.stringify(evidence,null,2));console.log(JSON.stringify(evidence));
 
 } finally {ws?.close();child.kill();}
