@@ -35,6 +35,8 @@ try {
     assert.ok(dimensions.overflow<=width,JSON.stringify({width,dimensions}));
     if(width<=760){
       assert.ok(dimensions.hand.h<=166,JSON.stringify({width,dimensions}));
+      assert.ok(dimensions.scene.h<=800&&dimensions.controls.bottom<=844,JSON.stringify({width,dimensions}));
+      assert.ok(dimensions.hand.y<=410,JSON.stringify({width,dimensions}));
       assert.ok(dimensions.actors.every(a=>a.x>=dimensions.stage.x&&a.right<=dimensions.stage.right+1),JSON.stringify({width,dimensions}));
       assert.ok(dimensions.stage.h<300,JSON.stringify({width,dimensions}));
       assert.ok(dimensions.hand.y<520,JSON.stringify({width,dimensions}));

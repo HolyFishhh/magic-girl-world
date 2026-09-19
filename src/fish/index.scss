@@ -4273,10 +4273,10 @@ body.mwg-fullscreen-active .center-battle-area {
   html:fullscreen .battle-main-grid { grid-template-rows:auto auto auto; }
   .battle-main-grid .battle-stage,
   .battle-main-grid.multi-enemy-battle .battle-stage {
-    min-height:132px; padding:8px 4px 6px;
+    min-height:104px; padding:4px;
     grid-template-columns:minmax(64px,.85fr) minmax(0,2.15fr); gap:4px;
   }
-  .battle-stage .stage-combatant { min-width:0; min-height:112px; }
+  .battle-stage .stage-combatant { min-width:0; min-height:76px; padding-block:1px; }
   .battle-stage .stage-player { flex-wrap:wrap; }
   .battle-stage .stage-enemy.has-enemy-party .stage-enemy-party {
     display:flex !important; flex-flow:row wrap; justify-content:flex-end; gap:4px;
@@ -4286,20 +4286,41 @@ body.mwg-fullscreen-active .center-battle-area {
     flex:0 0 calc((100% - 8px)/3); max-width:88px; min-width:48px;
     border-radius:8px; background:#ffffff06;
   }
-  .battle-stage .stage-enemy .stage-enemy-member { min-height:90px; gap:2px; }
-  .battle-stage .stage-enemy-member .stage-emoji { height:28px; min-height:28px; font-size:24px; }
+  .battle-stage .stage-enemy .stage-enemy-member { min-height:62px; gap:1px; padding-block:1px; }
+  .battle-stage .stage-enemy-member .stage-emoji { height:22px; min-height:22px; font-size:20px; }
+  .battle-stage .stage-enemy-member .stage-enemy-member-intent { min-height:18px; padding:0; font-size:9px; }
+  .battle-stage .stage-unit-health { height:13px; font-size:9px; line-height:11px; }
+  .battle-stage .stage-unit-supports { min-height:18px; flex-wrap:nowrap; overflow-x:auto; }
+  .battle-stage .stage-support-item { min-width:20px; min-height:20px; font-size:12px; }
   .battle-stage .stage-main-unit,
   .battle-stage .stage-enemy .stage-enemy-member,
   .battle-stage .stage-summons.is-inline .stage-summon-unit { min-width:0; }
-  .enemy-card,.player-card { grid-template-columns:minmax(0,1fr); }
+  .enemy-section,.enemy-section.is-multi-enemy,.player-section { grid-template-rows:auto auto; }
+  .enemy-title-bar,.player-title-bar { min-height:28px; padding:3px 5px; }
+  .enemy-card,.player-card {
+    grid-template-columns:minmax(0,1fr) auto; grid-template-rows:auto;
+    align-items:center; min-height:0; padding:4px 5px; gap:5px;
+  }
+  .enemy-card .character-stats,.player-card .character-stats { min-height:30px; gap:4px; }
+  .enemy-card .stat-bar-container,.player-card .stat-bar-container { height:24px; }
+  .enemy-card .stat-text,.player-card .stat-text { line-height:24px; }
   .compact-support-row {
-    display:grid; grid-template-columns:minmax(0,1fr); height:auto; max-height:none; gap:5px;
+    display:flex; flex-wrap:nowrap; align-items:center; width:auto; min-width:0;
+    height:32px; max-height:32px; gap:3px; padding:0; overflow-x:auto; overflow-y:hidden;
   }
   .compact-support-row > *,
   .compact-support-row .status-effects,
   .compact-support-row .abilities-grid,
   .compact-support-row .relic-grid,
-  .compact-support-row .lust-effect-display { max-height:none; }
+  .compact-support-row .lust-effect-display { flex:0 0 auto; max-height:28px; }
+  .compact-support-row .effect-label,
+  .compact-support-row .abilities-label,
+  .compact-support-row .relic-label,
+  .compact-support-row .lust-effect-label { display:none; }
+  .compact-support-row .status-ability-icons { flex-wrap:nowrap; }
+  .compact-support-row .support-icon-button,
+  .compact-support-row .ability-item,
+  .compact-support-row .relic-toggle { width:28px; height:28px; min-width:28px; min-height:28px; }
   .hand-section { min-height:0; grid-template-rows:auto auto; }
   .hand-header { min-height:44px; padding:5px 6px; }
   .hand-meta { min-width:0; flex-wrap:wrap; }
