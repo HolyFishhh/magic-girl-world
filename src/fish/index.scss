@@ -4273,14 +4273,21 @@ body.mwg-fullscreen-active .center-battle-area {
   html:fullscreen .battle-main-grid { grid-template-rows:auto auto auto; }
   .battle-main-grid .battle-stage,
   .battle-main-grid.multi-enemy-battle .battle-stage {
-    min-height:178px; padding:44px 4px 6px;
+    min-height:132px; padding:8px 4px 6px;
     grid-template-columns:minmax(64px,.85fr) minmax(0,2.15fr); gap:4px;
   }
-  .battle-stage .stage-combatant { min-width:0; min-height:122px; }
+  .battle-stage .stage-combatant { min-width:0; min-height:112px; }
   .battle-stage .stage-player { flex-wrap:wrap; }
-  .battle-stage .stage-enemy.has-enemy-party .stage-enemy-party { gap:2px; }
-  .battle-stage .stage-enemy .stage-enemy-member { min-height:112px; }
-  .battle-stage .stage-enemy-member .stage-emoji { height:36px; min-height:36px; font-size:26px; }
+  .battle-stage .stage-enemy.has-enemy-party .stage-enemy-party {
+    display:flex !important; flex-flow:row wrap; justify-content:flex-end; gap:4px;
+  }
+  .battle-stage .stage-enemy .stage-enemy-empty { display:none; }
+  .battle-stage .stage-enemy.has-enemy-party .stage-enemy-member {
+    flex:0 0 calc((100% - 8px)/3); max-width:88px; min-width:48px;
+    border-radius:8px; background:#ffffff06;
+  }
+  .battle-stage .stage-enemy .stage-enemy-member { min-height:90px; gap:2px; }
+  .battle-stage .stage-enemy-member .stage-emoji { height:28px; min-height:28px; font-size:24px; }
   .battle-stage .stage-main-unit,
   .battle-stage .stage-enemy .stage-enemy-member,
   .battle-stage .stage-summons.is-inline .stage-summon-unit { min-width:0; }
@@ -4299,27 +4306,28 @@ body.mwg-fullscreen-active .center-battle-area {
   .hand-actions { margin-left:auto; }
   .hand-actions .end-turn-button { min-width:82px; min-height:40px; padding:7px 10px; }
   #hand-cards.player-hand {
-    height:auto; min-height:330px; padding:10px; gap:12px; align-items:stretch;
+    height:280px; min-height:0; padding:8px; gap:8px; align-items:stretch;
     scroll-padding-inline:10px; scroll-snap-type:x mandatory; scrollbar-width:thin;
   }
   #hand-cards > .mwg-card,
   .card-play-unified #hand-cards > .card-drag-slot {
-    flex:0 0 100%; width:100%; height:auto; min-height:310px; max-width:100%; box-sizing:border-box;
+    flex:0 0 calc((100% - 8px)/2); width:calc((100% - 8px)/2); height:260px; min-height:0; max-width:180px; box-sizing:border-box;
     scroll-snap-align:start; scroll-snap-stop:always; border-radius:8px;
   }
-  #hand-cards > .mwg-card .card-header { min-height:30px; }
-  #hand-cards > .mwg-card .card-artwork { height:42px; min-height:42px; }
+  #hand-cards > .mwg-card .card-header { min-height:24px; flex-shrink:0; font-size:10px; }
+  #hand-cards > .mwg-card .card-body { min-height:0; padding:5px; gap:4px; }
+  #hand-cards > .mwg-card .card-artwork { height:24px; min-height:24px; font-size:22px; }
   #hand-cards > .mwg-card .card-name {
-    display:-webkit-box; min-height:40px; overflow:hidden; white-space:normal;
+    display:-webkit-box; min-height:34px; overflow:hidden; white-space:normal;
     overflow-wrap:anywhere; -webkit-box-orient:vertical; -webkit-line-clamp:2;
-    font-size:16px; line-height:1.25;
+    font-size:13px; line-height:1.3;
   }
-  #hand-cards > .mwg-card .card-type-row { height:28px; }
+  #hand-cards > .mwg-card .card-type-row { height:22px; min-height:22px; font-size:10px; }
   #hand-cards > .mwg-card .card-rules {
-    flex:0 0 auto; max-height:none; overflow:visible; font-size:13px; line-height:1.5;
+    flex:1 1 auto; min-height:0; max-height:none; overflow:auto; font-size:11px; line-height:1.4; touch-action:pan-x; overscroll-behavior:contain;
   }
   #hand-cards > .mwg-card .card-description.card-flavor-text {
-    display:block; max-height:none; overflow:visible; -webkit-line-clamp:unset; font-size:11px;
+    display:none;
   }
   .battle-pile-dock.deck-info {
     min-height:76px; gap:8px; padding:6px 2px; flex-wrap:nowrap;

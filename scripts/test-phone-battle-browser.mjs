@@ -34,20 +34,22 @@ try {
     const dimensions=await evaluate(`(()=>{const rect=s=>{const r=document.querySelector(s).getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,bottom:r.bottom,right:r.right}};const cards=[...document.querySelectorAll('#hand-cards>.mwg-card')].map(e=>{const r=e.getBoundingClientRect();return {x:r.x,right:r.right,w:r.width,scroll:e.scrollWidth,client:e.clientWidth}});const title=document.querySelector('#hand-cards>.mwg-card .card-name'),rules=document.querySelector('#hand-cards>.mwg-card .card-rules');return {stage:rect('#battle-stage'),hand:rect('#hand-cards'),center:rect('.center-battle-area'),scene:rect('#battle-scene'),pile:rect('.battle-pile-dock'),controls:rect('.bottom-controls'),endTurn:rect('.end-turn-button'),overflow:document.documentElement.scrollWidth,innerWidth:innerWidth,card:cards[0],cards,title:{scroll:title.scrollWidth,client:title.clientWidth,height:title.clientHeight,fullHeight:title.scrollHeight,text:title.textContent},rules:{height:rules.clientHeight,fullHeight:rules.scrollHeight,overflow:getComputedStyle(rules).overflowY},touch:getComputedStyle(document.querySelector('#hand-cards .mwg-card')).touchAction,actors:[...document.querySelectorAll('#stage-enemy-party [data-enemy-id]')].map(e=>{const r=e.getBoundingClientRect();return {x:r.x,right:r.right,w:r.width}})};})()`);
     assert.ok(dimensions.overflow<=width,JSON.stringify({width,dimensions}));
     if(width<=760){
+      assert.ok(dimensions.hand.h<=280,JSON.stringify({width,dimensions}));
+      assert.ok(dimensions.actors.every(a=>a.x>=dimensions.stage.x&&a.right<=dimensions.stage.right+1),JSON.stringify({width,dimensions}));
       assert.ok(dimensions.stage.h<300,JSON.stringify({width,dimensions}));
       assert.ok(dimensions.hand.y<520,JSON.stringify({width,dimensions}));
-      assert.ok(dimensions.card.w>=dimensions.hand.w-24,JSON.stringify({width,dimensions}));
+      assert.ok(dimensions.card.w<=180 && dimensions.card.w>=120,JSON.stringify({width,dimensions}));
       assert.ok(dimensions.card.x>=dimensions.hand.x&&dimensions.card.right<=dimensions.hand.right+1,JSON.stringify({width,dimensions}));
-      assert.ok(dimensions.cards[1].x>=dimensions.hand.right,JSON.stringify({width,dimensions}));
+      assert.ok(dimensions.cards[1].right<=dimensions.hand.right+1,JSON.stringify({width,dimensions}));
       assert.ok(dimensions.card.scroll<=dimensions.card.client+1,JSON.stringify({width,dimensions}));
       assert.ok(dimensions.title.fullHeight<=dimensions.title.height+1,JSON.stringify({width,dimensions}));
-      assert.ok(dimensions.rules.fullHeight<=dimensions.rules.height+1&&dimensions.rules.overflow==='visible',JSON.stringify({width,dimensions}));
+      assert.ok(dimensions.rules.height>30&&dimensions.rules.overflow==='auto',JSON.stringify({width,dimensions}));
       assert.match(dimensions.title.text,/长名称/);assert.equal(dimensions.touch,'pan-x');
       assert.ok(dimensions.endTurn.w>=76&&dimensions.endTurn.h>=36,JSON.stringify({width,dimensions}));
       assert.ok(dimensions.pile.h<=80&&dimensions.controls.h>=40,JSON.stringify({width,dimensions}));
       const h=dimensions.hand;
-      await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:h.x+h.w-35,y:h.y+80}]});
-      for(let step=1;step<=12;step++){await call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:h.x+h.w-35-h.w*.62*step/12,y:h.y+80}]});await pause(25);}
+      await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:h.x+h.w-35,y:h.y+35}]});
+      for(let step=1;step<=12;step++){await call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:h.x+h.w-35-h.w*.62*step/12,y:h.y+35}]});await pause(25);}
       await call('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await pause(500);
       const swipe=await evaluate(`({scroll:document.querySelector('#hand-cards').scrollLeft,count:document.querySelectorAll('#hand-cards>.mwg-card').length,flights:document.querySelectorAll('.card-cast-flight').length})`);
       assert.ok(swipe.scroll>30,JSON.stringify({width,swipe}));assert.equal(swipe.count,5);assert.equal(swipe.flights,0);
@@ -67,6 +69,13 @@ try {
       assert.equal(await evaluate("document.querySelectorAll('.status-detail-modal').length"),0);
       evidence.push({width,modal,status});
       if(width===390){
+        await evaluate("document.querySelector('#hand-cards').scrollLeft=0");await pause(250);
+        const rulePoint=await evaluate(`(()=>{const e=document.querySelector('#hand-cards .card-rules'),r=e.getBoundingClientRect();return {x:r.x+30,y:r.y+90};})()`);
+        await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[rulePoint]});
+        for(let i=1;i<=8;i++){await call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:rulePoint.x,y:rulePoint.y-i*8}]});await pause(25);}
+        await call('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await pause(300);
+        const ruleScroll=await evaluate(`({top:document.querySelector('#hand-cards .card-rules').scrollTop,cards:document.querySelectorAll('#hand-cards>.mwg-card').length,flights:document.querySelectorAll('.card-cast-flight').length})`);
+        assert.ok(ruleScroll.top>20,JSON.stringify(ruleScroll));assert.equal(ruleScroll.cards,5);assert.equal(ruleScroll.flights,0);
         await evaluate("document.querySelector('#hand-cards').scrollLeft=0;window.phonePlays=0;$('#hand-cards>.mwg-card').on('mwg:play-card',()=>window.phonePlays++)");await pause(250);
         const point=await evaluate(`(()=>{const r=document.querySelector('#hand-cards>.mwg-card').getBoundingClientRect(),s=document.querySelector('#battle-stage').getBoundingClientRect();return {x:r.x+60,y:r.y+60,end:s.y+s.height/2};})()`);
         await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:point.x,y:point.y}]});

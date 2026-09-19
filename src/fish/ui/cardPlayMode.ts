@@ -27,6 +27,7 @@ export class CardPlayMode {
   private dragFrame: number | null = null;
   private playAreaRect: DOMRect | null = null;
   private pointerDragActive = false;
+  private rulesScroll: { element: HTMLElement; top: number; active: boolean } | null = null;
   private justEndedDrag = false;
   private initialized = false;
 
@@ -281,6 +282,10 @@ export class CardPlayMode {
     if (!card.hasClass('clickable')) return;
     const pointer = (event as any).originalEvent as PointerEvent | undefined;
     if (!pointer || (pointer.pointerType === 'mouse' && pointer.button !== 0)) return;
+    const rules = (pointer.target as HTMLElement).closest<HTMLElement>('.card-rules');
+    this.rulesScroll = pointer.pointerType === 'touch' && window.matchMedia('(max-width: 599px)').matches
+      && rules && rules.scrollHeight > rules.clientHeight
+      ? { element: rules, top: rules.scrollTop, active: false } : null;
     this.draggedCard = card;
     this.dragPointerId = pointer.pointerId;
     this.dragOrigin = { x: pointer.clientX, y: pointer.clientY };
@@ -299,6 +304,17 @@ export class CardPlayMode {
       if (Math.abs(dx) >= 6 && Math.abs(dx) > Math.abs(dy)) {
         clearTimeout(this.pressPreviewTimer);
         this.cancelInterruptedPointer();
+        return;
+      }
+    }
+    if (this.rulesScroll && !this.pointerDragActive) {
+      const dy = pointer.clientY - this.dragOrigin.y;
+      if (Math.abs(dy) >= 6 || this.rulesScroll.active) {
+        this.rulesScroll.active = true;
+        clearTimeout(this.pressPreviewTimer);
+        this.draggedCard.data('suppressPlayClick', true);
+        this.rulesScroll.element.scrollTop = this.rulesScroll.top - dy;
+        event.preventDefault();
         return;
       }
     }
@@ -321,6 +337,7 @@ export class CardPlayMode {
   }
 
   private handlePointerEnd(event: JQuery.Event): void {
+    this.rulesScroll = null;
     clearTimeout(this.pressPreviewTimer);
     const previewCard = this.pressPreviewCard;
     this.pressPreviewCard = null;
