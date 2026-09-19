@@ -3,8 +3,11 @@ import path from 'node:path';
 import url from 'node:url';
 
 const root = path.dirname(path.dirname(url.fileURLToPath(import.meta.url)));
+const buildRoot = process.env.MWG_BUILD_OUTPUT_ROOT
+  ? path.resolve(process.env.MWG_BUILD_OUTPUT_ROOT)
+  : path.resolve(root, 'dist');
 const source = path.join(root, 'sillytavern-extension', 'manifest.json');
-const output = path.join(root, 'dist', 'sillytavern-extension', 'magic-girl-design-assistant');
+const output = path.join(buildRoot, 'sillytavern-extension', 'magic-girl-design-assistant');
 
 await fs.mkdir(output, { recursive: true });
 await fs.copyFile(source, path.join(output, 'manifest.json'));

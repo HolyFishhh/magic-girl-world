@@ -4,6 +4,9 @@ import MiniCssExtractPlugin from 'mini-css-extract-plugin';
 import TerserPlugin from 'terser-webpack-plugin';
 
 const root = path.dirname(url.fileURLToPath(import.meta.url));
+const buildRoot = process.env.MWG_BUILD_OUTPUT_ROOT
+  ? path.resolve(process.env.MWG_BUILD_OUTPUT_ROOT)
+  : path.resolve(root, 'dist');
 
 export default {
   mode: 'production',
@@ -15,7 +18,7 @@ export default {
   },
   experiments: { outputModule: true },
   output: {
-    path: path.resolve(root, 'dist/sillytavern-extension/magic-girl-design-assistant'),
+    path: path.resolve(buildRoot, 'sillytavern-extension/magic-girl-design-assistant'),
     filename: '[name].js',
     library: { type: 'module' },
     clean: true,
