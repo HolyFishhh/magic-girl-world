@@ -1,3 +1,4 @@
+import { renderStoryCharacterStatus } from './storyCharacterStatus';
 import { type GameState, effectProgramToDisplayTags, triggeredEffectProgramToDisplayTags, cardAttachmentsToDisplayTags, compactContentToDisplayTags, describeCardCost } from '../game-core';
 import { presentCompactContent } from '../game-core/contentPresentation';
 import { isTowerInitialSetup } from './initialPresentation';
@@ -45,7 +46,7 @@ export function renderCharacterStatus(stat: Record<string, any>, live?: GameStat
   const previousVitals = panel.querySelector('.character-vitals');
   if (previousVitals && previousVitals.outerHTML !== vitalsHTML) previousVitals.outerHTML = vitalsHTML;
   const playerView = player && { deck: player.deck, abilities: player.abilities, relics: player.relics, items: player.items, statusEffects: player.statusEffects, resources: player.resources };
-  const next = JSON.stringify([{emoji: core.emoji, resources: core.resources}, battle.statuses, battle.player_lust_effect, playerView || [battle.cards, battle.player_abilities, battle.player_status_effects, battle.artifacts, battle.items], stat.status?.profession, profile]);
+  const next = JSON.stringify([{emoji: core.emoji, resources: core.resources}, battle.statuses, battle.player_lust_effect, playerView || [battle.cards, battle.player_abilities, battle.player_status_effects, battle.artifacts, battle.items], stat.status, stat.npcs, stat.factions, stat.game_mode, stat.game_mode_lock, battle.level, battle.exp, profile]);
   if (!fold.open || (record.input === next && panel.childElementCount)) return fold;
   record.input = next;
   const expanded = new Set(Array.from(panel.querySelectorAll<HTMLDetailsElement>('details[open][data-detail-key]')).map(e => e.dataset.detailKey));
@@ -86,6 +87,7 @@ export function renderCharacterStatus(stat: Record<string, any>, live?: GameStat
     rulesHtml: rules(card, 'card'), quantity: !player && card.quantity > 1 ? card.quantity : undefined })}</div>`).join('');
   panel.innerHTML = `<header class="character-status-header"><div class="character-identity"><span class="character-portrait" aria-hidden="true">${escapeHtml(core.emoji || '✨')}</span><div><small>旅途中的你</small><strong>${escapeHtml(stat.status?.profession?.name || '角色状态')}</strong></div></div><button type="button" class="character-help-button" aria-haspopup="dialog">? 规则帮助</button></header>
     ${vitalsHTML}
+    ${renderStoryCharacterStatus(stat)}
     <section class="character-detail-container" aria-label="角色详情"><h3>角色详情</h3><div class="character-detail-grid">
       <section class="character-build-analysis"><h4>卡组分析</h4><button id="status-build-details" type="button"><span>主要流派 <b id="status-build-archetype">${escapeHtml(affinities.join(' · ') || '等待分析')}</b></span><span>卡组估算 <b id="status-build-score">${escapeHtml(score)}</b></span><small>详细评分与流派分析 ↗</small></button><p>综合能力估算，不是胜率。</p></section>
       <section class="character-desire"><h4>欲望效果</h4><p>敌方欲望满时触发</p>${support(battle.player_lust_effect ? [battle.player_lust_effect] : [], '欲望效果')}</section>

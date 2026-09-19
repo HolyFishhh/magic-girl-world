@@ -57,6 +57,7 @@ export function normalizeDesignAssistantSettings(value: unknown): DesignAssistan
     autoCalibration: source.autoCalibration !== false,
     simulationSeeds: boundedInteger(source.simulationSeeds, DEFAULT_DESIGN_ASSISTANT_SETTINGS.simulationSeeds, 8, 32),
     showNotifications: source.showNotifications !== false,
+    towerBattleNarrative: source.towerBattleNarrative !== false,
     debug: source.debug === true,
     firstAuthoringSchemaTransport: source.firstAuthoringSchemaTransport === 'compact-context'
       ? 'compact-context' : 'provider-outline',

@@ -22,6 +22,7 @@ export interface DesignAssistantSettings {
   autoCalibration: boolean;
   simulationSeeds: number;
   showNotifications: boolean;
+  towerBattleNarrative?: boolean;
   debug: boolean;
   firstAuthoringSchemaTransport?: 'provider-outline' | 'compact-context';
   initialAuthoringProtocol?: 'canonical' | 'registry-draft';
@@ -35,6 +36,7 @@ export const DEFAULT_DESIGN_ASSISTANT_SETTINGS: DesignAssistantSettings = {
   autoCalibration: true,
   simulationSeeds: 8,
   showNotifications: true,
+  towerBattleNarrative: true,
   debug: false,
   firstAuthoringSchemaTransport: 'provider-outline',
   initialAuthoringProtocol: 'canonical',

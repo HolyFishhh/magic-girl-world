@@ -342,6 +342,10 @@ export function buildTowerSemanticMvuContext(mvuData: Record<string, any>): Reco
   if (isRecord(stat.run_node)) stat.run_node = compactNodeDiagnosticsForPrompt(stat.run_node);
   // Tower mode does not run the story-mode relationship simulation. Keep only
   // compact player/location facts that help author the next encounter.
+  // Only finished prose is contextual history; generation logs/errors are not facts.
+  stat.tower_battle_stories = Array.isArray(stat.tower_battle_stories)
+    ? stat.tower_battle_stories.filter((entry: any) => entry.phase === 'ready').slice(-3)
+      .map((entry: any) => ({ nodeId: entry.nodeId, narrative: entry.narrative })) : [];
   delete stat.npcs;
   delete stat.factions;
   if (isRecord(stat.status)) {
@@ -476,7 +480,7 @@ export function buildTowerGenerationContext(scope: TowerCoordinatorScope): Tower
   }, '当前没有可复用的内容 ID');
   return {
     completeMvuContext: stringify(
-      semanticMvu,
+      { ...semanticMvu, narrativeContinuity: '已完成的战后剧情仅供后续敌人、事件和场景参考；可以延续，也可以独立，不强制关联，不为等待剧情而推迟节点生成。' },
       '当前游戏事实不可序列化',
     ),
     deckBalanceContext: deckBalance,

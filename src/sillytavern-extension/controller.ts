@@ -1,3 +1,4 @@
+import { towerBattleStories, towerBattleNarrativePrompt } from './towerBattleNarrative';
 import { OPENING_TRANSFORM_GUIDANCE } from '../game-core/towerOpeningTransforms';
 import { normalizeDamageProtectionRule } from '../game-core/damageProtection';
 import { RUN_NODE_KINDS, isBattleRunNode, validateRunState, type RunNodeKind, type RunState } from '../game-core/runState';
@@ -4174,7 +4175,10 @@ export class DesignAssistantController {
     this.warmupScheduled = false;
     this.warmupRerunRequested = false;
     this.latestSnapshot = null;
-    if (this.towerChatId) this.towerGenerationHost.queue.cancelChat(this.towerChatId, '设计辅助器已停止');
+    if (this.towerChatId) {
+      this.towerGenerationHost.queue.cancelChat(this.towerChatId, '设计辅助器已停止');
+      this.towerGenerationHost.battleNarrativeQueue.cancelChat(this.towerChatId, '设计辅助器已停止');
+    }
     this.towerChatId = null;
     this.publishedTowerTerminals.clear();
     this.towerRequestPromises.clear();
@@ -4522,6 +4526,9 @@ export class DesignAssistantController {
           const candidate = clone(draft);
           const previousBattle = isRecord(candidate.stat_data.battle) ? candidate.stat_data.battle : {};
           candidate.stat_data.status = isRecord(parsed.status) ? clone(parsed.status) : {};
+          // Established saves were rejected above; project only this new tower opening.
+          delete candidate.stat_data.npcs;
+          delete candidate.stat_data.factions;
           candidate.stat_data.battle = buildInitialPlayerBattle(previousBattle, parsed.player);
           normalizeMvuVariablesBattleInPlace(candidate);
           if (attempt > 0) {
@@ -5650,8 +5657,64 @@ export class DesignAssistantController {
     const normalizedReason = String(reason || 'character-runtime').trim().slice(0, 80) || 'character-runtime';
     void this.scheduleTowerNarrativeForOpening(normalizedReason);
     void this.scheduleTowerNarrativeForActiveNode(normalizedReason);
+    void this.scheduleTowerBattleNarrative();
     this.towerCoordinator?.schedule(`runtime:${normalizedReason}`);
     return true;
+  }
+
+  /** Independent of route/reward settlement and coordinator readiness. */
+  private async scheduleTowerBattleNarrative(): Promise<void> {
+    const chatId = this.currentChatId();
+    const messageId = this.latestMessageId();
+    if (!this.active || !chatId || !this.isTowerLockedScope(chatId, messageId)) return;
+    const before = this.readLatestMvuData(messageId);
+    const seed = (before.stat_data?.run || before.stat_data?.completed_expedition?.run)?.seed;
+    const story = towerBattleStories(before.stat_data || {}).find(entry => entry.seed === seed && ['pending', 'generating'].includes(entry.phase));
+    if (!story) return;
+    const request: TowerGenerationRequest = {
+      chatId, nodeId: story.nodeId, requestId: `${story.nodeId}__post_battle`,
+      runScope: `tower-run-seed:${seed}`, prompt: towerBattleNarrativePrompt(story, before.stat_data), maxAttempts: 2,
+      userExtra: { mwg_tower_post_battle: true }, assistantExtra: { mwg_tower_post_battle: true },
+    };
+    const key = towerGenerationTaskKey(request);
+    if (this.towerNarrativePromises.has(key)) return;
+    const update = async (phase: 'generating' | 'ready' | 'failed' | 'skipped', narrative = '', error?: string) => {
+      if (this.currentChatId() !== chatId || this.latestMessageId() !== messageId || !this.active) return;
+      const draft = this.readLatestMvuData(messageId);
+      if ((draft.stat_data?.run || draft.stat_data?.completed_expedition?.run)?.seed !== seed) return;
+      const target = towerBattleStories(draft.stat_data || {}).find(entry => entry.seed === seed && entry.nodeId === story.nodeId);
+      if (!target || !['pending', 'generating'].includes(target.phase)) return;
+      Object.assign(target, { phase, narrative });
+      if (error) target.error = error; else delete target.error;
+      await this.replaceLatestMvuData(draft, chatId, messageId);
+      this.saveTowerArchiveMetadata(chatId);
+    };
+    const promise = (async () => {
+      try {
+        if (this.getSettings().towerBattleNarrative === false) { await update('skipped'); return; }
+        await update('generating');
+        const result = await this.towerGenerationHost.generateNarrative(request, true);
+        const narrative = cleanTowerNarrative(result.response);
+        if (!narrative) throw new Error('战后剧情返回为空');
+        await update(this.getSettings().towerBattleNarrative === false ? 'skipped' : 'ready', narrative);
+      } catch (error) {
+        if (error instanceof TowerGenerationCancelledError) { await update('skipped'); } else {
+          await update('failed', '', error instanceof Error ? error.message : String(error));
+        }
+      }
+    })().catch(error => this.debug('战后剧情保存失败；不回滚结算', error)).finally(() => {
+      this.towerNarrativePromises.delete(key);
+      this.towerGenerationHost.forgetTerminalRecord(request);
+    });
+    this.towerNarrativePromises.set(key, promise);
+    await promise;
+    if (this.active && this.currentChatId() === chatId && this.latestMessageId() === messageId) {
+      const latest = towerBattleStories(this.readLatestMvuData(messageId).stat_data || {});
+      if (latest.some(entry => entry.seed === seed && entry.nodeId === story.nodeId && ['ready', 'failed', 'skipped'].includes(entry.phase))
+        && latest.some(entry => entry.seed === seed && entry.nodeId !== story.nodeId && ['pending', 'generating'].includes(entry.phase))) {
+        await this.scheduleTowerBattleNarrative();
+      }
+    }
   }
 
   /** Replace the structured opening's fallback summary with prose from the player's current preset. */
@@ -6105,7 +6168,8 @@ export class DesignAssistantController {
     const requestId = String(request.requestId || '').trim();
     if (!chatId || !nodeId || !requestId) return false;
     const key = this.scopeTowerGenerationKey({ chatId, nodeId, requestId });
-    const cancelled = this.towerGenerationHost.queue.cancelRequest(key, reason)
+    const cancelled = this.towerGenerationHost.battleNarrativeQueue.cancelRequest(key, reason)
+      || this.towerGenerationHost.queue.cancelRequest(key, reason)
       || this.towerGenerationHost.queue.cancelRequest({ chatId, nodeId, requestId }, reason);
     if (cancelled) {
       const fingerprints = new Set([
@@ -6696,6 +6760,7 @@ export class DesignAssistantController {
     }
     else if (this.towerChatId) {
       this.towerGenerationHost.queue.cancelChat(this.towerChatId, '聊天已关闭，后台生成已取消');
+      this.towerGenerationHost.battleNarrativeQueue.cancelChat(this.towerChatId, '聊天已关闭，后台生成已取消');
     }
     this.towerChatId = nextChatId;
     this.publishedTowerTerminals.clear();
@@ -6939,6 +7004,7 @@ export class DesignAssistantController {
       const parent = this.towerProgressParentRequestIds.get(requestId) || requestId;
       if (parent !== parentRequestId) continue;
       cancelled = this.towerGenerationHost.queue.cancelRequest(key, reason) || cancelled;
+      cancelled = this.towerGenerationHost.battleNarrativeQueue.cancelRequest(key, reason) || cancelled;
     }
     if (!cancelled) return false;
     await this.recordTowerGenerationFailure(normalized, new TowerGenerationCancelledError(reason), true);
@@ -6955,6 +7021,7 @@ export class DesignAssistantController {
     this.towerCoordinator?.requestRecovery();
     void this.scheduleTowerNarrativeForOpening('mvu-recovery');
     void this.scheduleTowerNarrativeForActiveNode('mvu-recovery');
+    void this.scheduleTowerBattleNarrative();
     this.scheduleWarmup();
   };
 
@@ -6972,6 +7039,7 @@ export class DesignAssistantController {
     this.towerCoordinator?.requestRecovery();
     void this.scheduleTowerNarrativeForOpening('runtime-recovery');
     void this.scheduleTowerNarrativeForActiveNode('runtime-recovery');
+    void this.scheduleTowerBattleNarrative();
     this.scheduleWarmup();
   };
 

@@ -468,6 +468,15 @@
       "ai_operations": []
     },
     {
+      "id": "tower_battle_stories",
+      "paths": ["tower_battle_stories"],
+      "shape": "array",
+      "owner": "program",
+      "lifecycle": "persistent",
+      "writers": ["program:battle-settlement", "program:preset-narrative"],
+      "ai_operations": []
+    },
+    {
       "id": "game_mode",
       "paths": ["game_mode"],
       "shape": "string",

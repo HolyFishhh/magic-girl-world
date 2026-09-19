@@ -255,6 +255,8 @@ function taggedExtra(
  */
 export class TowerGenerationHost {
   public readonly queue: TowerGenerationQueue;
+  /** Post-battle prose must never occupy the node generation lane. */
+  public readonly battleNarrativeQueue: TowerGenerationQueue;
   private readonly records = new Map<string, DeferredGenerationRecord>();
   private readonly diagnostics: TowerGenerationDiagnostics;
 
@@ -263,6 +265,7 @@ export class TowerGenerationHost {
     private readonly options: TowerGenerationHostOptions = {},
   ) {
     this.queue = options.queue || new TowerGenerationQueue(options.queueOptions);
+    this.battleNarrativeQueue = new TowerGenerationQueue(options.queueOptions);
     this.diagnostics = new TowerGenerationDiagnostics(options.now);
   }
 
@@ -319,7 +322,7 @@ export class TowerGenerationHost {
   }
 
   /** Current-preset story generation for the active node, sharing the same single-lane queue. */
-  public generateNarrative(input: TowerGenerationRequest): Promise<TowerGenerationResult> {
+  public generateNarrative(input: TowerGenerationRequest, independentBattleStory = false): Promise<TowerGenerationResult> {
     const request: TowerGenerationRequest = {
       ...input,
       chatId: requiredText(input.chatId, 'chatId'),
@@ -347,7 +350,7 @@ export class TowerGenerationHost {
       this.records.set(key, record);
     }
     if (created) this.options.onGenerationRequested?.(request);
-    const queued = this.queue.enqueue<TowerGenerationResult>({
+    const queued = (independentBattleStory ? this.battleNarrativeQueue : this.queue).enqueue<TowerGenerationResult>({
       chatId: request.chatId,
       nodeId: request.nodeId,
       requestId: request.requestId,
@@ -369,6 +372,7 @@ export class TowerGenerationHost {
 
   public activateChat(chatId: string): void {
     this.queue.activateChat(chatId);
+    this.battleNarrativeQueue.activateChat(chatId);
     this.diagnostics.retainChat(chatId);
     for (const [key, record] of this.records) {
       if (record.request.chatId !== chatId) this.records.delete(key);
@@ -426,7 +430,7 @@ export class TowerGenerationHost {
     const record = this.records.get(fingerprint);
     if (!record || !record.progress.eventDispatched || record.progress.persistence) return false;
     const deleted = this.records.delete(fingerprint);
-    if (deleted) this.queue.forgetSettledRequest(key);
+    if (deleted) { this.queue.forgetSettledRequest(key); this.battleNarrativeQueue.forgetSettledRequest(key); }
     return deleted;
   }
 
@@ -439,10 +443,11 @@ export class TowerGenerationHost {
     const fingerprint = towerGenerationTaskKey(key);
     const record = this.records.get(fingerprint);
     if (!record || record.progress.persistence) return false;
-    const status = this.queue.getStatus(key);
+    const status = this.queue.getStatus(key) || this.battleNarrativeQueue.getStatus(key);
     if (status && !['completed', 'failed', 'cancelled'].includes(status.phase)) return false;
     const deleted = this.records.delete(fingerprint);
     this.queue.forgetSettledRequest(key);
+    this.battleNarrativeQueue.forgetSettledRequest(key);
     return deleted || Boolean(status);
   }
 
@@ -461,6 +466,7 @@ export class TowerGenerationHost {
       }
     }
     this.queue.forgetSettled(chatId);
+    this.battleNarrativeQueue.forgetSettled(chatId);
     return discarded;
   }
 

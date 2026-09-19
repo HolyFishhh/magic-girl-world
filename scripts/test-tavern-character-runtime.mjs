@@ -130,6 +130,7 @@ assert.equal(nodesWithAttribute('data-mwg-design-setting', 'designAssistantEnabl
 assert.equal(nodesWithAttribute('data-mwg-design-setting', 'autoCalibration').length, 1);
 assert.equal(nodesWithAttribute('data-mwg-design-setting', 'simulationSeeds').length, 1);
 assert.equal(nodesWithAttribute('data-mwg-design-setting', 'showNotifications').length, 1);
+assert.equal(nodesWithAttribute('data-mwg-design-setting', 'towerBattleNarrative').length, 1);
 assert.equal(nodesWithAttribute('data-mwg-difficulty').length, 1);
 assert.equal(nodesWithAttribute('data-mwg-monitor-loading').length, 1);
 
@@ -558,6 +559,7 @@ assert.deepEqual(JSON.parse(JSON.stringify(context.MagicGirlWorldMvuMonitor.getS
   designAssistantEnabled: true,
   simulationSeeds: 8,
   showNotifications: true,
+  towerBattleNarrative: true,
   debug: false,
 });
 const exactMvuRequest = {

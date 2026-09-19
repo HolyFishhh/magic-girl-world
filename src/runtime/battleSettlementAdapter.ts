@@ -34,6 +34,8 @@ export interface TavernBattleSettlementInput {
   turns: number;
   /** Current encounter's authoritative events; archived only for tower runs. */
   eventJournal?: BattleEventJournalState;
+  /** Readable log snapshot for independent preset prose; never authorizes MVU changes. */
+  battleSummary?: string;
   rewardRequest?: Record<string, unknown> | null;
   /** Canonical one-record-per-owned-card deck after runtime run/permanent write-back. */
   persistentCards?: ReadonlyArray<Record<string, any>>;
@@ -279,6 +281,16 @@ export function settleTavernBattleVariables(
       battleResult?.route?.nodeId,
       encounterScoreSnapshot,
     );
+    if (isTowerRun && runSettlement && expectedTowerNodeId && input.battleSummary?.trim()) {
+      const stories = Array.isArray(draft.tower_battle_stories) ? draft.tower_battle_stories : [];
+      const seed = variables.stat_data.run?.seed;
+      if (!stories.some((entry: any) => entry.seed === seed && entry.nodeId === expectedTowerNodeId)) {
+        draft.tower_battle_stories = [...stories, {
+          seed, nodeId: expectedTowerNodeId, phase: 'pending',
+          summary: input.battleSummary.trim(), narrative: '',
+        }].slice(-24);
+      }
+    }
     // Tower runs no longer use character experience or levels. Preserve legacy
     // fields verbatim so existing saves remain recoverable, but never grant or
     // consume EXP, promote levels, or create removal rewards from old EXP.

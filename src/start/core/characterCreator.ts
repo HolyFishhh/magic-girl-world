@@ -1,3 +1,4 @@
+import { prepareModeInitialVariables } from './modeInitialVariables';
 // 剧情模式开始页：只负责收集玩家设定，并把一次浅层 JSON 交给酒馆续写链路。
 import type { CharacterConfig } from '../types';
 import {
@@ -201,6 +202,7 @@ export class CharacterCreator {
       const startMessage = createCharacterStartMessage(config);
       const persistStartMode = (variables: Record<string, any>): Record<string, any> => {
         if (!variables.stat_data || typeof variables.stat_data !== 'object') variables.stat_data = {};
+        prepareModeInitialVariables(variables.stat_data, normalizeGameMode(config.mode) || 'story');
         lockGameModeInStat(variables.stat_data, config.mode);
         variables.stat_data.selected_mechanics = config.selectedMechanics?.trim() || '';
         if (normalizeGameMode(config.mode) === 'tower' && config.towerRequirements?.trim()) {

@@ -40,6 +40,7 @@ export interface TavernBattleEndPorts {
   settleBattle(input: Parameters<typeof settleCurrentMessageBattle>[0]): Promise<void>;
   reloadPage(): void;
   openCommonView?(): void;
+  scheduleTowerNarrative?(): Promise<unknown> | unknown;
 }
 
 function battleEndsRun(variables: Record<string, any>, result: BattleEndResult): boolean {
@@ -187,6 +188,7 @@ export class TavernBattleEndHost {
         replaceVariables: variables => Promise.resolve(replaceCurrentMessageVariables(variables)),
         settleBattle: input => settleCurrentMessageBattle(input),
         reloadPage: () => location.reload(),
+        scheduleTowerNarrative: () => (globalThis as any).MagicGirlWorld?.scheduleTowerGeneration?.('battle-settled'),
         openCommonView: () => { captureBattleRewardBackdrop(getCurrentMessageVariables()?.stat_data); requestNavigationFocus('#choice-container'); switchRuntimeView('common'); },
       };
     })(),
@@ -248,7 +250,7 @@ export class TavernBattleEndHost {
   }
 
   /** Settle a tower fight in-place without creating or triggering a chat floor. */
-  public async confirmTowerBattleEnd(result: BattleEndResult): Promise<void> {
+  public async confirmTowerBattleEnd(result: BattleEndResult, battleSummary?: string): Promise<void> {
     if (this.towerSettlementPending) throw new Error('正在结算，请稍候。');
     const gameState = this.ports.getState();
     const key = JSON.stringify([gameState.battleRequest?.seed, gameState.battleRequest?.route?.nodeId]);
@@ -269,6 +271,7 @@ export class TavernBattleEndHost {
       defeatedEnemyIds: (gameState.defeatedEnemies || []).map(enemy => enemy.id),
       rewardEligibleEnemyIds: gameState.rewardEligibleEnemyIds,
       rewardRequest: null,
+      battleSummary,
     };
     let snapshot: Record<string, any> | undefined;
     try {
@@ -280,6 +283,9 @@ export class TavernBattleEndHost {
       await this.ports.settleBattle(settlement);
       this.ports.openCommonView?.();
       this.settledTowerBattleKey = key;
+      // Never await prose, and never roll back a settled battle on prose failure.
+      void Promise.resolve().then(() => this.ports.scheduleTowerNarrative?.())
+        .catch(error => console.warn('战后剧情唤醒失败；战斗结算已保留', error));
     } catch (error) {
       try {
         if (snapshot) await this.restoreBeforeSend(snapshot);
@@ -440,7 +446,7 @@ export class TavernBattleEndHost {
         narrativeText,
         mode: towerMode ? 'tower' : 'story',
         onConfirm: playerContinuation => {
-          if (towerMode) return this.confirmTowerBattleEnd(result);
+          if (towerMode) return this.confirmTowerBattleEnd(result, prompt.promptedBattleSummary);
           const continuationPrompt = formatBattleEndPrompt({ ...promptInput, playerContinuation });
           return this.confirmBattleEnd(result, continuationPrompt.promptedBattleSummary, rewardRequest);
         },

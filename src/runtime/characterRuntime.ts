@@ -429,6 +429,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
     designAssistantEnabled: boolean;
     simulationSeeds: number;
     showNotifications: boolean;
+    towerBattleNarrative: boolean;
     debug: boolean;
   };
 
@@ -605,6 +606,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
       designAssistantEnabled: true,
       simulationSeeds: 8,
       showNotifications: true,
+      towerBattleNarrative: true,
       debug: false,
     };
     let settings = { ...defaultSettings };
@@ -619,6 +621,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
         ? Number(settings.simulationSeeds)
         : 8;
       settings.showNotifications = settings.showNotifications !== false;
+      settings.towerBattleNarrative = settings.towerBattleNarrative !== false;
       settings.debug = settings.debug === true;
       if (Number.isFinite(stored?.orbPosition?.x) && Number.isFinite(stored?.orbPosition?.y)) {
         orbPosition = { x: Number(stored.orbPosition.x), y: Number(stored.orbPosition.y) };
@@ -733,6 +736,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
           ? Number(remote.simulationSeeds)
           : settings.simulationSeeds,
         showNotifications: remote.showNotifications !== false,
+        towerBattleNarrative: remote.towerBattleNarrative !== false,
         debug: remote.debug === true,
       };
       const changed = Object.keys(next).some(key => (next as any)[key] !== (settings as any)[key]);
@@ -1529,6 +1533,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
         <label class="mwg-difficulty-row"><span class="mwg-setting-copy"><strong>剧情战斗强度</strong><small>爬塔以80%为标准档，调节敌人耐久与出招压力；不是胜率，也不是双方评分的比例</small></span><select class="mwg-difficulty-select" data-mwg-difficulty aria-label="剧情战斗强度"><option value="10">10% 剧情体验</option><option value="50">50% 轻松</option><option value="80">80% 标准</option><option value="100">100% 困难</option><option value="110">110% 高压</option></select></label>
         <label class="mwg-setting-row"><span class="mwg-setting-copy"><strong>强度分析建议</strong><small>生成前提供数值范围，生成后只评分记录，不自动改写或拒绝敌人</small></span><input type="checkbox" data-mwg-design-setting="autoCalibration"><span class="mwg-switch" aria-hidden="true"></span></label>
         <label class="mwg-difficulty-row"><span class="mwg-setting-copy"><strong>模拟精度</strong><small>精度越高，随机牌序覆盖越多，后台计算耗时也会增加</small></span><select class="mwg-difficulty-select" data-mwg-design-setting="simulationSeeds" aria-label="模拟精度"><option value="8">快速 · 8组</option><option value="12">均衡 · 12组</option><option value="16">精细 · 16组</option><option value="24">深入 · 24组</option></select></label>
+        <label class="mwg-setting-row"><span class="mwg-setting-copy"><strong>爬塔战后剧情</strong><small>默认开启：按战斗日志生成剧情，在路线图上方显示；不阻塞后续节点生成</small></span><input type="checkbox" data-mwg-design-setting="towerBattleNarrative"><span class="mwg-switch" aria-hidden="true"></span></label>
         <label class="mwg-setting-row"><span class="mwg-setting-copy"><strong>显示强度提示</strong><small>在评分发现明显强弱偏差时显示建议，不修改当前敌人</small></span><input type="checkbox" data-mwg-design-setting="showNotifications"><span class="mwg-switch" aria-hidden="true"></span></label>
         <label class="mwg-setting-row"><span class="mwg-setting-copy"><strong>调试日志</strong><small>在控制台输出本轮注入的紧凑设计上下文和失败原因</small></span><input type="checkbox" data-mwg-design-setting="debug"><span class="mwg-switch" aria-hidden="true"></span></label>
         <button class="mwg-refresh-design" type="button" data-action="refresh-design">立即重新评估卡组</button>

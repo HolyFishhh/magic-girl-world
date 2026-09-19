@@ -277,11 +277,14 @@ for (const result of ['defeat', 'terminated']) {
     items: [],
     turns: 4,
     eventJournal: played.state,
+    battleSummary: '第4回合：斩击击败试炼魔偶。胜利。',
     rewardRequest: null,
   });
   assert.equal(variables.stat_data.reward.card[0].id, 'tower_guard');
   assert.equal(variables.stat_data.run_node_reward, null);
   assert.equal(variables.stat_data.run.phase, 'awaiting_choice');
+  assert.equal(variables.stat_data.tower_battle_stories[0].phase, 'pending');
+  assert.match(JSON.parse(JSON.stringify(variables)).stat_data.tower_battle_stories[0].summary, /斩击击败/);
   assert.equal(variables.stat_data.run.score.encounters.length, 1);
   assert.equal(variables.stat_data.run.score.encounters[0].nodeId, choice.id);
   assert.equal(variables.stat_data.run.score.encounters[0].playerDeckScore, 150);

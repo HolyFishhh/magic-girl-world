@@ -93,3 +93,7 @@ html:not(.mwg-fullscreen-active):not(:fullscreen) body > .card-game-container { 
 #tower-screen-host { max-width:1040px; }
 
 body[data-tower-screen]:not([data-tower-screen='setup']) > .mwg-statusbar { display:none; }
+
+.character-story-facts { overflow-wrap:anywhere; min-width:0; }
+.character-story-facts p { white-space:pre-wrap; }
+.character-story-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr)); gap:0 12px; }
