@@ -78,3 +78,5 @@
 - 剧情框由桌面 320px / 手机 280px 增至桌面 460px / 手机 380px，正文仍在框内独立滚动。
 - 本地酒馆只读检查发现 `magic-girl-design-assistant.towerBattleNarrative` 当前为 `false`，这是现场直接跳过生成的另一原因；本次本地安装同步恢复为开启，UI 中仍保留可关闭开关。
 - 新增调度先于页面切换的顺序回归；运行时切换、Tavern 续写、战后默认/关闭/失败/恢复/去重与独立队列测试通过。
+- 最终从 `478746f` 与 `9ef2df4` 生成隔离候选 `tmp/runtime-build-phone-poker-aftermath`，临时角色卡完整 Tavern 契约通过。运行时 4,003,367 字节，SHA-256 `d6d3e8c04b2cc4421afb7698f3d6c394e44ed55654e32b1f47ca27238816cb84`，安装到 `魔法少女世界 1.0.3.png` 后回读一致；备份位于 `tmp/tavern-runtime-backups/47ee7acf-e430-4e7f-9385-1886ba0174cb`。
+- 本地扩展 `index.js` 与隔离构建 SHA-256 均为 `b461500d278f4894807b5ad945c10a82a03494f991ae27ad0c5fded7e04860b5`，无需重复安装。通过设置 API 仅将 `towerBattleNarrative` 从 `false` 改为 `true`，回读确认其余设置未变化；角色当前聊天、角色其他字段和全局正则也未变化。未刷新页面、生成战后正文或推进存档。
