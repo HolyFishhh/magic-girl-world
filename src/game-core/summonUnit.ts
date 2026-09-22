@@ -7,6 +7,7 @@ import type { BattleTriggerEventContext } from './battleEventJournal';
 import type { CardValueOperator, CardValueStat, EffectProgram } from './effectDsl';
 import { transformCardEffectProgram } from './cardValueTransform';
 import { resolveStatusApplication, resolveStatusStacksChange } from './statusApplication';
+import { copiedStatusDuration, type StatusReceiveOptions } from './statusAction';
 import type { RuntimeStatusDefinition, StatusRuntimeEffect, StatusTickTiming } from './statusDefinitionRuntime';
 import type { StatusEventTrigger, StatusTrigger } from './battleTriggers';
 import { runTriggerTransaction, type TriggerTransactionPorts } from './triggerTransaction';
@@ -785,6 +786,7 @@ export class SummonStatusLifecycleRuntime<TToken> {
     targetIds: readonly string[],
     statusId: string,
     stacks: number,
+    options: StatusReceiveOptions = {},
   ): Promise<Array<{ summon: SummonUnit; status: SummonStatusState }>> {
     const applied: Array<{ summon: SummonUnit; status: SummonStatusState }> = [];
     for (const summonId of [...new Set(targetIds)]) {
@@ -806,15 +808,18 @@ export class SummonStatusLifecycleRuntime<TToken> {
       const existing = summon.statusEffects?.find(status => status.id === statusId);
       const application = resolveStatusApplication(existing?.stacks, stacks, definition.maxStacks);
       if (!application.trigger) continue;
+      const acceptedCount = application.nextStacks - (existing?.stacks ?? 0);
       const next: SummonStatusState = existing
         ? { ...existing, stacks: application.nextStacks }
         : this.createStatus(definition, application.nextStacks);
+      if (options.copied) next.duration = copiedStatusDuration(existing, options.copied);
       this.updateLiving(summonId, unit => ({
         ...unit,
         statusEffects: existing
           ? (unit.statusEffects || []).map(status => status.id === statusId ? clone(next) : status)
           : [...(unit.statusEffects || []), clone(next)],
       }), 'summon_status_applied');
+      await options.accepted?.(acceptedCount);
       const activeSummon = this.getLiving(summonId);
       const activeStatus = activeSummon?.statusEffects?.find(status => status.id === statusId);
       if (!activeSummon || !activeStatus) continue;
@@ -868,6 +873,15 @@ export class SummonStatusLifecycleRuntime<TToken> {
   }
 
   /** Consume precisely one layer from one exact summon holder. */
+  public async removeStacks(summonId: string, statusId: string, count: number): Promise<void> {
+    const summon = this.getLiving(summonId);
+    const status = summon?.statusEffects?.find(s => s.id === statusId);
+    if (!summon || !status || count <= 0) return;
+    if (count >= status.stacks) await this.removeOne(summon, status, 'explicit');
+    else this.updateLiving(summonId, unit => ({ ...unit, statusEffects: (unit.statusEffects || []).map(s =>
+      s.id === statusId ? { ...s, stacks: s.stacks - count } : s) }), 'summon_status_removed');
+  }
+
   public async consumeLayer(summonId: string, statusId: string): Promise<boolean> {
     const summon = this.getLiving(summonId);
     const status = summon?.statusEffects?.find(candidate => candidate.id === statusId);

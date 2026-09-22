@@ -1505,7 +1505,7 @@ export function createProviderSafeJsonSchema(
         name: { type: 'string', minLength: 1 }, emoji: { type: 'string', minLength: 1 },
         description: { type: 'string' }, type: { enum: ['buff', 'debuff', 'neutral'] },
         stacks_change: { anyOf: [{ type: 'number' }, { enum: ['keep', 'reset'] }, { type: 'string', pattern: '^x(?:\\d+(?:\\.\\d+)?|\\.\\d+)$' }] },
-        maxStacks: { type: 'integer', minimum: 1, maximum: 999 }, stun: { type: 'boolean' }, character_emoji: CHARACTER_EMOJI_SCHEMA, protection: protectionOutline(), tick_timing: { enum: ['before_action', 'after_action'] },
+        maxStacks: { type: 'integer', minimum: 1, maximum: 999 }, tags: { type: 'array', maxItems: 64, uniqueItems: true, items: { type: 'string', pattern: '^[a-zA-Z_][a-zA-Z0-9_]*$' } }, stun: { type: 'boolean' }, character_emoji: CHARACTER_EMOJI_SCHEMA, protection: protectionOutline(), tick_timing: { enum: ['before_action', 'after_action'] },
         triggers: { type: 'object', properties: { hold: compactPassiveEffectListOutline() }, additionalProperties: eventEffectListOutline() },
       }, required: ['id', 'name', 'emoji', 'type', 'triggers'], additionalProperties: false,
     };

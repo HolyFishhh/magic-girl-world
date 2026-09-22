@@ -1,3 +1,4 @@
+import { executeStatusAction, type StatusActionSpec } from '../../game-core/statusAction';
 import {
   addModifierOperation,
   allocateRuntimeId,
@@ -232,6 +233,7 @@ export class UnifiedEffectExecutor {
       executeEnemyCommand: (command, sourceIsPlayer) => this.executeEnemyCommand(command, sourceIsPlayer),
       executeSummonerProgram: (command, sourceIsPlayer) => this.executeSummonerProgram(command, sourceIsPlayer),
       forEachTarget: (selector, sourceIsPlayer, execute) => this.forEachTarget(selector, sourceIsPlayer, execute),
+      executeStatusAction: (spec, sourceIsPlayer) => this.executeStatusAction(spec, sourceIsPlayer),
       applyStatus: (target, status, stacks) => {
         const holder = this.activeSummonHolder(target);
         if (this.hasSummonSelfBinding(target)) return holder
@@ -425,6 +427,49 @@ export class UnifiedEffectExecutor {
    * damage transaction. Exact IDs are carried by targetEnemyId, never read from
    * the mutable active-enemy alias.
    */
+  private async executeStatusAction(spec: StatusActionSpec, sourceIsPlayer: boolean): Promise<void> {
+    const bind = (side: 'self' | 'opponent') => {
+      const target = sourceIsPlayer === (side === 'self') ? 'player' : 'enemy';
+      const summon = this.activeSummonHolder(target);
+      if (this.hasSummonSelfBinding(target)) return summon ? { kind: 'summon' as const, id: summon.instanceId } : null;
+      return target === 'player' ? { kind: 'player' as const, id: 'player' } : this.gameStateManager.getEnemy()
+        ? { kind: 'enemy' as const, id: this.gameStateManager.getEnemy()!.id } : null;
+    };
+    const bindings = { self: bind('self'), opponent: bind('opponent') };
+    const read = (side: 'self' | 'opponent') => {
+      const b = bindings[side];
+      if (!b) return [];
+      if (b.kind === 'summon') {
+        const summon = this.gameStateManager.getSummonById(b.id);
+        return summon && (summon.hasHp === false || summon.currentHp > 0) ? summon.statusEffects || [] : [];
+      }
+      const holder = b.kind === 'player' ? this.gameStateManager.getPlayer() : this.gameStateManager.getEnemyById(b.id);
+      return holder && holder.currentHp > 0 ? holder.statusEffects || [] : [];
+    };
+    const scoped = async (side: 'self' | 'opponent', action: (binding: NonNullable<ReturnType<typeof bind>>) => Promise<void>) => {
+      const b = bindings[side]; if (!b) return;
+      const bound = b.kind === 'enemy' ? this.gameStateManager.beginEnemyResolution(b.id) : false;
+      if (b.kind === 'enemy' && !bound) return;
+      try { await action(b); } finally { if (bound) this.gameStateManager.endEnemyResolution(b.id); }
+    };
+    await executeStatusAction(spec, {
+      read, tags: id => this.dynamicStatusManager.getStatusDefinition(id)?.tags || [],
+      random: () => this.gameStateManager.nextRandom(),
+      choose: async (statuses, count) => {
+        const answer = await TavernEffectChoicePresenter.getInstance().choose({ op: 'choose_one', choiceId: 'status_selection', count,
+          options: statuses.map(status => ({ id: status.id, label: `${status.emoji || ''}${status.name} · ${status.stacks}层${status.duration === undefined ? '' : ` · ${status.duration}回合`}`,
+            effects: [{ op: 'narrate', text: this.dynamicStatusManager.getStatusDefinition(status.id)?.description || status.description || '当前持有状态' }] })) });
+        return answer === null ? null : typeof answer === 'string' ? [answer] : answer;
+      },
+      apply: (side, status, count, options) => scoped(side, b => b.kind === 'summon'
+        ? this.triggerHost.applyStatusToSummons([b.id], status.id, count, options)
+        : this.triggerHost.applyStatus(b.kind, status.id, count, options)),
+      remove: (side, id, count) => scoped(side, b => b.kind === 'summon'
+        ? this.triggerHost.removeSummonStatusStacks(b.id, id, count)
+        : this.triggerHost.removeStatusStacks(b.kind, id, count)),
+    }, sourceIsPlayer);
+  }
+
   private async protectEnemyDamage(request: {
     source: 'player' | 'enemy'; target: 'player' | 'enemy'; amount: number;
     damageKind: DamageKind; sourceEnemyId?: string; sourceSummonId?: string; targetEnemyId?: string;

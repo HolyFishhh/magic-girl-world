@@ -1,4 +1,5 @@
 export { describeOpeningDeckTransforms } from './towerOpeningTransforms';
+import { describeStatusAction, type StatusActionSpec } from './statusAction';
 import { describeEffectTarget } from './effectTargetDisplay';
 import type { EnemyTargetSelector } from './combatantCollection';
 import { describeSummonPlayRequirement } from './summonPlayRequirementDisplay';
@@ -674,6 +675,9 @@ function describeSingleOperation(
           text += `（状态规则；以下自身指状态持有者：${rules}）`;
         } else text += '（状态定义不可用，无法展示其触发规则）';
       }
+      break;
+    case 'status_action':
+      text = describeStatusAction(value.status_action as StatusActionSpec, options.statusNames);
       break;
     case 'remove_status': {
       const names: Record<string, string> = { all: '全部状态', buffs: '全部增益', debuffs: '全部减益' };

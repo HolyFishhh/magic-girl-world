@@ -2,6 +2,7 @@ import { isEmptyProtectionEffect, normalizeDamageProtectionRule } from './damage
 import { validateEnemyActionReferences } from './enemyActionReferences';
 import { validPersistentGrowthTarget } from './persistentGrowth';
 import { validateCardLifecycle } from './cardLifecycle';
+import { validateStatusAction, type StatusActionSpec } from './statusAction';
 import {
   ABILITY_TRIGGER_SET,
   EVENT_FILTERABLE_TRIGGER_SET,
@@ -342,6 +343,7 @@ export type EffectNode =
   | { op: 'persistent_growth'; stat: 'max_hp' | 'max_lust' | 'damage' | 'lust'; summonTemplateId?: string; operator: 'add' | 'subtract' | 'set'; value: NumericExpression }
   | { op: 'apply_status'; target: EffectTarget; targetSelector?: EnemyTargetSelector; status: string; stacks: NumericExpression }
   | { op: 'remove_status'; target: EffectTarget; targetSelector?: EnemyTargetSelector; status: string }
+  | { op: 'status_action'; spec: StatusActionSpec }
   | { op: 'draw_cards'; amount: NumericExpression }
   | { op: 'scry_cards'; amount: NumericExpression }
   | { op: 'discard_cards'; selector: CardSelector; amount: NumericExpression }
@@ -648,6 +650,7 @@ export type CoreEffectEvent =
   | { type: 'persistent_growth'; stat: 'max_hp' | 'max_lust' | 'damage' | 'lust'; summonTemplateId?: string; operator: 'add' | 'subtract' | 'set'; value: number }
   | { type: 'apply_status'; target: EffectTarget; status: string; stacks: number }
   | { type: 'remove_status'; target: EffectTarget; status: string }
+  | { type: 'status_action'; spec: StatusActionSpec }
   | { type: 'draw_cards'; amount: number }
   | { type: 'scry_cards'; amount: number }
   | { type: 'discard_cards' | 'exhaust_cards'; selector: CardSelector; amount: number }
@@ -808,6 +811,7 @@ const EFFECT_OPS = new Set([
   'persistent_growth',
   'apply_status',
   'remove_status',
+  'status_action',
   'draw_cards',
   'scry_cards',
   'discard_cards',
@@ -2082,6 +2086,10 @@ function validateEffectNode(
     if (typeof value.status !== 'string' || !STATUS_ID_PATTERN.test(value.status))
       addIssue(issues, `${path}.status`, 'INVALID_STATUS_ID', `状态 ID 无效: ${String(value.status)}`);
     validateNumericExpression(value.stacks, `${path}.stacks`, issues, depth + 1, counter);
+  } else if (value.op === 'status_action') {
+    rejectUnknownKeys(value, ['op', 'spec'], path, issues);
+    const issue = validateStatusAction(value.spec);
+    if (issue) addIssue(issues, `${path}.spec`, 'INVALID_STATUS_ACTION', issue);
   } else if (value.op === 'remove_status') {
     rejectUnknownKeys(value, ['op', 'target', 'targetSelector', 'status'], path, issues);
     if (!TARGETS.has(value.target as EffectTarget))
@@ -3179,6 +3187,10 @@ function executeNode(
   }
   if (node.op === 'summoner_effects') {
     events.push({ type: 'summoner_effects', effects: clone(node.effects) });
+    return;
+  }
+  if (node.op === 'status_action') {
+    events.push({ type: 'status_action', spec: clone(node.spec) });
     return;
   }
   const entity = state[node.target];

@@ -755,6 +755,7 @@ const SHARED_CONTENT_DEFINITIONS: AiJsonSchema = {
         ],
       },
       maxStacks: { type: 'integer', minimum: 1, maximum: 999 },
+      tags: { type: 'array', maxItems: 64, uniqueItems: true, items: { type: 'string', pattern: ID_PATTERN } },
       tick_timing: { enum: ['before_action', 'after_action'] },
       stun: { type: 'boolean' }, character_emoji: CHARACTER_EMOJI_SCHEMA,
       protection: ref('mwgDamageProtection'),

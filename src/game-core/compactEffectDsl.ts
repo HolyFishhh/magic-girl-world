@@ -3,6 +3,7 @@ import { validateEnemyActionReferences } from './enemyActionReferences';
 import { validPersistentGrowthTarget } from './persistentGrowth';
 import jsep from 'jsep';
 import { validateCardLifecycle } from './cardLifecycle';
+import { validateStatusAction, type StatusActionSpec } from './statusAction';
 import { SUMMON_AUTHORING_FIELDS, SUMMON_ACTION_AUTHORING_FIELDS, SUMMON_ABILITY_AUTHORING_FIELDS } from './summonAuthoringFields';
 import { compactEffectDefaultTarget } from './compactEffectTarget';
 
@@ -2679,6 +2680,11 @@ function compileSingleEntry(
       const targetSelector = compileEnemyTargetSelector(value.targets, target, `${path}.targets`, issues, enemyCollectionTarget);
       node = lowerFormula(stacks, amount => ({ op: 'apply_status', target, ...(targetSelector ? { targetSelector } : {}), status, stacks: amount }));
     }
+  } else if (operation === 'status_action') {
+    rejectUnknownEntryKeys(value, [operation, 'when'], path, issues);
+    const issue = validateStatusAction(value.status_action);
+    if (issue) addIssue(issues, `${path}.status_action`, 'INVALID_STATUS_ACTION', issue);
+    else node = { op: 'status_action', spec: structuredClone(value.status_action) as StatusActionSpec };
   } else if (operation === 'remove_status') {
     rejectUnknownEntryKeys(value, [operation, 'to', 'targets', 'when'], path, issues);
     const status = value.remove_status;

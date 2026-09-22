@@ -1,5 +1,6 @@
 export { describeOpeningDeckTransforms } from './towerOpeningTransforms';
 import { describeCardTraits } from './cardLifecycle';
+import { describeStatusAction } from './statusAction';
 import { describeEffectTarget as targetName } from './effectTargetDisplay';
 import { describeSummonPlayRequirement } from './summonPlayRequirementDisplay';
 import { describeResourceHalf } from './resourceAssignmentDisplay';
@@ -551,6 +552,8 @@ function nodeTags(node: EffectNode, context: EffectDisplayContext): EffectDispla
       const owner = node.summonTemplateId ? `${context.summonNames?.[node.summonTemplateId] || '指定召唤物'}的` : '';
       return [tag(`${owner}永久${stat}${operator[node.operator]}${number(node.value)}`, 'special')];
     }
+    case 'status_action':
+      return [tag(describeStatusAction(node.spec, context.statusNames), 'special')];
     case 'apply_status':
       return [
         tag(

@@ -311,6 +311,10 @@ export class CardSystem {
       this.presentation.clearCardInteractionStates();
       return false;
     } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'CHOICE_CANCELLED') {
+        this.presentation.clearCardInteractionStates();
+        return false;
+      }
       if (isolatedBattlePresentation()) throw error;
       console.error('使用卡牌时发生错误:', error);
       let errorMessage = '卡牌执行失败';

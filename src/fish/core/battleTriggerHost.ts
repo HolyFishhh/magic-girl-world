@@ -439,8 +439,12 @@ export class TavernBattleTriggerHost {
     }
   }
 
-  public async applyStatus(targetType: 'player' | 'enemy', statusId: string, stacks: number): Promise<void> {
-    await this.statusRuntime.apply(targetType, statusId, stacks);
+  public async applyStatus(targetType: 'player' | 'enemy', statusId: string, stacks: number, options?: import('../../game-core/statusAction').StatusReceiveOptions): Promise<void> {
+    await this.statusRuntime.apply(targetType, statusId, stacks, options);
+  }
+
+  public async removeStatusStacks(targetType: 'player' | 'enemy', statusId: string, count: number): Promise<void> {
+    await this.statusRuntime.removeStacks(targetType, statusId, count);
   }
 
   public async removeStatuses(targetType: 'player' | 'enemy', selection: string): Promise<void> {
@@ -463,8 +467,12 @@ export class TavernBattleTriggerHost {
     await this.statusRuntime.processTurnEnd(targetType);
   }
 
-  public async applyStatusToSummons(targetIds: readonly string[], statusId: string, stacks: number): Promise<void> {
-    await this.summonStatusRuntime.apply(targetIds, statusId, stacks);
+  public async applyStatusToSummons(targetIds: readonly string[], statusId: string, stacks: number, options?: import('../../game-core/statusAction').StatusReceiveOptions): Promise<void> {
+    await this.summonStatusRuntime.apply(targetIds, statusId, stacks, options);
+  }
+
+  public async removeSummonStatusStacks(id: string, statusId: string, count: number): Promise<void> {
+    await this.summonStatusRuntime.removeStacks(id, statusId, count);
   }
 
   public async removeStatusesFromSummons(targetIds: readonly string[], selection: string): Promise<void> {

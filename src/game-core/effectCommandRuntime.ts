@@ -61,6 +61,7 @@ export type EffectCommand =
   | { type: 'persistent_growth'; stat: 'max_hp' | 'max_lust' | 'damage' | 'lust'; summonTemplateId?: string; operator: 'add' | 'subtract' | 'set'; value: number }
   | { type: 'apply_status'; target: EffectTarget; targetSelector?: EnemyTargetSelector; status: string; stacks: number }
   | { type: 'remove_status'; target: EffectTarget; targetSelector?: EnemyTargetSelector; status: string }
+  | { type: 'status_action'; spec: import('./statusAction').StatusActionSpec }
   | { type: 'draw_cards'; amount: number }
   | { type: 'scry_cards'; amount: number }
   | { type: 'discard_cards'; selector: CardSelector; amount: number }
@@ -533,6 +534,7 @@ function createCommand(
       stacks: readAmount(node.stacks, state, context, `${path}.stacks`, true),
     };
   }
+  if (node.op === 'status_action') return { type: 'status_action', spec: clone(node.spec) };
   if (node.op === 'remove_status') {
     return { type: 'remove_status', target: node.target, ...(node.targetSelector ? { targetSelector: clone(node.targetSelector) } : {}), status: node.status };
   }

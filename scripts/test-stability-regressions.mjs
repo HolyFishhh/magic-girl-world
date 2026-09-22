@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 
 const checks = [
+  'status-action-contract',
   'card-removal-permissions',
   'archetype-score-accuracy',
   'evidence-file-archive', 'tower-generation-evidence', 'tower-evidence-history-ui', 'mvu-monitor-chat-scope',

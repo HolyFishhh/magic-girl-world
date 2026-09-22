@@ -141,7 +141,7 @@ function normalizeEmbeddedBattleVariables(variables: unknown): boolean {
       if (!isSettlementRecord(nested) || typeof nested.id !== 'string') continue;
       const transferable = operation === 'apply_status' ? ['stacks', 'to', 'targets'] : ['to', 'targets'];
       const allowed = new Set([
-        'id', 'name', 'emoji', 'description', 'type', 'stacks_change', 'tick_timing', 'maxStacks', 'stun', 'character_emoji', 'protection', 'triggers', '$meta',
+        'id', 'name', 'emoji', 'description', 'type', 'stacks_change', 'tick_timing', 'tags', 'maxStacks', 'stun', 'character_emoji', 'protection', 'triggers', '$meta',
         ...transferable,
       ]);
       if (Object.keys(nested).some(key => !allowed.has(key))) continue;

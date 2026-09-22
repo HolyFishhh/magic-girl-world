@@ -43,6 +43,7 @@ export interface SharedSummonChoice {
 }
 
 export interface TavernEffectCommandHostPorts {
+  executeStatusAction?(spec: import('../../game-core/statusAction').StatusActionSpec, sourceIsPlayer: boolean): Promise<void>;
   runChoiceBranch?(execute: () => Promise<boolean>): Promise<boolean>;
   readState(sourceIsPlayer: boolean): CoreEffectState;
   isTerminal(): boolean;
@@ -338,6 +339,11 @@ export class TavernEffectCommandHost {
     }
     if (command.type === 'set_card_destination') {
       await this.ports.setCardDestination(command.destination);
+      return;
+    }
+    if (command.type === 'status_action') {
+      if (!this.ports.executeStatusAction) throw new Error('宿主未实现状态选择');
+      await this.ports.executeStatusAction(command.spec, sourceIsPlayer);
       return;
     }
     if (command.type === 'apply_status') {

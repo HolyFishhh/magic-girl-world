@@ -188,9 +188,11 @@ export function scoreDeckPower(input: { pack: ContentPack; maxHp: number; fullHe
     'channel_orb', 'spawn_summon', 'extra_turn', 'resource', 'set_resource',
   ]);
   const controlOperations = operationCount(features, [
+    'status_action',
     'apply_status', 'remove_status', 'card_rule', 'end_turn', 'discard', 'exhaust', 'modify',
   ]);
   const unsupportedComplexity = operationCount(features, [
+    'status_action',
     'apply_status', 'remove_status', 'trigger', 'replay', 'replay_current', 'auto_play', 'schedule', 'extra_turn',
     'spawn_summon', 'spawn_enemy', 'channel_orb', 'evoke_orb', 'modify_orb', 'sly', 'discard_remove', 'discard_purge',
   ]);

@@ -9,6 +9,7 @@ import { normalizeStatusDefenseRule } from './statusDefense';
 export type CompactStatusValidationResult = { ok: true } | { ok: false; message: string };
 
 const ROOT_KEYS = new Set([
+  'tags',
   'id',
   'name',
   'emoji',
@@ -103,6 +104,9 @@ export function collectCompactStatusDefinitionIssues(value: unknown): string[] {
   if (!validDecay(value.stacks_change)) push('状态 stacks_change 无效');
   if (!validTickTiming(value.tick_timing)) push('状态 tick_timing 只能是 before_action 或 after_action');
   const maxStacks = value.maxStacks;
+  if (value.tags !== undefined && (!Array.isArray(value.tags) || value.tags.length > 64
+    || value.tags.some(tag => typeof tag !== 'string' || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(tag))
+    || new Set(value.tags).size !== value.tags.length)) push('状态 tags 必须是不重复的标签 ID 数组');
   if (maxStacks !== undefined && (!Number.isInteger(maxStacks) || Number(maxStacks) < 1 || Number(maxStacks) > 999)) {
     push('状态 maxStacks 必须是 1..999 的整数');
   }

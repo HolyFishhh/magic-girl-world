@@ -81,6 +81,7 @@ export function isPlainStarterDefinition(value: unknown): boolean {
 const EFFECT_OPERATIONS = new Set([
   'damage', 'heal', 'block', 'energy', 'lust', 'resource', 'set_resource',
   'set_hp', 'set_lust', 'set_energy', 'set_block', 'apply_status', 'remove_status',
+  'status_action',
   'draw', 'scry', 'seek', 'discard', 'exhaust', 'recover', 'reduce_cost',
   'modify_card', 'patch_card', 'attach_card', 'upgrade_card', 'copy', 'double',
   'auto_play', 'replay_current', 'card_destination', 'move_card', 'remove_card', 'transform_card',
@@ -311,7 +312,7 @@ function axesFor(operations: ReadonlySet<string>, targets: ReadonlySet<string>, 
   if (has('block')) axes.add('格挡');
   if (has('heal', 'lifesteal', 'damage_taken_reduction', 'summon_intercept')) axes.add('生存');
   if (has('heal')) axes.add('恢复');
-  if (statuses.size || has('status_query', 'apply_status', 'remove_status', 'apply_summon_status', 'remove_summon_status')) axes.add('状态');
+  if (statuses.size || has('status_query', 'status_action', 'apply_status', 'remove_status', 'apply_summon_status', 'remove_summon_status')) axes.add('状态');
   if (has('draw', 'scry', 'seek')) axes.add('牌序');
   if (has('discard')) axes.add('弃牌');
   if (has('exhaust')) axes.add('消耗');

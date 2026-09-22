@@ -1,4 +1,5 @@
 import { builtinStatusAuthoringContract } from './builtinStatusCatalog';
+import { STATUS_ACTION_CONTRACT } from './statusAction';
 import { DAMAGE_PROTECTION_AUTHORING_CLAUSES } from './damageProtection';
 import { battlePresentationContractClauses } from './battlePresentationContract';
 import { ABILITY_TRIGGERS } from './battleTriggers';
@@ -56,6 +57,7 @@ export function compactEffectProtocolSections(placement: EffectProtocolPlacement
       '抽牌与牌库查看：{draw:数量}、{scry:数量}、{seek:数量} 只允许同级 when，不允许 to、targets、from、pick、count 或 amount。',
       '基础抽牌修饰：passive/hold 使用 {modify:"draw_per_turn",add|subtract|multiply|divide|set:数值或合法stacks公式}，只调整玩家开局及每回合自动抽牌，结算时向下取整且至少0；主动draw不受影响，固有牌仍按原规则进入开局手牌。按状态当前层数计算，移除状态即失效；即时draw的负数不是少抽牌，limit_draw是每次抽牌上限，不是基础抽牌增减。',
       '状态操作：{apply_status:"状态ID",stacks?:层数,to?:目标}；{remove_status:"状态ID|all|buffs|debuffs",to?:目标}。值为字符串，stacks/to 与操作同级。block/energy/hp/max_hp/lust/max_lust/max_energy 是数值池而非状态ID，不为其补造状态。清空格挡用 set_block:0，增加格挡用 block，其余数值池用对应数值操作。',
+      STATUS_ACTION_CONTRACT,
     ] },
     { id: 'formulas', title: '公式与局部结果', clauses: [
       ...formulaAuthoringContractClauses(),

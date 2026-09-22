@@ -4,6 +4,7 @@ import type { BattleStateStore, Enemy, Player, StatusEffect } from './battleStat
 import type { BattleTriggerEventContext } from './battleEventJournal';
 import type { StatusEventTrigger, StatusLifecycleTrigger, StatusTrigger } from './battleTriggers';
 import { resolveStatusApplication, resolveStatusStacksChange } from './statusApplication';
+import { copiedStatusDuration, type StatusReceiveOptions } from './statusAction';
 import type { RuntimeStatusDefinition, StatusRuntimeEffect, StatusTickTiming } from './statusDefinitionRuntime';
 import { runTriggerTransaction, type TriggerTransactionPorts } from './triggerTransaction';
 
@@ -102,6 +103,7 @@ export class StatusLifecycleRuntime<TToken> {
     target: StatusLifecycleTarget,
     statusId: string,
     stacks: number,
+    options: StatusReceiveOptions = {},
   ): Promise<StatusEffect | null> {
     const definition = this.ports.definitions.get(statusId);
     if (!definition) {
@@ -120,6 +122,7 @@ export class StatusLifecycleRuntime<TToken> {
     const existing = this.getEntity(target)?.statusEffects.find(status => status.id === statusId);
     const application = resolveStatusApplication(existing?.stacks, stacks, definition.maxStacks);
     if (!application.trigger) return existing ? { ...existing } : null;
+    const acceptedCount = application.nextStacks - (existing?.stacks ?? 0);
 
     const status: StatusEffect = {
       id: statusId,
@@ -128,9 +131,12 @@ export class StatusLifecycleRuntime<TToken> {
       description: definition.description,
       emoji: definition.emoji,
       stacks: application.nextStacks,
+      ...(options.copied ? { duration: copiedStatusDuration(existing, options.copied) } : {}),
     };
-    if (existing) this.ports.state.updateStatusEffect(target, statusId, { stacks: application.nextStacks });
+    if (existing) this.ports.state.updateStatusEffect(target, statusId, { stacks: application.nextStacks,
+      ...(options.copied ? { duration: status.duration } : {}) });
     else this.ports.state.addStatusEffect(target, status);
+    await options.accepted?.(acceptedCount);
 
     const active = this.getEntity(target)?.statusEffects.find(candidate => candidate.id === statusId) || status;
     const appliedEvent = { type: 'status_applied', target, ...(target === 'enemy' ? { enemyId: this.ports.state.getEnemy()?.id } : {}), status: { ...active }, trigger: application.trigger } as const;
@@ -162,6 +168,13 @@ export class StatusLifecycleRuntime<TToken> {
       this.present({ type: 'selection_removed', target, selection, count: selected.length });
     }
     return selected.map(status => ({ ...status }));
+  }
+
+  public async removeStacks(target: StatusLifecycleTarget, id: string, count: number): Promise<void> {
+    const status = this.getEntity(target)?.statusEffects.find(s => s.id === id);
+    if (!status || count <= 0) return;
+    if (count >= status.stacks) await this.removeOne(target, id, 'explicit');
+    else this.ports.state.updateStatusEffect(target, id, { stacks: status.stacks - count });
   }
 
   /** Consume precisely one holder-local defensive layer, including remove lifecycle. */

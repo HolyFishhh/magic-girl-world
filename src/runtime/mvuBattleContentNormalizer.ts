@@ -986,7 +986,7 @@ function rewriteNode(
     }
     if (typeof nested.id !== 'string') continue;
     const allowed = new Set([
-      'id', 'name', 'emoji', 'description', 'type', 'stacks_change', 'tick_timing', 'maxStacks', 'stun', 'character_emoji', 'triggers', '$meta',
+      'id', 'name', 'emoji', 'description', 'type', 'stacks_change', 'tick_timing', 'tags', 'maxStacks', 'stun', 'character_emoji', 'triggers', '$meta',
       ...transferable,
     ]);
     if (Object.keys(nested).some(key => !allowed.has(key))) continue;

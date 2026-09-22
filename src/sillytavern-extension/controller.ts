@@ -1359,6 +1359,7 @@ function canCompileCardCopyStrategy(value: unknown): boolean {
 }
 
 const INITIAL_SIMPLE_REPAIR_EFFECT_KEYS = new Set([
+  'status_action',
   'damage', 'heal', 'block', 'energy', 'lust', 'set_hp', 'set_lust', 'set_energy', 'set_block',
   'draw', 'apply_status', 'remove_status', 'resource', 'set_resource', 'discard', 'exhaust', 'recover',
   'move_card', 'remove_card', 'transform_card', 'copy', 'double',
@@ -2327,6 +2328,7 @@ function assertInitialSimpleRepairEffect(value: unknown, label: string): void {
     draw: new Set(['draw', 'when']),
     apply_status: new Set(['apply_status', 'stacks', 'to', 'targets', 'when']),
     remove_status: new Set(['remove_status', 'to', 'targets', 'when']),
+    status_action: new Set(['status_action', 'when']),
     resource: new Set(['resource', 'to', 'targets', 'when']),
     set_resource: new Set(['set_resource', 'to', 'targets', 'when']),
     choose: new Set(['choose', 'count', 'options', 'when']),

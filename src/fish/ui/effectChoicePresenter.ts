@@ -50,12 +50,14 @@ export class TavernEffectChoicePresenter {
         <section class="modal-content effect-choice-content">
           <header class="modal-header"><h3>选择效果 · ${choice.options.length}选${required}</h3></header>
           <div class="modal-body effect-choice-options mwg-card-choice-list" style="--choice-count:${choice.options.length}">${options}</div>
-        <footer class="modal-footer"><span class="effect-choice-count" role="status">已选 0/${required}</span><button type="button" class="btn btn-primary confirm-effect-choice" disabled>确认选择</button></footer></section>
+        <footer class="modal-footer"><button type="button" class="btn cancel-effect-choice">返回</button><span class="effect-choice-count" role="status">已选 0/${required}</span><button type="button" class="btn btn-primary confirm-effect-choice" disabled>确认选择</button></footer></section>
       </div>`);
       const finish = (value: string | string[] | null): void => {
         dialog.remove();
         resolve(value);
       };
+      dialog.on('click', '.cancel-effect-choice', () => finish(null));
+      dialog.on('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); finish(null); } });
       const select = (element: HTMLElement) => {
         const id = element.dataset.optionId;
         if (!id || !choice.options.some(option => option.id === id)) return;

@@ -332,6 +332,7 @@ const OPERATION_META_KEYS: Readonly<Record<string, readonly string[]>> = {
   narrate: ['when', 'on'],
   apply_status: ['stacks', 'to', 'targets', 'when', 'on'],
   remove_status: ['to', 'targets', 'when', 'on'],
+  status_action: ['when', 'on'],
   draw: ['when', 'on'],
   scry: ['when', 'on'],
   seek: ['when', 'on'],

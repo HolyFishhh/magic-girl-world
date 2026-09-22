@@ -10,6 +10,7 @@ export type StatusRuntimeEffect = EffectProgram;
 export type StatusTickTiming = 'before_action' | 'after_action';
 
 export interface RuntimeStatusDefinition {
+  tags?: string[];
   id: string;
   name: string;
   emoji: string;
@@ -107,6 +108,7 @@ export function normalizeRuntimeStatusDefinition(
     ...(stacksChange === undefined ? {} : { stacks_change: stacksChange }),
     tick_timing: tickTiming,
     ...(maxStacks === undefined ? {} : { maxStacks }),
+    ...(Array.isArray(value.tags) ? { tags: [...value.tags] } : {}),
     triggers,
     ...(protection ? { protection } : {}),
     ...(defense ? { defense } : {}),
