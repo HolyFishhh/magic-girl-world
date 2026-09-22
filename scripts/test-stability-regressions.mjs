@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 
 const checks = [
+  'evidence-file-archive', 'tower-generation-evidence', 'tower-evidence-history-ui', 'mvu-monitor-chat-scope',
   'stability-transactions', 'diagnostic-redaction', 'tower-mvu-restoration',
   'tower-lookahead-coordinator', 'persistent-mvu-repair-host', 'message-variable-authority',
   'run-transactions', 'run-history-prompt', 'battle-event-journal', 'trigger-event-contract',

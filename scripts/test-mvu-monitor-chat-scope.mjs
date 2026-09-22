@@ -2,6 +2,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+process.env.TS_NODE_COMPILER_OPTIONS = JSON.stringify({ module: 'CommonJS', moduleResolution: 'node' });
+require('ts-node/register/transpile-only');
+const { redactDiagnosticText } = require('../src/runtime/diagnosticRedaction.ts');
 
 // Execute current runtime source, not an older dist bundle. No network or MVU writes.
 // The browser runtime is bundled before execution. Strip source-only imports so
@@ -32,12 +37,13 @@ class FakeElement {
   replaceChildren(...children) { this.children = children; }
   remove() { this.isConnected = false; }
   setAttribute() {}
+  getBoundingClientRect() { return { left: 0, top: 0, width: 40, height: 40, right: 40, bottom: 40 }; }
   focus() {}
   addEventListener(type, listener) { this.listeners.set(type, listener); }
   click() { this.listeners.get('click')?.({ currentTarget: this }); }
 }
 class FakeDocument {
-  constructor() { this.byId = new Map(); this.body = new FakeElement(this); this.head = new FakeElement(this); }
+  constructor() { this.byId = new Map(); this.body = new FakeElement(this); this.head = new FakeElement(this); this.documentElement = { clientWidth: 1280, clientHeight: 720 }; }
   createElement() { return new FakeElement(this); }
   getElementById(id) { return this.byId.get(id) || null; }
   querySelectorAll() { return []; }
@@ -47,7 +53,7 @@ const context = {
   localStorage: {getItem:key=>stored.get(key)||null,setItem:(key,value)=>stored.set(key,value)},
   console, __MWG_BUILD_INFO__: { cardVersion: 'test', views: {} },
   __MWG_VIEW_ASSETS__: Object.fromEntries(['start','common','fish','update'].map(name => [name, {}])),
-  document,
+  document, redactDiagnosticText,
   Date: ControlledDate,
   assessMeasuredBuild: () => null,
   SillyTavern: { getContext: () => ({ chatId: activeChatId }) },
@@ -237,7 +243,7 @@ await Promise.resolve();
 await Promise.resolve();
 assert.equal(monitor.getSnapshot().generationId, 'tower-task:prefetch');
 assert.equal(monitor.getSnapshot().phase, 'generating', 'manual completion cannot complete the replacing tower task');
-const manualExport = monitor.getDiagnosticExportReport();
+const manualExport = (await monitor.getDiagnosticExportReport());
 assert.equal(manualExport.manualRepairEvidence.generationId, directRepairId);
 assert.equal(manualExport.manualRepairEvidence.association, 'matching-manual-monitor-output-fallback');
 assert.equal(manualExport.manualRepairEvidence.liveOutput.text, '{"operations":[]}');
@@ -246,7 +252,7 @@ context.MagicGirlDesignAssistant.getInitialGenerationEvidence = () => ({
   runs: [{ generationId: directRepairId, startedAt: now, updatedAt: now, outcome: 'completed',
     records: [{ stage: 'repair-final', text: '{"operations":[]}', capturedAt: now }], validationErrors: [] }],
 });
-const durableManualExport = monitor.getDiagnosticExportReport();
+const durableManualExport = (await monitor.getDiagnosticExportReport());
 assert.equal(durableManualExport.manualRepairEvidence.association, 'matching-manual-direct-repair-id');
 assert.equal(durableManualExport.manualRepairEvidence.run.generationId, directRepairId);
 console.log('PASS manual direct-repair ID ownership, tower replacement isolation, raw-output fallback and matching durable evidence.');
@@ -263,10 +269,10 @@ manualRoot.querySelector('[data-mwg-card-repair-input]').value = '触发失败�
 manualRoot.querySelector('[data-action="submit-card-repair"]').click();
 await Promise.resolve();
 await new Promise(resolve => setImmediate(resolve));
-assert.equal(monitor.getDiagnosticExportReport().manualRepairFailureEvidence.response, 'private prior-chat response');
+assert.equal((await monitor.getDiagnosticExportReport()).manualRepairFailureEvidence.response, 'private prior-chat response');
 activeChatId = 'manual-failure-cleared';
 monitor.resetForChat(activeChatId);
-assert.equal(monitor.getDiagnosticExportReport().manualRepairFailureEvidence, null, 'manual failure evidence cannot cross chat boundaries');
+assert.equal((await monitor.getDiagnosticExportReport()).manualRepairFailureEvidence, null, 'manual failure evidence cannot cross chat boundaries');
 
 let rejectLateRepair;
 context.MagicGirlWorld.registerCardRepairHandler(() => new Promise((resolve, reject) => { rejectLateRepair = reject; }));
@@ -281,6 +287,6 @@ rejectLateRepair(repairEvidenceError());
 await Promise.resolve();
 await new Promise(resolve => setImmediate(resolve));
 assert.equal(monitor.getSnapshot().phase, 'idle', 'late manual failure cannot overwrite the new chat monitor');
-assert.equal(monitor.getDiagnosticExportReport().manualRepairFailureEvidence, null, 'late manual failure cannot retain old-chat raw evidence');
+assert.equal((await monitor.getDiagnosticExportReport()).manualRepairFailureEvidence, null, 'late manual failure cannot retain old-chat raw evidence');
 console.log('PASS manual failure evidence and pending callbacks are isolated by original chat ID.');
 

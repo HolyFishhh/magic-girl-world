@@ -13,6 +13,7 @@ import { GenerationTransportError } from './generationTransportError';
 import { decodeInitialDraftContainers, normalizeInitialDraftAbsentCurseCost, normalizeInitialDraftEmptyLustCondition } from './initialDraftDecoding';
 import { INITIAL_GENERATION_EVIDENCE_METADATA_KEY, InitialGenerationEvidence, type InitialEvidenceStage } from './initialGenerationEvidence';
 import { TOWER_GENERATION_EVIDENCE_METADATA_KEY, TowerGenerationEvidence } from './towerGenerationEvidence';
+import { createTavernEvidenceFilePorts, EvidenceFileStore } from './evidenceFileStore';
 import { auditInitialSemanticStructure } from '../game-core/initialSemanticAudit';
 import { buildInitialPlayerBattle } from './initialPlayerBattle';
 import { expandInitialOpeningCardReferences } from '../game-core/initialCardReference';
@@ -3980,7 +3981,9 @@ export class DesignAssistantController {
   private readonly workerClient: DesignWorkerClient;
   private readonly towerGenerationHost: TowerGenerationHost;
   private readonly initialGenerationEvidence = new InitialGenerationEvidence(() => this.host.now());
-  private readonly towerGenerationEvidence = new TowerGenerationEvidence();
+  private readonly towerGenerationEvidence = new TowerGenerationEvidence(new EvidenceFileStore(
+    createTavernEvidenceFilePorts(() => this.host.context()?.getRequestHeaders?.() || {}),
+  ));
   private readonly structuredGenerate: TowerGenerationPorts['generate'];
   private readonly initialDeliveryDiagnostics: TowerGenerationDiagnostics;
   private readonly initialDeliveryCancels = new Map<string, () => void>();
@@ -4157,6 +4160,7 @@ export class DesignAssistantController {
 
   deactivate(): void {
     if (!this.active) return;
+    this.towerGenerationEvidence.retainChat(null);
     // The official context object can be replaced while a chat is loading.
     // Always unsubscribe from the exact event source used during activation.
     const context = this.listenerContext || this.host.context();
@@ -6008,14 +6012,37 @@ export class DesignAssistantController {
     return this.active ? this.towerGenerationEvidence.snapshot(this.currentChatId()) : null;
   }
 
-  getRecentGenerationEvidence(limit = 5) {
+  async getRecentGenerationEvidence(limit = 5) {
     const count = Math.max(1, Math.trunc(limit) || 5);
     const chatId = this.currentChatId();
     if (!this.active) return { chatId, total: 0, records: [] };
-    const tower = this.towerGenerationEvidence.recent(chatId, count);
-    const initial = this.initialGenerationEvidence.recent(chatId, count, this.towerGenerationEvidence.manualGenerationIds(chatId));
+    const tower = await this.towerGenerationEvidence.recent(chatId, count);
+    if (this.currentChatId() !== chatId || !this.active) throw new Error('聊天已切换，已取消旧记录列表');
+    const manualIds = new Set(tower.records.filter(record => record.kind === '自然语言修改').map(record => record.generationId || record.requestId));
+    const initial = this.initialGenerationEvidence.recent(chatId, count, manualIds);
     return { chatId, total: tower.total + initial.total,
+      storage: this.towerGenerationEvidence.status(chatId),
       records: [...tower.records, ...initial.records].sort((a,b) => b.recordedAt - a.recordedAt).slice(0,count) };
+  }
+
+  getGenerationEvidenceStatus() {
+    const chatId = this.active ? this.currentChatId() : null;
+    const initial = this.initialGenerationEvidence.recent(chatId, 1, new Set());
+    return { ...this.towerGenerationEvidence.status(chatId), initialTotal: initial.total, initialLatest: initial.records[0]?.key || '' };
+  }
+
+  async getGenerationEvidenceRecord(key: string) {
+    const chatId = this.currentChatId();
+    if (!this.active || !chatId) throw new Error('当前聊天不可用');
+    const record = await this.towerGenerationEvidence.loadRecord(chatId, key);
+    if (!this.active || this.currentChatId() !== chatId) throw new Error('聊天已切换，已取消旧记录读取');
+    return record;
+  }
+
+  async retryGenerationEvidenceArchive() {
+    const chatId = this.currentChatId();
+    if (!this.active || !chatId) return;
+    await this.towerGenerationEvidence.archive(chatId, () => this.persistTowerGenerationEvidence(chatId, false), true);
   }
 
   private retainInitialGenerationEvidence(chatId: string | null): void {
@@ -6030,13 +6057,15 @@ export class DesignAssistantController {
       chatId && context?.chatMetadata ? context.chatMetadata[TOWER_GENERATION_EVIDENCE_METADATA_KEY] : undefined);
   }
 
-  private persistTowerGenerationEvidence(chatId: string): void {
+  private persistTowerGenerationEvidence(chatId: string, archive = true): void {
+    if (!this.active) return;
     try {
       const context = this.host.context();
-      const history = this.towerGenerationEvidence.snapshot(chatId);
+      const history = this.towerGenerationEvidence.metadataSnapshot(chatId);
       if (!history || !context?.chatMetadata || this.currentChatId() !== chatId) return;
       context.chatMetadata[TOWER_GENERATION_EVIDENCE_METADATA_KEY] = history;
       context.saveMetadataDebounced();
+      if (archive) void this.towerGenerationEvidence.archive(chatId, () => this.persistTowerGenerationEvidence(chatId, false));
     } catch (error) { this.debug('tower generation evidence metadata save failed', error); }
   }
 
@@ -6090,9 +6119,9 @@ export class DesignAssistantController {
       chatId: request.chatId, nodeId: request.nodeId, requestId: request.requestId,
       ...(request.runScope ? { runScope: request.runScope } : {}),
       ...(this.towerEvidenceParent(request.requestId) ? { parentRequestId: this.towerEvidenceParent(request.requestId) } : {}),
-      stage: 'outcome', parsedResult: clone(parsedResult), outcome: clone(outcome),
-      ...(beforeMvuData ? { beforeMvuData: clone(beforeMvuData) } : {}),
-      ...(afterMvuData ? { afterMvuData: clone(afterMvuData) } : {}),
+      stage: 'outcome', parsedResult, outcome,
+      ...(beforeMvuData ? { beforeMvuData } : {}),
+      ...(afterMvuData ? { afterMvuData } : {}),
       recordedAt: this.host.now(),
     });
     this.persistTowerGenerationEvidence(request.chatId);

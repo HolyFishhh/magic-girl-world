@@ -9,21 +9,21 @@ const { TowerGenerationEvidence } = require(resolve('src/sillytavern-extension/t
 const { TowerGenerationHost } = require(resolve('src/sillytavern-extension/towerGenerationHost.ts'));
 const { formatTowerNodeStructureRepairPrompt, formatTowerNodeBatchStructureRepairPrompt } = require(resolve('src/game-core/towerRequest.ts'));
 
-const evidence = new TowerGenerationEvidence(() => 42);
+const evidence = new TowerGenerationEvidence();
 evidence.retainChat('chat-6');
 evidence.append({ chatId: 'chat-6', nodeId: 'n6', requestId: 'parent', stage: 'request', prompt: 'parent prompt' });
 evidence.append({ chatId: 'chat-6', nodeId: 'n6', requestId: 'parent', stage: 'response', generationId: 'g1', response: '{"reward":[]}' });
 evidence.append({ chatId: 'chat-6', nodeId: 'n6', requestId: 'parent__structure_repair_1', parentRequestId: 'parent', stage: 'request', prompt: 'repair only reward' });
 evidence.append({ chatId: 'chat-6', nodeId: 'n6', requestId: 'parent__structure_repair_1', parentRequestId: 'parent', stage: 'response', generationId: 'g2', response: '{"reward":{"card":[]}}' });
 evidence.append({ chatId: 'chat-6', nodeId: 'n6', requestId: 'parent', stage: 'outcome', parsedResult: { reward: { card: [] } }, outcome: { outcome: 'complete' }, beforeMvuData: { marker: 'before' }, afterMvuData: { marker: 'after' } });
-const snapshot = evidence.snapshot('chat-6');
+const snapshot = (await evidence.snapshot('chat-6'));
 assert.equal(snapshot.records.length, 5);
 assert.equal(snapshot.records[3].parentRequestId, 'parent');
 assert.equal(snapshot.records[4].afterMvuData.marker, 'after');
-assert.equal(evidence.snapshot('other-chat'), null);
+assert.equal((await evidence.snapshot('other-chat')), null);
 // A late callback from an old chat is ignored before it can pollute memory.
 evidence.append({ chatId: 'old-chat', nodeId: 'n-old', requestId: 'late', stage: 'response', response: 'old response' });
-assert.equal(evidence.snapshot('chat-6').records.some(record => record.requestId === 'late'), false);
+assert.equal((await evidence.snapshot('chat-6')).records.some(record => record.requestId === 'late'), false);
 const retained = new TowerGenerationEvidence();
 retained.retainChat('chat-retention');
 for (let index = 0; index < 70; index += 1) {
@@ -31,14 +31,14 @@ for (let index = 0; index < 70; index += 1) {
   retained.append({ chatId: 'chat-retention', nodeId: 'n', requestId: `r-${index}`, stage: 'response', response: `response-${index}` });
   retained.append({ chatId: 'chat-retention', nodeId: 'n', requestId: `r-${index}`, stage: 'outcome', outcome: { index } });
 }
-const retainedSnapshot = retained.snapshot('chat-retention');
-assert.ok(retainedSnapshot.retention.droppedRecords > 0);
+const retainedSnapshot = (await retained.snapshot('chat-retention'));
+assert.ok(retainedSnapshot.retention.droppedRecords === 0);
 for (const requestId of new Set(retainedSnapshot.records.map(record => record.requestId))) {
   assert.equal(retainedSnapshot.records.filter(record => record.requestId === requestId).length, 3, `request group ${requestId} must remain complete`);
 }
-const restored = new TowerGenerationEvidence(() => 99);
+const restored = new TowerGenerationEvidence();
 restored.retainChat('chat-6', snapshot);
-assert.deepEqual(restored.snapshot('chat-6'), snapshot);
+assert.deepEqual((await restored.snapshot('chat-6')), snapshot);
 
 
 const callbacks = [];
@@ -72,7 +72,7 @@ evidence.retainChat('chat-new');
 await new Promise(resolve => setTimeout(resolve, 0));
 resolveLate(JSON.stringify({ late: true }));
 await late;
-assert.equal(evidence.snapshot('chat-new').records.some(record => record.requestId === 'late-host'), false);
+assert.equal((await evidence.snapshot('chat-new')).records.some(record => record.requestId === 'late-host'), false);
 
 const job = { nodeId: 'n6', requestId: 'req-6', basedOnRevision: 2, kind: 'battle', act: 1, floor: 6 };
 const nodePrompt = formatTowerNodeStructureRepairPrompt(job, '{"reward":[]}', new Error('tower battle reward must be an object'));
@@ -85,4 +85,4 @@ console.log('tower generation evidence + reward repair contract: ok');
 evidence.retainChat('manual');
 evidence.append({chatId:'manual',nodeId:'manual-variable-repair',requestId:'manual-1',stage:'request',prompt:'把时间改为第二天'});
 evidence.append({chatId:'manual',nodeId:'manual-variable-repair',requestId:'manual-1',stage:'response',response:'原文'.repeat(20000)});
-const recent=evidence.recent('manual',1);assert.equal(recent.total,2);assert.equal(recent.records.length,1);assert.equal(recent.records[0].kind,'自然语言修改');assert.equal(recent.records[0].text.length,40000);assert.equal(evidence.snapshot('manual').records.length,2);
+const recent=await evidence.recent('manual',1);assert.equal(recent.total,2);assert.equal(recent.records.length,1);assert.equal(recent.records[0].kind,'自然语言修改');assert.equal((await evidence.loadRecord('manual',recent.records[0].key)).response.length,40000);assert.equal((await evidence.snapshot('manual')).records.length,2);

@@ -4,7 +4,8 @@ export interface EvidenceListRecord {
   stage: string;
   kind: string;
   recordedAt: number;
-  text: string;
+  text?: string;
+  characters?: number;
 }
 
 /** Bounded DOM only. Export continues to use the untouched complete archive. */
@@ -12,6 +13,7 @@ export function renderGenerationEvidencePage(
   container: HTMLElement,
   page: { total: number; records: EvidenceListRecord[] },
   loadMore: () => void,
+  loadRecord?: (key: string) => Promise<{ text: string; full: unknown }>,
 ): void {
   const doc = container.ownerDocument;
   const open = new Set(Array.from(container.querySelectorAll<HTMLDetailsElement>('details[open]')).map(el => el.dataset.evidenceKey));
@@ -27,17 +29,41 @@ export function renderGenerationEvidencePage(
     summary.title = record.requestId;
     const pre = doc.createElement('pre');
     const more = doc.createElement('button'); more.type = 'button'; more.textContent = '继续显示这条原文'; more.hidden = true;
-    let shown = 0;
+    const download = doc.createElement('button'); download.type = 'button'; download.textContent = '下载这条完整记录'; download.hidden = true;
+    let shown = 0, text = record.text, full: unknown = record.text, loading = false;
     const reveal = () => {
-      const next = Math.min(record.text.length, shown + 12000);
-      pre.append(doc.createTextNode(record.text.slice(shown,next)));
-      shown = next; more.hidden = shown >= record.text.length;
+      if (text === undefined) return;
+      const next = Math.min(text.length, shown + 12000);
+      pre.append(doc.createTextNode(text.slice(shown,next)));
+      shown = next; more.hidden = shown >= text.length; download.hidden = false;
     };
-    detail.append(summary, pre, more);
-    detail.addEventListener('toggle', () => { if (detail.open && shown === 0) reveal(); });
-    more.addEventListener('click', reveal);
+    const openRecord = async () => {
+      if (loading) return;
+      if (text !== undefined) { if (!shown) reveal(); return; }
+      loading = true; pre.textContent = '正在读取并校验原文…'; more.hidden = true;
+      try {
+        if (!loadRecord) throw Error('原文读取接口不可用，请刷新页面');
+        const loaded = await loadRecord(record.key);
+        if (!container.contains(detail)) return;
+        text = loaded.text; full = loaded.full; pre.textContent = ''; more.textContent = '继续显示这条原文'; reveal();
+      } catch (error) {
+        if (!container.contains(detail)) return;
+        pre.textContent = error instanceof Error ? error.message : String(error);
+        more.textContent = '重试读取原文'; more.hidden = false;
+      } finally { loading = false; }
+    };
+    detail.append(summary, pre, more, download);
+    detail.addEventListener('toggle', () => { if (detail.open && shown === 0) void openRecord(); });
+    more.addEventListener('click', () => { if (text === undefined) void openRecord(); else reveal(); });
+    download.addEventListener('click', () => {
+      if (full === undefined) return;
+      const blob = new Blob([typeof full === 'string' ? full : JSON.stringify(full, null, 2)], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob), link = doc.createElement('a');
+      link.href = url; link.download = `mwg-generation-record-${record.recordedAt}.json`; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
     container.append(detail);
-    if (open.has(record.key)) { detail.open = true; reveal(); }
+    if (open.has(record.key)) { detail.open = true; void openRecord(); }
   }
   if (page.records.length < page.total) {
     const button = doc.createElement('button'); button.type = 'button'; button.textContent = '加载更早的 5 条';

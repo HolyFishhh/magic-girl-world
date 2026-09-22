@@ -863,6 +863,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
     };
 
     let evidenceHistorySignature = '';
+    let evidenceHistoryRequest = 0;
     let evidenceHistoryLimit = 5;
     let evidenceHistoryChat: string | null = null;
     const readEvidenceProvider = (): any => registryHost.MagicGirlDesignAssistant || host.MagicGirlDesignAssistant || null;
@@ -972,15 +973,47 @@ function summarizeMvuUpdate(result: unknown): string[] {
     const renderEvidenceHistory = (): void => {
       const container = root?.querySelector<HTMLElement>('[data-mwg-evidence-history]');
       if (!container || !monitorState.settingsVisible) return;
-      if (evidenceHistoryChat !== monitorState.chatId) { evidenceHistoryChat = monitorState.chatId; evidenceHistoryLimit = 5; evidenceHistorySignature = ''; }
+      const chatId = monitorState.chatId;
+      if (evidenceHistoryChat !== chatId) { evidenceHistoryChat = chatId; evidenceHistoryLimit = 5; evidenceHistorySignature = ''; container.replaceChildren(); }
       const provider = readEvidenceProvider();
-      if (typeof provider?.getRecentGenerationEvidence !== 'function') { container.textContent = '请刷新页面加载新版原文列表；完整记录仍可导出。'; return; }
-      const page = provider.getRecentGenerationEvidence(evidenceHistoryLimit);
-      if (page.chatId !== monitorState.chatId) return;
-      const signature = JSON.stringify([page.chatId, page.total, evidenceHistoryLimit, page.records.map((r: any) => [r.key,r.recordedAt,r.text.length])]);
+      if (typeof provider?.getRecentGenerationEvidence !== 'function') { container.textContent = '生成记录组件尚未就绪，请刷新完整酒馆页面。'; return; }
+      const signature = JSON.stringify([chatId, evidenceHistoryLimit, provider.getGenerationEvidenceStatus?.()]);
       if (signature === evidenceHistorySignature && container.childElementCount) return;
       evidenceHistorySignature = signature;
-      renderGenerationEvidencePage(container, page, () => { evidenceHistoryLimit += 5; renderEvidenceHistory(); });
+      const request = ++evidenceHistoryRequest;
+      const current = () => request === evidenceHistoryRequest && monitorState.chatId === chatId && root?.contains(container);
+      if (!container.childElementCount) container.textContent = '正在读取生成记录索引…';
+      void Promise.resolve().then(() => provider.getRecentGenerationEvidence(evidenceHistoryLimit)).then(page => {
+        if (!current() || page.chatId !== chatId) return;
+        renderGenerationEvidencePage(container, page,
+          () => { evidenceHistoryLimit += 5; renderEvidenceHistory(); },
+          async key => {
+            const record = await provider.getGenerationEvidenceRecord(key);
+            if (!current()) throw new Error('聊天或列表已变化，已取消旧原文读取');
+            return { text: record.prompt ?? record.response ?? JSON.stringify({ outcome: record.outcome, error: record.error }, null, 2), full: record };
+          });
+        const status = container.ownerDocument.createElement('small');
+        status.textContent = page.storage?.error
+          ? `文件保存未完成：${page.storage.error}。未归档原文仍保留在聊天内。`
+          : page.storage?.pending ? `有 ${page.storage.pending} 条爬塔或修改记录尚未归档，原文仍保留在聊天内。` : '爬塔及修改记录归档后保存在本地酒馆文件中，展开时读取并校验；开局记录沿用原存储方式。';
+        container.prepend(status);
+        if (page.storage?.error || page.storage?.pending) {
+          const retry = container.ownerDocument.createElement('button'); retry.type = 'button'; retry.textContent = '重试保存完整记录';
+          retry.addEventListener('click', () => {
+            retry.disabled = true;
+            void Promise.resolve().then(() => provider.retryGenerationEvidenceArchive()).then(() => {
+              if (current()) { evidenceHistorySignature = ''; renderEvidenceHistory(); }
+            }).catch(error => { if (current()) status.textContent = diagnosticText(error); })
+              .finally(() => { retry.disabled = false; });
+          });
+          container.prepend(retry);
+        }
+      }).catch(error => {
+        if (!current()) return;
+        container.textContent = diagnosticText(error instanceof Error ? error.message : error);
+        const retry = container.ownerDocument.createElement('button'); retry.type = 'button'; retry.textContent = '重试读取记录';
+        retry.addEventListener('click', () => { evidenceHistorySignature = ''; renderEvidenceHistory(); }); container.append(retry);
+      });
     };
     const renderMvuProcess = (): void => {
       // Generation evidence is diagnostic UI only. A malformed retained record
@@ -1569,31 +1602,36 @@ function summarizeMvuUpdate(result: unknown): string[] {
           .then(() => { if (feedback) feedback.textContent = '轻量排查信息已复制（不含原文）'; })
           .catch(() => { if (feedback) feedback.textContent = '复制不可用，请点击导出排查记录'; });
       });
-      root.querySelector('[data-action="export-generation-diagnostic"]')?.addEventListener('click', () => {
-        const report = api.getDiagnosticExportReport();
-        const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json;charset=utf-8' });
-        const url = URL.createObjectURL(blob), link = doc.createElement('a');
-        link.href = url; link.download = `mwg-generation-diagnostic-${Date.now()}.json`; link.click();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      const exportRecords = async (button: HTMLButtonElement, diagnostic: boolean): Promise<void> => {
+        if (button.disabled) return;
+        const exportChatId = monitorState.chatId;
         const feedback = root?.querySelector<HTMLElement>('[data-mwg-diagnostic-feedback]');
-        if (feedback) feedback.textContent = report.towerEvidence?.records?.some((record: any) => record.stage === 'response')
-          ? '已导出含爬塔响应原文的排查记录；分享前请检查剧情和变量隐私。'
-          : report.originalResponse.availability === 'available'
-          ? '已导出含本次保留原文的排查记录；分享前请检查生成内容中的隐私。'
-          : `已导出排查记录；没有可确认的原始响应：${report.originalResponse.reason}`;
-      });
-      root.querySelector('[data-action="export-generation-evidence"]')?.addEventListener('click', () => {
-        const history = readEvidenceHistory();
-        const towerHistory = readTowerEvidenceHistory();
-        const exportValue = { initialGeneration: history || { runs: [] }, towerGeneration: towerHistory || { records: [] } };
-        const blob = new Blob([JSON.stringify(exportValue, null, 2)], { type: 'application/json;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const link = doc.createElement('a');
-        link.href = url;
-        link.download = `mwg-generation-records-${Date.now()}.json`;
-        link.click();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-      });
+        button.disabled = true; const label = button.textContent; button.textContent = '正在读取并校验记录…';
+        try {
+          const initial = diagnostic ? null : readEvidenceHistory();
+          const report = diagnostic ? await api.getDiagnosticExportReport()
+            : { initialGeneration: initial || { runs: [] }, towerGeneration: await readTowerEvidenceHistory() || { records: [] } };
+          if (monitorState.chatId !== exportChatId) throw new Error('聊天已切换，已取消旧记录导出');
+          const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json;charset=utf-8' });
+          const url = URL.createObjectURL(blob), link = doc.createElement('a');
+          link.href = url; link.download = `mwg-generation-${diagnostic ? 'diagnostic' : 'records'}-${Date.now()}.json`; link.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+          if (feedback) feedback.textContent = diagnostic && report.originalResponse?.availability !== 'available' && !report.towerEvidence?.records?.some((record: any) => record.stage === 'response')
+            ? `已导出排查记录；没有可确认的原始响应：${report.originalResponse?.reason || '原文未保留'}`
+            : '已导出完整保留记录；分享前请检查剧情和变量隐私。';
+        } catch (error) {
+          if (monitorState.chatId === exportChatId) {
+            const message = diagnosticText(error instanceof Error ? error.message : error);
+            if (feedback) feedback.textContent = `导出失败：${message}`;
+            host.toastr?.error?.(message, '生成记录导出失败');
+          }
+        } finally { button.disabled = false; button.textContent = label; }
+      };
+      for (const action of ['export-generation-diagnostic', 'export-generation-evidence']) {
+        root.querySelector<HTMLButtonElement>(`[data-action="${action}"]`)?.addEventListener('click', event => {
+          void exportRecords(event.currentTarget as HTMLButtonElement, action === 'export-generation-diagnostic');
+        });
+      }
       root.querySelector('[data-action="open-settings"]')?.addEventListener('click', () => {
         if (root?.dataset.dragged === 'true') {
           root.dataset.dragged = 'false';
@@ -2193,8 +2231,10 @@ function summarizeMvuUpdate(result: unknown): string[] {
           elapsedMs: Math.max(0, (latest.finishedAt || Date.now()) - latest.startedAt),
           recentRequests: history.filter(entry => entry.generationId !== latest.generationId) };
       },
-      getDiagnosticExportReport: () => {
-        const retainedTowerHistory = readTowerEvidenceHistory();
+      getDiagnosticExportReport: async () => {
+        const exportChatId = monitorState.chatId, exportGenerationId = monitorState.generationId;
+        const retainedTowerHistory = await readTowerEvidenceHistory();
+        if (monitorState.chatId !== exportChatId || monitorState.generationId !== exportGenerationId) throw new Error('聊天或生成轮次已变化，已取消旧排查记录导出');
         const towerEvidence = retainedTowerHistory?.chatId === monitorState.chatId
           ? retainedTowerHistory : null;
         const diagnostic = api.getDiagnosticReport();

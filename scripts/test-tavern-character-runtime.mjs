@@ -320,7 +320,7 @@ context.MagicGirlDesignAssistant = evidenceProvider;
 context.window.parent.MagicGirlDesignAssistant = evidenceProvider;
 context.MagicGirlWorldMvuMonitor.resetForChat('diagnostic-current-chat');
 context.MagicGirlWorldMvuMonitor.begin({ generationId: 'diagnostic-matching-run' });
-const matchingExport = sharedRuntime.getGenerationDiagnosticExportReport();
+const matchingExport = (await sharedRuntime.getGenerationDiagnosticExportReport());
 assert.equal(matchingExport.spec, 'mwg.generation-diagnostic-export/v2');
 assert.equal(matchingExport.localOnly, true);
 assert.equal(matchingExport.evidence.availability, 'available');
@@ -336,9 +336,9 @@ assert.doesNotMatch(JSON.stringify(matchingExport), /OTHER_RUN_MUST_NOT_LEAK|mus
 
 // Primary diagnostic export also carries same-chat tower raw evidence.
 evidenceProvider.getTowerGenerationEvidence = () => ({chatId:'diagnostic-current-chat',records:[{requestId:'tower-6',stage:'response',response:'{"reward":[]}'}]});
-assert.equal(sharedRuntime.getGenerationDiagnosticExportReport().towerEvidence.records[0].response, '{"reward":[]}');
+assert.equal((await sharedRuntime.getGenerationDiagnosticExportReport()).towerEvidence.records[0].response, '{"reward":[]}');
 evidenceProvider.getTowerGenerationEvidence = () => ({chatId:'foreign-chat',records:[{response:'FOREIGN_TOWER'}]});
-assert.equal(sharedRuntime.getGenerationDiagnosticExportReport().towerEvidence, null);
+assert.equal((await sharedRuntime.getGenerationDiagnosticExportReport()).towerEvidence, null);
 delete evidenceProvider.getTowerGenerationEvidence;
 
 // A page refresh can lose the lightweight local record while current-chat
@@ -349,7 +349,7 @@ retainedEvidence = {
   runs: [{ generationId: 'persisted-after-refresh', startedAt: 31, updatedAt: 32, outcome: 'completed',
     records: [{ stage: 'compiled-result', text: 'PERSISTED_CURRENT_CHAT_ORIGINAL', characters: 30, truncated: false, capturedAt: 32 }], validationErrors: [] }],
 };
-const refreshedExport = sharedRuntime.getGenerationDiagnosticExportReport();
+const refreshedExport = (await sharedRuntime.getGenerationDiagnosticExportReport());
 assert.equal(refreshedExport.diagnostic.availability, 'missing');
 assert.equal(refreshedExport.evidence.availability, 'available');
 assert.equal(refreshedExport.evidence.association, 'current-chat-retained-evidence-without-lightweight-diagnostic');
@@ -362,7 +362,7 @@ retainedEvidence = null;
 const liveFallback = `LIVE_OUTPUT_${'字'.repeat(12_345)}`;
 context.MagicGirlWorldMvuMonitor.begin({ generationId: 'live-fallback-run' });
 context.MagicGirlWorldMvuMonitor.complete(liveFallback, 'live-fallback-run');
-const liveFallbackExport = sharedRuntime.getGenerationDiagnosticExportReport();
+const liveFallbackExport = (await sharedRuntime.getGenerationDiagnosticExportReport());
 assert.equal(liveFallbackExport.evidence.availability, 'available');
 assert.equal(liveFallbackExport.evidence.association, 'matching-live-monitor-output-fallback');
 assert.equal(liveFallbackExport.evidence.liveOutput.text, liveFallback);
@@ -379,7 +379,7 @@ retainedEvidence = {
   runs: [{ generationId: 'diagnostic-matching-run', startedAt: 1, updatedAt: 2, outcome: 'failed',
     records: [{ stage: 'provider-final', text: 'OTHER_CHAT_MUST_NOT_LEAK', characters: 26, truncated: false, capturedAt: 2 }], validationErrors: [] }],
 };
-const foreignChatExport = sharedRuntime.getGenerationDiagnosticExportReport();
+const foreignChatExport = (await sharedRuntime.getGenerationDiagnosticExportReport());
 assert.equal(foreignChatExport.evidence.availability, 'missing');
 assert.match(foreignChatExport.evidence.reason, /其他聊天/);
 assert.doesNotMatch(JSON.stringify(foreignChatExport), /OTHER_CHAT_MUST_NOT_LEAK/);
@@ -388,7 +388,7 @@ retainedEvidence = {
   runs: [{ generationId: 'different-run', startedAt: 1, updatedAt: 2, outcome: 'failed',
     records: [{ stage: 'provider-final', text: 'OTHER_GENERATION_MUST_NOT_LEAK', characters: 31, truncated: false, capturedAt: 2 }], validationErrors: [] }],
 };
-const foreignRunExport = sharedRuntime.getGenerationDiagnosticExportReport();
+const foreignRunExport = (await sharedRuntime.getGenerationDiagnosticExportReport());
 assert.equal(foreignRunExport.evidence.availability, 'missing');
 assert.match(foreignRunExport.evidence.reason, /没有保留完整原文/);
 assert.doesNotMatch(JSON.stringify(foreignRunExport), /OTHER_GENERATION_MUST_NOT_LEAK/);
