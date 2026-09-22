@@ -4909,6 +4909,14 @@
                 "retain",
                 "exhaust"
               ]
+            },
+            "removable": {
+              "type": "boolean",
+              "description": "false: cannot permanently remove the owned card; combat removal still works and the original survives battle."
+            },
+            "transformable": {
+              "type": "boolean",
+              "description": "false: cannot transform in or out of battle; independent of removal permission."
             }
           }
         },

@@ -1,3 +1,4 @@
+import { canPermanentlyRemoveCard } from '../game-core/cardLifecycle';
 import {
   executeNonCombatDeckPlan,
   migratePersistentRunDeck,
@@ -269,7 +270,7 @@ function showFrozenAction(
 }
 
 export async function choosePendingCardRemoval(stat: JsonRecord, remaining: number, signal?: AbortSignal): Promise<string | null> {
-  const cards = migratePersistentRunDeck(flattenMvuArray<JsonRecord>(stat.battle?.cards));
+  const cards = migratePersistentRunDeck(flattenMvuArray<JsonRecord>(stat.battle?.cards)).filter(canPermanentlyRemoveCard);
   if (!cards.length) return null;
   const indexes = await chooseIndexes(globalThis.document, '获得删卡机会 · 选择要永久移除的卡牌',
     `剩余 ${remaining} 次。确认后立即移除所选实例；返回不会消耗次数，可从角色面板继续处理。`, cards, 1, 'card', stat, signal);

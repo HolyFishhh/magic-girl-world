@@ -1,3 +1,4 @@
+import { canPermanentlyRemoveCard, canTransformCard } from './cardLifecycle';
 import {
   appendCardPatch,
   clearCardPatches,
@@ -60,6 +61,7 @@ export interface ProgressionCard extends PatchableCard {
 }
 
 export interface PersistentCardCarrier extends Record<string, any> {
+  lifecycle?: import('./cardLifecycle').CardLifecycle;
   id?: string;
   originalId?: string;
   templateId?: string;
@@ -263,6 +265,7 @@ export function applyPersistentDeckMutation<TCard extends PersistentCardCarrier>
   const source = cards[index];
 
   if (mutation.kind === 'remove') {
+    if (!canPermanentlyRemoveCard(source)) throw new Error(`卡牌“${source.name || source.id}”不可永久移除`);
     cards.splice(index, 1);
     return {
       cards,
@@ -293,6 +296,7 @@ export function applyPersistentDeckMutation<TCard extends PersistentCardCarrier>
     return { cards, sourceRunInstanceId: source.runInstanceId, createdRunInstanceId };
   }
 
+  if (!canTransformCard(source)) throw new Error(`卡牌“${source.name || source.id}”不可变形`);
   if (!mutation.replacement || typeof mutation.replacement !== 'object' || Array.isArray(mutation.replacement)) {
     throw new Error('persistent card transform requires a replacement card');
   }

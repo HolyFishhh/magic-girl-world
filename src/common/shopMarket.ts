@@ -1,4 +1,5 @@
 import type { RunState } from '../game-core';
+import { canPermanentlyRemoveCard } from '../game-core/cardLifecycle';
 import { migratePersistentRunDeck, recommendShopPrice, towerShopRemovalPrice } from '../game-core';
 import { inspectRewardCandidates, normalizeMvuList, readRewardLimits, type RewardCategory } from './rewardTransactions';
 import { pinSelectionToVisibleViewport } from './fixedSelectionViewport';
@@ -48,7 +49,7 @@ export function renderShopMarket(options: ShopMarketOptions): void {
   const inspections = inspectRewardCandidates(stat),
     limits = readRewardLimits(stat);
   const removalPrice = towerShopRemovalPrice(run);
-  const deck = migratePersistentRunDeck(normalizeMvuList<Record<string, any>>(stat.battle?.cards));
+  const deck = migratePersistentRunDeck(normalizeMvuList<Record<string, any>>(stat.battle?.cards)).filter(canPermanentlyRemoveCard);
   const names = { cards: '卡牌', artifacts: '遗物', items: '药水与道具' };
   const row = (category: RewardCategory) => {
     const goods = candidates[category]

@@ -3,6 +3,7 @@ import type { BattleRequest } from './battleContract';
 import { roundBattleValue } from './battleMath';
 import type { PlayedCardDestination } from './cardRules';
 import { getCardSourceId } from './cardRules';
+import { canPermanentlyRemoveCard } from './cardLifecycle';
 import {
   appendCardToZone,
   insertCardIntoZone,
@@ -1125,6 +1126,10 @@ export class BattleStateStore {
   }
 
   public purgeOwnedCard(card: Card): void {
+    const owned = this.gameState.player.deck.find(entry => entry.runInstanceId === card.runInstanceId);
+    // Check both the combat incarnation and its owned original: transformation
+    // during this battle must not erase the original's removal permission.
+    if (!canPermanentlyRemoveCard(card) || (owned && !canPermanentlyRemoveCard(owned))) return;
     // Temporary copies share lineage but must never delete their original.
     if (card.runInstanceId && !(card.origin === 'copied' && card.parentCombatInstanceId) && this.gameState.player.deck.some(c => c.runInstanceId === card.runInstanceId)) {
       this.gameState.purgedRunInstanceIds = [...new Set([...(this.gameState.purgedRunInstanceIds || []), card.runInstanceId])];

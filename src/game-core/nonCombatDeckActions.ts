@@ -1,3 +1,4 @@
+import { canPermanentlyRemoveCard, canTransformCard } from './cardLifecycle';
 import {
   applyPersistentDeckMutation,
   migratePersistentRunDeck,
@@ -71,7 +72,9 @@ function candidates<T extends PersistentCardCarrier>(cards: readonly T[], action
     ids = new Set(action.filter?.ids || []),
     types = new Set(action.filter?.types || []);
   return deck.filter(
-    c => (!ids.size || ids.has(c.id) || ids.has(c.templateId)) && (!types.size || types.has(String((c as any).type))),
+    c => (action.kind !== 'remove' || canPermanentlyRemoveCard(c))
+      && (action.kind !== 'transform' || canTransformCard(c))
+      && (!ids.size || ids.has(c.id) || ids.has(c.templateId)) && (!types.size || types.has(String((c as any).type))),
   );
 }
 export function planNonCombatDeckAction<T extends PersistentCardCarrier>(

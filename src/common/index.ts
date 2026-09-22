@@ -30,6 +30,7 @@ import { collectSummonDisplayNames } from '../game-core/summonDisplayNames';
 import { renderStoryPanel } from '../runtime/storyPanel';
 import { bindRewardSelectionSurface, createRewardSelectionOption, refreshRewardSelectionSurfaces, rewardPreviewLabel } from '../shared/rewardSelectionInteraction';
 import { continueExpeditionStory } from './expeditionContinuation';
+import { canPermanentlyRemoveCard, canTransformCard } from '../game-core/cardLifecycle';
 import {
   getCurrentChatMessageText,
   getCurrentMessageVariableOptions,
@@ -2531,8 +2532,8 @@ function renderRunData(stat: any): void {
         addButton(`升级 · ${name}`, 'run-choice run-upgrade', () => void requestRestUpgrade(node, card));
       }
       addButton(`复制 · ${name}`, 'run-choice run-duplicate', () => void duplicateRestCard(card));
-      addButton(`移除 · ${name}`, 'run-choice run-remove', () => void removeRestCard(card));
-      addButton(`变形 · ${name}`, 'run-choice run-transform', () => void requestRestTransform(node, card));
+      if (canPermanentlyRemoveCard(card)) addButton(`移除 · ${name}`, 'run-choice run-remove', () => void removeRestCard(card));
+      if (canTransformCard(card)) addButton(`变形 · ${name}`, 'run-choice run-transform', () => void requestRestTransform(node, card));
     });
     if (cards.length === 0) currentEl.textContent += ' · 没有可处理的卡牌';
     return;
@@ -3333,7 +3334,7 @@ function renderBattleData(rpgData: any) {
           <div class="collection-card" data-card-id="${escapeHtml(card.id || '')}">
             ${renderCollectionCard(card)}
             ${archetypeMeta}
-            <button type="button" class="card-delete-btn" data-card-instance-id="${escapeHtml(card.runInstanceId)}" title="永久移除${escapeHtml(card.name || '这张卡牌')}" hidden>移除这张</button>
+            ${canPermanentlyRemoveCard(card) ? `<button type="button" class="card-delete-btn" data-card-instance-id="${escapeHtml(card.runInstanceId)}" title="永久移除${escapeHtml(card.name || '这张卡牌')}" hidden>移除这张</button>` : ''}
           </div>`;
         })
         .join('');

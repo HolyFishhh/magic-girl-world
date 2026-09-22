@@ -1,5 +1,6 @@
 import { planCardSelection, resolveCardSelection, type CardSelectionMode } from './cardSelection';
 import { hasCardHitTarget, hasCardValueTarget } from './cardValueTransform';
+import { canTransformCard } from './cardLifecycle';
 import {
   planCardZoneOperation,
   type CardZoneOperationPlan,
@@ -632,7 +633,7 @@ export class CardEffectRuntime {
     command: Extract<CardEffectCommand, { type: 'transform_cards' }>,
     context: CardEffectRuntimeContext,
   ): Promise<Card[]> {
-    const selected = await this.selectCards(command.selector, 'transform', context);
+    const selected = await this.selectCards(command.selector, 'transform', context, canTransformCard);
     const all = Object.values(this.state.readCardZoneState()).flat();
     if (selected.length && (command.replacement.unique === true && selected.length > 1
       || all.some(card => !selected.some(picked => picked.id === card.id)

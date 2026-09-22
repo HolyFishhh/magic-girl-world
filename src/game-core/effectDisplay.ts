@@ -1,4 +1,5 @@
 export { describeOpeningDeckTransforms } from './towerOpeningTransforms';
+import { describeCardTraits } from './cardLifecycle';
 import { describeEffectTarget as targetName } from './effectTargetDisplay';
 import { describeSummonPlayRequirement } from './summonPlayRequirementDisplay';
 import { describeResourceHalf } from './resourceAssignmentDisplay';
@@ -486,7 +487,7 @@ function generatedCardReference(card: import('./effectDsl').GeneratedCardDefinit
   const discarded = card.discardProgram && depth < 8
     ? effectProgramToDisplayTags(card.discardProgram, { ...context, referenceDepth: depth + 1 }) : [];
   return { id: card.id, name: card.name, card, flavor: card.description,
-    rules: [...tags.map(tag => tag.text), ...(discarded.length ? [`此牌被战斗效果弃掉后，${discarded.map(tag => tag.text).join('；')}`] : [])].join('；') || '请在牌库中查看此循环引用卡牌的规则',
+    rules: [...describeCardTraits(card).map(trait => `${trait.name}：${trait.detail}`), ...tags.map(tag => tag.text), ...(discarded.length ? [`此牌被战斗效果弃掉后，${discarded.map(tag => tag.text).join('；')}`] : [])].join('；') || '请在牌库中查看此循环引用卡牌的规则',
     references: [...tags, ...discarded].flatMap(tag => [...(tag.reference ? [tag.reference] : []), ...(tag.references || [])]) };
 }
 

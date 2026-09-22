@@ -1,5 +1,6 @@
 import { createCardCopyIdentity } from './cardIdentity';
 import { inheritedCardAttachments } from './cardAttachment';
+import { canTransformCard } from './cardLifecycle';
 import {
   inheritedCardPatches,
   materializeCardPatches,
@@ -206,6 +207,7 @@ export function transformCardInstance<TCard extends PatchableCard>(
   replacement: Omit<TCard, 'id' | 'runInstanceId' | 'combatInstanceId' | 'patches' | 'patchBase' | 'attachments'>,
   policy: CardPatchInheritancePolicy = TRANSFORM_PATCH_POLICY,
 ): TCard {
+  if (!canTransformCard(source)) throw new Error('这张卡牌不可变形');
   const transformed = {
     ...structuredClone(replacement),
     id: source.id,
