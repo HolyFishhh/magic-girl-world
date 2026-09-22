@@ -287,6 +287,118 @@ for (const [trigger, cardType] of [
   cover(trigger);
 }
 
+resetAudit('card_played', {
+  enemy: {
+    block: 0,
+    abilities: [{
+      id: 'payment_collector', name: '费用征收', trigger: 'attack_played',
+      effectProgram: {
+        spec: 'mwg.effect/v1',
+        steps: [{ op: 'gain_block', target: 'self', amount: { op: 'var', path: 'context.spent_energy' } }],
+      },
+    }],
+  },
+});
+const paidAttack = { ...auditCard('paid_attack', 'Attack'), cost: 'energy' };
+store.updatePlayer({ hand: [paidAttack], deck: [paidAttack], resources: auditResource(5) });
+assert.equal(await cards.playCard(paidAttack.id), true);
+assert.equal(store.getEnemy().block, 3, 'enemy attack-played abilities read the actual energy paid by an X-cost card');
+const paidEvent = store.getGameState().eventJournal.events.find(event =>
+  event.kind === 'card_played' && event.phase === 'after' && event.cardInstanceId === paidAttack.id);
+assert.deepEqual(paidEvent.paidResources, { energy: 3 }, 'actual payment survives in the saved battle journal');
+const freeAttack = { ...auditCard('free_attack', 'Attack'), cost: 0 };
+store.updatePlayer({ hand: [freeAttack], deck: [freeAttack] });
+assert.equal(await cards.playCard(freeAttack.id), true);
+assert.equal(store.getEnemy().block, 3, 'a zero-cost card contributes zero instead of its card-face category or a default cost');
+
+resetAudit('card_played', {
+  enemy: {
+    block: 0,
+    abilities: [{
+      id: 'replay_payment_collector', name: '重放费用征收', trigger: 'attack_played',
+      effectProgram: { spec: 'mwg.effect/v1', steps: [{ op: 'gain_block', target: 'self', amount: { op: 'var', path: 'context.spent_energy' } }] },
+    }],
+  },
+});
+const replayPaidAttack = {
+  ...auditCard('replay_paid_attack', 'Attack'), cost: 2,
+  effectProgram: { spec: 'mwg.effect/v1', steps: [
+    { op: 'gain_block', target: 'self', amount: 1 },
+    { op: 'replay_current', count: 1 },
+  ] },
+};
+store.updatePlayer({ hand: [replayPaidAttack], deck: [replayPaidAttack] });
+assert.equal(await cards.playCard(replayPaidAttack.id), true);
+assert.equal(store.getEnemy().block, 2, 'the payment observer taxes the initial payment once and replay events pay zero');
+assert.deepEqual(store.getGameState().eventJournal.events.filter(event =>
+  event.kind === 'card_played' && event.phase === 'after' && event.cardInstanceId === replayPaidAttack.id,
+).map(event => event.paidEnergy), [2, 0]);
+
+resetAudit('on_discard');
+const slyCard = { ...auditCard('sly_card'), cost: 2, sly: true };
+store.updatePlayer({ hand: [slyCard], deck: [slyCard], energy: 0, block: 0 });
+assert.equal(await cards.discardCard(slyCard.id, 'effect'), true);
+assert.equal(store.getPlayer().block, 1, '灵巧弃牌即使无能量也免费完整打出');
+assert.equal(store.getPlayer().energy, 0);
+assert.equal(store.getGameState().eventJournal.events.filter(event =>
+  event.kind === 'card_played' && event.cardInstanceId === slyCard.id,
+).every(event => event.paidEnergy === 0), true);
+
+resetAudit('turn_end');
+const cleanupSly = { ...auditCard('cleanup_sly'), sly: true };
+store.updatePlayer({ hand: [cleanupSly], deck: [cleanupSly], block: 0 });
+await cards.discardHand();
+assert.equal(store.getPlayer().block, 0, '回合末自动弃牌不触发灵巧');
+assert.equal(store.getPlayer().discardPile.some(card => card.id === cleanupSly.id), true);
+
+resetAudit('on_discard');
+const abandoned = { ...auditCard('abandoned'), lifecycle: { on_discard: 'remove' }, runInstanceId: 'run_abandoned' };
+store.updatePlayer({ hand: [abandoned], deck: [abandoned] });
+assert.equal(await cards.discardCard(abandoned.id, 'effect'), true);
+assert.equal([...store.getPlayer().hand, ...store.getPlayer().drawPile, ...store.getPlayer().discardPile, ...store.getPlayer().exhaustPile]
+  .some(card => card.id === abandoned.id), false, '遗弃从所有战斗牌区移除且不进入可回收消耗区');
+assert.equal(store.getPlayer().deck.some(card => card.runInstanceId === 'run_abandoned'), true, '遗弃保留战后持有实例');
+
+resetAudit('turn_end');
+const forgotten = { ...auditCard('forgotten'), lifecycle: { on_discard: 'purge' }, runInstanceId: 'run_forgotten' };
+store.updatePlayer({ hand: [forgotten], deck: [forgotten] });
+await cards.discardHand();
+assert.equal(store.getPlayer().deck.some(card => card.runInstanceId === 'run_forgotten'), false, '回合清理触发遗忘并永久删除精确持有实例');
+assert.deepEqual(store.getGameState().purgedRunInstanceIds, ['run_forgotten']);
+const forgottenSnapshot = JSON.parse(JSON.stringify(store.getGameState()));
+store.replaceState(forgottenSnapshot);
+assert.equal(store.getPlayer().deck.some(card => card.runInstanceId === 'run_forgotten'), false,
+  '遗忘墓碑和精确删除在战斗快照恢复后保持不变');
+assert.deepEqual(store.getGameState().purgedRunInstanceIds, ['run_forgotten']);
+
+resetAudit('card_played');
+const playedForget = { ...auditCard('played_forget'), lifecycle: { on_discard: 'purge' }, runInstanceId: 'run_played_forget' };
+store.updatePlayer({ hand: [playedForget], deck: [playedForget] });
+assert.equal(await cards.playCard(playedForget.id), true);
+assert.equal(store.getPlayer().deck.some(card => card.runInstanceId === 'run_played_forget'), true,
+  '正常打出进入弃牌堆不算弃牌，不触发遗忘');
+
+resetAudit('turn_end');
+const retainedForget = { ...auditCard('retained_forget'), retain: true, lifecycle: { on_discard: 'purge' }, runInstanceId: 'run_retained_forget' };
+const voidForget = { ...auditCard('void_forget'), retain: true, ethereal: true, lifecycle: { on_discard: 'purge' }, runInstanceId: 'run_void_forget' };
+store.updatePlayer({ hand: [retainedForget, voidForget], deck: [retainedForget, voidForget] });
+await cards.discardHand();
+assert.equal(store.getPlayer().hand.some(card => card.id === retainedForget.id), true, '保留优先避免自动弃牌，因而不触发遗忘');
+assert.equal(store.getPlayer().exhaustPile.some(card => card.id === voidForget.id), true, '虚无优先于保留并直接消耗，不误触发遗忘');
+assert.equal(store.getPlayer().deck.length, 2);
+
+const voidAura = {
+  id: 'void_aura', name: '虚无领域', trigger: 'passive',
+  effectProgram: {
+    spec: 'mwg.effect/v1',
+    steps: [{ op: 'card_play_rule', target: 'opponent', rule: 'ethereal' }],
+  },
+};
+store.setEnemies([{ ...enemy(), abilities: [voidAura] }], 'trigger_target');
+assert.equal(executor.getCardPlayRules('player').some(rule => rule.rule === 'ethereal'), true, 'a living enemy grants the player dynamic ethereal');
+store.setEnemies([{ ...enemy(), currentHp: 0, abilities: [voidAura] }], 'trigger_target');
+assert.equal(executor.getCardPlayRules('player').some(rule => rule.rule === 'ethereal'), false, 'the aura disappears immediately when its exact enemy source dies');
+
 resetAudit('on_discard');
 {
   const card = auditCard('audit_discard_card');

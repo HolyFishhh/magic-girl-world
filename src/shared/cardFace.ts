@@ -6,7 +6,7 @@ import { renderRulePills } from './rulePills';
 /** Shared battle card face. Runtime cost/playability stays with the caller. */
 export function renderCardFace(cardData: CardDisplayMetadata & {
   id?: string; name?: string; rarity?: string; type?: string; emoji?: string; description?: string;
-  innate?: boolean; retain?: boolean; exhaust?: boolean; ethereal?: boolean;
+  innate?: boolean; retain?: boolean; exhaust?: boolean; ethereal?: boolean; sly?: boolean;
   lifecycle?: import('../game-core/cardLifecycle').CardLifecycle;
 }, options: {
   costLabel: string; costHtml?: string; rarityLabel: string; typeLabel: string;

@@ -118,6 +118,7 @@ export interface Card extends Partial<CardIdentity> {
   exhaust?: boolean;
   ethereal?: boolean;
   innate?: boolean;
+  sly?: boolean;
   doubleEffect?: boolean;
   origin?: CardOrigin;
   tags?: string[];
@@ -157,7 +158,7 @@ export interface Relic {
   /** Omitted for acquisition-only relics; battle trigger resolution treats them as no-ops. */
   effectProgram?: EffectProgram;
   emoji: string;
-  rarity: 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary' | 'Boss' | 'ENS';
+  rarity: 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary' | 'Corrupt' | 'Boss' | 'ENS';
   trigger?: string;
   eventQuery?: import('./battleEventJournal').EventTriggerQuery;
   onAcquire?: import('./nonCombatSettlement').NonCombatSettlementPlan;
@@ -596,8 +597,8 @@ export class BattleStateStore {
     return { ...result, copied: result.copied.map(unit => this.getSummonById(unit.instanceId) || unit) };
   }
 
-  public damageSummons(targetIds: readonly string[], amount: number, bypassBlock = false): SummonDamageResult {
-    const result = damageSummonUnits(this.readSummons(), targetIds, amount, bypassBlock);
+  public damageSummons(targetIds: readonly string[], amount: number, bypassBlock = false, preventHpLoss = false): SummonDamageResult {
+    const result = damageSummonUnits(this.readSummons(), targetIds, amount, bypassBlock, preventHpLoss);
     this.writeSummons(result.state, 'summons_damaged');
     return result;
   }

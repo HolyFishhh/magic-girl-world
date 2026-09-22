@@ -1,3 +1,4 @@
+import { expandBuiltinStatusDefinitions } from './builtinStatusCatalog';
 import { validateCombatResourceDefinitions } from './combatResource';
 import { resolveInitialCardReference } from './initialCardReference';
 import { INITIAL_DRAFT_SPEC, INITIAL_DRAFT_ROOT_FIELDS, collectInitialDraftEnvelopeIssues } from './initialDraftEnvelope';
@@ -127,7 +128,8 @@ function compileInitialDraft(input: unknown,
     statuses: new Map(), resources: new Map(), templates: new Map(),
   };
   for (const kind of ['statuses', 'resources', 'templates'] as const) {
-    const definitions = input.registry[kind];
+    const definitions = kind === 'statuses' && Array.isArray(input.registry.statuses)
+      ? expandBuiltinStatusDefinitions(input.registry.statuses, input) : input.registry[kind];
     if (!Array.isArray(definitions) || definitions.length > (kind === 'resources' ? 16 : 128)) {
       issue('INVALID_REGISTRY', ['registry', kind], ['registry', kind], '定义库必须是有界数组');
       continue;

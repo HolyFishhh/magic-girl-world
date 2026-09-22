@@ -20,11 +20,17 @@ const {createInitialDraftJsonSchema}=require(resolve('src/game-core/initialDraft
 const {resolveStartingHand}=require(resolve('src/game-core/cardRules.ts'));
 const {describeCardTraits}=require(resolve('src/game-core/cardLifecycle.ts'));
 assert.equal(createInitialDraftJsonSchema().value.$defs.mwgRewardCard.anyOf[0].properties.innate.type,'boolean');
+assert.equal(createInitialDraftJsonSchema().value.$defs.mwgRewardCard.anyOf[0].properties.sly.type,'boolean');
 const innate=adapter.convertMvuCards([{id:'engine',name:'开场引擎',type:'Skill',rarity:'Common',cost:1,quantity:1,innate:true,effects:{block:4}}]);
 assert.equal(innate[0].innate,true);
 const restoredInnate=JSON.parse(JSON.stringify(innate));
 assert.equal(resolveStartingHand(restoredInnate,0,x=>[...x]).hand[0].id,innate[0].id);
 assert.match(JSON.stringify(describeCardTraits(restoredInnate[0])),/固有/);
+const sly=adapter.convertMvuCards([{id:'flick',name:'翻飞',type:'Skill',rarity:'Common',cost:1,quantity:1,sly:true,lifecycle:{on_discard:'remove'},effects:{block:4}}]);
+assert.equal(sly[0].sly,true);
+assert.equal(sly[0].lifecycle.on_discard,'remove');
+assert.match(JSON.stringify(describeCardTraits(sly[0])),/灵巧/);
+assert.match(JSON.stringify(describeCardTraits(sly[0])),/遗弃/);
 
 assert.equal(adapter.convertMvuCards([{ id: 'old', name: '旧牌', effect: 'OP.hp - 8' }]).length, 0);
 assert.equal(adapter.convertMvuAbilities([{ id: 'old', effect: 'turn_end(ME.hp + 1)' }]).length, 0);

@@ -222,8 +222,9 @@ export class CardSystem {
           destination => { destinationOverride = destination; },
           replayIndex,
         ),
-        recordCardPlayEvent: (card, _payment, event) => {
+        recordCardPlayEvent: (card, payment, event) => {
           const state = this.gameStateManager.getGameState();
+          const actualSpent = event.replayIndex === 0 ? payment.spent : {};
           this.gameStateManager.recordBattleEvent({
             turn: state.currentTurn,
             phase: event.phase,
@@ -242,6 +243,9 @@ export class CardSystem {
             ...(card.tags ? { tags: [...card.tags] } : {}),
             ...(card.origin ? { origin: card.origin } : {}),
             upgraded: card.upgraded === true || (card.upgradeLevel || 0) > 0,
+            paidEnergy: event.replayIndex === 0 ? payment.spentEnergy : 0,
+            paidTotal: Object.values(actualSpent).reduce((sum, amount) => sum + amount, 0),
+            paidResources: { ...actualSpent },
             automatic: event.automatic,
             replayIndex: event.replayIndex,
           });
@@ -525,6 +529,7 @@ export class CardSystem {
             repeatCount = extendCardResolutionLimit(repeatCount, requestedReplays, replayIndex);
           }
           const current = this.gameStateManager.getGameState();
+          const actualSpent = replayIndex === 0 ? payment.spent : {};
           this.gameStateManager.recordBattleEvent({
             turn: current.currentTurn,
             phase,
@@ -540,6 +545,9 @@ export class CardSystem {
             ...(detached.tags ? { tags: [...detached.tags] } : {}),
             ...(detached.origin ? { origin: detached.origin } : {}),
             upgraded: detached.upgraded === true || (detached.upgradeLevel || 0) > 0,
+            paidEnergy: replayIndex === 0 ? payment.spentEnergy : 0,
+            paidTotal: Object.values(actualSpent).reduce((sum, amount) => sum + amount, 0),
+            paidResources: { ...actualSpent },
             automatic: true,
             replayIndex,
           });
@@ -649,13 +657,14 @@ export class CardSystem {
       const remaining = this.gameStateManager.removeOwnedCardFromZone(updated.id, 'discardPile');
       if (remaining) {
         if (discardDestination === 'exhaust') await this.exhaustCard(remaining, 'discardPile');
+        else if (discardDestination === 'remove') this.abandonCard(remaining);
         else this.purgeCard(remaining);
       }
       return;
     }
-    if (autoPlay) {
+    if (lifecycle.sly || autoPlay) {
       const played = await this.autoPlayCard(updated, 'discardPile', true);
-      if (!played && autoPlay.rule.failureDestination !== 'discard') {
+      if (!played && autoPlay && autoPlay.rule.failureDestination !== 'discard') {
         const stranded = this.gameStateManager.removeOwnedCardFromZone(updated.id, 'discardPile');
         if (stranded) {
           if (autoPlay.rule.failureDestination === 'exhaust') await this.exhaustCard(stranded, 'discardPile');
@@ -703,7 +712,12 @@ export class CardSystem {
       UnifiedEffectExecutor.getInstance().getCardPlayRules('player'),
       this.gameStateManager.getGameState().cardRuleUsesThisTurn || 0,
     );
-    const disposition = resolveTurnEndHandDisposition(player.hand, continuousRules.retainHand);
+    const allRules = UnifiedEffectExecutor.getInstance().getCardPlayRules('player');
+    const disposition = resolveTurnEndHandDisposition(
+      player.hand,
+      continuousRules.retainHand,
+      card => resolveActiveCardPlayRules(allRules, this.gameStateManager.getGameState().cardRuleUsesThisTurn || 0, card).ethereal,
+    );
 
     // 先移除本回合手牌，再触发消耗通知，防止触发器读取或覆盖旧手牌快照。
     this.gameStateManager.updatePlayer({ hand: disposition.keep });
@@ -730,6 +744,15 @@ export class CardSystem {
         to: 'discardPile',
         moveReason: 'turn_cleanup',
       });
+      const destination = resolveCardLifecycle(card).on_discard;
+      if (destination !== 'discard') {
+        const remaining = this.gameStateManager.removeOwnedCardFromZone(card.id, 'discardPile');
+        if (remaining) {
+          if (destination === 'exhaust') await this.exhaustCard(remaining, 'discardPile');
+          else if (destination === 'remove') this.abandonCard(remaining);
+          else this.purgeCard(remaining);
+        }
+      }
     }
 
     // 弃牌完成 - 移除日志减少输出
@@ -745,6 +768,11 @@ export class CardSystem {
     this.gameStateManager.purgeOwnedCard(card);
     this.presentation.animateCardDeparture(card, 'purge');
     this.presentation.addLog(`销毁卡牌：${card.name}（永久移除本张持有卡；临时副本不影响原卡）`, 'action');
+  }
+
+  private abandonCard(card: Card): void {
+    this.presentation.animateCardDeparture(card, 'remove');
+    this.presentation.addLog(`遗弃卡牌：${card.name}（移出本场战斗；战后原持有卡恢复）`, 'action');
   }
 
   public async executeCardEffectCommand(

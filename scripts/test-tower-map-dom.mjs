@@ -262,15 +262,32 @@ routeBoundarySnapshot.nodeContent[immediateId].phase = 'generating';
 routeBoundarySnapshot.nodeContent[laterNode.id].phase = 'ready';
 routeBoundarySnapshot.nodeContent[laterNode.id].content = { narrative: '后方篝火的预生成剧情' };
 let boundarySelections = 0;
+let reservedNode = '';
 const routeBoundaryController = mountTowerApp({
   root: routeBoundaryRoot,
   snapshot: routeBoundarySnapshot,
-  callbacks: { onNodeSelect: () => { boundarySelections += 1; } },
+  callbacks: {
+    onNodeSelect: () => { boundarySelections += 1; },
+    onPreparingNode: node => { reservedNode = node.id; },
+  },
 });
 const immediateButton = withDataset(routeBoundaryRoot, 'nodeId', immediateId)[0];
 const laterButton = withDataset(routeBoundaryRoot, 'nodeId', laterNode.id)[0];
 assert.ok(immediateButton.textContent.includes('准备中'), 'the direct next node distinguishes preparation from entry');
 assert.equal(immediateButton.classList.contains('can-enter'), false, 'a direct node remains non-enterable while preparing');
+assert.equal(immediateButton.classList.contains('can-reserve'), true, 'a direct preparing node may be reserved without entering');
+immediateButton.click();
+assert.equal(reservedNode, immediateId, 'only the live preparing route choice invokes reservation');
+assert.equal(withDataset(routeBoundaryRoot, 'nodeId', immediateId)[0].classList.contains('is-preselected'), true);
+assert.ok(withDataset(routeBoundaryRoot, 'nodeId', immediateId)[0].textContent.includes('已预选'));
+
+reservedNode = '';
+immediateButton.click();
+assert.equal(reservedNode, '', 'repeated clicks on the same preparing node do not repeat reservation notices');
+routeBoundarySnapshot.nodeContent[immediateId].phase = 'failed';
+routeBoundaryController.update(routeBoundarySnapshot);
+assert.equal(withDataset(routeBoundaryRoot, 'nodeId', immediateId)[0].classList.contains('can-reserve'), false,
+  'a failed preparation clears its reservation and never auto-enters');
 assert.ok(laterButton.textContent.includes('已备好·路线未到'), 'a future ready node states that its route has not arrived');
 assert.equal(laterButton.classList.contains('is-locked'), true);
 assert.equal(laterButton.classList.contains('can-enter'), false, 'a future ready node cannot skip its predecessor');

@@ -24,6 +24,8 @@ export interface ActiveCardPlayRules {
   extraReplays: number;
   retainHand: boolean;
   retainBlock: boolean;
+  /** Matching cards gain turn-end ethereal while the continuous source exists. */
+  ethereal: boolean;
   drawLimit?: number;
   blockGainLimit?: number;
   energyGainLimit?: number;
@@ -93,6 +95,7 @@ export function resolveActiveCardPlayRules(
   let extraReplays = 0;
   let retainHand = false;
   let retainBlock = false;
+  let ethereal = false;
   let drawLimit: number | undefined;
   let blockGainLimit: number | undefined;
   let energyGainLimit: number | undefined;
@@ -110,6 +113,7 @@ export function resolveActiveCardPlayRules(
   for (const rule of rules) {
     if (rule.rule === 'retain_hand') { retainHand = true; continue; }
     if (rule.rule === 'retain_block') { retainBlock = true; continue; }
+    if (rule.rule === 'ethereal' && (!rule.selector || matches(rule, card))) { ethereal = true; continue; }
     if (rule.rule === 'limit_draw') { drawLimit = tighten(drawLimit, numericLimit(rule)); continue; }
     if (rule.rule === 'limit_block_gain') { blockGainLimit = tighten(blockGainLimit, numericLimit(rule)); continue; }
     if (rule.rule === 'limit_energy_gain') { energyGainLimit = tighten(energyGainLimit, numericLimit(rule)); continue; }
@@ -147,6 +151,7 @@ export function resolveActiveCardPlayRules(
     extraReplays: Math.min(20, Math.max(0, Math.trunc(extraReplays))),
     retainHand,
     retainBlock,
+    ethereal,
     ...(drawLimit !== undefined ? { drawLimit } : {}),
     ...(blockGainLimit !== undefined ? { blockGainLimit } : {}),
     ...(energyGainLimit !== undefined ? { energyGainLimit } : {}),

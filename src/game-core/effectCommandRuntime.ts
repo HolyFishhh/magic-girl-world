@@ -132,6 +132,7 @@ export type EffectCommand =
       target: EffectTarget;
       targetSelector?: EnemyTargetSelector;
       stat: ModifierStat;
+      damageKind?: import('./battleEventJournal').DamageKind;
       operator: EffectModifierOperator;
       value: number;
     }
@@ -438,6 +439,7 @@ function createCommand(
       target: node.target,
       ...(node.targetSelector ? { targetSelector: clone(node.targetSelector) } : {}),
       stat: node.stat,
+      ...(node.damageKind ? { damageKind: node.damageKind } : {}),
       operator: node.operator,
       value: roundBattleValue(evaluateNumericExpression(node.value, state, context, `${path}.value`)),
     };

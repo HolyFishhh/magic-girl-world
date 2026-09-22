@@ -32,12 +32,14 @@ const continuous = core.resolveActiveCardPlayRules([
   rule('limit_draw', { limit: 0 }),
   rule('limit_block_gain', { limit: 4 }),
   rule('limit_energy_gain', { limit: 1 }),
+  rule('ethereal'),
 ], 0);
 assert.equal(continuous.retainHand, true);
 assert.equal(continuous.retainBlock, true);
 assert.equal(continuous.drawLimit, 0, 'zero is a valid rule limit');
 assert.equal(continuous.blockGainLimit, 4);
 assert.equal(continuous.energyGainLimit, 1);
+assert.equal(continuous.ethereal, true);
 
 const ordinary = { id: 'ordinary', name: 'Ordinary', type: 'Skill', cost: 1 };
 const ethereal = { id: 'ethereal', name: 'Ethereal', type: 'Skill', cost: 1, ethereal: true };
@@ -47,6 +49,17 @@ assert.deepEqual(core.resolveTurnEndHandDisposition([ordinary, ethereal, retaine
   discard: [],
   exhaust: [ethereal],
 }, 'retain_hand keeps the hand while Ethereal still exhausts');
+
+const auraRules = [rule('ethereal', { selector: selector({ name: 'Ordinary' }) })];
+assert.deepEqual(core.resolveTurnEndHandDisposition(
+  [ordinary, ethereal, retained],
+  true,
+  card => core.resolveActiveCardPlayRules(auraRules, 0, card).ethereal,
+), {
+  keep: [retained],
+  discard: [],
+  exhaust: [ordinary, ethereal],
+}, 'a dynamic ethereal aura overrides retention only for matching cards');
 
 const attack = { id: 'attack', name: 'Attack', type: 'Attack', rarity: 'Common', cost: 1, tags: ['strike'], templateId: 'attack' };
 const skill = { id: 'skill', name: 'Skill', type: 'Skill', rarity: 'Common', cost: 1, tags: ['guard'], templateId: 'skill' };
@@ -133,6 +146,7 @@ const compactCases = [
   { card_rule: 'allow_card_play', card_type: 'Curse' },
   { card_rule: 'limit_card_play', limit: 2, tag: 'strike' },
   { card_rule: 'card_destination', destination: 'exhaust', priority: 5, rarity: 'Rare' },
+  { card_rule: 'ethereal', to: 'opponent' },
 ];
 for (const compact of compactCases) {
   const compiled = core.compileCompactEffectList([compact]);
@@ -155,6 +169,12 @@ const passive = {
     steps: [{ op: 'card_play_rule', target: 'self', rule: 'retain_block' }],
   },
 };
+const auraTag = core.effectProgramToDisplayTags({
+  spec: core.EFFECT_PROGRAM_SPEC,
+  steps: [{ op: 'card_play_rule', target: 'opponent', rule: 'ethereal' }],
+})[0];
+assert.match(auraTag.text, /虚无/);
+assert.match(auraTag.text, /来源离场后解除/);
 const store = new core.BattleStateStore();
 store.updatePlayer({ abilities: [passive] });
 store.createSnapshot('rules');
@@ -165,7 +185,7 @@ assert.equal(core.resolveActiveCardPlayRules(restoredEvents, 0).retainBlock, tru
 
 const compactSchema = JSON.parse(await readFile(resolve('schemas/mwg-card-effects-v1.schema.json'), 'utf8'));
 const astSchema = JSON.parse(await readFile(resolve('schemas/mwg-effect-v1.schema.json'), 'utf8'));
-for (const name of ['retain_hand', 'retain_block', 'limit_draw', 'limit_block_gain', 'limit_energy_gain', 'deny_card_play', 'allow_card_play', 'limit_card_play', 'card_destination']) {
+for (const name of ['retain_hand', 'retain_block', 'limit_draw', 'limit_block_gain', 'limit_energy_gain', 'deny_card_play', 'allow_card_play', 'limit_card_play', 'card_destination', 'ethereal']) {
   assert.equal(compactSchema.$defs.cardPlayRuleEffect.properties.card_rule.enum.includes(name), true);
   assert.equal(astSchema.$defs.cardPlayRuleEffect.properties.rule.enum.includes(name), true);
 }

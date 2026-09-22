@@ -332,6 +332,11 @@ assert.equal(
   describeCompactStatus({ stun: true, stacks_change: 'reset', triggers: {} }),
   '持有时无法行动；回合结束后移除。',
 );
+const defenseStatusText = describeCompactStatus({ defense: { retaliate_attack: 'stacks' }, triggers: {} });
+assert.match(defenseStatusText, /受到攻击伤害包时反击自身层数点伤害/);
+assert.doesNotMatch(defenseStatusText, /仅记录状态层数/);
+const protectionStatusText = describeCompactStatus({ protection: { mode: 'intercept', scope: 'all_allies' }, triggers: {} });
+assert.doesNotMatch(protectionStatusText, /仅记录状态层数/);
 assert.equal(canGenerateCompactStatusDescription({ triggers: { tick: 'removed string format' } }), false);
 assert.equal(canGenerateCompactStatusDescription({ triggers: { tick: [{ damage: 'stacks', to: 'self' }] } }), true);
 assert.equal(canGenerateCompactStatusDescription({ triggers: { tick: { damage: 'stacks', to: 'self' } } }), true);

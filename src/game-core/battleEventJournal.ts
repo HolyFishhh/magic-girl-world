@@ -134,6 +134,10 @@ export type BattleEvent =
       tags?: string[];
       origin?: CardOrigin;
       upgraded?: boolean;
+      /** Immutable actual payment for this accepted card play/replay event. */
+      paidEnergy?: number;
+      paidTotal?: number;
+      paidResources?: Record<string, number>;
       automatic: boolean;
       replayIndex: number;
     })
@@ -413,6 +417,9 @@ export interface BattleTriggerEventContext {
   targetId?: string;
   actorSide?: 'player' | 'enemy';
   targetSide?: 'player' | 'enemy';
+  paidEnergy?: number;
+  paidTotal?: number;
+  paidResources?: Readonly<Record<string, number>>;
   /** Runtime-owned actor ids used when an AI-facing query selects team scope. */
   teamActorIds?: readonly string[];
   eventJournal?: BattleEventJournalState;
@@ -437,6 +444,9 @@ export function battleTriggerContextFromEvent(
     ...('cardInstanceId' in event ? { cardInstanceId: event.cardInstanceId } : {}),
     ...('damageKind' in event ? { damageKind: event.damageKind } : {}),
     ...('statusId' in event ? { statusId: event.statusId } : {}),
+    ...('paidEnergy' in event ? { paidEnergy: event.paidEnergy } : {}),
+    ...('paidTotal' in event ? { paidTotal: event.paidTotal } : {}),
+    ...('paidResources' in event ? { paidResources: structuredClone(event.paidResources) } : {}),
     ...('actorId' in event ? { actorId: event.actorId } : {}),
     ...('targetId' in event ? { targetId: event.targetId } : {}),
     ...(event.actorSide ? { actorSide: event.actorSide } : {}),
@@ -577,6 +587,16 @@ export function appendBattleEvent(state: BattleEventJournalState, draft: BattleE
   if (event.kind === 'damage_resolved') {
     if ([event.requested, event.modified, event.blocked, event.hpLost].some(value => !Number.isFinite(value) || value < 0))
       return { ok: false, code: 'INVALID_EVENT_VALUE', state };
+  }
+  if (event.kind === 'card_played') {
+    if (
+      !Number.isInteger(event.paidEnergy ?? 0) || (event.paidEnergy ?? 0) < 0 ||
+      !Number.isInteger(event.paidTotal ?? 0) || (event.paidTotal ?? 0) < 0 ||
+      (event.paidResources !== undefined && (
+        !isRecord(event.paidResources) || Object.entries(event.paidResources).some(([id, amount]) =>
+          !/^[A-Za-z_][A-Za-z0-9_]*$/.test(id) || !Number.isInteger(amount) || amount < 0)
+      ))
+    ) return { ok: false, code: 'INVALID_EVENT_VALUE', state };
   }
   if (event.kind === 'resource_spent') {
     if (

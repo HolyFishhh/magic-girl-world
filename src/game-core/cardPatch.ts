@@ -4,7 +4,7 @@ import { transformCardEffectProgram, transformCardHitGroups, transformCardAttack
 import type { CardCost } from './combatResource';
 
 export type CardPatchScope = 'resolution' | 'turn' | 'until_played' | 'combat' | 'run' | 'permanent';
-export type CardKeyword = 'retain' | 'exhaust' | 'ethereal' | 'innate';
+export type CardKeyword = 'retain' | 'exhaust' | 'ethereal' | 'innate' | 'sly';
 export type CardCostOperator = 'add' | 'subtract' | 'multiply' | 'divide' | 'set' | 'min' | 'max';
 export type CardPatchSourceKind =
   | 'card'
@@ -83,6 +83,7 @@ export interface CardPatchBaseSnapshot {
   exhaust?: boolean;
   ethereal?: boolean;
   innate?: boolean;
+  sly?: boolean;
   replayCount?: number;
   xValueBonus?: number;
 }
@@ -93,6 +94,7 @@ export interface PatchableCard extends SelectableCard {
   exhaust?: boolean;
   ethereal?: boolean;
   innate?: boolean;
+  sly?: boolean;
   replayCount?: number;
   xValueBonus?: number;
   doubleEffect?: boolean;
@@ -194,6 +196,7 @@ function snapshot(card: PatchableCard): CardPatchBaseSnapshot {
     ...(card.exhaust !== undefined ? { exhaust: card.exhaust } : {}),
     ...(card.ethereal !== undefined ? { ethereal: card.ethereal } : {}),
     ...(card.innate !== undefined ? { innate: card.innate } : {}),
+    ...(card.sly !== undefined ? { sly: card.sly } : {}),
     replayCount: card.replayCount ?? (card.doubleEffect ? 1 : 0),
     xValueBonus: card.xValueBonus ?? 0,
   };
@@ -239,6 +242,7 @@ export function materializeCardPatches<TCard extends PatchableCard>(card: TCard,
     exhaust: base.exhaust === true,
     ethereal: base.ethereal === true,
     innate: base.innate === true,
+    sly: base.sly === true,
   };
   let replayCount = Math.max(0, Math.floor(base.replayCount || 0));
   let xValueBonus = Number.isFinite(base.xValueBonus) ? Number(base.xValueBonus) : 0;

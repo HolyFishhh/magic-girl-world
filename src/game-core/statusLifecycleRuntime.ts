@@ -109,6 +109,14 @@ export class StatusLifecycleRuntime<TToken> {
       return null;
     }
 
+    const defender = definition.type === 'debuff'
+      ? this.getEntity(target)?.statusEffects.find(status => this.ports.definitions.get(status.id)?.defense?.negate_debuff)
+      : undefined;
+    if (defender) {
+      await this.consumeLayer(target, defender.id);
+      return null;
+    }
+
     const existing = this.getEntity(target)?.statusEffects.find(status => status.id === statusId);
     const application = resolveStatusApplication(existing?.stacks, stacks, definition.maxStacks);
     if (!application.trigger) return existing ? { ...existing } : null;
@@ -154,6 +162,15 @@ export class StatusLifecycleRuntime<TToken> {
       this.present({ type: 'selection_removed', target, selection, count: selected.length });
     }
     return selected.map(status => ({ ...status }));
+  }
+
+  /** Consume precisely one holder-local defensive layer, including remove lifecycle. */
+  public async consumeLayer(target: StatusLifecycleTarget, statusId: string): Promise<boolean> {
+    const status = this.getEntity(target)?.statusEffects.find(candidate => candidate.id === statusId);
+    if (!status) return false;
+    if (status.stacks <= 1) await this.removeOne(target, statusId, 'explicit');
+    else this.ports.state.updateStatusEffect(target, statusId, { stacks: status.stacks - 1 });
+    return true;
   }
 
   /** Resolve tick effects for one exact holder at its declared action boundary. */

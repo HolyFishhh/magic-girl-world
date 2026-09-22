@@ -18,10 +18,17 @@ const played = journal.appendBattleEvent(state, {
   cardInstanceId: 'strike__1',
   templateId: 'strike',
   cardType: 'Attack',
+  paidEnergy: 1,
+  paidTotal: 3,
+  paidResources: { energy: 1, stars: 2 },
   automatic: false,
   replayIndex: 0,
 });
 assert.equal(played.ok, true);
+const paymentContext = journal.battleTriggerContextFromEvent(played.event, played.state);
+assert.equal(paymentContext.paidEnergy, 1);
+assert.equal(paymentContext.paidTotal, 3);
+assert.deepEqual(paymentContext.paidResources, { energy: 1, stars: 2 });
 state = played.state;
 
 const damage = journal.appendBattleEvent(state, {

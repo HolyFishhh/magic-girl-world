@@ -21,6 +21,8 @@ const MAP_COLUMNS = 5;
 
 export interface TowerAppCallbacks {
   onNodeSelect?: (node: RunMapNode, snapshot: RunState) => void;
+  /** The player may reserve a live route choice while its content is still being prepared. */
+  onPreparingNode?: (node: RunMapNode, snapshot: RunState) => void;
   onBlockedNode?: (node: RunMapNode, snapshot: RunState) => void;
   onRetryNode?: (node: RunMapNode, snapshot: RunState) => void;
   onRetry?: (snapshot: RunState) => void;
@@ -129,6 +131,7 @@ class TowerMapApp implements TowerAppController {
     y: number;
     key: string;
   } | null = null;
+  private reservedNodeId: string | null = null;
   private readonly unsubscribeParentFullscreen: () => void;
 
   constructor(options: MountTowerAppOptions) {
@@ -153,6 +156,9 @@ class TowerMapApp implements TowerAppController {
 
   update(snapshot: RunState, options: TowerAppUpdateOptions = {}): void {
     this.snapshot = snapshot;
+    const reserved = this.reservedNodeId ? snapshot.nodeContent[this.reservedNodeId] : undefined;
+    const stillLiveChoice = this.reservedNodeId && snapshot.choices.some(choice => choice.id === this.reservedNodeId);
+    if (!stillLiveChoice || !reserved || !['queued', 'generating'].includes(reserved.phase)) this.reservedNodeId = null;
     if (options.selectedAct !== undefined) this.selectedAct = options.selectedAct;
     if (options.difficultyPercent !== undefined) this.difficultyPercent = options.difficultyPercent;
     if (options.playerHp !== undefined) this.playerHp = options.playerHp;
@@ -427,7 +433,10 @@ class TowerMapApp implements TowerAppController {
       button.append(createElement(this.document, 'span', 'tower-map-narrative-bubble', Array.from(node.narrative.replace(/\s+/g, ' ').trim()).slice(0, 20).join('')));
       button.title = `${node.ariaLabel}\n${node.narrative}`;
     }
-    const phase = contentPhaseLabel(node);
+    const preselected = this.reservedNodeId === node.node.id;
+    button.classList.toggle('is-preselected', preselected);
+    button.setAttribute('aria-pressed', String(preselected));
+    const phase = preselected ? '已预选 · 等待生成' : contentPhaseLabel(node);
     if (phase) button.append(createElement(this.document, 'span', 'tower-node-phase', phase));
     if (node.contentPhase === 'queued' || node.contentPhase === 'generating') {
       button.append(createElement(this.document, 'span', 'tower-node-orbit'));
@@ -439,6 +448,18 @@ class TowerMapApp implements TowerAppController {
     } else if (node.interactive && this.callbacks.onNodeSelect) {
       button.classList.add('can-enter');
       button.addEventListener('click', () => this.callbacks.onNodeSelect?.(node.node, this.snapshot));
+    } else if (
+      node.routeState === 'reachable' &&
+      (node.contentPhase === 'queued' || node.contentPhase === 'generating') &&
+      this.callbacks.onPreparingNode
+    ) {
+      button.classList.add('can-reserve');
+      button.addEventListener('click', () => {
+        if (this.reservedNodeId === node.node.id) return;
+        this.reservedNodeId = node.node.id;
+        this.callbacks.onPreparingNode?.(node.node, this.snapshot);
+        this.render();
+      });
     } else {
       const adjacent = node.node.act === this.snapshot.act && (
         node.routeState === 'reachable' || node.routeState === 'current' ||

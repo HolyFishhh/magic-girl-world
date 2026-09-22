@@ -45,6 +45,7 @@ const kindGuidance = {
   status_stun: ['status'],
   status_character_emoji: ['status'],
   status_protection: ['status'],
+  status_defense: ['status'],
   status_trigger_effect_item: ['status'],
   status_trigger_effect_sequence: ['status'],
   status_hold_effect_item: ['status'],

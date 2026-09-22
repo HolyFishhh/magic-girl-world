@@ -1,3 +1,4 @@
+import { expandBuiltinStatusDefinitions } from './builtinStatusCatalog';
 import { ABILITY_TRIGGER_SET } from './battleTriggers';
 import { compileCompactEffectList } from './compactEffectDsl';
 import { isCompactEffectList } from './compactEffectContract';
@@ -55,7 +56,7 @@ export function collectRewardCandidateTypedContractIssues(
 ): ContentContractIssue[] {
   if (!isRecord(value)) return [];
   const candidate = structuredClone(value);
-  const supportStatuses = readRewardCandidateSupportStatuses(candidate);
+  const supportStatuses = readRewardCandidateSupportStatuses(candidate, library.statusDefinitions);
   delete candidate.status;
   delete candidate.statuses;
   if (category === 'cards' && (candidate.quantity === undefined || candidate.quantity === 0)) candidate.quantity = 1;
@@ -74,6 +75,7 @@ export function collectRewardCandidateTypedContractIssues(
       .filter((id): id is string => typeof id === 'string'),
   ]);
   const pack = createContentPack({
+    knownStatusIds,
     playerDesireEffect: library.playerDesireEffect,
     cards: category === 'cards' ? [candidate] : [],
     statuses,
@@ -117,7 +119,7 @@ function failure(message: string): RewardCandidateValidationResult {
  * `statuses`. Equal duplicate ids are harmless and collapse to one definition;
  * conflicting duplicates are rejected before anything reaches persistent MVU.
  */
-export function readRewardCandidateSupportStatuses(value: unknown): RewardCandidateSupportStatusesResult {
+export function readRewardCandidateSupportStatuses(value: unknown, referenceDefinitions: readonly unknown[] = []): RewardCandidateSupportStatusesResult {
   if (!isRecord(value)) return { ok: true, statuses: [] };
   const entries: Array<{ definition: Record<string, unknown>; path: string }> = [];
   if (value.status !== undefined) {
@@ -153,7 +155,7 @@ export function readRewardCandidateSupportStatuses(value: unknown): RewardCandid
     }
     if (!existing) statuses.set(id, status);
   }
-  return { ok: true, statuses: Array.from(statuses.values()) };
+  return { ok: true, statuses: expandBuiltinStatusDefinitions(Array.from(statuses.values()), value, referenceDefinitions.filter(isRecord).map(definition => String(definition.id))) };
 }
 
 function compactPrograms(value: Record<string, unknown>): unknown[] {
@@ -351,7 +353,7 @@ export function validateRewardCandidate(
     const triggerInput = resolveTriggerInput(value);
     const trigger = type === 'Power' ? triggerInput.trigger : undefined;
     if (type !== 'Power' && value.trigger !== undefined) return failure('只有 Power 可以提供 trigger');
-    for (const flag of ['retain', 'exhaust', 'ethereal', 'innate']) {
+    for (const flag of ['retain', 'exhaust', 'ethereal', 'innate', 'sly']) {
       if (value[flag] !== undefined && typeof value[flag] !== 'boolean') return failure(`卡牌 ${flag} 必须是布尔值`);
     }
     const costComponents = normalizeCardCost((value.cost ?? 0) as any);
@@ -492,7 +494,7 @@ export function validateRewardCandidateAgainstLibrary(
     if (missing.size > 0) return failure(`引用了未注册资源: ${[...missing].sort().join(', ')}`);
   }
 
-  const supportStatusesResult = readRewardCandidateSupportStatuses(value);
+  const supportStatusesResult = readRewardCandidateSupportStatuses(value, library.statusDefinitions);
   if (!supportStatusesResult.ok) return failure(supportStatusesResult.message);
   const supportStatuses = supportStatusesResult.statuses;
 

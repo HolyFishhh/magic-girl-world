@@ -28,6 +28,32 @@ const content = core.createContentPack({
 
 assert.equal(core.validateContentPackContract(content, { requireEnemy: true, requireExecutable: true }).ok, true);
 
+const paymentObserver = core.createContentPack({
+  ...content,
+  enemy: {
+    ...content.enemy,
+    abilities: [{
+      id: 'energy_tax', name: '能量税', source: '训练靶', description: '玩家打出攻击牌后，按实际支付能量获得力量。',
+      trigger: { on: 'attack_played', effects: { apply_status: 'focus', stacks: 'spent_energy', to: 'self' } },
+    }],
+  },
+});
+const paymentObserverResult = core.validateContentPackContract(paymentObserver, { requireEnemy: true, requireExecutable: true });
+assert.equal(paymentObserverResult.ok, true,
+  `card-play observers may read the triggering card actual spent_energy: ${JSON.stringify(paymentObserverResult.issues)}`);
+const detachedPaymentObserver = structuredClone(paymentObserver);
+detachedPaymentObserver.enemy.abilities[0].trigger.on = 'turn_start';
+assert.ok(core.validateContentPackContract(detachedPaymentObserver, { requireEnemy: true, requireExecutable: true }).issues.some(issue =>
+  issue.code === 'SPENT_ENERGY_NOT_ALLOWED'), 'unrelated future triggers cannot inherit a stale card payment');
+
+const cursedRelic = core.createContentPack({
+  ...content,
+  relics: [{ id: 'cursed_locket', name: '诅咒坠饰', rarity: 'Corrupt', trigger: 'battle_start', effects: [{ damage: 1, to: 'self' }] }],
+});
+const cursedRelicValidation = core.validateContentPackContract(cursedRelic, { requireEnemy: true, requireExecutable: true });
+assert.equal(cursedRelicValidation.ok, true,
+  `Corrupt is a valid relic rarity when the relic retains an executable drawback: ${JSON.stringify(cursedRelicValidation.issues)}`);
+
 const playerLustWithoutOverflow = core.createContentPack({
   ...content,
   cards: [{ id: 'pressure', name: '欲望施压', type: 'Skill', rarity: 'Common', cost: 1, quantity: 1, effects: { lust: 8 } }],

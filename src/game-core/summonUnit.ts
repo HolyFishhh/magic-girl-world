@@ -157,7 +157,7 @@ export interface ResolvedSummonAction {
 
 export interface SummonDamageResult {
   state: SummonCollectionState;
-  hits: Array<{ summonId: string; requested: number; modified?: number; blocked: number; hpLost: number; defeated: boolean }>;
+  hits: Array<{ summonId: string; requested: number; modified?: number; blocked: number; hpLost: number; prevented?: number; defeated: boolean }>;
 }
 
 export interface SummonCopyResult {
@@ -566,6 +566,7 @@ export function damageSummonUnits(
   targetIds: readonly string[],
   requestedDamage: number,
   bypassBlock = false,
+  preventHpLoss = false,
 ): SummonDamageResult {
   let state = createSummonCollectionState(current.living, current.defeated);
   state.nextSequence = Math.max(state.nextSequence, current.nextSequence || 1);
@@ -579,9 +580,10 @@ export function damageSummonUnits(
     const absorbed = bypassBlock
       ? { damage, remainingBlock: unit.block || 0, blockUsed: 0 }
       : absorbDamageWithBlock(damage, unit.block || 0);
-    const nextHp = Math.max(0, roundBattleValue(unit.currentHp - absorbed.damage));
+    const prevented = preventHpLoss ? absorbed.damage : 0;
+    const nextHp = Math.max(0, roundBattleValue(unit.currentHp - (preventHpLoss ? 0 : absorbed.damage)));
     state.living[index] = { ...unit, block: absorbed.remainingBlock, currentHp: nextHp };
-    hits.push({ summonId: id, requested: damage, blocked: absorbed.blockUsed, hpLost: roundBattleValue(unit.currentHp - nextHp), defeated: nextHp <= 0 });
+    hits.push({ summonId: id, requested: damage, blocked: absorbed.blockUsed, hpLost: roundBattleValue(unit.currentHp - nextHp), ...(prevented > 0 ? { prevented } : {}), defeated: nextHp <= 0 });
   }
   state = moveDefeated(state);
   return { state, hits };
@@ -793,6 +795,14 @@ export class SummonStatusLifecycleRuntime<TToken> {
         this.present({ type: 'missing_definition', summonId, statusId });
         continue;
       }
+      const defender = definition.type === 'debuff'
+        ? summon.statusEffects?.find(status => this.ports.definitions.get(status.id)?.defense?.negate_debuff)
+        : undefined;
+      if (defender) {
+        if (defender.stacks <= 1) await this.removeOne(summon, defender, 'explicit');
+        else this.updateLiving(summonId, unit => ({ ...unit, statusEffects: (unit.statusEffects || []).map(status => status.id === defender.id ? { ...status, stacks: status.stacks - 1 } : status) }), 'summon_status_defense_consumed');
+        continue;
+      }
       const existing = summon.statusEffects?.find(status => status.id === statusId);
       const application = resolveStatusApplication(existing?.stacks, stacks, definition.maxStacks);
       if (!application.trigger) continue;
@@ -855,6 +865,20 @@ export class SummonStatusLifecycleRuntime<TToken> {
       }
     }
     return removed;
+  }
+
+  /** Consume precisely one layer from one exact summon holder. */
+  public async consumeLayer(summonId: string, statusId: string): Promise<boolean> {
+    const summon = this.getLiving(summonId);
+    const status = summon?.statusEffects?.find(candidate => candidate.id === statusId);
+    if (!summon || !status) return false;
+    if (status.stacks <= 1) await this.removeOne(summon, status, 'explicit');
+    else this.updateLiving(summonId, unit => ({
+      ...unit,
+      statusEffects: (unit.statusEffects || []).map(candidate =>
+        candidate.id === statusId ? { ...candidate, stacks: candidate.stacks - 1 } : candidate),
+    }), 'summon_status_defense_consumed');
+    return true;
   }
 
   /** Resolve tick effects for one exact summon at its declared action boundary. */

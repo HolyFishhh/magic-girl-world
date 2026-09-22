@@ -347,7 +347,7 @@ const OPERATION_META_KEYS: Readonly<Record<string, readonly string[]>> = {
   double: ['from', 'pick', 'name', 'name_contains', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'id', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'root_only', 'when', 'on'],
   add_card: ['to', 'count', 'when', 'on'],
   ensure_card: ['to', 'minimum', 'include_copies', 'when', 'on'],
-  modify: ['add', 'subtract', 'multiply', 'divide', 'set', 'to', 'targets'],
+  modify: ['add', 'subtract', 'multiply', 'divide', 'set', 'to', 'targets', 'damage_type'],
   card_rule: ['limit', 'extra', 'to', 'destination', 'priority', 'resources', 'name', 'name_contains', 'card_type', 'rarity', 'cost', 'min_cost', 'max_cost', 'tag', 'id', 'template_id', 'run_instance_id', 'combat_instance_id', 'origin', 'upgraded', 'root_only'],
   stance: ['to', 'targets', 'when'],
   channel_orb: ['to', 'targets', 'when'],

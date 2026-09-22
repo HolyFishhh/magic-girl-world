@@ -1,3 +1,4 @@
+import { expandBuiltinStatusDefinitions } from '../game-core/builtinStatusCatalog';
 import { normalizeMvuStatusDefinitions } from './mvuArrays';
 import { compileCompactEffectList } from '../game-core/compactEffectDsl';
 import { validateEffectProgramPolicy } from '../game-core/effectProgramPolicy';
@@ -1406,6 +1407,9 @@ export function normalizeMvuAuthoredContent<T>(value: T): T {
   const normalized = rewriteNode(cloneJson(value), new Map()) as T;
   stripEmptyOptionalStanceAndOrbEffects(normalized);
   promoteCardLifecycleFlags(normalized);
+  if (isRecord(normalized) && isRecord(normalized.registry) && Array.isArray(normalized.registry.statuses)) {
+    normalized.registry.statuses = expandBuiltinStatusDefinitions(normalized.registry.statuses, normalized);
+  }
   return normalized;
 }
 
@@ -1772,7 +1776,7 @@ export function normalizeMvuBattleContent(battleData: unknown): Record<string, a
     return { ...status, id: replacement };
   });
 
-  battle.statuses = normalizedStatuses;
+  battle.statuses = expandBuiltinStatusDefinitions(normalizedStatuses, battle);
   const normalized = rewriteNode(battle, aliases) as Record<string, any>;
   stripEmptyOptionalStanceAndOrbEffects(normalized);
   pruneStrictEmptyPlayerLustEffect(normalized);

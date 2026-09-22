@@ -87,6 +87,11 @@ for (const reason of ['player_choice', 'random_effect', 'effect']) {
     `${reason} respects the attachment's explicit reason filter`,
   );
 }
+for (const reason of ['player_choice', 'random_effect', 'effect']) {
+  assert.equal(core.resolveCardDiscardLifecycle({ sly: true }, reason, 'hand', 'player_turn').sly, true);
+}
+assert.equal(core.resolveCardDiscardLifecycle({ sly: true }, 'turn_cleanup', 'hand', 'player_turn').sly, false,
+  '灵巧不响应回合末自动弃牌');
 for (const [reason, source, phase] of [
   ['turn_cleanup', 'hand', 'player_turn'],
   ['scry', 'hand', 'player_turn'],

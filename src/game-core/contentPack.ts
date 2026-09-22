@@ -1,3 +1,4 @@
+import { expandBuiltinStatusDefinitions } from './builtinStatusCatalog';
 import { readSummonGrowth, type PersistentGrowthOperation } from './persistentGrowth';
 import { validateCardPatch, type CardPatch } from './cardPatch';
 import { stableHash32, stableSerialize } from './deterministicRandom';
@@ -58,6 +59,8 @@ export interface ContentPack {
 }
 
 export interface CreateContentPackInput {
+  /** Definitions owned by the calling library must not be replaced by a convenience preset. */
+  knownStatusIds?: Iterable<string>;
   cards?: unknown;
   statuses?: unknown;
   relics?: unknown;
@@ -120,7 +123,7 @@ export function createContentPack(input: CreateContentPackInput): ContentPack {
   return {
     schemaVersion: CONTENT_PACK_SCHEMA_VERSION,
     cards: definitionList(input.cards),
-    statuses: definitionList(input.statuses),
+    statuses: expandBuiltinStatusDefinitions(definitionList(input.statuses), input, input.knownStatusIds),
     relics: definitionList(input.relics),
     items: definitionList(input.items),
     abilities: definitionList(input.abilities),

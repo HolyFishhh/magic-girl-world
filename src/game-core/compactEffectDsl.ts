@@ -118,6 +118,7 @@ const CARD_VALUE_OPERATORS = new Set<CardValueOperator>(['add', 'subtract', 'mul
 const CARD_PLAY_RULES = new Set<CardPlayRuleKind>([
   'replay', 'free', 'retain_hand', 'retain_block', 'limit_draw', 'limit_block_gain',
   'limit_energy_gain', 'deny_card_play', 'allow_card_play', 'limit_card_play', 'card_destination',
+  'ethereal',
 ]);
 const DAMAGE_KINDS = new Set(['attack', 'effect', 'hp_loss', 'retaliation', 'damage_over_time']);
 const ARITHMETIC_OPERATORS: Record<string, 'add' | 'subtract' | 'multiply' | 'divide' | 'modulo'> = {
@@ -332,6 +333,10 @@ function readVariablePath(node: jsep.Expression): string | null {
 
 function normalizeVariablePath(path: string): string | null {
   if (path === 'spent_energy') return 'context.spent_energy';
+  if (path === 'event_paid_energy' || path === 'paid_energy') return 'context.event_paid_energy';
+  if (path === 'event_paid_total' || path === 'paid_cost') return 'context.event_paid_total';
+  if (/^(event_paid_resource|paid_resource)\.[A-Za-z_][A-Za-z0-9_]*$/.test(path))
+    return `context.event_paid_resource.${path.slice(path.indexOf('.') + 1)}`;
   if (/^spent_resource\.[A-Za-z_][A-Za-z0-9_]*$/.test(path)) return `context.${path}`;
   if (/^x_resource\.[A-Za-z_][A-Za-z0-9_]*$/.test(path)) return `context.${path}`;
   if (path === 'x_value') return 'context.x_value';
@@ -1081,7 +1086,7 @@ function compileCardSelectorFilter(
   ] as const) {
     if (value[source] === undefined) continue;
     const keywords = stringArray(value[source]);
-    if (!keywords || keywords.some(keyword => !['retain', 'exhaust', 'ethereal', 'innate'].includes(keyword))) {
+    if (!keywords || keywords.some(keyword => !['retain', 'exhaust', 'ethereal', 'innate', 'sly'].includes(keyword))) {
       addIssue(issues, `${path}.${source}`, 'INVALID_CARD_FILTER', `${source} contains an unsupported card keyword`);
     } else {
       filter[target] = keywords as CardSelectorFilter[typeof target];
@@ -2851,7 +2856,7 @@ function compileSingleEntry(
               ? new Set(['extra'])
               : patchType === 'hits'
                 ? new Set(['add'])
-              : ['retain', 'exhaust', 'ethereal', 'innate'].includes(String(patchType))
+              : ['retain', 'exhaust', 'ethereal', 'innate', 'sly'].includes(String(patchType))
                 ? new Set(['enabled'])
                 : null;
     if (allowedPatchPayloadKeys) {
@@ -2936,9 +2941,9 @@ function compileSingleEntry(
           };
         }
       }
-    } else if (['retain', 'exhaust', 'ethereal', 'innate'].includes(String(patchType))) {
+    } else if (['retain', 'exhaust', 'ethereal', 'innate', 'sly'].includes(String(patchType))) {
       if (typeof value.enabled !== 'boolean') addIssue(issues, `${path}.enabled`, 'INVALID_CARD_PATCH', 'keyword patch requires enabled boolean');
-      else patch = { ...common, kind: 'keyword', keyword: patchType as 'retain' | 'exhaust' | 'ethereal' | 'innate', enabled: value.enabled };
+      else patch = { ...common, kind: 'keyword', keyword: patchType as import('./cardPatch').CardKeyword, enabled: value.enabled };
     } else {
       addIssue(issues, `${path}.patch_card`, 'INVALID_CARD_PATCH', `Unsupported card patch type: ${String(patchType)}`);
     }
@@ -3065,7 +3070,7 @@ function compileSingleEntry(
         }
         if (change.kind === 'keyword') {
           rejectUnknownEntryKeys(change, ['kind', 'keyword', 'enabled'], changePath, issues, false);
-          if (!['retain', 'exhaust', 'ethereal', 'innate'].includes(String(change.keyword)) || typeof change.enabled !== 'boolean')
+          if (!['retain', 'exhaust', 'ethereal', 'innate', 'sly'].includes(String(change.keyword)) || typeof change.enabled !== 'boolean')
             addIssue(issues, changePath, 'INVALID_CARD_KEYWORD', 'keyword attachment requires a supported keyword and enabled boolean');
           else changes.push({ kind: 'keyword', keyword: change.keyword as import('./cardPatch').CardKeyword, enabled: change.enabled });
           return;
@@ -3186,7 +3191,7 @@ function compileSingleEntry(
       }
       if (raw.kind === 'keyword') {
         rejectUnknownEntryKeys(raw, ['kind', 'keyword', 'enabled'], changePath, issues, false);
-        if (!['retain', 'exhaust', 'ethereal', 'innate'].includes(String(raw.keyword)) || typeof raw.enabled !== 'boolean')
+        if (!['retain', 'exhaust', 'ethereal', 'innate', 'sly'].includes(String(raw.keyword)) || typeof raw.enabled !== 'boolean')
           addIssue(issues, changePath, 'INVALID_CARD_KEYWORD', 'keyword upgrade requires a supported keyword and enabled boolean');
         else changes.push({ kind: 'keyword', keyword: raw.keyword as import('./cardPatch').CardKeyword, enabled: raw.enabled });
         return;
@@ -3545,12 +3550,14 @@ function compileSingleEntry(
   } else if (operation === 'modify') {
     rejectUnknownEntryKeys(
       value,
-      [operation, 'add', 'subtract', 'multiply', 'divide', 'set', 'to', 'targets'],
+      [operation, 'add', 'subtract', 'multiply', 'divide', 'set', 'to', 'targets', 'damage_type'],
       path,
       issues,
       false,
     );
     const stat = value.modify;
+    if (value.damage_type !== undefined && (!DAMAGE_KINDS.has(String(value.damage_type)) || !['damage', 'damage_taken'].includes(String(stat))))
+      addIssue(issues, `${path}.damage_type`, 'INVALID_DAMAGE_KIND', 'damage_type only filters damage/damage_taken modifiers');
     const modifierKeys = Array.from(MODIFIER_OPERATORS).filter(key => value[key] !== undefined);
     const target = compileEffectTarget(value, implicitTarget ?? compactEffectDefaultTarget(operation), `${path}.to`, issues, enemyCollectionTarget);
     if (typeof stat !== 'string' || !MODIFIER_STATS.has(stat as ModifierStat)) {
@@ -3580,6 +3587,7 @@ function compileSingleEntry(
           target,
           ...(targetSelector ? { targetSelector } : {}),
           stat: stat as ModifierStat,
+          ...(value.damage_type ? { damageKind: value.damage_type as import('./battleEventJournal').DamageKind } : {}),
           operator,
           value: result,
         }));

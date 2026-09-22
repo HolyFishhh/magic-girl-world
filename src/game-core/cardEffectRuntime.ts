@@ -236,6 +236,7 @@ function generatedCard(definition: GeneratedCardDefinition, runtimeId: string): 
     lifecycle: definition.lifecycle ? structuredClone(definition.lifecycle) : undefined,
     exhaust: definition.type === 'Power' || definition.exhaust === true,
     ethereal: definition.ethereal === true,
+    sly: definition.sly === true,
   }, { origin: 'generated', templateId: definition.id, combatInstanceId: runtimeId });
 }
 

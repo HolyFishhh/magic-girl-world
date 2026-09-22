@@ -195,7 +195,8 @@
     "test:production-encounter": "node scripts/test-production-encounter-evaluator.mjs",
     "test:tower-encounter-plan": "node scripts/test-tower-encounter-plan.mjs",
     "test:tower-runtime-balance": "node scripts/test-tower-runtime-balance.mjs && node scripts/test-trigger-transaction-recovery-observer.mjs && node scripts/test-tower-balance-feedback.mjs",
-    "test:player-feedback": "node scripts/test-measured-build-assessment.mjs && node scripts/test-user-navigation-scroll.mjs && node scripts/test-hand-card-condition-highlight.mjs && node scripts/test-combat-action-timing.mjs && node scripts/test-battle-animation-target.mjs"
+    "test:player-feedback": "node scripts/test-measured-build-assessment.mjs && node scripts/test-user-navigation-scroll.mjs && node scripts/test-hand-card-condition-highlight.mjs && node scripts/test-combat-action-timing.mjs && node scripts/test-battle-animation-target.mjs",
+    "test:sts2-mechanics": "node scripts/test-builtin-statuses.mjs && node scripts/test-builtin-status-integration.mjs && node scripts/test-status-defense-integration.mjs && node scripts/test-status-defense-summon-e2e.mjs && node scripts/test-status-defense-repair.mjs && node scripts/test-card-lifecycle.mjs && node scripts/test-card-play-rule-runtime.mjs && node scripts/test-ability-trigger-integration.mjs && node scripts/test-tower-encounter-plan.mjs && node scripts/test-tower-preselection.mjs && node scripts/test-tower-map-dom.mjs"
   },
   "browserslist": [
     "defaults and partially supports es6-module"

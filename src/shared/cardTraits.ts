@@ -7,16 +7,18 @@ export interface CardDisplayMetadata extends LifecycleCard {
   effectProgram?: unknown; effects?: unknown;
   discardEffectProgram?: unknown; discard_effects?: unknown;
 }
-export interface CardTraitContext { playAccess?: 'allowed' | 'denied'; temporary?: boolean; compact?: boolean }
+export interface CardTraitContext { playAccess?: 'allowed' | 'denied'; temporary?: boolean; etherealAura?: boolean; compact?: boolean }
 export function describeDisplayCardTraits(card: CardDisplayMetadata, context: CardTraitContext = {}) {
   const traits = describeCardTraits(card);
+  if (context.etherealAura === true && !traits.some(trait => trait.id === 'ethereal'))
+    traits.push({id:'ethereal-aura',name:'虚无',detail:'回合结束仍在手中时本场移入消耗区；这是存活来源赋予的动态特性，来源离场后立即解除。',tone:'fire'});
   const access = resolveCardAttachmentPlayAccess(card);
   const denied = context.playAccess === 'denied' || (context.playAccess !== 'allowed' && !access.explicitlyAllowed && (access.denied || card.type === 'Curse'));
   if (denied) traits.unshift({id:'unplayable',name:'不可打出',detail:'不能主动打出；明确允许打出的效果可以解除这项限制。抽牌、弃置等触发效果仍按各自规则执行。',tone:'normal'});
   if (context.temporary === true || (context.temporary === undefined && card.origin === 'copied' && !!card.parentCombatInstanceId))
     traits.push({id:'temporary',name:'临时·战后消失',detail:'这张战斗实例不会加入持有牌库；战后消失不等于打出后消耗，打出去向仍由其他特性决定。',tone:'normal'});
   const meaningful = (value: unknown): boolean => !!value && typeof value === 'object' && ('steps' in value ? Array.isArray(value.steps) && value.steps.length > 0 : Object.keys(value).length > 0);
-  if (card.type === 'Curse' && (meaningful(card.effectProgram) || meaningful(card.effects))) traits.push({id:'curse-turn-end',name:'回合结束时',detail:'仍在手牌中的诅咒在回合结束时执行其效果，之后再按保留、空灵等特性处理去向。具体效果见卡牌详情。',tone:'normal'});
+  if (card.type === 'Curse' && (meaningful(card.effectProgram) || meaningful(card.effects))) traits.push({id:'curse-turn-end',name:'回合结束时',detail:'仍在手牌中的诅咒在回合结束时执行其效果，之后再按保留、虚无等特性处理去向。具体效果见卡牌详情。',tone:'normal'});
   if (meaningful(card.discardEffectProgram) || meaningful(card.discard_effects))
     traits.push({id:'discard-trigger',name:'弃置时',detail:'此牌从手牌被主动或效果弃置时执行弃置效果；正常打出和回合清理不触发。具体效果见卡牌详情。',tone:'normal'});
   const timings = new Set((card.attachments || []).flatMap(a => a.changes.filter(c => c.kind === 'dynamic_cost').map(c => c.timing)));

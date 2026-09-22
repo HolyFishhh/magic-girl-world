@@ -81,6 +81,9 @@ export interface ModernEffectExecutionContext {
   spentEnergy?: number;
   /** Every resource actually paid by the current card resolution. */
   spentResources?: Readonly<Record<string, number>>;
+  paidEnergy?: number;
+  paidTotal?: number;
+  paidResources?: Readonly<Record<string, number>>;
   /** X values resolved independently for every `all` cost component. */
   xValues?: Readonly<Record<string, number>>;
   /** Compatibility projection for the legacy energy-only X formula. */
@@ -146,33 +149,54 @@ export class UnifiedEffectExecutor {
       recordResolvedEvent: event => this.recordResolvedBattleEffectEvent(event),
       dispatchTriggers: dispatches => this.dispatchBattleTriggers(dispatches),
       handleLustOverflow: (target, context) => this.handleLustOverflow(target, context),
-      protectDamage: async request => this.protectEnemyDamage(request),
-      interceptDamage: async request => {
-        const before = new Map(
-          this.gameStateManager.getSummons(request.target).map(unit => [unit.instanceId, unit]),
-        );
-        const intercepted = this.gameStateManager.interceptDamageWithSummons(request.target, request.amount, request.targetEnemyId, (unit, incoming) => {
-          let damage = incoming;
-          for (const { operation } of this.summonModifierSources(unit).damage_taken_modifier || []) {
-            damage = Math.max(0, applyModifierOperation(damage, operation));
-          }
-          return damage;
-        });
-        for (const hit of intercepted.hits) {
-          const unit = before.get(hit.summonId);
-          if (unit) await this.dispatchSummonDamageTransition(unit, hit, request.source, request.damageKind);
-        }
-        return {
-          remainingDamage: intercepted.remainingDamage,
-          interceptedDamage: intercepted.interceptedDamage,
-          hits: intercepted.hits.map(hit => ({
-            summonId: hit.summonId,
-            blocked: hit.blocked,
-            hpLost: hit.hpLost,
-            defeated: hit.defeated,
-          })),
-        };
+      capDamageByStatus: async request => {
+        const entity = request.target === 'player'
+          ? this.gameStateManager.getPlayer()
+          : (request.targetEnemyId ? this.gameStateManager.getEnemyById(request.targetEnemyId) : this.gameStateManager.getEnemy());
+        if (!entity) return request.amount;
+        const caps = entity.statusEffects
+          .map(status => this.dynamicStatusManager.getStatusDefinition(status.id)?.defense?.damage_cap)
+          .filter((cap): cap is number => cap !== undefined);
+        return caps.length ? Math.min(request.amount, ...caps) : request.amount;
       },
+      preventHpLossByStatus: async request => {
+        const entity = request.target === 'player'
+          ? this.gameStateManager.getPlayer()
+          : (request.targetEnemyId ? this.gameStateManager.getEnemyById(request.targetEnemyId) : this.gameStateManager.getEnemy());
+        const defender = entity?.statusEffects.find(status => this.dynamicStatusManager.getStatusDefinition(status.id)?.defense?.prevent_hp_loss);
+        if (!defender) return false;
+        const bound = request.target === 'enemy' && !!request.targetEnemyId && this.gameStateManager.beginEnemyResolution(request.targetEnemyId);
+        try {
+          return await this.triggerHost.consumeStatusLayer(request.target, defender.id);
+        } finally {
+          if (bound && request.targetEnemyId) this.gameStateManager.endEnemyResolution(request.targetEnemyId);
+        }
+      },
+      retaliateAttackByStatus: async request => {
+        const holder = request.target === 'player' ? this.gameStateManager.getPlayer() : (request.targetEnemyId ? this.gameStateManager.getEnemyById(request.targetEnemyId) : this.gameStateManager.getEnemy());
+        if (!holder) return;
+        for (const status of holder.statusEffects) {
+          const rule = this.dynamicStatusManager.getStatusDefinition(status.id)?.defense?.retaliate_attack;
+          const amount = rule === 'stacks' ? status.stacks : rule;
+          if (!amount || amount <= 0) continue;
+          if (request.sourceSummonId) {
+            await this.damageSummonsWithDefense(
+              [request.sourceSummonId], amount,
+              { owner: request.target, ...(request.targetEnemyId ? { enemyId: request.targetEnemyId } : {}) },
+              'retaliation', false,
+            );
+          } else {
+            await this.executeModernBattleCommand(
+              { type: 'damage', target: 'opponent', amount, damageKind: 'retaliation' },
+              request.target === 'player',
+              request.source === 'enemy' ? request.sourceEnemyId : { kind: 'player', id: 'player' },
+              { ...(request.targetEnemyId ? { sourceEnemyId: request.targetEnemyId } : {}) },
+            );
+          }
+        }
+      },
+      protectDamage: async request => this.protectEnemyDamage(request),
+      interceptDamage: request => this.interceptDamageWithSummonDefense(request),
       present: event => this.presentBattleEffectRuntimeEvent(event),
     });
     this.effectCommandHost = new TavernEffectCommandHost({
@@ -407,7 +431,7 @@ export class UnifiedEffectExecutor {
    */
   private async protectEnemyDamage(request: {
     source: 'player' | 'enemy'; target: 'player' | 'enemy'; amount: number;
-    damageKind: DamageKind; sourceEnemyId?: string; targetEnemyId?: string;
+    damageKind: DamageKind; sourceEnemyId?: string; sourceSummonId?: string; targetEnemyId?: string;
     sourceModifierSources?: BattleEffectRuntimeContext['sourceModifierSources'];
     bypassBlock?: boolean;
   }): Promise<{ remainingDamage: number; redirectedHpLost?: number }> {
@@ -443,7 +467,7 @@ export class UnifiedEffectExecutor {
             { type: 'damage', target: 'opponent', amount: remainingDamage, damageKind: 'attack' },
             request.source === 'player',
             holder.id,
-            { sourceEnemyId: request.sourceEnemyId, sourceModifierSources: request.sourceModifierSources, skipSourceDamageModifiers: true, ...(request.bypassBlock ? { bypassBlock: true } : {}) },
+            { sourceEnemyId: request.sourceEnemyId, sourceSummonId: request.sourceSummonId, sourceModifierSources: request.sourceModifierSources, skipSourceDamageModifiers: true, ...(request.bypassBlock ? { bypassBlock: true } : {}) },
           );
           if (!transferred?.applied) continue;
           redirectedHpLost = roundBattleValue(redirectedHpLost + (transferred.hpLost || 0));
@@ -474,7 +498,7 @@ export class UnifiedEffectExecutor {
           { type: 'damage', target: 'opponent', amount: each, damageKind: 'attack' },
           request.source === 'player',
           holder.id,
-          { sourceEnemyId: request.sourceEnemyId, sourceModifierSources: request.sourceModifierSources, skipSourceDamageModifiers: true, ...(request.bypassBlock ? { bypassBlock: true } : {}) },
+          { sourceEnemyId: request.sourceEnemyId, sourceSummonId: request.sourceSummonId, sourceModifierSources: request.sourceModifierSources, skipSourceDamageModifiers: true, ...(request.bypassBlock ? { bypassBlock: true } : {}) },
         );
         redirectedHpLost = roundBattleValue(redirectedHpLost + (transferred?.hpLost || 0));
       }
@@ -499,7 +523,9 @@ export class UnifiedEffectExecutor {
     if (damageKind !== 'hp_loss') {
       const recipient = target === 'self' ? 'player' : 'enemy';
       for (const [side, attribute] of [['player', 'damage_modifier'], [recipient, 'damage_taken_modifier']] as const) {
-        for (const source of this.getDeclarativeModifierOperations(side, attribute, enemy || undefined)) value = applyModifierOperation(value, source.operation);
+        for (const source of this.getDeclarativeModifierOperations(side, attribute, enemy || undefined)) {
+          if (!source.operation.damageKind || source.operation.damageKind === (damageKind || 'attack')) value = applyModifierOperation(value, source.operation);
+        }
         const entity = side === 'enemy' ? enemy : this.gameStateManager.getPlayer();
         const direct = entity?.modifiers?.[attribute];
         if (typeof direct === 'number' && direct !== 0) value = applyModifierOperation(value, { operator: '+', value: direct });
@@ -515,6 +541,7 @@ export class UnifiedEffectExecutor {
     const targetSide = target === 'self' ? 'enemy' : 'player';
     for (const [side, attribute] of [['enemy', 'damage_modifier'], [targetSide, 'damage_taken_modifier']] as const) {
       for (const source of this.getDeclarativeModifierOperations(side, attribute, enemy)) {
+        if (source.operation.damageKind && source.operation.damageKind !== (damageKind || 'attack')) continue;
         value = applyModifierOperation(value, source.operation);
       }
       const entity = side === 'enemy' ? enemy : this.gameStateManager.getPlayer();
@@ -1347,17 +1374,23 @@ export class UnifiedEffectExecutor {
     const selected = await this.selectSummons(command.selector, sourceOwner, sourceIsPlayer, sharedChoice);
     const ids = selected.map(unit => unit.instanceId);
     if (command.type === 'damage_summons') {
-      const result = this.gameStateManager.damageSummons(ids, command.amount);
+      const sourceEnemyId = sourceOwner === 'enemy'
+        ? this.executionContext.battleContext?.enemyId || this.gameStateManager.getGameState().activeEnemyId || undefined
+        : undefined;
+      const sourceSummonId = this.executionContext.summonContext?.instanceId;
+      const result = await this.damageSummonsWithDefense(
+        ids, command.amount,
+        { owner: sourceOwner, ...(sourceEnemyId ? { enemyId: sourceEnemyId } : {}), ...(sourceSummonId ? { summonId: sourceSummonId } : {}) },
+        'effect', false,
+      );
       for (const hit of result.hits) {
         const unit = selected.find(entry => entry.instanceId === hit.summonId);
         if (!unit) continue;
-        await this.dispatchSummonDamageTransition(unit, hit, sourceOwner);
         this.presentation.addLog(
           `${unit.name}受到${hit.hpLost}点伤害${hit.blocked > 0 ? `（格挡${hit.blocked}）` : ''}${hit.defeated ? '并倒下' : ''}`,
           hit.defeated ? 'damage' : 'info',
           { type: 'ability', name: unit.name, details: unit.description },
         );
-        if (hit.defeated) this.recordSummonDefeat(unit, 'damage');
       }
       return;
     }
@@ -1711,13 +1744,134 @@ export class UnifiedEffectExecutor {
     amount: number,
     holder: SummonUnit,
     attributes: readonly BattleModifierAttribute[],
+    damageKind?: DamageKind,
   ): number {
     const sources = this.summonModifierSources(holder);
     let result = amount;
     for (const attribute of attributes) {
-      for (const source of sources[attribute] || []) result = applyModifierOperation(result, source.operation);
+      for (const source of sources[attribute] || []) {
+        if (!source.operation.damageKind || source.operation.damageKind === damageKind) result = applyModifierOperation(result, source.operation);
+      }
     }
     return Math.max(0, roundBattleValue(result));
+  }
+
+  private async damageSummonsWithDefense(
+    targetIds: readonly string[],
+    amount: number,
+    source: { owner: 'player' | 'enemy'; enemyId?: string; summonId?: string },
+    damageKind: DamageKind,
+    bypassBlock: boolean,
+    packetRequested = amount,
+  ): Promise<ReturnType<GameStateManager['damageSummons']>> {
+    const hits: ReturnType<GameStateManager['damageSummons']>['hits'] = [];
+    for (const summonId of [...new Set(targetIds)]) {
+      const before = this.gameStateManager.getSummonById(summonId);
+      if (!before || before.hasHp === false || before.currentHp <= 0) continue;
+      const caps = (before.statusEffects || [])
+        .map(status => this.dynamicStatusManager.getStatusDefinition(status.id)?.defense?.damage_cap)
+        .filter((cap): cap is number => cap !== undefined);
+      const requested = Math.max(0, roundBattleValue(packetRequested));
+      const incoming = Math.max(0, roundBattleValue(amount));
+      const modified = caps.length ? Math.min(incoming, ...caps) : incoming;
+      const postBlock = bypassBlock ? modified : Math.max(0, roundBattleValue(modified - (before.block || 0)));
+      const buffer = postBlock > 0
+        ? before.statusEffects?.find(status => this.dynamicStatusManager.getStatusDefinition(status.id)?.defense?.prevent_hp_loss)
+        : undefined;
+      const prevented = buffer
+        ? await this.triggerHost.consumeSummonStatusLayer(summonId, buffer.id)
+        : false;
+      const result = this.gameStateManager.damageSummons([summonId], modified, bypassBlock, prevented);
+      const rawHit = result.hits[0];
+      if (!rawHit) continue;
+      const hit = {
+        ...rawHit,
+        requested,
+        ...(modified !== requested ? { modified } : rawHit.modified !== undefined ? { modified: rawHit.modified } : {}),
+      };
+      hits.push(hit);
+      await this.dispatchSummonDamageTransition(before, hit, source.owner, damageKind);
+      if (damageKind === 'attack') await this.retaliateSummonAttack(this.gameStateManager.getSummonById(summonId) || before, source);
+      if (hit.defeated) this.recordSummonDefeat(before, 'damage');
+    }
+    return { state: this.gameStateManager.readSummons(), hits };
+  }
+
+  private async retaliateSummonAttack(
+    defender: SummonUnit,
+    attacker: { owner: 'player' | 'enemy'; enemyId?: string; summonId?: string },
+  ): Promise<void> {
+    for (const status of defender.statusEffects || []) {
+      const rule = this.dynamicStatusManager.getStatusDefinition(status.id)?.defense?.retaliate_attack;
+      const amount = rule === 'stacks' ? status.stacks : rule;
+      if (!amount || amount <= 0) continue;
+      if (attacker.summonId) {
+        await this.damageSummonsWithDefense(
+          [attacker.summonId], amount,
+          { owner: defender.owner, summonId: defender.instanceId },
+          'retaliation', false,
+        );
+      } else {
+        await this.executeModernBattleCommand(
+          { type: 'damage', target: 'opponent', amount, damageKind: 'retaliation' },
+          defender.owner === 'player',
+          attacker.owner === 'player' ? { kind: 'player', id: 'player' } : attacker.enemyId,
+          { sourceSummonId: defender.instanceId },
+        );
+      }
+    }
+  }
+
+  private async interceptDamageWithSummonDefense(request: {
+    source: 'player' | 'enemy'; target: 'player' | 'enemy'; amount: number;
+    damageKind: DamageKind; sourceEnemyId?: string; sourceSummonId?: string; targetEnemyId?: string;
+  }): Promise<{ remainingDamage: number; interceptedDamage: number; hits: Array<{ summonId: string; blocked: number; hpLost: number; defeated: boolean }> }> {
+    let remainingDamage = Math.max(0, roundBattleValue(request.amount));
+    const hits: Array<{ summonId: string; blocked: number; hpLost: number; defeated: boolean }> = [];
+    const eligible = this.gameStateManager.getSummons(request.target)
+      .filter(unit => unit.hasHp !== false && unit.currentHp > 0)
+      .filter(unit => request.target !== 'enemy' || (request.targetEnemyId !== undefined && unit.summonerId === request.targetEnemyId))
+      .filter(unit => unit.capabilities?.intercepts !== false)
+      .filter(unit => unit.intercept?.maxPerTurn === undefined || unit.interceptionsThisTurn < unit.intercept.maxPerTurn)
+      .sort((left, right) => {
+        const priority = (right.intercept?.priority || 0) - (left.intercept?.priority || 0);
+        if (priority !== 0) return priority;
+        const speed = left.intercept || right.intercept ? (right.speed || 0) - (left.speed || 0) : 0;
+        return speed || left.createdSequence - right.createdSequence;
+      });
+    for (const snapshot of eligible) {
+      if (remainingDamage <= 0) break;
+      const unit = this.gameStateManager.getSummonById(snapshot.instanceId);
+      if (!unit || unit.currentHp <= 0) continue;
+      const state = this.gameStateManager.readSummons();
+      this.gameStateManager.writeSummons({
+        ...state,
+        living: state.living.map(candidate => candidate.instanceId === unit.instanceId
+          ? { ...candidate, interceptionsThisTurn: candidate.interceptionsThisTurn + 1 }
+          : candidate),
+      }, 'summon_interception_started');
+      let modified = remainingDamage;
+      for (const { operation } of this.summonModifierSources(unit).damage_taken_modifier || []) {
+        if (!operation.damageKind || operation.damageKind === request.damageKind)
+          modified = Math.max(0, roundBattleValue(applyModifierOperation(modified, operation)));
+      }
+      const result = await this.damageSummonsWithDefense(
+        [unit.instanceId], modified,
+        { owner: request.source, ...(request.sourceEnemyId ? { enemyId: request.sourceEnemyId } : {}), ...(request.sourceSummonId ? { summonId: request.sourceSummonId } : {}) },
+        request.damageKind, false, remainingDamage,
+      );
+      const hit = result.hits[0];
+      if (!hit) continue;
+      hits.push({ summonId: unit.instanceId, blocked: hit.blocked, hpLost: hit.hpLost, defeated: hit.defeated });
+      remainingDamage = hit.prevented
+        ? 0
+        : Math.max(0, roundBattleValue((hit.modified ?? hit.requested) - hit.blocked - hit.hpLost));
+    }
+    return {
+      remainingDamage,
+      interceptedDamage: roundBattleValue(Math.max(0, request.amount) - remainingDamage),
+      hits,
+    };
   }
 
   private writeSummonStatusHolder(
@@ -1744,12 +1898,17 @@ export class UnifiedEffectExecutor {
       const amount = this.applySummonStatusModifiers(
         command.amount,
         holder,
-        ['damage_modifier', 'damage_taken_modifier'],
+        command.damageKind === 'hp_loss' ? [] : ['damage_modifier', 'damage_taken_modifier'],
+        command.damageKind || 'effect',
       );
-      const result = this.gameStateManager.damageSummons([id], amount, command.bypassBlock === true);
-      const hit = result.hits[0];
-      if (hit) await this.dispatchSummonDamageTransition(holder, hit, holder.owner, command.damageKind || 'effect');
-      if (hit?.defeated) this.recordSummonDefeat(holder, 'damage');
+      const sourceOwner = this.executionContext.sourceIsPlayer ? 'player' : 'enemy';
+      const sourceSummonId = this.executionContext.summonContext?.instanceId;
+      const sourceEnemyId = sourceOwner === 'enemy' ? this.executionContext.battleContext?.enemyId : undefined;
+      await this.damageSummonsWithDefense(
+        [id], amount,
+        { owner: sourceOwner, ...(sourceEnemyId ? { enemyId: sourceEnemyId } : {}), ...(sourceSummonId && sourceSummonId !== id ? { summonId: sourceSummonId } : {}) },
+        command.damageKind || 'effect', command.bypassBlock === true,
+      );
       return;
     }
     if (command.type === 'heal') {
@@ -1888,7 +2047,7 @@ export class UnifiedEffectExecutor {
     command: BattleEffectCommand,
     sourceIsPlayer: boolean,
     selectedTarget?: ResolvedEffectTarget | string,
-    transfer?: Pick<BattleEffectRuntimeContext, 'sourceEnemyId' | 'sourceModifierSources' | 'skipSourceDamageModifiers' | 'bypassBlock'>,
+    transfer?: Pick<BattleEffectRuntimeContext, 'sourceEnemyId' | 'sourceSummonId' | 'sourceModifierSources' | 'skipSourceDamageModifiers' | 'bypassBlock'>,
   ): Promise<BattleEffectRuntimeResult | undefined> {
     const inferredDamageKind = this.executionContext.cardContext?.type === 'Attack'
       ? 'attack'
@@ -1963,6 +2122,9 @@ export class UnifiedEffectExecutor {
         ...(transfer?.skipSourceDamageModifiers ? { skipSourceDamageModifiers: true } : {}),
         ...(transfer?.bypassBlock ? { bypassBlock: true } : {}),
         ...(sourceEnemyId ? { sourceEnemyId } : {}),
+        ...(transfer?.sourceSummonId || this.executionContext.summonContext?.instanceId
+          ? { sourceSummonId: transfer?.sourceSummonId || this.executionContext.summonContext?.instanceId }
+          : {}),
         ...(resolvedEnemyId ? { targetEnemyId: resolvedEnemyId } : {}),
       });
     } finally {

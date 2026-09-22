@@ -20,6 +20,7 @@ import {
   describeCardCost,
   normalizeCardCost,
   resourcePoolFromCombatant,
+  resolveActiveCardPlayRules,
   roundBattleDisplayValue,
   type Card,
   type CardResourcePayment,
@@ -694,10 +695,17 @@ export class BattleUI {
     const player = GameStateManager.getInstance().getPlayer();
     const denied = !preview.ok && ['CURSE_UNPLAYABLE', 'RULE_DENIED', 'RULE_LIMIT_REACHED', 'DOMINATED_ATTACK', 'SILENCED_SKILL'].includes(preview.code);
     const allowed = preview.ok || (!preview.ok && ['INSUFFICIENT_ENERGY', 'INSUFFICIENT_RESOURCE'].includes(preview.code));
+    const state = GameStateManager.getInstance().getGameState();
+    const aura = resolveActiveCardPlayRules(
+      UnifiedEffectExecutor.getInstance().getCardPlayRules('player'),
+      state.cardRuleUsesThisTurn || 0,
+      card,
+    ).ethereal;
     return {
       playAccess: denied ? 'denied' : allowed ? 'allowed' : undefined,
       temporary: !!card.parentCombatInstanceId && card.origin === 'copied' ||
         !!card.runInstanceId && !player.deck.some(owned => owned.runInstanceId === card.runInstanceId),
+      etherealAura: aura,
     };
   }
 
@@ -723,6 +731,7 @@ export class BattleUI {
       lifecycle: card.lifecycle,
       exhaust: card.exhaust || false,
       ethereal: card.ethereal || false,
+      sly: card.sly || false,
       innate: card.innate || false,
     };
 

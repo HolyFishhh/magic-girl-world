@@ -22,6 +22,7 @@ export * from './dynamicCardCost';
 export * from './effectScheduler';
 export * from './battleMath';
 export * from './damageProtection';
+export * from './statusDefense';
 export * from './modifierMath';
 export * from './statusApplication';
 export * from './statusDefinitionValidation';

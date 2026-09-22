@@ -1,3 +1,4 @@
+import { normalizeStatusDefenseRule } from '../game-core/statusDefense';
 import { towerBattleStories, towerBattleNarrativePrompt } from './towerBattleNarrative';
 import { OPENING_TRANSFORM_GUIDANCE } from '../game-core/towerOpeningTransforms';
 import { normalizeDamageProtectionRule } from '../game-core/damageProtection';
@@ -1633,7 +1634,7 @@ export function extractTowerInitialRepairSlotTargets(
         }
         const addStatusValueSlot = (
           kind: Extract<TowerInitialRepairSlotKind,
-            'status_type' | 'status_stacks_change' | 'status_tick_timing' | 'status_max_stacks' | 'status_stun' | 'status_character_emoji' | 'status_protection' | 'description'>,
+            'status_type' | 'status_stacks_change' | 'status_tick_timing' | 'status_max_stacks' | 'status_stun' | 'status_character_emoji' | 'status_protection' | 'status_defense' | 'description'>,
           field: string,
         ): void => {
           const path = `${statusPath}.${field}`;
@@ -1643,6 +1644,7 @@ export function extractTowerInitialRepairSlotTargets(
             original: clone(initialRepairValueAtPath(original, path)),
           }, error);
         };
+        if (/defense/i.test(error)) { addStatusValueSlot('status_defense', 'defense'); continue; }
         if (/protection/i.test(error)) { addStatusValueSlot('status_protection', 'protection'); continue; }
         if (/character_emoji/i.test(error)) { addStatusValueSlot('status_character_emoji', 'character_emoji'); continue; }
         if (/tick_timing/i.test(error)) {
@@ -2537,6 +2539,10 @@ function assertInitialRepairSlotValue(slot: TowerInitialRepairSlotTarget, value:
     }
     return;
   }
+  if (slot.kind === 'status_defense') {
+    if (value !== null && !normalizeStatusDefenseRule(value)) throw new Error(`${label} 不是合法状态防御规则`);
+    return;
+  }
   if (slot.kind === 'status_protection') {
     if (value !== null && !normalizeDamageProtectionRule(value)) throw new Error(`${label} 不是合法保护规则`);
     return;
@@ -2991,7 +2997,7 @@ export function mergeTowerInitialSlotRepair(
         continue;
       }
       if (
-        (slot.kind === 'status_max_stacks' || slot.kind === 'status_stun' || slot.kind === 'status_character_emoji' || slot.kind === 'status_protection' || slot.kind === 'status_tick_timing')
+        (slot.kind === 'status_max_stacks' || slot.kind === 'status_stun' || slot.kind === 'status_character_emoji' || slot.kind === 'status_protection' || slot.kind === 'status_defense' || slot.kind === 'status_tick_timing')
         && operation.value === null
       ) {
         deleteInitialRepairValueAtPath(result, slot.path);

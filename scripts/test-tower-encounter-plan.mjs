@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 process.env.TS_NODE_COMPILER_OPTIONS = JSON.stringify({ module: 'CommonJS', moduleResolution: 'node' });
 require('ts-node/register/transpile-only');
-const { createTowerEncounterPlan, TOWER_ENEMY_COUNT_WEIGHTS } = require('../src/game-core/towerEncounterPlan.ts');
+const { createTowerEncounterPlan, TOWER_ENEMY_COUNT_WEIGHTS, TOWER_COUNTER_STRATEGY_CHANCE } = require('../src/game-core/towerEncounterPlan.ts');
 const tower = require('../src/game-core/towerRequest.ts');
 const { recommendTowerBattleRewardBudget } = require('../src/game-core/contentBudget.ts');
 const job = { nodeId: 'count_fixture', requestId: 'count_request', basedOnRevision: 3, kind: 'battle', act: 1, floor: 4, contentSeed: 89, rewardSeed: 11, difficultyMultiplier: 1 };
@@ -15,8 +15,11 @@ assert.equal(createTowerEncounterPlan({ ...job, kind: 'event' }), undefined);
 assert.equal(createTowerEncounterPlan({ ...job, contentSeed: undefined }), undefined, 'legacy saved snapshots remain readable');
 for (const kind of ['battle', 'elite', 'boss']) {
   const bins = [0, 0, 0, 0, 0];
+  let counterStrategies = 0;
   for (let seed = 0; seed < 20000; seed++) bins[createTowerEncounterPlan({ ...job, kind, contentSeed: seed }).enemyCount - 1]++;
+  for (let seed = 0; seed < 20000; seed++) counterStrategies += Number(createTowerEncounterPlan({ ...job, kind, contentSeed: seed }).counterStrategy);
   bins.forEach((value, index) => assert.ok(Math.abs(value / 200 - TOWER_ENEMY_COUNT_WEIGHTS[kind][index]) < 1.5, `${kind}: ${bins}`));
+  assert.ok(Math.abs(counterStrategies / 200 - TOWER_COUNTER_STRATEGY_CHANCE[kind]) < 1.5, `${kind}: ${counterStrategies}`);
 }
 const schema = tower.createTowerNodeJsonSchema(job.kind, job).value.properties.payload.properties.battle;
 assert.equal(schema.properties.enemies.minItems, plan.enemyCount);
@@ -25,6 +28,7 @@ assert.equal(schema.properties.enemy, undefined);
 assert.deepEqual(schema.required, ['enemies']);
 const prompt = tower.formatTowerNodeGenerationPrompt(job, { difficultyPercent: 80 });
 assert.ok(prompt.includes(`必须恰好 ${plan.enemyCount} 名`));
+assert.ok(prompt.includes('软克制思考'));
 assert.doesNotMatch(prompt, /普通遭遇优先2至3|普通战斗优先考虑2至3/);
 const budget = recommendTowerBattleRewardBudget(job);
 const candidates = (kind, amount) => Array.from({ length: amount }, (_, index) => kind === 'card'

@@ -21,6 +21,9 @@ export interface TavernEffectCommandContext {
   statusId?: string;
   spentEnergy?: unknown;
   spentResources?: Readonly<Record<string, number>>;
+  paidEnergy?: unknown;
+  paidTotal?: unknown;
+  paidResources?: Readonly<Record<string, number>>;
   xValues?: Readonly<Record<string, number>>;
   statusContext?: { stacks?: unknown };
   orbValue?: unknown;
@@ -189,10 +192,13 @@ export class TavernEffectCommandHost {
     await runEffectCommandProgram(
       program,
       {
-        spentEnergy: finiteNumber(context.spentEnergy, 0) || 0,
-        spentResources: context.spentResources,
+        spentEnergy: finiteNumber(context.spentEnergy, finiteNumber(context.paidEnergy, 0)) || 0,
+        eventPaidEnergy: finiteNumber(context.paidEnergy, 0) || 0,
+        eventPaidTotal: finiteNumber(context.paidTotal, 0) || 0,
+        eventPaidResources: context.paidResources,
+        spentResources: context.spentResources || context.paidResources,
         xValues: context.xValues,
-        xValue: finiteNumber((context as { xValue?: unknown }).xValue, finiteNumber(context.spentEnergy, 0) || 0),
+        xValue: finiteNumber((context as { xValue?: unknown }).xValue, finiteNumber(context.spentEnergy, finiteNumber(context.paidEnergy, 0)) || 0),
         statusStacks: finiteNumber(context.statusContext?.stacks),
         orbValue: finiteNumber(context.orbValue),
         eventDamageKind: context.damageKind,

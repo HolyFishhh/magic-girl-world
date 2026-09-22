@@ -487,7 +487,7 @@
             },
             "path": {
               "type": "string",
-              "pattern": "^(context\\.(spent_energy|x_value|status_stacks|orb_value)|context\\.(spent_resource|x_resource)\\.[A-Za-z_][A-Za-z0-9_]*|(self|opponent)\\.resource\\.[A-Za-z_][A-Za-z0-9_]*\\.(current|max)|battle\\.(turn_number|cards_played_this_turn|attacks_played_this_turn|skills_played_this_turn)|(self|opponent)\\.(hp|max_hp|lust|max_lust|energy|max_energy|block)|(self|opponent)\\.(hand_size|draw_pile_size|discard_pile_size|exhaust_pile_size)|(self|opponent)\\.status\\.[A-Za-z0-9_]+\\.stacks)$"
+              "pattern": "^(context\\.(spent_energy|x_value|status_stacks|orb_value|event_paid_energy|event_paid_total)|context\\.(spent_resource|x_resource|event_paid_resource)\\.[A-Za-z_][A-Za-z0-9_]*|(self|opponent)\\.resource\\.[A-Za-z_][A-Za-z0-9_]*\\.(current|max)|battle\\.(turn_number|cards_played_this_turn|attacks_played_this_turn|skills_played_this_turn)|(self|opponent)\\.(hp|max_hp|lust|max_lust|energy|max_energy|block)|(self|opponent)\\.(hand_size|draw_pile_size|discard_pile_size|exhaust_pile_size)|(self|opponent)\\.status\\.[A-Za-z0-9_]+\\.stacks)$"
             }
           }
         },
@@ -1446,8 +1446,36 @@
         },
         "value": {
           "$ref": "#/$defs/numberExpression"
+        },
+        "damageKind": {
+          "enum": [
+            "attack",
+            "effect",
+            "hp_loss",
+            "retaliation",
+            "damage_over_time"
+          ]
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "damageKind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "stat": {
+                "enum": [
+                  "damage",
+                  "damage_taken"
+                ]
+              }
+            }
+          }
+        }
+      ]
     },
     "modifyCardEffect": {
       "type": "object",
@@ -1792,7 +1820,8 @@
                     "retain",
                     "exhaust",
                     "ethereal",
-                    "innate"
+                    "innate",
+                    "sly"
                   ]
                 },
                 "enabled": {
@@ -2118,7 +2147,8 @@
                 "retain",
                 "exhaust",
                 "ethereal",
-                "innate"
+                "innate",
+                "sly"
               ]
             },
             "enabled": {
@@ -2394,7 +2424,8 @@
             "deny_card_play",
             "allow_card_play",
             "limit_card_play",
-            "card_destination"
+            "card_destination",
+            "ethereal"
           ]
         },
         "limit": {
@@ -2509,7 +2540,8 @@
                 "retain_hand",
                 "retain_block",
                 "deny_card_play",
-                "allow_card_play"
+                "allow_card_play",
+                "ethereal"
               ]
             }
           },
@@ -4859,6 +4891,7 @@
               "enum": [
                 "discard",
                 "exhaust",
+                "remove",
                 "purge"
               ]
             },
@@ -4866,6 +4899,7 @@
               "enum": [
                 "discard",
                 "exhaust",
+                "remove",
                 "purge"
               ]
             },
@@ -4881,6 +4915,10 @@
         "requiresSummonTemplateId": {
           "type": "string",
           "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "sly": {
+          "type": "boolean",
+          "description": "灵巧：回合结束清理前从手牌被主动或效果弃置时，免费打出并完整结算；回合末自动弃牌不触发。"
         }
       }
     },
@@ -5166,7 +5204,8 @@
                 "retain",
                 "exhaust",
                 "ethereal",
-                "innate"
+                "innate",
+                "sly"
               ]
             },
             "enabled": {

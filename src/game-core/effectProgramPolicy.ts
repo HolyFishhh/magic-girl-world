@@ -331,6 +331,10 @@ function visitNode(
       policy,
       node.trigger === 'passive' ? 'only' : policy.modifierPolicy,
     );
+    if (['card_played', 'attack_played', 'skill_played', 'power_played'].includes(node.trigger)) {
+      nestedPolicy.allowSpentEnergy = policy.allowSpentEnergy;
+      nestedPolicy.allowSpentResources = policy.allowSpentResources;
+    }
     node.effects.forEach((entry, index) =>
       visitNode(entry, `${path}.effects[${index}]`, nestedPolicy, issues, false),
     );

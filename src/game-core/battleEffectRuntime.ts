@@ -150,6 +150,7 @@ export interface BattleEffectRuntimePorts {
     amount: number;
     damageKind: import('./battleEventJournal').DamageKind;
     sourceEnemyId?: string;
+    sourceSummonId?: string;
     targetEnemyId?: string;
     /** Preserve an independent attacker's outgoing modifier snapshot during redirects. */
     sourceModifierSources?: Partial<Record<BattleModifierAttribute, readonly BattleModifierSource[]>>;
@@ -162,12 +163,16 @@ export interface BattleEffectRuntimePorts {
     amount: number;
     damageKind: import('./battleEventJournal').DamageKind;
     sourceEnemyId?: string;
+    sourceSummonId?: string;
     targetEnemyId?: string;
   }): Promise<{
     remainingDamage: number;
     interceptedDamage: number;
     hits: Array<{ summonId: string; blocked: number; hpLost: number; defeated: boolean }>;
   }>;
+  capDamageByStatus?(request: { target: BattleSide; targetEnemyId?: string; amount: number; damageKind: import('./battleEventJournal').DamageKind }): Promise<number>;
+  preventHpLossByStatus?(request: { target: BattleSide; targetEnemyId?: string; damageKind: import('./battleEventJournal').DamageKind }): Promise<boolean>;
+  retaliateAttackByStatus?(request: { source: BattleSide; target: BattleSide; sourceEnemyId?: string; sourceSummonId?: string; targetEnemyId?: string }): Promise<void>;
   present?(event: BattleEffectRuntimeEvent): void;
 }
 
@@ -175,6 +180,8 @@ export interface BattleEffectRuntimeContext {
   source: BattleSide;
   /** Stable identity for an enemy source while the legacy active alias may move. */
   sourceEnemyId?: string;
+  /** Stable identity when a summon, rather than its owning combatant, created the packet. */
+  sourceSummonId?: string;
   /** Stable identity for an enemy target selected by a multi-enemy selector. */
   targetEnemyId?: string;
   damageKind?: import('./battleEventJournal').DamageKind;
@@ -410,6 +417,7 @@ export class BattleEffectRuntime {
         ? this.modifierSources(definition.target, definition.attribute, enemyId)
         : [...independentSourceModifiers];
       for (const source of sources) {
+        if (source.operation.damageKind && source.operation.damageKind !== context.damageKind) continue;
         const previousValue = result;
         const next = applyModifierOperation(result, source.operation);
         if (deferredReduction && definition.attribute === 'damage_taken_modifier' && next < result) {
@@ -486,6 +494,7 @@ export class BattleEffectRuntime {
         const protectedDamage = await this.ports.protectDamage({
           source, target, amount: value, damageKind: context.damageKind,
           ...(context.sourceEnemyId ? { sourceEnemyId: context.sourceEnemyId } : {}),
+          ...(context.sourceSummonId ? { sourceSummonId: context.sourceSummonId } : {}),
           ...(context.targetEnemyId ? { targetEnemyId: context.targetEnemyId } : {}),
           ...(context.sourceModifierSources ? { sourceModifierSources: context.sourceModifierSources } : {}),
           ...(context.bypassBlock ? { bypassBlock: true } : {}),
@@ -501,6 +510,7 @@ export class BattleEffectRuntime {
           amount: value,
           damageKind: context.damageKind,
           ...(context.sourceEnemyId ? { sourceEnemyId: context.sourceEnemyId } : {}),
+          ...(context.sourceSummonId ? { sourceSummonId: context.sourceSummonId } : {}),
           ...(context.targetEnemyId ? { targetEnemyId: context.targetEnemyId } : {}),
         });
         if (intercepted.hits.length > 0) {
@@ -536,6 +546,10 @@ export class BattleEffectRuntime {
       // summon interception ordering, otherwise an absorbed guard reduction is
       // incorrectly reintroduced as overflow.
       modifiedRequested = value;
+      if (value > 0 && this.ports.capDamageByStatus) {
+        value = Math.max(0, roundBattleValue(await this.ports.capDamageByStatus({ target, ...(enemyId ? { targetEnemyId: enemyId } : {}), amount: value, damageKind: context.damageKind || 'effect' })));
+        modifiedRequested = value;
+      }
       const absorption = context.bypassBlock
         ? { damage: value, blockUsed: 0, remainingBlock: entity.block }
         : absorbDamageWithBlock(value, entity.block);
@@ -577,6 +591,8 @@ export class BattleEffectRuntime {
         if (!entity) return { applied: false, target };
       }
       value = absorption.damage;
+      if (value > 0 && this.ports.preventHpLossByStatus && await this.ports.preventHpLossByStatus({ target, ...(enemyId ? { targetEnemyId: enemyId } : {}), damageKind: context.damageKind || 'effect' })) value = 0;
+      if (context.damageKind === 'attack' && this.ports.retaliateAttackByStatus) await this.ports.retaliateAttackByStatus({ source, target, ...(context.sourceEnemyId ? { sourceEnemyId: context.sourceEnemyId } : {}), ...(context.sourceSummonId ? { sourceSummonId: context.sourceSummonId } : {}), ...(enemyId ? { targetEnemyId: enemyId } : {}) });
 
     }
 

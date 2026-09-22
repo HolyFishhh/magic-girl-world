@@ -80,7 +80,10 @@ export class EffectProgramDisplay {
 
   public protectionToTags(value: unknown): EffectDisplayTag[] {
     const enemyNames = Object.fromEntries(GameStateManager.getInstance().getEnemies().map(enemy => [enemy.id, enemy.name]));
-    return compactContentToDisplayTags({ protection: (value as { protection?: unknown })?.protection }, { enemyNames });
+    return compactContentToDisplayTags({
+      protection: (value as { protection?: unknown })?.protection,
+      defense: (value as { defense?: unknown })?.defense,
+    }, { enemyNames });
   }
 
   public cardToTags(card: { effectProgram?: EffectProgram; program?: EffectProgram; requiresSummonTemplateId?: string }, context: Pick<EffectDisplayContext, 'damageAmountText'> = {}): EffectDisplayTag[] {

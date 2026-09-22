@@ -319,12 +319,13 @@ export interface DiscardAutoPlayResolution {
 
 export interface CardDiscardLifecycleResolution {
   triggersDiscardLifecycle: boolean;
+  sly: boolean;
   autoPlay: DiscardAutoPlayResolution | null;
 }
 
 /** Resolve one deterministic auto-play request without treating cleanup, scry, or ordinary moves as a discard. */
 export function resolveDiscardAutoPlay(
-  card: Pick<CardWithAttachments, 'attachments'>,
+  card: Pick<CardWithAttachments, 'attachments' | 'sly'>,
   reason: CardMoveReason,
   phase: string,
 ): DiscardAutoPlayResolution | null {
@@ -346,7 +347,7 @@ export function resolveDiscardAutoPlay(
  * Cleanup, scry and non-hand moves remain journal events, but are not gameplay discards.
  */
 export function resolveCardDiscardLifecycle(
-  card: Pick<CardWithAttachments, 'attachments'>,
+  card: Pick<CardWithAttachments, 'attachments' | 'sly'>,
   reason: CardMoveReason,
   source: 'hand' | 'drawPile' | 'discardPile' | 'exhaustPile',
   phase: string,
@@ -354,6 +355,7 @@ export function resolveCardDiscardLifecycle(
   const triggersDiscardLifecycle = source === 'hand' && CARD_DISCARD_TRIGGER_REASONS.has(reason);
   return {
     triggersDiscardLifecycle,
+    sly: triggersDiscardLifecycle && card.sly === true,
     autoPlay: triggersDiscardLifecycle ? resolveDiscardAutoPlay(card, reason, phase) : null,
   };
 }

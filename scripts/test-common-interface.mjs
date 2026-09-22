@@ -145,20 +145,23 @@ const statusDefinitionsSource = scriptSource.match(/function contentDescriptionS
 const statusNamesSource = scriptSource.match(/function contentDescriptionStatusNames\([\s\S]*?(?=\nfunction )/)?.[0];
 assert.ok(statusDefinitionsSource && statusNamesSource);
 const referenceProbe = {};
-runInNewContext(ts.transpileModule(`${statusDefinitionsSource}\n${statusNamesSource}\n${ruleSource}\nreferenceProbe.rules=contentRuleDescription(probe);`, {
+runInNewContext(ts.transpileModule(`${statusDefinitionsSource}\n${statusNamesSource}\n${ruleSource}\nreferenceProbe.rules=contentRuleDescription(probe);referenceProbe.builtin=contentRuleDescription({type:'Skill',effects:{apply_status:'sts_ritual',stacks:1,to:'self'}});`, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
 }).outputText, {
   referenceProbe,
   probe: { type:'Skill', effects:{apply_status:'delayed',to:'opponent'}, description:'本回合结束伤害' },
   __STAT__: {battle:{statuses:[{id:'delayed',name:'延迟',triggers:{turn_start:{damage:6,to:'self'}}}]}},
   contentDescriptionResourceNames:()=>({}),collectStanceNames, collectStanceDefinitions:()=>({}), collectCardDisplayNames:()=>({}), collectSummonDisplayNames:()=>({}), contentDescriptionResourceDefinitions:()=>({}),
+  expandBuiltinStatusDefinitions: requireRules(resolve('src/game-core/builtinStatusCatalog.ts')).expandBuiltinStatusDefinitions,
   describeCompactCard:cardRules.describeCompactCard,describeCompactContent:cardRules.describeCompactContent,
 });
 assert.match(referenceProbe.rules,/回合开始时/,'actual common renderer supplies exact status definitions');
 assert.doesNotMatch(referenceProbe.rules,/本回合结束伤害/);
+assert.match(referenceProbe.builtin,/仪式/,'a wrapper-free built-in reward preview uses its Chinese status name before selection');
+assert.doesNotMatch(referenceProbe.builtin,/sts_ritual/);
 for (const [extra, keyword] of [
   [{ exhaust: true }, '消耗'], [{ retain: true }, '保留'],
-  [{ innate: true }, '固有'], [{ ethereal: true }, '空灵'],
+  [{ innate: true }, '固有'], [{ ethereal: true }, '虚无'],
   [{ type: 'Power', trigger: { on: 'turn_start', effects: { block: 1 } } }, '消耗'],
   [{ type: 'Power', trigger: { on: 'passive', effects: { modify: 'summon_capacity', add: 1 } } }, '自身的召唤容量增加1'],
 ]) {

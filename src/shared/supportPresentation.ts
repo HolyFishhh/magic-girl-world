@@ -8,7 +8,7 @@ export function renderSupportDetails(value: Record<string, any>, options: {
     <span>${escapeHtml(value.emoji || '✦')}</span>
     <strong>${escapeHtml(value.name || value.id || options.kind)}</strong>
     <small>${escapeHtml(options.kind)}</small>
-    ${value.rarity ? `<small class="support-rarity rarity-${escapeHtml(value.rarity)}">${escapeHtml(({Common:"普通",Uncommon:"罕见",Rare:"稀有",Epic:"史诗",Legendary:"传说",Boss:"首领",ENS:"特殊"} as Record<string,string>)[value.rarity] || value.rarity)}</small>` : ''}
+    ${value.rarity ? `<small class="support-rarity rarity-${escapeHtml(value.rarity)}">${escapeHtml(({Common:"普通",Uncommon:"罕见",Rare:"稀有",Epic:"史诗",Legendary:"传说",Corrupt:"诅咒",Boss:"首领",ENS:"特殊"} as Record<string,string>)[value.rarity] || value.rarity)}</small>` : ''}
     ${value.count != null ? `<small>×${escapeHtml(value.count)}</small>` : ''}
   </div>
   <div class="support-details-effects content-rules">${options.rulesHtml}</div>

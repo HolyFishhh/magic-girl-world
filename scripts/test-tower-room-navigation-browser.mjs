@@ -12,7 +12,7 @@ fs.mkdirSync(resolve('tmp'), { recursive: true });
 const dir = fs.mkdtempSync(resolve('tmp/tower-room-navigation-'));
 const wrap = (file, imports = '') => {
   const code = ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
-  return `(()=>{const exports={};const require=id=>{if(id==='../common/userNavigationScroll')return scrollModule;if(id==='../fish/shared/html')return {escapeHtml:s=>String(s)};if(id==='./towerMapMode')return {isLockedTowerMapRun:(stat,run)=>stat?.game_mode_lock?.schemaVersion===1&&stat.game_mode_lock.mode==='tower'&&run?.schemaVersion===3&&run.routeMode==='map'&&!!run.map};throw Error('Unexpected fixture import: '+id)};${imports}\n${code}\nreturn exports;})()`;
+  return `(()=>{const exports={};const require=id=>{if(id==='../shared/initialPresentation')return initialModule;if(id==='../game-core/towerMode')return modeModule;if(id==='../common/userNavigationScroll')return scrollModule;if(id==='../fish/shared/html')return {escapeHtml:s=>String(s)};if(id==='./towerMapMode')return {isLockedTowerMapRun:(stat,run)=>stat?.game_mode_lock?.schemaVersion===1&&stat.game_mode_lock.mode==='tower'&&run?.schemaVersion===3&&run.routeMode==='map'&&!!run.map};throw Error('Unexpected fixture import: '+id)};${imports}\n${code}\nreturn exports;})()`;
 };
 const index = fs.readFileSync('src/common/index.ts', 'utf8');
 const focusBody = index.match(/function applyPendingUserFocus\(\): void \{[\s\S]*?\n\}/)?.[0];
@@ -30,6 +30,8 @@ html,body{margin:0}body{display:block}#fixture-tail{height:2200px}</style>
 <div id="tower-map-root"><h2>路线图</h2><button>下一地点</button></div>
 <details id="mwg-status-fold"><summary>底部状态</summary></details><div id="fixture-tail"></div>
 <script>window.addEventListener("error",event=>window.fixtureError=event.message);</script><script>
+const modeModule=${wrap('src/game-core/towerMode.ts')};
+const initialModule=${wrap('src/shared/initialPresentation.ts')};
 const presentation=${wrap('src/common/towerScreenPresentation.ts')};
 const scrollModule=${wrap('src/common/userNavigationScroll.ts')};
 const {requestNavigationFocus,applyNavigationFocus}=${wrap('src/runtime/navigationFocus.ts')};

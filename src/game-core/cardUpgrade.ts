@@ -21,6 +21,7 @@ export interface CardUpgradePatch {
   exhaust?: boolean;
   ethereal?: boolean;
   innate?: boolean;
+  sly?: boolean;
 }
 
 export interface CardUpgradeOptions {
@@ -51,6 +52,7 @@ const PATCH_KEYS = new Set([
   'exhaust',
   'ethereal',
   'innate',
+  'sly',
 ]);
 const GAMEPLAY_PATCH_KEYS = [
   'cost',
@@ -62,6 +64,7 @@ const GAMEPLAY_PATCH_KEYS = [
   'exhaust',
   'ethereal',
   'innate',
+  'sly',
 ] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {

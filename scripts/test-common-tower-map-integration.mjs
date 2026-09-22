@@ -66,10 +66,16 @@ assert.match(commonSource, /renderTowerNodePanel/);
 assert.match(commonSource, /isLockedTowerMapRun\(stat, run\)/);
 assert.match(commonSource, /classList\.toggle\('has-tower-rewards', lockedTowerMap && hasRewards\)/);
 assert.match(commonSource, /runActionHost\.activateTowerRunNode\(node\.id\)/);
+assert.match(commonSource, /onPreparingNode:[\s\S]*?__TOWER_PRESELECTED_NODE_ID\s*=\s*choice\.id/,
+  'only a current queued/generating route choice may be reserved in DOM state');
+assert.match(commonSource, /readyReservedChoice[\s\S]{0,900}!hasSelectableRewards\(stat\)[\s\S]{0,900}activateTowerNode\(readyReservedChoice, true\)/,
+  'automatic entry rechecks reward locks before activating a reserved node');
+assert.match(commonSource, /\['consumed', 'skipped'\]\.includes\(run\.opening\.phase\)/,
+  'automatic entry rechecks the opening settlement lock');
 assert.doesNotMatch(commonSource, /enterTowerRunNode\(node, routePrompt\(node\)\)/);
 assert.match(commonSource, /runActionHost\.retryTowerNodeGeneration\(nodeId\)/);
 assert.match(commonSource, /capabilities\.singleFloorStart !== true/);
-assert.match(commonSource, /至少需要 0\.3\.5/);
+assert.ok(commonSource.includes(`至少需要 ${JSON.parse(readFileSync('release.config.json', 'utf8')).cardVersion}`));
 assert.match(html, /id="tower-player-energy"/);
 assert.match(html, /class="tower-player-deck-section"/);
 const collectionCardRenderer = commonSource.match(/function renderCollectionCard\([\s\S]*?(?=\nfunction )/)?.[0] || '';

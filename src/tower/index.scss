@@ -1202,3 +1202,12 @@
   animation: none;
 }
 .tower-map-node.is-locked .tower-node-orbit { display: none; }
+
+.tower-map-node.is-preselected .tower-node-sigil {
+  outline: 2px solid #f2ce77;
+  outline-offset: 4px;
+}
+.tower-map-node.is-preselected .tower-node-phase {
+  color: #fff1c6;
+  border-color: #d9ad48;
+}

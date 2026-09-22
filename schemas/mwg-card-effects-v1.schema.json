@@ -502,7 +502,8 @@
             "retain",
             "exhaust",
             "ethereal",
-            "innate"
+            "innate",
+            "sly"
           ]
         },
         {
@@ -514,7 +515,8 @@
               "retain",
               "exhaust",
               "ethereal",
-              "innate"
+              "innate",
+              "sly"
             ]
           }
         }
@@ -3136,7 +3138,8 @@
             "exhaust",
             "ethereal",
             "innate",
-            "area"
+            "area",
+            "sly"
           ]
         },
         "add": {
@@ -3683,7 +3686,8 @@
                   "retain",
                   "exhaust",
                   "ethereal",
-                  "innate"
+                  "innate",
+                  "sly"
                 ]
               }
             },
@@ -3948,7 +3952,8 @@
                 "retain",
                 "exhaust",
                 "ethereal",
-                "innate"
+                "innate",
+                "sly"
               ]
             },
             "enabled": {
@@ -4353,7 +4358,8 @@
                 "retain",
                 "exhaust",
                 "ethereal",
-                "innate"
+                "innate",
+                "sly"
               ]
             },
             "enabled": {
@@ -4675,6 +4681,15 @@
         },
         "targets": {
           "$ref": "#/$defs/enemyTargetSelector"
+        },
+        "damage_type": {
+          "enum": [
+            "attack",
+            "effect",
+            "hp_loss",
+            "retaliation",
+            "damage_over_time"
+          ]
         }
       },
       "oneOf": [
@@ -4703,6 +4718,25 @@
             "set"
           ]
         }
+      ],
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "damage_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "modify": {
+                "enum": [
+                  "damage",
+                  "damage_taken"
+                ]
+              }
+            }
+          }
+        }
       ]
     },
     "cardPlayRuleEffect": {
@@ -4724,7 +4758,8 @@
             "deny_card_play",
             "allow_card_play",
             "limit_card_play",
-            "card_destination"
+            "card_destination",
+            "ethereal"
           ]
         },
         "limit": {
@@ -4899,7 +4934,8 @@
                 "retain_hand",
                 "retain_block",
                 "deny_card_play",
-                "allow_card_play"
+                "allow_card_play",
+                "ethereal"
               ]
             }
           },
@@ -6952,6 +6988,7 @@
               "enum": [
                 "discard",
                 "exhaust",
+                "remove",
                 "purge"
               ]
             },
@@ -6959,9 +6996,10 @@
               "enum": [
                 "discard",
                 "exhaust",
+                "remove",
                 "purge"
               ],
-              "description": "Only active/effect discard from hand, not playing, scry or turn cleanup."
+              "description": "Every real discard from hand, including turn cleanup; playing and scry are not discard. remove leaves combat without entering the recoverable exhaust pile; purge permanently removes the exact owned instance."
             },
             "turn_end": {
               "enum": [
@@ -6984,6 +7022,10 @@
         "dialogue": {
           "type": "string",
           "minLength": 1
+        },
+        "sly": {
+          "type": "boolean",
+          "description": "灵巧：回合结束清理前从手牌被主动或效果弃置时，免费打出并完整结算；回合末自动弃牌不触发。"
         }
       },
       "allOf": [

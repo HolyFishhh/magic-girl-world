@@ -228,7 +228,7 @@ export function planRewardSelections(input: RewardSelectionPlanInput): RewardSel
       if (quantity === null) throw new Error(`奖励 ${rewardName(value)} 的数量无效`);
       if (category === 'cards') value.quantity = quantity;
       if (category === 'items') value.count = quantity;
-      const supportStatuses = readRewardCandidateSupportStatuses(value);
+      const supportStatuses = readRewardCandidateSupportStatuses(value, statusDefinitions);
       if (!supportStatuses.ok) throw new Error(`奖励 ${rewardName(value)} 无效：${supportStatuses.message}`);
       for (const supportStatus of supportStatuses.statuses) {
         const statusId = String(supportStatus.id);

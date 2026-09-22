@@ -4,6 +4,7 @@ import { describeCompactStatus } from './contentDescription';
 import type { EffectNode, EffectProgram } from './effectDsl';
 import { validateEffectProgramPolicy } from './effectProgramPolicy';
 import { normalizeDamageProtectionRule } from './damageProtection';
+import { normalizeStatusDefenseRule } from './statusDefense';
 
 export type CompactStatusValidationResult = { ok: true } | { ok: false; message: string };
 
@@ -20,6 +21,7 @@ const ROOT_KEYS = new Set([
   'character_emoji',
   'triggers',
   'protection',
+  'defense',
   'creates',
   '$meta',
 ]);
@@ -106,6 +108,7 @@ export function collectCompactStatusDefinitionIssues(value: unknown): string[] {
   }
   if (value.stun !== undefined && typeof value.stun !== 'boolean') push('状态 stun 必须是布尔值');
   if (value.protection !== undefined && !normalizeDamageProtectionRule(value.protection)) push('状态 protection 必须是有效的保护规则');
+  if (value.defense !== undefined && !normalizeStatusDefenseRule(value.defense)) push('状态 defense 必须是有效的状态防御规则');
 
   // Validate every local template, including unreferenced ones. Compile only;
   // this validation program is never executed or persisted. The same compact

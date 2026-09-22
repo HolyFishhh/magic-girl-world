@@ -204,6 +204,7 @@ export function normalizeCardDefinition(
     lifecycle: value.lifecycle ? structuredClone(value.lifecycle) : undefined,
     exhaust: type === 'Power' || value.exhaust === true,
     ethereal: value.ethereal === true,
+    sly: value.sly === true,
     innate: value.innate === true,
     unique: value.unique === true,
     ...((value.requires_summon || value.requiresSummonTemplateId) ? { requiresSummonTemplateId: String(value.requires_summon || value.requiresSummonTemplateId) } : {}),

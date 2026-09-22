@@ -3850,6 +3850,7 @@ html.mwg-fullscreen-active, html:fullscreen {
 .departure-face { width: 150px; height: 215px; display: grid; align-content: center; gap: 18px; text-align: center; color: #ecf3ff; border: 1px solid #a5bedb; border-radius: 12px; background: #243148; }
 .departure-face span { font-size: 42px; }
 .departure-exhaust { animation: mwg-card-burn 850ms ease-in forwards; }
+.departure-remove { animation: mwg-card-vanish 700ms ease-out forwards; }
 .departure-exhaust::after { content: ''; position: absolute; inset: -5px; border: 3px solid #ffb64e; border-radius: 12px; box-shadow: 0 0 24px #f86d28, inset 0 -30px 40px #ff8f28; animation: mwg-card-burn 850ms ease-in forwards; }
 .card-shard { position: absolute; inset: 0; clip-path: polygon(50% 50%, 0 0, 100% 0); animation: mwg-card-shatter 800ms ease-in forwards; }
 .card-shard:nth-child(2) { clip-path: polygon(50% 50%,100% 0,100% 50%); }
@@ -3859,6 +3860,7 @@ html.mwg-fullscreen-active, html:fullscreen {
 .card-shard:nth-child(6) { clip-path: polygon(50% 50%,0 50%,0 0); }
 @keyframes mwg-card-burn { 0% { opacity: 1; filter: brightness(1); clip-path: inset(0); } 40% { filter: brightness(1.8) sepia(1); } 100% { opacity: 0; filter: brightness(.2); clip-path: inset(0 0 100%); transform: translateY(-24px); } }
 @keyframes mwg-card-shatter { to { opacity: 0; transform: rotate(calc((var(--piece) - 2.5) * 12deg)) translate(calc((var(--piece) - 2.5) * 22px), 65px); } }
+@keyframes mwg-card-vanish { to { opacity: 0; filter: blur(8px); transform: scale(.72); } }
 @media (prefers-reduced-motion: reduce) { .card-departure, .card-departure::after, .card-shard { animation-duration: 120ms; } }
 
 /* Keep viewport placement on the outer layer; animate only its children. */

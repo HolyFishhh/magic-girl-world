@@ -22,6 +22,7 @@ import { collectStanceDefinitions, collectStanceNames, describeStanceFormula, de
 import { describeSummonSlotLifecycle } from './summonLifecycleDescription';
 import { describeStatusEventIdentity } from './statusEventIdentityDisplay';
 import { damageProtectionRuleDescription, normalizeDamageProtectionRule } from './damageProtection';
+import { normalizeStatusDefenseRule, statusDefenseRuleDescription } from './statusDefense';
 import { describeNonCombatSettlement, nonCombatSettlementReferences } from './nonCombatSettlementDisplay';
 import type { ModifierStat } from './effectDsl';
 import jsep from 'jsep';
@@ -156,6 +157,8 @@ const VARIABLE_LABELS: Array<[RegExp, string]> = [
   [/\bopponent\.discard_pile_size\b/g, '对方弃牌堆数量'],
   [/\bopponent\.exhaust_pile_size\b/g, '对方消耗堆数量'],
   [/\bspent_energy\b/g, '使用能量'],
+  [/\bevent_paid_energy\b|\bpaid_energy\b/g, '本次出牌实际支付能量'],
+  [/\bevent_paid_total\b|\bpaid_cost\b/g, '本次出牌实际支付总费用'],
   [/\b(?:context\.)?x_value\b/g, 'X值（本次消耗量）'],
   [/\bturn_number\b/g, '当前回合数'],
   [/\bcards_played_this_turn\b/g, '本回合使用卡牌的次数'],
@@ -235,6 +238,7 @@ function formatFormulaText(text: string, options: CompactCardDescriptionOptions)
   text = describeStanceFormula(text, options.stanceNames, options);
   text = text.replace(/\b(self|opponent)\.status\.([A-Za-z0-9_]+)\.stacks\b/g, (_match, target: string, statusId: string) => `${target === 'self' ? '自身' : '敌方'}${displayStatusName(statusId, options)}层数`);
   text = text.replace(/\bspent_resource\.([A-Za-z_][A-Za-z0-9_]*)\b/g, (_match, id: string) => `使用${options.resourceNames?.[id] || id}`);
+  text = text.replace(/\b(?:event_paid_resource|paid_resource)\.([A-Za-z_][A-Za-z0-9_]*)\b/g, (_match, id: string) => `本次出牌实际支付${options.resourceNames?.[id] || id}`);
   text = text.replace(/\bx_resource\.([A-Za-z_][A-Za-z0-9_]*)\b/g, (_match, id: string) => `${options.resourceNames?.[id] || id}的X值`);
   text = text.replace(/\b(self|opponent)\.resource\.([A-Za-z_][A-Za-z0-9_]*)\.(current|max)\b/g, (_match, target: string, id: string, field: string) => `${target === 'self' ? '自身' : '敌方'}${options.resourceNames?.[id] || id}${field === 'max' ? '上限' : '数量'}`);
   for (const [pattern, label] of VARIABLE_LABELS) text = text.replace(pattern, label);
@@ -459,7 +463,7 @@ function cardRuleFilterText(
   if (value.origin !== undefined) filters.push(`来源:${({ deck: '初始牌组', generated: '生成', copied: '复制', transformed: '变形' } as Record<string, string>)[String(value.origin)] || '指定来源'}`);
   if (value.upgraded !== undefined) filters.push(value.upgraded ? '已升级' : '未升级');
   const keywordNames: Record<string, string> = {
-    retain: '保留', exhaust: '消耗', ethereal: '虚无', innate: '固有',
+    retain: '保留', exhaust: '消耗', ethereal: '虚无', innate: '固有', sly: '灵巧',
   };
   const keywords = list(value.keyword);
   if (keywords.length) filters.push(keywords.map(keyword => keywordNames[keyword] || keyword).join('+'));
@@ -498,8 +502,9 @@ function describeCardAttachmentChange(
   const keywords: Record<string, string> = {
     retain: '保留',
     exhaust: '消耗',
-    ethereal: '空灵',
+    ethereal: '虚无',
     innate: '固有',
+    sly: '灵巧',
   };
   const timings: Record<string, string> = {
     on_draw: '抽到时',
@@ -742,8 +747,8 @@ function describeSingleOperation(
       if (kind === 'replay') text = `使${selected}在${scope}额外结算${formula(value.extra, options)}次`;
       else if (kind === 'area') text = `使${selected}在${scope}攻击所有敌人`;
       else if (kind === 'hits') text = `使${selected}在${scope}每段攻击增加${formula(value.add, options)}次命中`;
-      else if (['retain', 'exhaust', 'ethereal', 'innate'].includes(kind)) {
-        const keywords: Record<string, string> = { retain: '保留', exhaust: '消耗', ethereal: '空灵', innate: '固有' };
+      else if (['retain', 'exhaust', 'ethereal', 'innate', 'sly'].includes(kind)) {
+        const keywords: Record<string, string> = { retain: '保留', exhaust: '消耗', ethereal: '虚无', innate: '固有', sly: '灵巧' };
         text = `使${selected}在${scope}${value.enabled === false ? '移除' : '获得'}“${keywords[kind]}”`;
       } else if (kind === 'dynamic_cost' && operator) {
         const timings: Record<string, string> = { on_draw: '抽到时', while_in_hand: '留在手牌时', on_play: '打出时' };
@@ -804,7 +809,7 @@ function describeSingleOperation(
         divide: '除以',
         set: '设为',
       };
-      text = `${subjects[String(value.modify) as ModifierStat] || `${target}的未知属性`}${verbs[operator]}${formula(value[operator], options)}`;
+      text = `${subjects[String(value.modify) as ModifierStat] || `${target}的未知属性`}${verbs[operator]}${formula(value[operator], options)}${value.damage_type ? `（仅${({ attack: "攻击伤害", effect: "效果伤害", hp_loss: "生命流失", retaliation: "反伤", damage_over_time: "持续伤害" } as Record<string, string>)[String(value.damage_type)]}）` : ""}`;
       break;
     }
     case 'card_rule': {
@@ -824,6 +829,7 @@ function describeSingleOperation(
         allow_card_play: '允许打出符合条件但通常不可打出的卡牌',
         limit_card_play: `每回合至多打出${formula(value.limit, options)}张符合条件的卡牌`,
         card_destination: '符合条件的卡牌结算后改为移至指定区域',
+        ethereal: '符合条件的卡牌获得虚无，回合结束仍在手中则本场消耗',
       };
       text = value.card_rule === 'free'
         ? `每回合${scope}不消耗${Array.isArray(value.resources) ? value.resources.map(id => options.resourceNames?.[String(id)] || (id === 'energy' ? '能量' : '指定资源')).join('、') : '任何资源'}`
@@ -1391,6 +1397,8 @@ export function describeCompactStatusRuleGroups(value: unknown, options: Compact
   if (value.stun === true) parts.push('持有时无法行动');
   const protection = normalizeDamageProtectionRule(value.protection);
   if (protection) parts.push(damageProtectionRuleDescription(protection, { resolveTargetName: targetId => options.enemyNames?.[targetId] }));
+  const defense = normalizeStatusDefenseRule(value.defense);
+  if (defense) parts.push(...statusDefenseRuleDescription(defense));
   if (isRecord(value.triggers)) {
     for (const trigger of [
       'hold',
@@ -1420,7 +1428,7 @@ export function describeCompactStatusRuleGroups(value: unknown, options: Compact
   // This is a local structural statement only: another rule may read the
   // layers or observe application/removal. Unknown or unrenderable triggers
   // must not be described as a proven marker merely because their text is empty.
-  if (value.stun !== true && (value.triggers == null || (isRecord(value.triggers) && Object.keys(value.triggers).length === 0))) {
+  if (value.stun !== true && !protection && !defense && (value.triggers == null || (isRecord(value.triggers) && Object.keys(value.triggers).length === 0))) {
     parts.push('仅记录状态层数，自身没有额外行动或数值修饰；可供其他规则读取');
   }
   const stackChange = describeStatusStackChange(value.stacks_change);

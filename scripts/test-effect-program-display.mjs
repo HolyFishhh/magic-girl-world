@@ -25,6 +25,9 @@ const loaded = manager.registry.replace([
 assert.equal(loaded.rejected.length, 0);
 
 const display = EffectProgramDisplay.getInstance();
+const defenseTags = compactContentToDisplayTags({ defense: { prevent_hp_loss: true, retaliate_attack: 3 } }).map(entry => entry.text);
+assert.ok(defenseTags.some(text => text.includes('抵消一次格挡后仍会失去生命')));
+assert.ok(defenseTags.some(text => text.includes('反击3点伤害')));
 for (const amount of [2, -2, 0]) {
   const effects = {resource:{id:'charge',amount}};
   const change = amount < 0 ? '减少2点充能' : `获得${amount}点充能`;

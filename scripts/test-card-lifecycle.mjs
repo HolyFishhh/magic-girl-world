@@ -22,6 +22,7 @@ const output = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 const lifecycle = require(lifecyclePath);
+const lifecycleTraits = require(resolve('src/game-core/cardLifecycle.ts'));
 
 assert.equal(lifecycle.resolvePlayedCardDestination({ type: 'Attack', exhaust: false }), 'discard');
 assert.equal(lifecycle.resolvePlayedCardDestination({ type: 'Skill', exhaust: true }), 'exhaust');
@@ -30,6 +31,11 @@ assert.equal(
   'exhaust',
   'Power cards must leave the draw cycle even when generated content omits exhaust',
 );
+assert.equal(lifecycleTraits.describeCardTraits({ type: 'Skill', lifecycle: { on_discard: 'exhaust' } }).at(-1).name, '弃置消耗');
+assert.equal(lifecycleTraits.describeCardTraits({ type: 'Skill', lifecycle: { on_discard: 'remove' } }).at(-1).name, '遗弃');
+assert.equal(lifecycleTraits.describeCardTraits({ type: 'Skill', lifecycle: { on_discard: 'purge' } }).at(-1).name, '遗忘');
+assert.equal(lifecycleTraits.describeCardTraits({ type: 'Skill', sly: true }).find(trait => trait.id === 'sly').name, '灵巧');
+assert.equal(lifecycleTraits.describeCardTraits({ type: 'Skill', ethereal: true }).find(trait => trait.id === 'ethereal').name, '虚无');
 
 const effectProgram = { spec: 'mwg.effect/v1', steps: [{ op: 'gain_block', target: 'self', amount: 1 }] };
 const ordinary = { id: 'ordinary', type: 'Attack', effectProgram };

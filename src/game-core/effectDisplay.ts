@@ -20,6 +20,7 @@ import { describeSummonSlotLifecycle } from './summonLifecycleDescription';
 import { describeNonCombatSettlement, nonCombatSettlementReferences } from './nonCombatSettlementDisplay';
 import { describeStatusEventIdentity } from './statusEventIdentityDisplay';
 import { damageProtectionRuleDescription, normalizeDamageProtectionRule } from './damageProtection';
+import { normalizeStatusDefenseRule, statusDefenseRuleDescription } from './statusDefense';
 
 export type EffectIntentType = 'attack' | 'lust_attack' | 'defend' | 'heal' | 'buff' | 'debuff' | 'special';
 
@@ -167,6 +168,8 @@ function describeVariablePath(path: string, context: EffectDisplayContext): stri
   const opponent = context.opponentLabel || '敌方';
   const names: Record<string, string> = {
     'context.spent_energy': '使用能量',
+    'context.event_paid_energy': '本次出牌实际支付能量',
+    'context.event_paid_total': '本次出牌实际支付总费用',
     'context.x_value': 'X值（本次消耗量）',
     'context.status_stacks': '当前状态层数',
     'battle.turn_number': '当前回合数',
@@ -203,6 +206,8 @@ function describeVariablePath(path: string, context: EffectDisplayContext): stri
   if (names[path]) return names[path];
   const spentResource = path.match(/^context\.spent_resource\.([A-Za-z_][A-Za-z0-9_]*)$/);
   if (spentResource) return `使用${context.resourceNames?.[spentResource[1]] || spentResource[1]}`;
+  const eventPaidResource = path.match(/^context\.event_paid_resource\.([A-Za-z_][A-Za-z0-9_]*)$/);
+  if (eventPaidResource) return `本次出牌实际支付${context.resourceNames?.[eventPaidResource[1]] || eventPaidResource[1]}`;
   const xResource = path.match(/^context\.x_resource\.([A-Za-z_][A-Za-z0-9_]*)$/);
   if (xResource) return `${context.resourceNames?.[xResource[1]] || xResource[1]}的X值`;
   const entityResource = path.match(/^(self|opponent)\.resource\.([A-Za-z_][A-Za-z0-9_]*)\.(current|max)$/);
@@ -357,7 +362,7 @@ function describeCardFilter(filter: CardSelector['filter'], context: EffectDispl
   if (filter?.origin) constraints.push(`来源:${{ deck: '初始牌组', generated: '生成', copied: '复制', transformed: '变形' }[filter.origin] || '指定来源'}`);
   if (filter?.upgraded !== undefined) constraints.push(filter.upgraded ? '已升级' : '未升级');
   const keywordNames: Record<string, string> = {
-    retain: '保留', exhaust: '消耗', ethereal: '虚无', innate: '固有',
+    retain: '保留', exhaust: '消耗', ethereal: '虚无', innate: '固有', sly: '灵巧',
   };
   if (filter?.keywords?.length) {
     constraints.push(filter.keywords.map(keyword => keywordNames[keyword] || keyword).join('+'));
@@ -621,7 +626,7 @@ function nodeTags(node: EffectNode, context: EffectDisplayContext): EffectDispla
       } as const;
       const scope = scopes[node.patch.scope];
       if (node.patch.kind === 'keyword') {
-        const keywords = { retain: '保留', exhaust: '消耗', ethereal: '空灵', innate: '固有' } as const;
+        const keywords = { retain: '保留', exhaust: '消耗', ethereal: '虚无', innate: '固有', sly: '灵巧' } as const;
         return [tag(`${describeSelector(node.selector, context)}${scope}${node.patch.enabled ? '获得' : '移除'}“${keywords[node.patch.keyword]}”`, 'card')];
       }
       if (node.patch.kind === 'replay') {
@@ -903,7 +908,7 @@ function nodeTags(node: EffectNode, context: EffectDisplayContext): EffectDispla
       const operations = { add: '+', subtract: '-', multiply: '×', divide: '÷', set: '=' } as const;
       return [
         tag(
-          `${modifierSubject(node.target, node.stat, context, node.targetSelector)}${operations[node.operator]}${number(node.value)}`,
+          `${modifierSubject(node.target, node.stat, context, node.targetSelector)}${operations[node.operator]}${number(node.value)}${node.damageKind ? `（仅${({ attack: "攻击伤害", effect: "效果伤害", hp_loss: "生命流失", retaliation: "反伤", damage_over_time: "持续伤害", execute: "处决" })[node.damageKind]}）` : ""}`,
           node.target === 'self' ? 'buff' : 'debuff',
         ),
       ];
@@ -927,6 +932,7 @@ function nodeTags(node: EffectNode, context: EffectDisplayContext): EffectDispla
         allow_card_play: `允许打出${selected}，即使其通常不可打出`,
         limit_card_play: `每回合至多打出${node.limit === 'all' ? '任意数量的' : number(node.limit ?? 0)}${selected}`,
         card_destination: `${selected}结算后改为移至${node.destination ? describeCardDestination(node.destination) : '指定区域'}`,
+        ethereal: `赋予${selected}虚无（回合结束仍在手中则本场消耗；来源离场后解除）`,
       };
       return [
         tag(
@@ -1064,7 +1070,7 @@ export function cardAttachmentsToDisplayTags(
   const tags: EffectDisplayTag[] = [];
   const operators = { add: '增加', subtract: '减少', multiply: '乘以', divide: '除以', set: '设为', min: '上限设为', max: '下限设为' } as const;
   const stats = { damage: '伤害', block: '格挡', lust: '欲望', stacks: '状态层数' } as const;
-  const keywords = { retain: '保留', exhaust: '消耗', ethereal: '空灵', innate: '固有' } as const;
+  const keywords = { retain: '保留', exhaust: '消耗', ethereal: '虚无', innate: '固有', sly: '灵巧' } as const;
   const timings = { on_draw: '抽到时', while_in_hand: '留在手牌时', on_play: '打出时' } as const;
   for (const attachment of attachments || []) {
     const attachmentTags: EffectDisplayTag[] = [];
@@ -1161,6 +1167,8 @@ export function compactContentToDisplayTags(value: unknown, context: EffectDispl
   const protectionTags = protection ? [tag(damageProtectionRuleDescription(protection, {
     resolveTargetName: targetId => context.enemyNames?.[targetId],
   }), 'special')] : [];
+  const defense = normalizeStatusDefenseRule(content.defense);
+  const defenseTags = defense ? statusDefenseRuleDescription(defense).map(text => tag(text, 'special')) : [];
   const acquisition = content.on_acquire ?? content.onAcquire;
   const acquireText = acquisition === undefined ? '' : describeNonCombatSettlement(acquisition, context);
   const acquireTags = acquireText ? [{ ...tag(`获得时：${acquireText}`, 'special'), references: nonCombatSettlementReferences(acquisition,
@@ -1176,6 +1184,7 @@ export function compactContentToDisplayTags(value: unknown, context: EffectDispl
       ),
       ...discardTags,
       ...protectionTags,
+      ...defenseTags,
       ...acquireTags,
     ];
   }
@@ -1184,6 +1193,7 @@ export function compactContentToDisplayTags(value: unknown, context: EffectDispl
     ...compileTags(content.effects, typeof trigger.trigger === 'string' ? trigger.trigger : undefined),
     ...discardTags,
     ...protectionTags,
+    ...defenseTags,
     ...acquireTags,
   ];
 }

@@ -14,6 +14,7 @@ export interface CardRuleCard {
   retain?: boolean;
   exhaust?: boolean;
   ethereal?: boolean;
+  sly?: boolean;
   innate?: boolean;
   lifecycle?: CardLifecycle;
   /** Added after paying an X-cost card; does not consume extra energy. */
@@ -107,6 +108,7 @@ export function selectTurnEndCurseTriggers<TCard extends CardRuleCard>(hand: rea
 export function resolveTurnEndHandDisposition<TCard extends CardRuleCard>(
   hand: readonly TCard[],
   retainAll = false,
+  gainsEthereal: (card: TCard) => boolean = () => false,
 ): TurnEndHandDisposition<TCard> {
   const exhaust: TCard[] = [];
   const discard: TCard[] = [];
@@ -114,7 +116,7 @@ export function resolveTurnEndHandDisposition<TCard extends CardRuleCard>(
 
   for (const card of hand) {
     const destination = resolveCardLifecycle(card).turn_end;
-    if (destination === 'exhaust') exhaust.push(card);
+    if (destination === 'exhaust' || gainsEthereal(card)) exhaust.push(card);
     else if (retainAll || destination === 'retain') keep.push(card);
     else discard.push(card);
   }

@@ -1,3 +1,4 @@
+import { STATUS_DEFENSE_SCHEMA } from './statusDefense';
 import { CHARACTER_EMOJI_SCHEMA } from './characterAppearance';
 import compactEffectSchema from '../../schemas/mwg-card-effects-v1.schema.json';
 import {
@@ -262,6 +263,7 @@ function publicCardDefinitionSchema(includeSupportStatus = false): AiJsonSchema 
       creates: { type: 'array', maxItems: 32, items: ref('cardTemplate') },
       trigger: ref('mwgCardTrigger'),
       innate: { type: 'boolean', description: '固有：开战进入起手手牌，允许超过常规起手数量但不超过手牌上限；溢出留在抽牌堆顶。适用于需要先铺设的引擎、形态与关键支援牌。' },
+      sly: { type: 'boolean', description: '灵巧：回合结束清理前从手牌被主动或效果弃置时，免费打出并完整结算；回合末自动弃牌不触发。' },
       unique: { type: 'boolean', description: 'unique:true 的卡牌 quantity=1，不能有额外副本；非唯一卡可写 unique:false 并用同一 ID、名称、完整规则与 quantity 表达完全相同的多份持有卡，每份独立结算。若只差小幅数值或换名且没有玩法差异，也优先复用已有卡，不强造新卡；已合法但不同的内容不会自动合并，确有玩法差异才使用新 ID。' },
       tags: {
         type: 'array',
@@ -756,6 +758,7 @@ const SHARED_CONTENT_DEFINITIONS: AiJsonSchema = {
       tick_timing: { enum: ['before_action', 'after_action'] },
       stun: { type: 'boolean' }, character_emoji: CHARACTER_EMOJI_SCHEMA,
       protection: ref('mwgDamageProtection'),
+      defense: clone(STATUS_DEFENSE_SCHEMA),
       creates: { type: 'array', maxItems: 32, items: ref('cardTemplate') },
       triggers: {
         type: 'object',

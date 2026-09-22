@@ -58,7 +58,8 @@ export type CardPlayRuleKind =
   | 'deny_card_play'
   | 'allow_card_play'
   | 'limit_card_play'
-  | 'card_destination';
+  | 'card_destination'
+  | 'ethereal';
 export type EffectTrigger = RuntimeRegisteredEffectTrigger;
 export type EffectSchedulePhase = 'turn_start' | 'before_draw' | 'after_draw' | 'turn_end';
 
@@ -182,6 +183,7 @@ export interface GeneratedCardDefinition {
   retain?: boolean;
   exhaust?: boolean;
   ethereal?: boolean;
+  sly?: boolean;
   requiresSummonTemplateId?: string;
 }
 
@@ -440,6 +442,7 @@ export type EffectNode =
       target: EffectTarget;
       targetSelector?: EnemyTargetSelector;
       stat: ModifierStat;
+      damageKind?: import('./battleEventJournal').DamageKind;
       operator: EffectModifierOperator;
       value: NumericExpression;
     }
@@ -593,6 +596,7 @@ export interface CoreCardView {
   exhaust?: boolean;
   ethereal?: boolean;
   innate?: boolean;
+  sly?: boolean;
 }
 
 export interface EffectExecutionContext {
@@ -601,6 +605,10 @@ export interface EffectExecutionContext {
   /** Latest completed discard command in this program invocation, not journal history. */
   discardResult?: import('./cardEffectRuntime').DiscardCommandResult;
   spentEnergy: number;
+  /** Actual payment of the card-play event currently dispatched to a listener. */
+  eventPaidEnergy?: number;
+  eventPaidTotal?: number;
+  eventPaidResources?: Readonly<Record<string, number>>;
   spentResources?: Readonly<Record<string, number>>;
   xValues?: Readonly<Record<string, number>>;
   xValue?: number;
@@ -724,6 +732,7 @@ export type CoreEffectEvent =
       type: 'modify';
       target: EffectTarget;
       stat: ModifierStat;
+      damageKind?: import('./battleEventJournal').DamageKind;
       operator: EffectModifierOperator;
       value: number;
     }
@@ -856,14 +865,14 @@ const CARD_ORIGINS = new Set<CardOrigin>(['deck', 'generated', 'copied', 'transf
 const CARD_PATCH_SCOPES = new Set<CardPatchScope>(['resolution', 'turn', 'until_played', 'combat', 'run', 'permanent']);
 const CARD_PATCH_MATCHES = new Set<CardPatchMatch>(['instance', 'run_instance', 'template', 'filter']);
 const CARD_COST_OPERATORS = new Set<CardCostOperator>(['add', 'subtract', 'multiply', 'divide', 'set', 'min', 'max']);
-const CARD_KEYWORDS = new Set<CardKeyword>(['retain', 'exhaust', 'ethereal', 'innate']);
+const CARD_KEYWORDS = new Set<CardKeyword>(['retain', 'exhaust', 'ethereal', 'innate', 'sly']);
 const MODIFIER_STATS = new Set<ModifierStat>(['damage', 'damage_taken', 'lust', 'lust_taken', 'heal', 'block', 'summon_capacity', 'draw_per_turn']);
 const MODIFIER_OPERATORS = new Set<EffectModifierOperator>(['add', 'subtract', 'multiply', 'divide', 'set']);
 const CARD_VALUE_STATS = new Set<CardValueStat>(['damage', 'block', 'lust', 'stacks']);
 const CARD_VALUE_OPERATORS = new Set<CardValueOperator>(['add', 'subtract', 'multiply', 'divide']);
 const CARD_PLAY_RULES = new Set<CardPlayRuleKind>([
   'replay', 'free', 'retain_hand', 'retain_block', 'limit_draw', 'limit_block_gain',
-  'limit_energy_gain', 'deny_card_play', 'allow_card_play', 'limit_card_play', 'card_destination',
+  'limit_energy_gain', 'deny_card_play', 'allow_card_play', 'limit_card_play', 'card_destination', 'ethereal',
 ]);
 const STATUS_ID_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
@@ -2284,7 +2293,9 @@ function validateEffectNode(
       });
     }
   } else if (value.op === 'modify') {
-    rejectUnknownKeys(value, ['op', 'target', 'targetSelector', 'stat', 'operator', 'value'], path, issues);
+    rejectUnknownKeys(value, ['op', 'target', 'targetSelector', 'stat', 'operator', 'value', 'damageKind'], path, issues);
+    if (value.damageKind !== undefined && (!['damage', 'damage_taken'].includes(String(value.stat)) || !['attack', 'effect', 'hp_loss', 'retaliation', 'damage_over_time'].includes(String(value.damageKind))))
+      addIssue(issues, `${path}.damageKind`, 'INVALID_DAMAGE_KIND', '伤害类型筛选仅用于伤害修饰');
     if (!TARGETS.has(value.target as EffectTarget))
       addIssue(issues, `${path}.target`, 'INVALID_TARGET', `不支持的目标: ${String(value.target)}`);
     validateTargetSelectorForNode(value, path, issues);
@@ -2523,6 +2534,8 @@ export function isSupportedVariablePath(path: string): boolean {
       'battle.attacks_played_this_turn',
       'battle.skills_played_this_turn',
       'context.spent_energy',
+      'context.event_paid_energy',
+      'context.event_paid_total',
       'context.x_value',
       'context.status_stacks',
       'context.orb_value',
@@ -2530,6 +2543,7 @@ export function isSupportedVariablePath(path: string): boolean {
   )
     return true;
   if (/^context\.(spent_resource|x_resource)\.[a-zA-Z_][a-zA-Z0-9_]*$/.test(path)) return true;
+  if (/^context\.event_paid_resource\.[a-zA-Z_][a-zA-Z0-9_]*$/.test(path)) return true;
   if (/^(self|opponent)\.resource\.[a-zA-Z_][a-zA-Z0-9_]*\.(current|max)$/.test(path)) return true;
   if (/^(self|opponent)\.(hp|max_hp|lust|max_lust|energy|max_energy|block)$/.test(path)) return true;
   if (/^(self|opponent)\.(hand_size|draw_pile_size|discard_pile_size|exhaust_pile_size|summon_count|ally_count)$/.test(path)) return true;
@@ -2584,6 +2598,10 @@ export function resolveNumericVariable(path: string, state: CoreEffectState, con
   if (path === 'battle.attacks_played_this_turn') return state.attacksPlayedThisTurn;
   if (path === 'battle.skills_played_this_turn') return state.skillsPlayedThisTurn;
   if (path === 'context.spent_energy') return context.spentEnergy;
+  if (path === 'context.event_paid_energy') return context.eventPaidEnergy ?? 0;
+  if (path === 'context.event_paid_total') return context.eventPaidTotal ?? 0;
+  const eventPaidResource = path.match(/^context\.event_paid_resource\.([a-zA-Z_][a-zA-Z0-9_]*)$/);
+  if (eventPaidResource) return context.eventPaidResources?.[eventPaidResource[1]] ?? 0;
   const spentResource = path.match(/^context\.spent_resource\.([a-zA-Z_][a-zA-Z0-9_]*)$/);
   if (spentResource) return context.spentResources?.[spentResource[1]] ?? 0;
   const xResource = path.match(/^context\.x_resource\.([a-zA-Z_][a-zA-Z0-9_]*)$/);
@@ -3007,6 +3025,7 @@ function executeNode(
       type: 'modify',
       target: node.target,
       stat: node.stat,
+      ...(node.damageKind ? { damageKind: node.damageKind } : {}),
       operator: node.operator,
       value: roundBattleValue(evaluateNumericExpression(node.value, state, context, `${path}.value`)),
     });

@@ -4,6 +4,7 @@ import { describeCompactStatus, normalizeChinesePlayerDescription, type CompactC
 import type { EffectProgram } from './effectDsl';
 import { isThresholdExecuteProgram, validateCompactStatusDefinition } from './statusDefinitionValidation';
 import { normalizeDamageProtectionRule, type DamageProtectionRule } from './damageProtection';
+import { normalizeStatusDefenseRule, type StatusDefenseRule } from './statusDefense';
 
 export type StatusRuntimeEffect = EffectProgram;
 export type StatusTickTiming = 'before_action' | 'after_action';
@@ -24,6 +25,7 @@ export interface RuntimeStatusDefinition {
   character_emoji?: string;
   triggers: Partial<Record<StatusTrigger, EffectProgram[]>>;
   protection?: DamageProtectionRule;
+  defense?: StatusDefenseRule;
 }
 
 export interface StatusDefinitionRegistryLoadResult {
@@ -87,6 +89,8 @@ export function normalizeRuntimeStatusDefinition(
   if (maxStacks !== undefined && (!Number.isInteger(maxStacks) || maxStacks < 1 || maxStacks > 999)) return null;
   const protection = normalizeDamageProtectionRule(value.protection);
   if (value.protection !== undefined && !protection) return null;
+  const defense = normalizeStatusDefenseRule(value.defense);
+  if (value.defense !== undefined && !defense) return null;
   const description = describeCompactStatus(value, options);
   const flavorText = normalizeChinesePlayerDescription(value.description);
   if (!description) return null;
@@ -105,6 +109,7 @@ export function normalizeRuntimeStatusDefinition(
     ...(maxStacks === undefined ? {} : { maxStacks }),
     triggers,
     ...(protection ? { protection } : {}),
+    ...(defense ? { defense } : {}),
   };
 }
 

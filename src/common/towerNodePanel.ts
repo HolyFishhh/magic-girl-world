@@ -1,4 +1,5 @@
 import { describeOpeningDeckTransforms } from '../game-core/contentDescription';
+import { expandBuiltinStatusDefinitions } from '../game-core/builtinStatusCatalog';
 import {
   createTowerFinale,
   describeCardCost,
@@ -62,6 +63,12 @@ const NODE_COPY: Readonly<Record<RunNodeKind, { icon: string; label: string }>> 
 
 function isRecord(value: unknown): value is Record<string, any> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** Match persistence-time expansion while rendering a candidate before it is claimed. */
+function displayStatuses(...values: unknown[]): Record<string, any>[] {
+  return expandBuiltinStatusDefinitions(values.flatMap(list), values)
+    .filter(isRecord) as Record<string, any>[];
 }
 
 function createElement<K extends keyof HTMLElementTagNameMap>(
@@ -363,7 +370,7 @@ function createOpeningChoice(
   preview.className = 'tower-opening-choice-rewards';
   for (const [kind, values] of previewEntries) {
     for (const value of list(values)) {
-      const statuses = [...list(battle.statuses), ...list(reward.statuses), ...list(value.statuses), ...list(value.status)]
+      const statuses = displayStatuses(battle.statuses, reward.statuses, value.statuses, value.status)
         .filter(status => typeof status.id === 'string' && status.id.trim());
       const resources = list(battle.core?.resources);
       const references: ContentRuleReference[] = [];
@@ -568,10 +575,10 @@ function renderEventReveal(options: TowerNodePanelOptions, shell: HTMLElement): 
   for (const line of eventOutcomeSummary(reveal.outcome, stat.battle).lines) {
     appendOutcomeSummary(document, result, line);
   }
-  const statuses = list(stat.battle?.statuses);
+  const statuses = displayStatuses(stat.battle?.statuses, reveal.outcome.gain_cards);
   const resources: Record<string, any> = Object.fromEntries(list(stat.battle?.core?.resources).map(resource => [resource.id, resource]));
   for (const card of list(reveal.outcome.gain_cards)) {
-    const definitions = [...statuses, ...list(card.statuses)];
+    const definitions = displayStatuses(statuses, card.statuses, card.status);
     const references: ContentRuleReference[] = [];
     const descriptionOptions = {
       onSummonReference: (reference: ContentRuleReference) => references.push(reference),

@@ -20,6 +20,20 @@ const { withAiContentDefinitions } = require(resolve('src/game-core/aiContentJso
 
 const compactSchema = JSON.parse(await readFile(resolve('schemas/mwg-card-effects-v1.schema.json'), 'utf8'));
 const validateCompactSchema = new Ajv2020({ strict: false, allErrors: true }).compile(compactSchema);
+const paymentCondition = compileCompactEffectList({
+  apply_status: 'sts_strength',
+  stacks: 'event_paid_total',
+  when: 'self.status.tax_mark.stacks > 0 && opponent.hp <= opponent.max_hp / 2',
+});
+assert.equal(paymentCondition.ok, true, JSON.stringify(paymentCondition.issues));
+const paymentExecution = executeEffectProgram(paymentCondition.value, {
+  self: { hp: 20, maxHp: 20, lust: 0, maxLust: 100, energy: 3, maxEnergy: 3, block: 0, statusStacks: { tax_mark: 1 } },
+  opponent: { hp: 10, maxHp: 20, lust: 0, maxLust: 100, energy: 3, maxEnergy: 3, block: 0 },
+  currentTurn: 1, cardsPlayedThisTurn: 1, attacksPlayedThisTurn: 1, skillsPlayedThisTurn: 0,
+}, { spentEnergy: 0, eventPaidEnergy: 1, eventPaidTotal: 3, eventPaidResources: { stars: 2 } });
+assert.equal(paymentExecution.ok, true);
+assert.equal(paymentExecution.events[0].type, 'apply_status');
+assert.equal(paymentExecution.events[0].stacks, 3, 'card-play listeners use the immutable actual total payment');
 const schemaHistoryEffect = {
   effects: {
     damage: {
@@ -1664,5 +1678,9 @@ const missingSummonId = compileCompactEffectList({
 });
 assert.equal(missingSummonId.ok, false);
 assert.ok(missingSummonId.issues.some(issue => issue.code === 'MISSING_SUMMON_ID'));
+const slyPatch = compileCompactEffectList({ patch_card: 'sly', enabled: true, from: 'combat', pick: 'all', keyword: 'ethereal', scope: 'combat', match: 'filter' });
+assert.equal(slyPatch.ok, true, JSON.stringify(slyPatch.issues));
+assert.equal(slyPatch.value.steps[0].patch.keyword, 'sly');
+assert.deepEqual(slyPatch.value.steps[0].selector.filter.keywords, ['ethereal']);
 
 console.log('Compact AI effects compile through restricted CEL into the portable AST.');

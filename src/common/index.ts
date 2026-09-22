@@ -9,6 +9,7 @@ import { parseTowerEventFlow, requireTowerEventStage, towerEventRandomKey } from
 import { planTowerEventOutcome } from '../game-core/towerEventOutcome';
 import { currentTowerScreen, ensureTowerRunDom, renderTowerScreen } from './towerScreenPresentation';
 import { collectCardDisplayNames } from '../game-core/cardDisplayNames';
+import { expandBuiltinStatusDefinitions } from '../game-core/builtinStatusCatalog';
 // RPG UI - 动态版本入口文件
 import '../runtime/bootstrap';
 import { renderCardFace } from '../shared/cardFace';
@@ -171,6 +172,9 @@ let __INITIAL_TOWER_REPAIR_TIMER: ReturnType<typeof setTimeout> | null = null;
 let __INITIAL_TOWER_EXTENSION_WAIT_ATTEMPTS = 0;
 const __INITIAL_TOWER_REPAIR_FALLBACK_ATTEMPTS = new Map<string, number>();
 let __TOWER_MAP_APP: TowerAppController | null = null;
+/** DOM-only route reservation. Never persisted or allowed to bypass route gates. */
+let __TOWER_PRESELECTED_NODE_ID: string | null = null;
+let __TOWER_PRESELECT_ACTIVATING_NODE_ID: string | null = null;
 let __stopLatestMessageGuard: (() => void) | null = null;
 let __disposeTowerGenerationListener: (() => void) | null = null;
 let __towerGenerationRefreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1200,9 +1204,19 @@ function contentDescriptionStatusDefinitions(content?: Record<string, any>): Rec
       Object.values(status).filter(value => value && typeof value === 'object').forEach(visit);
     }
   };
-  visit(__STAT__?.battle?.statuses);
-  visit(content?.status);
-  visit(content?.statuses);
+  // Candidate cards can reference a built-in status without carrying a
+  // support-status wrapper. Expand that same executable closure for previews
+  // so rules show “力量” rather than a raw `sts_strength` identifier before
+  // the reward is selected and persisted.
+  const readStatusList = typeof normalizeOptionsList === 'function'
+    ? normalizeOptionsList<any>
+    : (value: unknown): any[] => Array.isArray(value) ? value : [];
+  const statusInputs = [
+    ...readStatusList(__STAT__?.battle?.statuses),
+    ...readStatusList(content?.status),
+    ...readStatusList(content?.statuses),
+  ];
+  visit(expandBuiltinStatusDefinitions(statusInputs, { content }));
   return definitions;
 }
 
@@ -1469,13 +1483,14 @@ async function sendEnteredRunNode(node: RunNodeChoice): Promise<void> {
   }
 }
 
-async function activateTowerNode(node: RunNodeChoice): Promise<void> {
+async function activateTowerNode(node: RunNodeChoice, notifyPreselection = false): Promise<void> {
   if (__IS_SENDING_ACTION) return;
   setSendingState(true);
   setRunButtonsDisabled(true);
   try {
     await runActionHost.activateTowerRunNode(node.id);
     requestUserFocus('@room');
+    if (notifyPreselection && typeof toastr !== 'undefined') toastr.success('预选关卡已生成，已进入关卡。', '路线准备完成');
     __PENDING_REWARD_SUMMARY = null;
     __PENDING_RUN_SUMMARY = null;
     __RUN_ERROR = null;
@@ -1965,6 +1980,8 @@ async function restartCurrentRun(): Promise<void> {
 function teardownTowerMap(): void {
   __TOWER_MAP_APP?.destroy();
   __TOWER_MAP_APP = null;
+  __TOWER_PRESELECTED_NODE_ID = null;
+  __TOWER_PRESELECT_ACTIVATING_NODE_ID = null;
   const root = document.getElementById('tower-map-root');
   if (root) root.style.display = 'none';
   const panel = document.getElementById('tower-node-panel-root');
@@ -1986,6 +2003,17 @@ function renderTowerMap(stat: any, run: RunState, selectionEnabled: boolean): bo
   const root = document.getElementById('tower-map-root');
   const section = document.getElementById('run-section');
   if (!root || !section) return false;
+  // A reservation is only valid while this exact node remains one of the live
+  // choices. A failed/cancelled generation and every route transition clear it
+  // without touching the save.
+  const reservedChoice = __TOWER_PRESELECTED_NODE_ID
+    ? run.choices.find(choice => choice.id === __TOWER_PRESELECTED_NODE_ID)
+    : undefined;
+  const reservedEnvelope = reservedChoice ? run.nodeContent[reservedChoice.id] : undefined;
+  if (!reservedChoice || !reservedEnvelope || !['queued', 'generating', 'ready'].includes(reservedEnvelope.phase)) {
+    __TOWER_PRESELECTED_NODE_ID = null;
+    __TOWER_PRESELECT_ACTIVATING_NODE_ID = null;
+  }
   if (currentTowerScreen(stat, hasSelectableRewards(stat)) !== 'map') {
     __TOWER_MAP_APP?.destroy(); __TOWER_MAP_APP = null;
     root.style.display = 'none';
@@ -1999,6 +2027,17 @@ function renderTowerMap(stat: any, run: RunState, selectionEnabled: boolean): bo
   if (heading) heading.style.display = 'none';
 
   const callbacks: TowerAppCallbacks = {
+    onPreparingNode: (node: { id: string }) => {
+      const current = readRunState(__STAT__);
+      const choice = current?.choices.find(candidate => candidate.id === node.id);
+      const phase = choice ? current?.nodeContent?.[choice.id]?.phase : undefined;
+      if (!choice || !['queued', 'generating'].includes(String(phase)) || !isCurrentMessageLatest() || __IS_SENDING_ACTION) return;
+      __TOWER_PRESELECTED_NODE_ID = choice.id;
+      __TOWER_PRESELECT_ACTIVATING_NODE_ID = null;
+      if (typeof toastr !== 'undefined') toastr.info('已预选此关，生成完成后将自动进入。', '路线已预选');
+      const notice = document.getElementById('tower-route-notice');
+      if (notice) { notice.textContent = '已预选此关，正在生成；完成后会自动进入。'; notice.hidden = false; }
+    },
     onBlockedNode: () => {
       const current = readRunState(__STAT__);
       let message = '下一层内容正在准备，请稍候。';
@@ -2066,6 +2105,24 @@ function renderTowerMap(stat: any, run: RunState, selectionEnabled: boolean): bo
   } else {
     __TOWER_MAP_APP.setCallbacks(callbacks);
     __TOWER_MAP_APP.update(run, options);
+  }
+  // Activate once, only after the same current choice is ready. This is kept
+  // after map rendering so a failed/cancelled request never leaves a stale
+  // visual reservation behind, and route/reward/opening locks are rechecked.
+  const readyReservedChoice = __TOWER_PRESELECTED_NODE_ID
+    ? run.choices.find(choice => choice.id === __TOWER_PRESELECTED_NODE_ID)
+    : undefined;
+  const readyReservedPhase = readyReservedChoice ? run.nodeContent[readyReservedChoice.id]?.phase : undefined;
+  if (
+    selectionEnabled && isCurrentMessageLatest() && !__IS_SENDING_ACTION &&
+    readyReservedChoice && readyReservedPhase === 'ready' &&
+    run.phase === 'awaiting_choice' && !run.currentNode &&
+    !hasSelectableRewards(stat) && (!run.opening || ['consumed', 'skipped'].includes(run.opening.phase)) &&
+    __TOWER_PRESELECT_ACTIVATING_NODE_ID !== readyReservedChoice.id
+  ) {
+    __TOWER_PRESELECT_ACTIVATING_NODE_ID = readyReservedChoice.id;
+    __TOWER_PRESELECTED_NODE_ID = null;
+    void activateTowerNode(readyReservedChoice, true).finally(() => { __TOWER_PRESELECT_ACTIVATING_NODE_ID = null; });
   }
   return true;
 }

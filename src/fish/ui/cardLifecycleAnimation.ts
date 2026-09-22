@@ -2,7 +2,7 @@ import type { Card } from '../../game-core';
 import { escapeHtml } from '../shared/html';
 
 /** Cosmetic, non-blocking, and driven only by an actual committed departure. */
-export function animateCardDeparture(card: Card, kind: 'exhaust' | 'purge'): void {
+export function animateCardDeparture(card: Card, kind: 'exhaust' | 'remove' | 'purge'): void {
   if (kind === 'exhaust' && document.querySelector('.battle-pile-dock')) return;
   const stage = document.getElementById('battle-stage');
   if (!stage) return;

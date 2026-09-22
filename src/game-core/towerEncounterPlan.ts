@@ -6,6 +6,12 @@ export const TOWER_ENCOUNTER_PLAN_SPEC = 'mwg.tower-encounter-plan/v1' as const;
 export const TOWER_ENEMY_COUNT_WEIGHTS = {
   battle: [35, 35, 20, 7, 3], elite: [60, 10, 10, 10, 10], boss: [60, 10, 10, 10, 10],
 } as const;
+/**
+ * A node-owned roll decides whether the author is asked to consider a soft
+ * counterplay angle.  It is deliberately separate from enemy-count entropy:
+ * retries and restores must not turn a non-counter encounter into one.
+ */
+export const TOWER_COUNTER_STRATEGY_CHANCE = { battle: 20, elite: 50, boss: 50 } as const;
 
 export interface TowerEncounterScope {
   nodeId: string; kind: string; contentSeed?: number; act?: number; floor?: number;
@@ -15,6 +21,9 @@ export interface TowerEncounterPlan {
   spec: typeof TOWER_ENCOUNTER_PLAN_SPEC;
   enemyCount: number;
   countSeed: number;
+  counterStrategySeed: number;
+  counterStrategyChance: number;
+  counterStrategy: boolean;
   act: number;
   floor: number;
   /** Entire encounter, never a budget to be copied onto every enemy. */
@@ -28,6 +37,7 @@ export function createTowerEncounterPlan(scope: TowerEncounterScope, budget?: En
   if (!Object.hasOwn(TOWER_ENEMY_COUNT_WEIGHTS, scope.kind) || !Number.isInteger(scope.contentSeed)) return undefined;
   const kind = scope.kind as keyof typeof TOWER_ENEMY_COUNT_WEIGHTS;
   const countSeed = stableHash32([TOWER_ENCOUNTER_PLAN_SPEC, scope.contentSeed, scope.nodeId, kind]);
+  const counterStrategySeed = stableHash32([TOWER_ENCOUNTER_PLAN_SPEC, 'counter-strategy', scope.contentSeed, scope.nodeId, kind]);
   let cursor = drawBattleRandom(createBattleRandomState(countSeed)).value * 100;
   const weights = TOWER_ENEMY_COUNT_WEIGHTS[kind];
   let enemyCount: number = weights.length;
@@ -37,8 +47,11 @@ export function createTowerEncounterPlan(scope: TowerEncounterScope, budget?: En
   }
   const act = Math.max(1, Math.trunc(scope.act || 1));
   const elite = kind !== 'battle';
+  const counterStrategyChance = TOWER_COUNTER_STRATEGY_CHANCE[kind];
   return {
-    spec: TOWER_ENCOUNTER_PLAN_SPEC, enemyCount, countSeed, act, floor: Math.max(1, Math.trunc(scope.floor || 1)),
+    spec: TOWER_ENCOUNTER_PLAN_SPEC, enemyCount, countSeed, counterStrategySeed, counterStrategyChance,
+    counterStrategy: (counterStrategySeed / 0x1_0000_0000) * 100 < counterStrategyChance,
+    act, floor: Math.max(1, Math.trunc(scope.floor || 1)),
     ...(budget ? { totalBudget: structuredClone(budget) } : {}),
     enemyShares: Array.from({ length: enemyCount }, (_, index) => enemyCount === 1 ? 1 : index === 0 ? 0.4 : 0.6 / (enemyCount - 1)),
     challenge: [
@@ -56,5 +69,8 @@ export function createTowerEncounterPlan(scope: TowerEncounterScope, budget?: En
 export function formatTowerEncounterPlan(scope: TowerEncounterScope, budget?: EnemyBudgetEnvelope): string {
   const plan = createTowerEncounterPlan(scope, budget);
   if (!plan) return '';
-  return `[程序遭遇计划]\npayload.battle.enemies 必须恰好 ${plan.enemyCount} 名，禁止另写 enemy；重试保持数量。\n${JSON.stringify(plan)}\n${plan.totalBudget ? 'totalBudget 是整场预算；enemyShares 仅为可调整的职责分摊起点，合计必须为1。' : '数值参考当前真实玩家构筑与下方生存/输出预算；若已有画像未覆盖核心机制，不得将其零收益当作玩家真实实力。'}`;
+  const counterGuidance = plan.counterStrategy
+    ? `本节点已抽中“软克制思考”（${plan.counterStrategyChance}%）：依据下方当前卡组事实，思考一种能互动的应对角度，但不要硬编码或强制采用任何策略。可参考吸血面对护盾、减益面对净化、多段面对固定减伤或受击成长；只在该卡组确有对应机制时选择，并保留替代打法、可读预警和反制窗口。不能封死所有输出与生存手段；压力应可通过击杀顺序、出牌节奏、资源或其他路线应对。`
+    : `本节点未抽中“软克制思考”（${plan.counterStrategyChance}%）；按剧情与节点身份设计常规遭遇，当前卡组事实用于匹配数值预算；不要主动围绕玩家流派短板设计针对机制，也不要为了凑克制而制造免疫、锁死或必死机制。`;
+  return `[程序遭遇计划]\npayload.battle.enemies 必须恰好 ${plan.enemyCount} 名，禁止另写 enemy；重试保持人数与软克制抽签。\n${JSON.stringify(plan)}\n${plan.totalBudget ? 'totalBudget 是整场预算；enemyShares 仅为可调整的职责分摊起点，合计必须为1。' : '数值参考当前真实玩家构筑与下方生存/输出预算；若已有画像未覆盖核心机制，不得将其零收益当作玩家真实实力。'}\n${counterGuidance}`;
 }

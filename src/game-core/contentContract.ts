@@ -55,14 +55,14 @@ export interface ContentContractOptions {
 const CARD_WRAPPER_FIELDS = new Set([
   'lifecycle',
   'id', 'name', 'emoji', 'type', 'rarity', 'cost', 'quantity', 'description', 'dialogue', 'effects', 'discard_effects',
-  'unique', 'trigger', 'retain', 'exhaust', 'ethereal', 'innate', 'tags', 'creates', 'when', 'requires_summon',
+  'unique', 'trigger', 'retain', 'exhaust', 'ethereal', 'innate', 'sly', 'tags', 'creates', 'when', 'requires_summon',
   // Host-owned persistent identity/progression fields survive between tower battles.
   'runInstanceId', 'runInstanceIds', 'templateId', 'parentRunInstanceId', 'origin', '$meta', 'upgrade_level',
 ]);
 const CARD_TEMPLATE_FIELDS = new Set([
   'lifecycle',
   'id', 'name', 'emoji', 'type', 'rarity', 'cost', 'description', 'dialogue', 'effects', 'discard_effects',
-  'unique', 'trigger', 'retain', 'exhaust', 'ethereal', 'when', 'requires_summon',
+  'unique', 'trigger', 'retain', 'exhaust', 'ethereal', 'sly', 'when', 'requires_summon',
 ]);
 const RELIC_WRAPPER_FIELDS = new Set([
   'id', 'name', 'rarity', 'emoji', 'description', 'creates', 'trigger', 'on_acquire',
@@ -705,7 +705,7 @@ function validateGeneratedCardTemplates(
     }
     const lifecycleIssue = validateCardLifecycle(template.lifecycle);
     if (lifecycleIssue) addIssue(issues, `${templatePath}.lifecycle`, 'INVALID_CARD_LIFECYCLE', lifecycleIssue);
-    for (const flag of ['unique', 'retain', 'exhaust', 'ethereal']) {
+    for (const flag of ['unique', 'retain', 'exhaust', 'ethereal', 'sly']) {
       if (template[flag] !== undefined && typeof template[flag] !== 'boolean') {
         addIssue(issues, `${templatePath}.${flag}`, 'INVALID_BOOLEAN', `${flag} must be a boolean`);
       }
@@ -835,7 +835,7 @@ function validateCard(
   }
   const lifecycleIssue = validateCardLifecycle(value.lifecycle);
   if (lifecycleIssue) addIssue(issues, `${path}.lifecycle`, 'INVALID_CARD_LIFECYCLE', lifecycleIssue);
-  for (const flag of ['unique', 'retain', 'exhaust', 'ethereal', 'innate']) {
+  for (const flag of ['unique', 'retain', 'exhaust', 'ethereal', 'innate', 'sly']) {
     if (value[flag] !== undefined && typeof value[flag] !== 'boolean') {
       addIssue(issues, `${path}.${flag}`, 'INVALID_BOOLEAN', `${flag} must be a boolean`);
     }
@@ -935,6 +935,11 @@ function validateNamedExecutable(
       { enemyCollectionTarget: requirements.enemyCollectionTarget },
     );
   }
+}
+
+function observesCardPayment(value: Record<string, any>): boolean {
+  const trigger = resolveTriggerInput(value).trigger;
+  return trigger === 'card_played' || trigger === 'attack_played' || trigger === 'skill_played' || trigger === 'power_played';
 }
 
 function validateStatusList(
@@ -1050,6 +1055,7 @@ export function validateContentPackContract(
         {
           triggerPolicy: 'allow',
           modifierPolicy: resolveTriggerInput(relic).trigger === 'passive' ? 'only' : 'forbid',
+          allowSpentEnergy: observesCardPayment(relic),
           allowPersistentGrowth: true,
           knownStatusIds: statusIds,
         },
@@ -1089,6 +1095,7 @@ export function validateContentPackContract(
       {
         triggerPolicy: 'allow',
         modifierPolicy: resolveTriggerInput(ability).trigger === 'passive' ? 'only' : 'forbid',
+        allowSpentEnergy: observesCardPayment(ability),
         allowPersistentGrowth: true,
         knownStatusIds: statusIds,
       },
@@ -1185,6 +1192,7 @@ export function validateContentPackContract(
         {
           triggerPolicy: 'allow',
           modifierPolicy: resolveTriggerInput(ability).trigger === 'passive' ? 'only' : 'forbid',
+          allowSpentEnergy: observesCardPayment(ability),
           knownStatusIds: statusIds,
         },
         required,

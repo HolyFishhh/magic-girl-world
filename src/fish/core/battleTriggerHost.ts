@@ -447,6 +447,10 @@ export class TavernBattleTriggerHost {
     await this.statusRuntime.remove(targetType, selection);
   }
 
+  public async consumeStatusLayer(targetType: 'player' | 'enemy', statusId: string): Promise<boolean> {
+    return this.statusRuntime.consumeLayer(targetType, statusId);
+  }
+
   public async processStatusEffectsAtActionTiming(
     targetType: 'player' | 'enemy',
     timing: import('../../game-core/statusDefinitionRuntime').StatusTickTiming,
@@ -465,6 +469,10 @@ export class TavernBattleTriggerHost {
 
   public async removeStatusesFromSummons(targetIds: readonly string[], selection: string): Promise<void> {
     await this.summonStatusRuntime.remove(targetIds, selection);
+  }
+
+  public async consumeSummonStatusLayer(summonId: string, statusId: string): Promise<boolean> {
+    return this.summonStatusRuntime.consumeLayer(summonId, statusId);
   }
 
   public async processSummonStatusEffectsAtActionTiming(

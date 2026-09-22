@@ -16,6 +16,7 @@ export type ModifierOperator = '+' | '-' | '*' | '/' | '=';
 export interface ModifierOperation {
   operator: ModifierOperator;
   value: number;
+  damageKind?: import('./battleEventJournal').DamageKind;
 }
 
 export interface ModifierBreakdown {
@@ -61,7 +62,7 @@ export function resolveEffectProgramModifiers(
     .map(event => ({
       target: event.target,
       stat: event.stat,
-      operation: { operator: MODIFIER_SYMBOL_BY_OPERATOR[event.operator], value: event.value },
+      operation: { operator: MODIFIER_SYMBOL_BY_OPERATOR[event.operator], value: event.value, ...(event.damageKind ? { damageKind: event.damageKind } : {}) },
     }));
 }
 

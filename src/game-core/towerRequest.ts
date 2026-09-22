@@ -1,3 +1,4 @@
+import { STATUS_DEFENSE_SCHEMA } from './statusDefense';
 import { createOpeningDeckTransformsSchema, OPENING_TRANSFORM_GUIDANCE } from './towerOpeningTransforms';
 import { INITIAL_CARD_REFERENCE_SCHEMA } from './initialCardReference';
 import { DAMAGE_PROTECTION_SCHEMA } from './damageProtection';
@@ -279,7 +280,7 @@ export function formatCompactEffectRepairContract(error: unknown): string {
     )
   ) {
     lines.push(
-      `报错触及一个完整状态定义，必须同时复核该状态的全部字段，而不只修第一条：根对象只用 id/name/emoji/description/type/stacks_change/tick_timing/maxStacks/stun/character_emoji/protection/triggers/creates；保留合法 creates 模板及其触发器引用，不得为修复其他字段而删除造牌机制。type 只用 buff/debuff/neutral；stacks_change 只用有限数字、"keep"、"reset" 或 "x倍率"；tick_timing 仅可省略（默认 before_action）、before_action 或 after_action。triggers 键只用 ${STATUS_TRIGGERS.join('/')}；hold 只放持续 modify/card_rule，其他触发键只放一次性浅层 effects。hold 的 modify 只允许 damage/damage_taken/lust/lust_taken/heal/block/summon_capacity/draw_per_turn。actions_per_activation 只能由一次性的 modify_summon 修改，不是状态持续 modifier；不得用一次性强化替代持续规则、删除原状态施加或修改说明掩盖寿命差异。仅当原机制本来就是一次性修改，且指定修复范围允许保持原事件、目标、次数与寿命时，才可等价迁移；否则保留失败。所有 apply_status/apply_summon_status 引用必须由本候选 statuses 依赖闭包或已有状态库完整登记。`,
+      `报错触及一个完整状态定义，必须同时复核该状态的全部字段，而不只修第一条：根对象只用 id/name/emoji/description/type/stacks_change/tick_timing/maxStacks/stun/character_emoji/protection/defense/triggers/creates；保留合法 creates 模板及其触发器引用，不得为修复其他字段而删除造牌机制。type 只用 buff/debuff/neutral；stacks_change 只用有限数字、"keep"、"reset" 或 "x倍率"；tick_timing 仅可省略（默认 before_action）、before_action 或 after_action。triggers 键只用 ${STATUS_TRIGGERS.join('/')}；hold 只放持续 modify/card_rule，其他触发键只放一次性浅层 effects。hold 的 modify 只允许 damage/damage_taken/lust/lust_taken/heal/block/summon_capacity/draw_per_turn。actions_per_activation 只能由一次性的 modify_summon 修改，不是状态持续 modifier；不得用一次性强化替代持续规则、删除原状态施加或修改说明掩盖寿命差异。仅当原机制本来就是一次性修改，且指定修复范围允许保持原事件、目标、次数与寿命时，才可等价迁移；否则保留失败。所有 apply_status/apply_summon_status 引用必须由本候选 statuses 依赖闭包或已有状态库完整登记。`,
     );
   }
   const unknownFields = [...detail.matchAll(/([^;；\n]+?):\s*Unknown field:\s*([A-Za-z_][A-Za-z0-9_]*)/gi)];
@@ -510,7 +511,7 @@ export function formatCompactEffectRepairContract(error: unknown): string {
   }
   if (/INVALID_RELIC_RARITY|unsupported relic rarity|遗物 rarity 无效|遗物稀有度不受支持/i.test(detail)) {
     lines.push(
-      '报错对象是遗物而不是卡牌：rarity 使用 Common/Uncommon/Rare/Epic/Legendary；Boss/ENS 只兼容旧内容。不支持 Corrupt 遗物。程序若已指定本槽位稀有度，按该稀有度设计，保留原机制语义，不得擅自降级。',
+      '报错对象是遗物而不是卡牌：rarity 使用 Common/Uncommon/Rare/Epic/Legendary/Corrupt；Corrupt 表示诅咒遗物，必须保留其真实负面或代价机制，不能只改名称或用空壳替代。Boss/ENS 只兼容旧内容。程序若已指定本槽位稀有度，按该稀有度设计，保留原机制语义，不得擅自降级。',
     );
   }
   if (/narrate 只允许作为 Event|\bnarrate\b/i.test(detail)) {
@@ -1082,7 +1083,7 @@ export function formatTowerNodeGenerationPrompt(
     if (world) lines.push(`[世界与当前进度]\n${world}`);
     if (player) lines.push(`[玩家状态]\n${player}`);
   }
-  if (balance) lines.push(`[构筑与数值预算]\n${balance}`);
+  if (balance) lines.push(`[当前卡组事实与构筑分析]\n${balance}`);
   if (lineage) lines.push(`[敌人谱系连续性]\n${lineage}`);
   if (custom) lines.push(`[玩家额外要求]\n${custom}`);
   lines.push(
@@ -1143,7 +1144,7 @@ export function formatTowerNodeBatchGenerationPrompt(
     if (world) lines.push(`[世界与当前进度]\n${world}`);
     if (player) lines.push(`[玩家状态]\n${player}`);
   }
-  if (balance) lines.push(`[构筑与数值预算]\n${balance}`);
+  if (balance) lines.push(`[当前卡组事实与构筑分析]\n${balance}`);
   if (lineage) lines.push(`[敌人谱系连续性]\n${lineage}`);
   if (custom) lines.push(`[玩家额外要求]\n${custom}`);
   lines.push(
@@ -1397,6 +1398,7 @@ export type TowerInitialRepairSlotKind =
   | 'status_stun'
   | 'status_character_emoji'
   | 'status_protection'
+  | 'status_defense'
   | 'status_trigger_effect_item'
   | 'status_trigger_effect_sequence'
   | 'status_hold_effect_item'
@@ -1531,7 +1533,7 @@ function createTowerInitialFiniteSupportStatusJsonSchema(id?: string): Record<st
       },
       maxStacks: { type: 'integer', minimum: 1, maximum: 999 },
       tick_timing: { enum: ['before_action', 'after_action'] },
-      stun: { type: 'boolean' }, character_emoji: CHARACTER_EMOJI_SCHEMA, protection: DAMAGE_PROTECTION_SCHEMA,
+      stun: { type: 'boolean' }, character_emoji: CHARACTER_EMOJI_SCHEMA, protection: DAMAGE_PROTECTION_SCHEMA, defense: structuredClone(STATUS_DEFENSE_SCHEMA),
       triggers: {
         type: 'object',
         additionalProperties: false,
@@ -1607,6 +1609,7 @@ function createTowerInitialRepairSlotValueJsonSchema(
   if (target.kind === 'status_max_stacks') {
     return { anyOf: [{ type: 'integer', minimum: 1, maximum: 999 }, { type: 'null' }] };
   }
+  if (target.kind === 'status_defense') return { anyOf: [structuredClone(STATUS_DEFENSE_SCHEMA), { type: 'null' }] };
   if (target.kind === 'status_protection') return { anyOf: [DAMAGE_PROTECTION_SCHEMA, { type: 'null' }] };
   if (target.kind === 'status_character_emoji') return { anyOf: [CHARACTER_EMOJI_SCHEMA, { type: 'null' }] };
   if (target.kind === 'status_stun') return { anyOf: [{ type: 'boolean' }, { type: 'null' }] };

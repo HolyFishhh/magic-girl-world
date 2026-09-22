@@ -27,7 +27,7 @@ export interface CardSelectionModalRequest {
 
 /** Owns card interaction DOM and animation inside the Tavern battle iframe. */
 export class TavernCardInteractionPresenter {
-  public animateCardDeparture(card: Card, kind: 'exhaust' | 'purge'): void { animateCardDeparture(card, kind); }
+  public animateCardDeparture(card: Card, kind: 'exhaust' | 'remove' | 'purge'): void { animateCardDeparture(card, kind); }
   private static instance: TavernCardInteractionPresenter;
   private readonly animationManager = AnimationManager.getInstance();
   private readonly effectDisplay = EffectProgramDisplay.getInstance();
