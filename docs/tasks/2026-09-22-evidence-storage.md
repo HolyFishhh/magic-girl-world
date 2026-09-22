@@ -30,8 +30,16 @@
 
 本机证据：`tmp/evidence-file-archive-result.json`、`tmp/evidence-stability-regressions.log`、`tmp/tavern-evidence-files-result.json`、`tmp/evidence-view-browser-NHB7RO/evidence.json`。修复了界面测试夹具的缺失 DOM/脱敏函数及异步调用，保留原有行为断言。
 
+源码提交 `974fbcd`，补充导出回归提交 `f6ab209`。首个隔离候选 r1 的构建/导出/扩展包检查通过，但角色运行时检查发现一条旧字段访问正则尚未同步可选链写法；修正后在该实际产物上通过全部运行时检查，并加入文件读取失败、聊天/轮次切换时拒绝导出的行为断言。r1 未安装，重新冻结源码后构建 r2。
+
 ## 交付状态
 
-源码回归已验证；隔离构建、安装及哈希核验结果将在完成后追加。目标显示名 **魔法少女世界 1.0.3**，精确头像 **魔法少女世界 1.0.3.png**。没有刷新用户已有页面、推进玩家存档、调用真实模型或正式发布。
+候选 **evidence-20260922-r2** 已完成隔离构建、备份安装和哈希核验。1024 份源码冻结一致，构建前后 1031 份 dist/已安装扩展文件不变；扩展包及实际角色运行时测试通过。安装前再次校验全部源码和产物哈希。
+
+本地测试酒馆 8012 当前卡显示名 **魔法少女世界 1.0.3**，精确头像 **魔法少女世界 1.0.3.png**。卡内运行时 API 回读 SHA256 为 `55b84c8579b2750d39f022b61f92e473f0a2c0a11baf7d1bd592b73fcf0b4942`，扩展 index.js HTTP 回读为 `f5055911dece6793e06b53308774d6bf27163a752153adafce45c6821bcd6c95`；其余四项扩展 HTTP 哈希一致。344 份其他角色卡、全部聊天及世界书文件不变；所选聊天、全局正则、无关角色字段不变。
+
+没有刷新用户已有页面、推进玩家存档、调用真实模型、推送或正式发布。用户自行刷新完整酒馆页后加载这次扩展及运行时。未做完整玩家实玩和手机长局性能验收。
+
+构建绑定：`tmp/build-binding-evidence-20260922-r2.json`。安装结果：`tmp/evidence-install-final.json`、`tmp/evidence-install-{extension,runtime,protected-data}.log`。扩展备份：`D:/project/oldproject/magic-girl-world/tmp/tavern-extension-backups/2026-09-22T07-28-40.622Z-145866e1-daac-4ca2-b1a7-e130cf2693c8`；角色运行时备份：`D:/project/oldproject/magic-girl-world/tmp/tavern-runtime-backups/ff391b28-eac4-4dad-83a2-22163bdce781`。
 
 总体计划仍未全部完成：初始生成证据进一步去重、战斗历史分段索引、局部渲染与完整长局性能、真实模型流派针对质量仍需后续验证。
