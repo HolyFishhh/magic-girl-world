@@ -56,7 +56,7 @@ export function extractArchetypeEvidence(definition: ContentDefinition, pack?: C
       // Destinations are risks, never proof of an active discard source/payoff.
       if (key === 'lifecycle') {
         if (record(child) && child.on_discard === 'remove') derived.add('discard_remove');
-        if (record(child) && child.on_discard === 'purge') derived.add('discard_purge');
+        if (record(child) && child.on_discard === 'purge') derived.add(child.removable === false ? 'discard_remove' : 'discard_purge');
         continue;
       }
       if (key === 'summon_template' || key === 'summonTemplateId' || key === 'summon_template_id'

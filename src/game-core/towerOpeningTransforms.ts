@@ -1,4 +1,5 @@
 import { migratePersistentRunDeck, applyPersistentDeckMutation } from './cardProgression';
+import { canTransformCard } from './cardLifecycle';
 
 export const OPENING_TRANSFORM_FILTER_FIELDS = ['ids', 'names', 'name_contains', 'types'] as const;
 export const OPENING_OUTCOME_FIELDS = [
@@ -42,6 +43,7 @@ export function parseOpeningDeckTransforms(value: unknown): OpeningDeckTransform
   });
 }
 export function openingTransformMatches(card: Record<string, any>, filter: OpeningDeckTransform['filter']): boolean {
+  if (!canTransformCard(card)) return false;
   return (
     (!filter.ids || filter.ids.some(id => id === card.id || id === card.templateId)) &&
     (!filter.names || filter.names.includes(String(card.name || ''))) &&
@@ -109,7 +111,7 @@ export function createOpeningDeckTransformsSchema(card: Record<string, unknown>)
   };
 }
 export const OPENING_TRANSFORM_GUIDANCE =
-  '馈赠也可使用 outcome.deck_transforms:[{filter:{names:["打击","防御"]},replacement:完整单张卡牌}] 将当前持久牌组中所有匹配副本逐张永久转化。filter 支持 ids（模板ID）、names（精确卡名）、name_contains（卡名包含文字）、types（Attack/Skill等类型）；同字段任一匹配，不同字段同时满足。替换牌必须完整预生成且 quantity 为1，不使用 card_ref；新状态按该候选的 statuses 闭包提供。各项按领取前牌组筛选，不连锁转化，不能让同一实例命中多项。没有匹配牌时转化0张，不补发，不影响将来获得的牌；每张保持持有实例身份，唯一性冲突或规则无效时整体失败。不能把只有描述、删除额度或未来奖励说成已完成转化。';
+  '馈赠也可使用 outcome.deck_transforms:[{filter:{names:["打击","防御"]},replacement:完整单张卡牌}] 将当前持久牌组中所有匹配副本逐张永久转化。filter 支持 ids（模板ID）、names（精确卡名）、name_contains（卡名包含文字）、types（Attack/Skill等类型）；同字段任一匹配，不同字段同时满足。替换牌必须完整预生成且 quantity 为1，不使用 card_ref；新状态按该候选的 statuses 闭包提供。各项按领取前牌组筛选，不可变形卡不参与筛选，不连锁转化，不能让同一实例命中多项。没有匹配牌时转化0张，不补发，不影响将来获得的牌；每张保持持有实例身份，唯一性冲突或规则无效时整体失败。不能把只有描述、删除额度或未来奖励说成已完成转化。';
 export function describeOpeningDeckTransforms(value: unknown, cards: readonly Record<string, any>[] = []): string[] {
   const types: Record<string, string> = {
     Attack: '攻击牌',
@@ -134,6 +136,6 @@ export function describeOpeningDeckTransforms(value: unknown, cards: readonly Re
     const count = cards
       .filter(card => openingTransformMatches(card, f))
       .reduce((n, c) => n + (Number.isInteger(c.quantity) ? c.quantity : 1), 0);
-    return `将当前牌组中全部${scope}（当前${count}张）逐张永久转化为“${action.replacement.name || action.replacement.id}”；仅本次持有副本，保留实例身份，不影响未来副本`;
+    return `将当前牌组中全部${scope}（当前${count}张可变形）逐张永久转化为“${action.replacement.name || action.replacement.id}”；跳过不可变形卡，仅本次持有副本，保留实例身份，不影响未来副本`;
   });
 }

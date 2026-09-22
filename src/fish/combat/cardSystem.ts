@@ -765,9 +765,11 @@ export class CardSystem {
   }
 
   private purgeCard(card: Card): void {
-    this.gameStateManager.purgeOwnedCard(card);
-    this.presentation.animateCardDeparture(card, 'purge');
-    this.presentation.addLog(`销毁卡牌：${card.name}（永久移除本张持有卡；临时副本不影响原卡）`, 'action');
+    const removed = this.gameStateManager.purgeOwnedCard(card);
+    this.presentation.animateCardDeparture(card, removed ? 'purge' : 'remove');
+    this.presentation.addLog(removed
+      ? `销毁卡牌：${card.name}（永久移除本张持有卡）`
+      : `移出本场：${card.name}（原持有牌组保留）`, 'action');
   }
 
   private abandonCard(card: Card): void {

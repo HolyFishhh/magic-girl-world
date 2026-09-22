@@ -6,6 +6,7 @@ const dir=resolve('tmp/shop-fixed-visual');fs.mkdirSync(dir,{recursive:true});
 fs.writeFileSync(resolve(dir,'entry.ts'),`import {renderShopMarket} from '../../src/common/shopMarket';
 const root=document.getElementById('choice-container')!;
 const cards=Array.from({length:20},(_,i)=>({id:'c'+i,name:'测试牌'+i,type:'攻击',cost:1,description:'测试',runInstanceId:'instance-'+i}));
+cards[19].lifecycle={removable:false};
 window['removed']=[];window['purchased']=[];
 renderShopMarket({root,stat:{battle:{cards},reward:{card:[cards[0]],artifact:[],item:[]}},run:{gold:999,act:1} as any,enabled:true,renderCard:c=>'<div class="mwg-card" style="height:180px;padding:12px;border:1px solid gray">'+c.name+'</div>',renderSupport:()=>'',purchase:async(...args)=>{window['purchased'].push(args)},removeCard:async id=>{window['removed'].push(id)},leave:async()=>{}});`);
 await new Promise((yes,no)=>{const c=webpack({mode:'development',entry:resolve(dir,'entry.ts'),output:{path:dir,filename:'bundle.js'},resolve:{extensions:['.ts','.js']},module:{rules:[{test:/\.ts$/,exclude:/node_modules/,use:{loader:'ts-loader',options:{transpileOnly:true}}},{test:/\.scss$/,type:'asset/source'}]},devtool:false});c.run((e,s)=>c.close(()=>e||s.hasErrors()?no(e||s.toString({all:false,errors:true})):yes()));});
@@ -40,6 +41,7 @@ try{
   await evalJs(`(()=>{const f=document.querySelector('iframe'),b=f.contentDocument.querySelector('[data-shop-remove]');window.scrollTo(0,900+b.getBoundingClientRect().top-450);window.beforeScroll=scrollY;b.click()})()`);await new Promise(r=>setTimeout(r,120));
   const inspect=()=>evalJs(`(()=>{const f=document.querySelector('iframe'),d=f.contentDocument,m=d.querySelector('dialog'),r=m.getBoundingClientRect(),h=d.querySelector('.shop-remove-confirm').getBoundingClientRect(),offset=f.getBoundingClientRect().top;return {top:r.top+offset,bottom:r.bottom+offset,left:r.left,right:r.right,confirmTop:h.top+offset,confirmBottom:h.bottom+offset,scroll:scrollY,before:window.beforeScroll,open:m.open,removed:f.contentWindow.removed}})()`);
   let state=await inspect();assert.ok(state.open);assert.ok(state.top>=0&&state.bottom<=800&&state.left>=0&&state.right<=width,JSON.stringify(state));assert.equal(state.scroll,state.before,'opening must not scroll parent');assert.ok(state.confirmTop>=0&&state.confirmBottom<=800);await shot('removal-'+width);
+  assert.equal(await evalJs('document.querySelector("iframe").contentDocument.querySelectorAll("[data-remove-index]").length'),19,'bound card excluded from shop choices');
   await evalJs(`(()=>{const d=document.querySelector('iframe').contentDocument;d.querySelector('[data-remove-index="0"]').click();d.querySelector('.shop-detail-close').click()})()`);
   assert.deepEqual(await evalJs('document.querySelector("iframe").contentWindow.removed'),[]);
   await evalJs(`(()=>{const d=document.querySelector('iframe').contentDocument;d.querySelector('[data-shop-remove]').click();d.querySelector('[data-remove-index="1"]').click();d.querySelector('.shop-remove-confirm').click()})()`);await new Promise(r=>setTimeout(r,50));

@@ -19,6 +19,10 @@ const { describeCardTraits } = require('../src/game-core/cardLifecycle.ts');
 const { presentCompactContent } = require('../src/game-core/contentPresentation.ts');
 const { effectProgramToDisplayTags } = require('../src/game-core/effectDisplay.ts');
 const { CardSystem } = require('../src/fish/combat/cardSystem.ts');
+const { applyOpeningDeckTransforms, describeOpeningDeckTransforms } = require('../src/game-core/towerOpeningTransforms.ts');
+const { withAiContentDefinitions } = require('../src/game-core/aiContentJsonSchema.ts');
+const runApi = require('../src/game-core/runState.ts');
+const { extractArchetypeEvidence } = require('../src/game-core/archetypeEvidence.ts');
 const locked = { id: 'oath', name: '不灭誓约', type: 'Skill', rarity: 'Common', cost: 0, quantity: 1,
   effects: { block: 2 }, lifecycle: { removable: false, transformable: false, on_discard: 'purge' } };
 const free = { ...locked, id: 'free', name: '散页', lifecycle: {} };
@@ -35,9 +39,14 @@ const validate = ajv.compile(astSchema);
 assert.equal(validate(program.value), true, JSON.stringify(validate.errors));
 const validateTemplate = new Ajv2020({ strict: false }).compile({ $defs: authoredSchema.$defs, $ref: '#/$defs/cardTemplate' });
 assert.equal(validateTemplate(template), true, JSON.stringify(validateTemplate.errors));
+const validatePublicCard = new Ajv2020({ strict: false }).compile(withAiContentDefinitions({ $ref: '#/$defs/mwgCard' }));
+assert.equal(validatePublicCard(locked), true, JSON.stringify(validatePublicCard.errors));
 assert.match(presentCompactContent(locked, 'card').rulesText, /不可移除/);
 assert.match(effectProgramToDisplayTags(program.value).map(tag => tag.reference?.rules || '').join(' '), /不可变形/);
 assert.ok(describeCardTraits(locked).some(trait => trait.name === '遗忘·本场'));
+const operations = extractArchetypeEvidence(createContentPack({ cards: [locked] }).cards[0]).operations;
+assert.ok(operations.includes('discard_remove'));
+assert.ok(!operations.includes('discard_purge'), 'scoring must not report permanent card loss for a protected card');
 const deck = migratePersistentRunDeck([locked, free]);
 const before = structuredClone(deck);
 for (const kind of ['remove', 'transform']) {
@@ -46,6 +55,10 @@ for (const kind of ['remove', 'transform']) {
   assert.deepEqual(plan.candidates.map(card => card.id), ['free']);
 }
 assert.deepEqual(deck, before);
+const replacement = { ...free, id: 'renewed', name: '新生' };
+const transformAll = [{ filter: { types: ['Skill'] }, replacement }];
+assert.deepEqual(applyOpeningDeckTransforms(deck, transformAll, value => value).map(card => card.id), ['oath', 'renewed']);
+assert.match(describeOpeningDeckTransforms(transformAll, deck).join(' '), /当前1张可变形/);
 assert.equal(applyPersistentDeckMutation(deck, { kind: 'remove', runInstanceId: deck[1].runInstanceId }).cards.length, 1);
 const independentlyBound = [{ ...deck[0], lifecycle: { removable: false } }];
 assert.equal(applyPersistentDeckMutation(independentlyBound, { kind: 'transform', runInstanceId: deck[0].runInstanceId, replacement: free }).cards[0].id, 'free');
@@ -53,6 +66,24 @@ const stat = { battle: { core: { card_removal_count: 2 }, cards: deck }, run_tra
 const statBefore = structuredClone(stat);
 assert.throws(() => executeUnifiedRunTransactionInStat(stat, { kind: 'allowance_remove_card', runInstanceId: deck[0].runInstanceId, expectedRevision: 0, source: { kind: 'player', id: 'test' } }), /不可永久移除/);
 assert.deepEqual(stat, statBefore, 'failed deletion must not spend allowance, change revision or rewrite the deck');
+const initialRun = runApi.createRunState({ seed: 7, routeMode: 'map' });
+let shopRun;
+searchShop: for (const path of initialRun.map.acts[0].paths) {
+  let run = initialRun;
+  for (const nodeId of path) {
+    const choice = run.choices.find(entry => entry.id === nodeId);
+    if (!choice) break;
+    run = runApi.enterRunNode(run, nodeId);
+    if (choice.kind === 'shop') { shopRun = run; break searchShop; }
+    run = runApi.completeRunNode(run, { outcome: 'cleared' });
+  }
+}
+assert.ok(shopRun);
+const shopStat = { ...structuredClone(stat), run: { ...shopRun, gold: 1000 }, run_shop: { removal_used: false } };
+const shopBefore = structuredClone(shopStat);
+assert.throws(() => executeUnifiedRunTransactionInStat(shopStat, { kind: 'shop_remove_card', runInstanceId: deck[0].runInstanceId,
+  source: { kind: 'player', id: 'shop-test' } }), /不可永久移除/);
+assert.deepEqual(shopStat, shopBefore, 'blocked shop removal must not spend gold or mark the service used');
 let offered = false;
 await new PendingCardRemoval().offer({ read: () => ({ battle: { core: { card_removal_count: 1 }, cards: [locked] } }), active: () => true,
   choose: async () => { offered = true; return null; }, commit: async () => assert.fail('cannot commit'), changed: async () => {} }, true);
@@ -66,11 +97,13 @@ for (const reason of ['effect', 'player_choice', 'turn_cleanup']) {
   const host = Object.create(CardSystem.prototype);
   host.gameStateManager = store; host.triggerDiscardEffect = async () => {}; host.dispatchPlayerTrigger = async () => {};
   host.relicTriggerHost = { triggerRelics: async () => {} };
-  host.presentation = { animateCardDeparture() {}, logDiscardCardDetail() {}, addLog() {} };
+  const logs = [];
+  host.presentation = { animateCardDeparture() {}, logDiscardCardDetail() {}, addLog(text) { logs.push(text); } };
   await host.discardCard(cards[0].id, reason);
   assert.equal(store.getPlayer().hand.length, 0);
   assert.equal(store.getPlayer().deck.length, 2);
   assert.equal(store.getGameState().purgedRunInstanceIds?.length || 0, 0);
+  if (reason !== 'turn_cleanup') assert.ok(logs.some(text => text.includes('原持有牌组保留')));
   // A transformed combat incarnation cannot evade the original's protection.
   store.purgeOwnedCard({ ...cards[0], lifecycle: {} });
   const restored = new BattleStateStore(JSON.parse(JSON.stringify(store.getGameState())));

@@ -1125,17 +1125,19 @@ export class BattleStateStore {
     this.notifyListeners('exhaust_updated');
   }
 
-  public purgeOwnedCard(card: Card): void {
+  public purgeOwnedCard(card: Card): boolean {
     const owned = this.gameState.player.deck.find(entry => entry.runInstanceId === card.runInstanceId);
     // Check both the combat incarnation and its owned original: transformation
     // during this battle must not erase the original's removal permission.
-    if (!canPermanentlyRemoveCard(card) || (owned && !canPermanentlyRemoveCard(owned))) return;
+    if (!canPermanentlyRemoveCard(card) || (owned && !canPermanentlyRemoveCard(owned))) return false;
     // Temporary copies share lineage but must never delete their original.
     if (card.runInstanceId && !(card.origin === 'copied' && card.parentCombatInstanceId) && this.gameState.player.deck.some(c => c.runInstanceId === card.runInstanceId)) {
       this.gameState.purgedRunInstanceIds = [...new Set([...(this.gameState.purgedRunInstanceIds || []), card.runInstanceId])];
       this.gameState.player.deck = this.gameState.player.deck.filter(owned => owned.runInstanceId !== card.runInstanceId);
+      this.notifyListeners('card_purged');
+      return true;
     }
-    this.notifyListeners('card_purged');
+    return false;
   }
 
   public placeResolvedCard(card: Card, destination: PlayedCardDestination): PlayedCardDestination {
