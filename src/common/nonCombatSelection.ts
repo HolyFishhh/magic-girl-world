@@ -18,6 +18,7 @@ import { renderSupportDetails } from '../shared/supportPresentation';
 import { applyFixedRewardGrant } from './rewardTransactions';
 import { applyNonCombatSettlementInStat } from './nonCombatSettlementTransactions';
 import type { NonCombatAnswers } from './nonCombatSettlementTransactions';
+import { pinSelectionToVisibleViewport } from './fixedSelectionViewport';
 
 type JsonRecord = Record<string, any>;
 
@@ -126,12 +127,25 @@ function createOverlay(document: Document, title: string, description: string) {
   panel.append(heading, intro, content, footer);
   overlay.append(panel);
   const style = document.createElement('style');
-  style.textContent =
-    '.non-combat-selection-overlay{position:fixed;inset:0;z-index:2147483000;display:grid;place-items:center;padding:18px;background:#08101acc;color:#edf3ff;font:14px/1.5 system-ui}.non-combat-selection-dialog{display:flex;flex-direction:column;max-width:min(100%,960px);max-height:min(88vh,820px);width:100%;padding:18px;border:1px solid #607a9b;border-radius:16px;background:#111c2d;box-shadow:0 22px 64px #000a}.non-combat-selection-dialog h2{margin:0;font-size:20px}.non-combat-selection-intro{margin:6px 0 14px;color:#c4d5eb}.non-combat-selection-content{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;overflow:auto;padding:3px}.non-combat-selection-option{display:block;min-width:0;padding:0;border:2px solid #3d5978;border-radius:12px;background:#18283d;color:inherit;cursor:pointer;text-align:left}.non-combat-selection-option.is-selected{border-color:#8ecaff;background:#284d76;box-shadow:0 0 0 2px #8ecaff66}.non-combat-selection-option:focus-visible{outline:3px solid #d8f1ff;outline-offset:2px}.non-combat-selection-option .mwg-card{pointer-events:none;min-height:250px}.non-combat-selection-option .mwg-status-reference,.non-combat-selection-option [data-content-reference]{pointer-events:auto}.non-combat-selection-footer{display:flex;justify-content:space-between;gap:12px;margin-top:16px;padding-top:14px;border-top:1px solid #38516d}.non-combat-selection-footer button{padding:9px 16px;border:1px solid #769cc4;border-radius:9px;background:#203a58;color:#fff;font:inherit;cursor:pointer}.non-combat-selection-footer button[disabled]{opacity:.5;cursor:not-allowed}';
+  style.textContent = `
+    .non-combat-selection-overlay{position:fixed;inset:0;z-index:2147483000;background:#08101acc;color:#edf3ff;font:14px/1.5 system-ui;color-scheme:dark}
+    .non-combat-selection-dialog{box-sizing:border-box;display:flex;flex-direction:column;min-height:0;width:min(960px,calc(100% - 24px));max-height:calc(100vh - 24px);padding:16px;border:1px solid #607a9b;border-radius:16px;background:#111c2d;box-shadow:0 22px 64px #000a;overflow:hidden}
+    .non-combat-selection-dialog h2{flex:none;margin:0;font-size:18px;overflow-wrap:anywhere}
+    .non-combat-selection-intro{flex:none;margin:6px 0 12px;color:#c4d5eb;overflow-wrap:anywhere}
+    .non-combat-selection-content{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(190px,100%),1fr));grid-auto-rows:max-content;align-content:start;align-items:start;justify-items:center;min-height:0;gap:12px;overflow:auto;padding:3px;overscroll-behavior:contain}
+    .non-combat-selection-option{display:block;box-sizing:border-box;min-width:0;max-width:100%;padding:0;border:2px solid #3d5978;border-radius:12px;background:#18283d;color:inherit;cursor:pointer;text-align:left}
+    .non-combat-selection-option.is-selected{border-color:#8ecaff;background:#284d76;box-shadow:0 0 0 2px #8ecaff66}
+    .non-combat-selection-option:focus-visible{outline:3px solid #d8f1ff;outline-offset:2px}
+    .non-combat-selection-option .mwg-card{pointer-events:none;min-height:250px}
+    .non-combat-selection-option .mwg-status-reference,.non-combat-selection-option [data-content-reference],.non-combat-selection-option .card-preview-trigger{pointer-events:auto}
+    .non-combat-selection-footer{flex:none;display:flex;justify-content:space-between;gap:12px;margin-top:12px;padding-top:12px;border-top:1px solid #38516d}
+    .non-combat-selection-footer button{min-height:44px;padding:9px 16px;border:1px solid #769cc4;border-radius:9px;background:#203a58;color:#fff;font:inherit;cursor:pointer}
+    .non-combat-selection-footer button[disabled]{opacity:.5;cursor:not-allowed}`;
   overlay.append(style);
   document.body.append(overlay);
+  const unpin = pinSelectionToVisibleViewport(panel);
   bindStatusReferenceDetails(document);
-  return { content, footer, close: () => overlay.remove() };
+  return { content, footer, close: () => { unpin(); overlay.remove(); } };
 }
 
 function chooseIndexes(

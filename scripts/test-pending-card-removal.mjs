@@ -56,8 +56,8 @@ const empty=harness({...s,battle:{...s.battle,cards:[]}});await new PendingCardR
 console.log('PASS acquisition removal: gifts, acquired/initial relics, exact copies, save restore, cancel/resume, repeated/stale/invalid/historical requests, concurrent/destroyed view, empty deck');
 const {describeCompactContent}=require('../src/game-core/contentDescription.ts');
 const {compactContentToDisplayTags}=require('../src/game-core/effectDisplay.ts');
-assert.match(describeCompactContent(relic),/领取后立即选择/);
-assert.match(compactContentToDisplayTags(relic).map(x=>x.text).join('；'),/领取后立即选择/);
+assert.match(describeCompactContent(relic),/选择后永久移除指定卡牌/);
+assert.match(compactContentToDisplayTags(relic).map(x=>x.text).join('；'),/选择后永久移除指定卡牌/);
 const reacquired=harness(s),reacquiredQueue=new PendingCardRemoval();let reacquiredOffers=0;
 reacquired.stat().battle.core.card_removal_count=1;
 const reacquiredPorts={...reacquired.ports,choose:async()=>{reacquiredOffers++;return null}};

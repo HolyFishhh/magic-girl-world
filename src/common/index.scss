@@ -2318,16 +2318,20 @@ summary:focus-visible {
 }
 
 .card-delete-btn {
-  position: absolute;
-  top: 5px;
-  right: 5px;
-  width: 28px;
-  height: 28px;
+  display: block;
+  position: relative;
+  width: 100%;
+  min-height: 36px;
+  margin-top: 8px;
+  padding: 6px 8px;
   border: 1px solid var(--danger);
   border-radius: 5px;
   background: var(--danger-soft);
   color: var(--danger);
   cursor: pointer;
+  font: inherit;
+  &:disabled { opacity: .6; cursor: wait; }
+  &[hidden] { display: none !important; }
 }
 
 .battle-deck.delete-mode .card {
@@ -2336,7 +2340,12 @@ summary:focus-visible {
 
 .delete-toggle-btn {
   gap: 4px;
+  &[aria-pressed='true'] { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
+  &:disabled { opacity: .55; cursor: not-allowed; }
 }
+
+.delete-mode-hint { margin: 0 0 12px; color: var(--danger); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+@media (max-width: 540px) { .card-delete-btn, .delete-toggle-btn { min-height: 44px; } }
 
 .status-section + .status-section {
   margin-top: 10px;

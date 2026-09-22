@@ -26,6 +26,7 @@ import {renderStancePanel} from '../../src/shared/stancePresentation';
 import {renderRulePills} from '../../src/shared/rulePills';
 import {presentCompactContent} from '../../src/game-core/contentPresentation';
 import {describeCompactStatus} from '../../src/game-core';
+import {expandBuiltinStatusDefinitions} from '../../src/game-core/builtinStatusCatalog';
 import {collectCardDisplayNames} from '../../src/game-core/cardDisplayNames';
 import {collectSummonDisplayNames} from '../../src/game-core/summonDisplayNames';
 import {collectStanceDefinitions,collectStanceNames} from '../../src/game-core/stanceIdentityDisplay';
@@ -41,7 +42,7 @@ const next=()=>{variables.stat_data.run.phase='in_node';variables.stat_data.run_
 (window as any).fixture={render,tower,complete,next,combat:()=>{renderStoryPanel('fish');const fold=renderCharacterStatus(variables.stat_data);document.body.append(fold);fold.open=true;renderCharacterStatus(variables.stat_data);},variables:()=>variables,restore:()=>{variables=JSON.parse(JSON.stringify(variables));render();}};render();
 `);
 const css=compile('src/common/index.scss',{style:'expanded'}).css;
-const commonHtml=fs.readFileSync('src/common/index.html','utf8').replace('</head>',`<style>${css}</style></head>`).replace('</body>','<script src="bundle.js"></script></body>');
+const commonHtml=fs.readFileSync('src/common/index.html','utf8').replace('</head>',`<style>${css}</style><script>window.fixtureErrors=[];window.addEventListener('error',e=>fixtureErrors.push(e.error?.stack||e.message));</script></head>`).replace('</body>','<script src="bundle.js"></script></body>');
 fs.writeFileSync(resolve(out,'index.html'),commonHtml);
 await new Promise((done,fail)=>{const compiler=webpack({mode:'development',devtool:false,entry:resolve(out,'entry.ts'),output:{path:out,filename:'bundle.js'},resolve:{extensions:['.ts','.js'],alias:{'@':resolve('src')}},module:{rules:[{test:/\.ts$/,use:resolve(out,'loader.cjs')}]}});compiler.run((e,s)=>compiler.close(()=>e||s.hasErrors()?fail(e||s.toString({all:false,errors:true})):done()));});
 const port=18179;
@@ -59,6 +60,8 @@ let ws;try{
   await call('Page.navigate',{url:'file:///'+resolve(out,'index.html').replaceAll('\\','/')});
   for(let i=0;i<100;i++){if(await evaluate('Boolean(window.fixture)'))break;await new Promise(r=>setTimeout(r,100));}
   assert.equal(await evaluate('Boolean(window.fixture)'),true);
+  assert.equal(await evaluate('(()=>{try{fixture.render();return ""}catch(error){return error.stack}})()'), '', 'production render must complete');
+  assert.deepEqual(await evaluate('window.fixtureErrors'),[], 'production renderer must initialize without exceptions');
   assert.equal(await evaluate("Boolean(document.querySelector('#mwg-status-fold'))"),false,'story keeps original panels instead of a tower replacement');
   assert.equal(await evaluate("document.querySelector('.mwg-statusbar').classList.contains('is-tower-mode')"),false,'story status never receives the tower presentation class');
   assert.equal(await evaluate("getComputedStyle(document.getElementById('tower-player-panel')).display==='none'"),true,'story status never exposes the tower player panel');

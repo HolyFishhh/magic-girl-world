@@ -254,7 +254,13 @@ function candidateCount(value: unknown): number {
 }
 
 function sameJson(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  if (Object.is(left, right)) return true;
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object') return false;
+  if (Array.isArray(left) !== Array.isArray(right)) return false;
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length
+    && keys.every(key => Object.hasOwn(right, key)
+      && sameJson((left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key]));
 }
 
 function entryIdentity(value: Record<string, any>): string {
@@ -381,10 +387,10 @@ function reconcileBattleSettlementCandidate(
     if (reward.item.length !== expectedItems) {
       throw new ExtraModelCandidateRejectedError(`胜利道具候选应为 ${expectedItems} 项，实际为 ${reward.item.length} 项`);
     }
-    const expectedLimits = isRecord(request.limits) ? request.limits : {};
-    if (!sameJson(reward.limits, expectedLimits)) {
-      throw new ExtraModelCandidateRejectedError('胜利奖励领取上限必须与程序预算完全一致');
-    }
+    // Allowances are deterministic program data. Restore the authoritative
+    // budget locally instead of regenerating otherwise valid rewards because
+    // the model reordered keys, added an unused zero, or copied a wrong limit.
+    reward.limits = clone(isRecord(request.limits) ? request.limits : {});
   } else {
     if (reward.card.length || reward.artifact.length || reward.item.length || Object.keys(reward.limits).length) {
       throw new ExtraModelCandidateRejectedError('战败结算不能保留或生成待选奖励');
@@ -868,8 +874,6 @@ export class PersistentMvuRepairHost {
     const required = ['getChatMessages', 'setChatMessages', 'getVariables']
       .filter(name => typeof helper[name] !== 'function');
     if (required.length > 0) throw new Error(`Tavern Helper 结构化结算接口缺失: ${required.join(', ')}`);
-    const generator = this.options.generate;
-    if (!generator) throw new Error('结构化战斗结算生成器尚未就绪');
     const assertCurrent = (): void => {
       if (isCurrent?.() === false || Number(helper.getLastMessageId?.()) !== messageId) {
         throw new Error('当前聊天已经切换，已取消旧存档的战斗结算补写');
@@ -889,6 +893,39 @@ export class PersistentMvuRepairHost {
     if (!isRecord(request) || request.marker !== '[MVU_BATTLE_SETTLEMENT]') return;
 
     const generationId = `mwg-settlement-repair-${messageId}-${this.options.now?.() ?? Date.now()}`;
+    // A model can write the complete reward pool but omit the final request
+    // cleanup. Validate the retained pool before making any new model call;
+    // clearing this marker must not replace cards, growth, or story consequences.
+    if (request.result === 'victory') {
+      let existing: SettlementCandidate | null = null;
+      try {
+        existing = reconcileBattleSettlementCandidate(originalVariables, {
+          reward: originalVariables.stat_data.reward,
+          add_cards: [], add_artifacts: [], add_permanent_status: [],
+        });
+      } catch (error) {
+        if (!(error instanceof ExtraModelCandidateRejectedError)) throw error;
+      }
+      if (existing && existing.normalizedLegacyCurseCards.length === 0 && existing.addedBattleStatuses.length === 0) {
+        const variables = clone(originalVariables);
+        variables.stat_data.reward.limits = clone(existing.reward.limits);
+        variables.stat_data.reward.request = null;
+        const update = [
+          '<UpdateVariable>', '<Analysis>Repair battle settlement.</Analysis>',
+          `_.set('reward.limits', ${JSON.stringify(existing.reward.limits)});`,
+          "_.set('reward.request', null);", '</UpdateVariable>',
+        ].join('\n');
+        this.options.onStructuredProgress?.({ phase: 'begin', generationId, detail: '奖励已经齐全，正在确认结算完成' });
+        await commitMvuRepairSnapshot(helper, messageId, originalSnapshot,
+          { message: appendBattleSettlementUpdate(originalMessage, update), variables }, assertCurrent);
+        this.options.onStructuredProgress?.({ phase: 'complete', generationId,
+          detail: '已确认现有奖励，无需重新生成', summary: '已保留全部奖励并清理结算请求' });
+        return;
+      }
+    }
+
+    const generator = this.options.generate;
+    if (!generator) throw new Error('结构化战斗结算生成器尚未就绪');
     this.options.onStructuredProgress?.({
       phase: 'begin',
       generationId,

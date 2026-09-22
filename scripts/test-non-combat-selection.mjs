@@ -243,7 +243,7 @@ const stanceGrant = collectNonCombatAnswers({
   } },
 });
 const stanceGrantFace = chooseFirst().innerHTML;
-assert.match(stanceGrantFace, /自身处于<span class="mwg-status-reference[^>]+>恶魔形态<\/span>时改为8点/,
+assert.match(stanceGrantFace, /自身处于<span class="mwg-status-reference[^>]+>恶魔形态<\/span>，则造成8点伤害/,
   'grant preview resolves a stance defined by another owned card into a clickable Chinese reference');
 assert.doesNotMatch(stanceGrantFace, /self\.stance|>demon_form</, 'raw stance ids never appear as visible card text');
 chooseFirst().click(); confirm().click();

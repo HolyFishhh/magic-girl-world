@@ -734,6 +734,65 @@ for (const scope of ['generic', 'cards-only', 'initial-content']) {
 
 }
 
+// A complete retained reward pool only needs its pending marker cleared. Its
+// quantities, definitions, and already-written growth must survive unchanged.
+for (const existing of [false, true]) {
+  for (const limits of [{ items: 1, cards: 1 }, { cards: 1, artifacts: 0, items: 1 }, { cards: 99, items: 2 }]) {
+    const originalVariables = wrapBattle(readyBattle());
+    const pool = {
+      card: [0, 1, 2].map(index => ({ id: `reward_${index}`, name: `奖励${index}`, type: 'Attack',
+        rarity: 'Common', cost: 1, quantity: 1, effects: { damage: 8 + index } })),
+      artifact: [], item: [{ id: 'reward_tonic', name: '战后药剂', count: 1, effects: { heal: 5 } }], limits,
+    };
+    originalVariables.stat_data.reward = {
+      ...(existing ? clone(pool) : { card: [], artifact: [], item: [], limits: {} }),
+      pool_revision: 4,
+      request: { marker: '[MVU_BATTLE_SETTLEMENT]', result: 'victory',
+        cards: { candidates: 3, pick: 1 }, items: { candidates: 1, pick: 1 }, limits: { cards: 1, items: 1 } },
+    };
+    const { helper, state } = createRepairHelper({ originalVariables });
+    let calls = 0;
+    const host = new PersistentMvuRepairHost({ generate: async () => {
+      calls++;
+      return { reward: clone(pool), add_cards: [], add_artifacts: [], add_permanent_status: [] };
+    } });
+    const run = () => host.request(helper, 'settlement-idempotence', request('battle-settlement'));
+    await run();
+    assert.equal(calls, existing ? 0 : 1, 'program-owned limits never require another model request');
+    assert.equal(state.variables.stat_data.reward.request, null);
+    assert.deepEqual(state.variables.stat_data.reward.card, pool.card);
+    assert.deepEqual(state.variables.stat_data.reward.item, pool.item);
+    assert.deepEqual(state.variables.stat_data.reward.limits, { cards: 1, items: 1 });
+    assert.equal(state.variables.stat_data.reward.pool_revision, 4);
+    assert.deepEqual(state.variables.stat_data.battle, originalVariables.stat_data.battle);
+    if (existing) assert.doesNotMatch(state.message, /_\.set\('reward\.card'/);
+    const completed = clone(state.variables);
+    state.variables = JSON.parse(JSON.stringify(state.variables));
+    await run();
+    assert.equal(calls, existing ? 0 : 1, 'restored completed settlement must not generate again');
+    assert.deepEqual(state.variables, completed);
+  }
+}
+
+// An invalid retained pool is not mistaken for completed settlement.
+{
+  const originalVariables = wrapBattle(readyBattle());
+  const valid = { id: 'reward_valid', name: '可执行奖励', type: 'Skill', cost: 1, rarity: 'Common', quantity: 1, effects: { block: 8 } };
+  originalVariables.stat_data.reward = { card: [{ ...valid, effects: { apply_status: 'unknown_status', stacks: 1 } }],
+    artifact: [], item: [], limits: { cards: 1 }, request: { marker: '[MVU_BATTLE_SETTLEMENT]', result: 'victory',
+      cards: { candidates: 1, pick: 1 }, limits: { cards: 1 } } };
+  const { helper, state } = createRepairHelper({ originalVariables });
+  let calls = 0;
+  const host = new PersistentMvuRepairHost({ generate: async () => {
+    calls++;
+    return { reward: { card: [valid], artifact: [], item: [], limits: { cards: 1 } },
+      add_cards: [], add_artifacts: [], add_permanent_status: [] };
+  } });
+  await host.request(helper, 'settlement-invalid-pool', request('battle-settlement'));
+  assert.equal(calls, 1);
+  assert.deepEqual(state.variables.stat_data.reward.card, [valid]);
+}
+
 // Optional victory growth is persisted atomically, survives repair serialization,
 // and never consumes or replaces ordinary rewards.
 for (const scenario of ['grow', 'omit', 'missing-owner', 'defeat', 'invalid', 'new-status', 'conflicting-status']) {

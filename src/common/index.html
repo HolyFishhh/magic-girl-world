@@ -272,11 +272,14 @@
                   id="delete-mode-toggle"
                   class="icon-button delete-toggle-btn"
                   type="button"
-                  title="切换删卡模式"
+                  title="使用删卡次数移除一张牌"
+                  aria-pressed="false"
+                  aria-controls="battle-deck"
                 >
-                  🗑️ <span id="delete-count">0</span>
+                  🗑️ <span id="delete-mode-label">删牌</span> <span id="delete-count">0</span>
                 </button>
               </div>
+              <p id="delete-mode-hint" class="delete-mode-hint" hidden></p>
               <div class="battle-deck" id="battle-deck"></div>
             </section>
             <section class="status-group split-resource">

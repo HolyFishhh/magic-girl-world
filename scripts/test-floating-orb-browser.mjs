@@ -102,7 +102,11 @@ try {
   const call = (method, params = {}) => new Promise((resolveCall, rejectCall) => { const id = ++sequence; pending.set(id, { resolve: resolveCall, reject: rejectCall }); ws.send(JSON.stringify({ id, method, params })); });
   const evaluate = async expression => { const result = await call('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }); if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails)); return result.result.value; };
   await call('Page.enable'); await call('Runtime.enable');
-  const setSize = async width => { await call('Emulation.setDeviceMetricsOverride', { width, height: 800, deviceScaleFactor: 1, mobile: false }); };
+  const setSize = async width => {
+    await call('Emulation.setDeviceMetricsOverride', { width, height: 800, deviceScaleFactor: 1, mobile: false });
+    // CDP acknowledges the dimensions before the browser dispatches resize.
+    await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+  };
   await setSize(1000);
   await call('Page.navigate', { url: 'data:text/html,<div id=probe style=\"position:fixed;left:137px;top:0;width:1px;height:1px\"></div>' });
   await new Promise(resolveWait => setTimeout(resolveWait, 50));
@@ -158,6 +162,27 @@ try {
   evidence.drag = snapshot;
   const shot = await call('Page.captureScreenshot', { format: 'png' });
   await writeFile(screenshotPath, Buffer.from(shot.data, 'base64'));
+
+  await setSize(390);
+  await evaluate(`__setOrbVisualViewport({width:390,height:800,offsetLeft:0,offsetTop:0});
+    document.body.style.color='#eee';
+    MagicGirlWorldMvuMonitor.begin({generationId:'browser-encounter'});
+    MagicGirlWorldMvuMonitor.complete("<UpdateVariable>_.set('status.time', '战后');</UpdateVariable>",'browser-encounter');
+    MagicGirlWorldMvuMonitor.success('browser-encounter');
+    window.__completedSnapshot=JSON.stringify(MagicGirlWorldMvuMonitor.getSnapshot());
+    MagicGirlWorldMvuMonitor.complete('【战斗结果】胜利。请根据摘要续写剧情。');
+    MagicGirlWorldMvuMonitor.stream('迟到的正文');
+    MagicGirlWorldMvuMonitor.reasoning('迟到的分析');`);
+  assert.equal(await evaluate('JSON.stringify(MagicGirlWorldMvuMonitor.getSnapshot())===__completedSnapshot'), true,
+    'bundled runtime ignores late user battle summaries after success');
+  await evaluate('MagicGirlWorldMvuMonitor.openProgress()');
+  evidence.diagnostics = await evaluate(`(()=>{const p=document.querySelector('.mwg-mvu-panel'), r=p.getBoundingClientRect(),
+    text=document.querySelector('[data-mwg-diagnostic-feedback]');return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,
+    color:getComputedStyle(text).color,font:getComputedStyle(text).fontSize,phase:MagicGirlWorldMvuMonitor.getSnapshot().phase}})()`);
+  assert.ok(evidence.diagnostics.left>=0 && evidence.diagnostics.right<=390 && evidence.diagnostics.bottom<=800);
+  assert.equal(evidence.diagnostics.color,'rgb(113, 91, 101)', 'diagnostics must remain readable over a light panel in dark Tavern themes');
+  assert.equal(evidence.diagnostics.phase,'success');
+  await writeFile(resolve('tmp/story-ui-diagnostic-390.png'),Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
 
   assert.equal(snapshot.listeners, 2, 'runtime must register exactly visualViewport resize and scroll listeners');
   await evaluate(`window.__MAGIC_GIRL_WORLD_CHARACTER_RUNTIME__.destroy()`);

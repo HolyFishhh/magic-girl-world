@@ -1168,7 +1168,7 @@ function applyHistoricalReadOnlyMode(): boolean {
   }
   document.querySelectorAll<HTMLButtonElement>('.card-delete-btn').forEach(button => {
     button.disabled = true;
-    button.style.display = 'none';
+    button.hidden = true;
   });
   return true;
 }
@@ -2835,6 +2835,7 @@ const pendingCardRemoval = new PendingCardRemoval();
 let pendingRemovalAbort: AbortController | null = null;
 async function offerPendingCardRemovals(force = false): Promise<void> {
   if (__IS_SENDING_ACTION || !__commonViewInitialized || !isCurrentMessageLatest()) return;
+  if (selectedGameMode(getStatRootRef(getCurrentMessageVariables()) || {}) !== 'tower') return;
   if ((globalThis as any).MagicGirlWorld?.getTowerInitialPublicationStatus?.()?.ready === false) return;
   const sequence = __commonViewSequence;
   const controller = new AbortController();
@@ -2843,7 +2844,8 @@ async function offerPendingCardRemovals(force = false): Promise<void> {
   try {
     await pendingCardRemoval.offer({
       read: () => getStatRootRef(getCurrentMessageVariables()) || {},
-      active: () => __commonViewInitialized && sequence === __commonViewSequence && isCurrentMessageLatest(),
+      active: () => __commonViewInitialized && sequence === __commonViewSequence && isCurrentMessageLatest()
+        && selectedGameMode(getStatRootRef(getCurrentMessageVariables()) || {}) === 'tower',
       choose: (stat, remaining) => choosePendingCardRemoval(stat, remaining, controller.signal),
       commit: async (id, revision) => {
         const result = await runActionHost.removeCardWithAllowance(id, revision);
@@ -2861,6 +2863,8 @@ async function offerPendingCardRemovals(force = false): Promise<void> {
 let pendingRemovalTimer: ReturnType<typeof setTimeout> | null = null;
 function schedulePendingCardRemovals(): void {
   if (pendingRemovalTimer !== null) clearTimeout(pendingRemovalTimer);
+  pendingRemovalTimer = null;
+  if (selectedGameMode(getStatRootRef(getCurrentMessageVariables()) || {}) !== 'tower') return;
   const sequence = __commonViewSequence;
   pendingRemovalTimer = setTimeout(async () => {
     pendingRemovalTimer = null;
@@ -3000,7 +3004,6 @@ async function loadGameData() {
     renderRunData(rpgData);
     document.getElementById('common-loading-status')?.remove();
     startLatestMessageGuard();
-    schedulePendingCardRemovals();
     applyPendingUserFocus();
   } catch (error) {
     console.error('加载游戏数据失败:', error);
@@ -3305,7 +3308,8 @@ function renderBattleData(rpgData: any) {
 
   // 普通页面与奖励、战斗页面共享同一个效果解析器，避免出现只有描述、没有实际效果的卡牌。
   if (deckContainer) {
-    const deck = flattenMvuArray(cards, { objectsOnly: true });
+    const deck = migratePersistentRunDeck(flattenMvuArray<any>(cards, { objectsOnly: true }));
+    const revision = Number(rpgData.run_transaction_revision ?? 0);
 
     if (deck.length > 0) {
       const cardsHtml = deck
@@ -3327,21 +3331,23 @@ function renderBattleData(rpgData: any) {
               : '';
           return `
           <div class="collection-card" data-card-id="${escapeHtml(card.id || '')}">
-            <button type="button" class="card-delete-btn" data-card-id="${escapeHtml(card.id || '')}" title="删除一张" style="display: none;">🗑️</button>
             ${renderCollectionCard(card)}
             ${archetypeMeta}
+            <button type="button" class="card-delete-btn" data-card-instance-id="${escapeHtml(card.runInstanceId)}" title="永久移除${escapeHtml(card.name || '这张卡牌')}" hidden>移除这张</button>
           </div>`;
         })
         .join('');
 
       deckContainer.innerHTML = cardsHtml;
       deckContainer.querySelectorAll<HTMLButtonElement>('.card-delete-btn').forEach(button => {
-        button.addEventListener('click', () => void removeCard(button.dataset.cardId || ''));
+        button.addEventListener('click', () => void removeCard(button.dataset.cardInstanceId || '', revision));
       });
     } else {
       deckContainer.innerHTML = '<div class="value">牌库为空</div>';
     }
   }
+
+  syncStoryRemovalControls(rpgData);
 
   // 渲染遗物
   if (artifactsContainer) {
@@ -3669,10 +3675,16 @@ function renderFactionData(gameData: any) {
 }
 
 // 删除卡牌函数
-async function removeCard(cardId: string): Promise<void> {
+async function removeCard(runInstanceId: string, revision: number): Promise<void> {
+  if (__IS_SENDING_ACTION || !__commonViewInitialized || !isCurrentMessageLatest()) return;
+  if (selectedGameMode(getStatRootRef(getCurrentMessageVariables()) || {}) !== 'story') return;
+  const actionToken = setSendingState(true);
+  syncStoryRemovalControls(getStatRootRef(getCurrentMessageVariables()) || {});
   try {
-    await runActionHost.removeCard(cardId);
-    if (typeof toastr !== 'undefined') toastr.success('已删除所选卡牌');
+    const result = await runActionHost.removeCardWithAllowance(runInstanceId, revision);
+    if (actionToken !== __sendingOwner) return;
+    __USER_MUTATION_PILLS.push(`永久移除：${result.cardName}`);
+    if (typeof toastr !== 'undefined') toastr.success(`已永久移除：${result.cardName}`);
     // 刷新显示，但不影响奖励区域
     try {
       await loadGameData();
@@ -3680,8 +3692,14 @@ async function removeCard(cardId: string): Promise<void> {
       console.warn('刷新数据失败:', e);
     }
   } catch (e) {
+    if (actionToken !== __sendingOwner) return;
     console.error('删除卡牌失败:', e);
     if (typeof toastr !== 'undefined') toastr.error(e instanceof Error ? e.message : '删除卡牌失败，请重试');
+  } finally {
+    if (actionToken === __sendingOwner) {
+      setSendingState(false, actionToken);
+      syncStoryRemovalControls(getStatRootRef(getCurrentMessageVariables()) || {});
+    }
   }
 }
 
@@ -3801,45 +3819,36 @@ function renderBattleBookContent() {
 
 // 切换删除模式函数
 function toggleDeleteMode(): void {
-  if (!isCurrentMessageLatest()) return;
+  if (__IS_SENDING_ACTION || !isCurrentMessageLatest()) return;
   const deckContainer = document.getElementById('battle-deck');
-  const toggleBtn = document.getElementById('delete-mode-toggle');
+  if (!deckContainer) return;
+  deckContainer.classList.toggle('delete-mode');
+  syncStoryRemovalControls(getStatRootRef(getCurrentMessageVariables()) || {});
+}
 
-  if (!deckContainer || !toggleBtn) return;
-
-  // 检查删卡次数，如果为0则禁用删除模式
-  const variables = getCurrentMessageVariables();
-  const battle = variables?.stat_data?.battle;
-  const cardRemovalCount = Number(battle?.core?.card_removal_count) || 0;
-
-  if (cardRemovalCount <= 0) {
-    if (typeof toastr !== 'undefined') toastr.warning('删卡次数不足，无法进入删除模式');
-    return;
+function syncStoryRemovalControls(stat: Record<string, any>): void {
+  const deck = document.getElementById('battle-deck');
+  const toggle = document.getElementById('delete-mode-toggle') as HTMLButtonElement | null;
+  if (!deck || !toggle) return;
+  const remaining = Number(stat.battle?.core?.card_removal_count ?? 0);
+  const available = selectedGameMode(stat) === 'story' && isCurrentMessageLatest()
+    && Number.isInteger(remaining) && remaining > 0 && !!deck.querySelector('.card-delete-btn');
+  const enabled = available && deck.classList.contains('delete-mode');
+  deck.classList.toggle('delete-mode', enabled);
+  toggle.disabled = !available || __IS_SENDING_ACTION;
+  toggle.setAttribute('aria-pressed', String(enabled));
+  toggle.title = !isCurrentMessageLatest() ? '历史记录只读' : enabled ? '结束删牌' : '使用删卡次数移除一张牌';
+  const label = document.getElementById('delete-mode-label');
+  if (label) label.textContent = enabled ? '结束删牌' : '删牌';
+  const hint = document.getElementById('delete-mode-hint');
+  if (hint) {
+    hint.hidden = !enabled;
+    hint.textContent = `剩余 ${remaining} 次。点击卡牌下方“移除这张”会永久移除该牌并消耗 1 次机会。`;
   }
-
-  const isDeleteMode = deckContainer.classList.contains('delete-mode');
-
-  if (isDeleteMode) {
-    // 退出删除模式
-    deckContainer.classList.remove('delete-mode');
-    toggleBtn.style.backgroundColor = '#ff6b6b';
-
-    // 隐藏所有删除按钮
-    const deleteButtons = deckContainer.querySelectorAll('.card-delete-btn');
-    deleteButtons.forEach(btn => {
-      (btn as HTMLElement).style.display = 'none';
-    });
-  } else {
-    // 进入删除模式
-    deckContainer.classList.add('delete-mode');
-    toggleBtn.style.backgroundColor = '#51cf66';
-
-    // 显示所有删除按钮
-    const deleteButtons = deckContainer.querySelectorAll('.card-delete-btn');
-    deleteButtons.forEach(btn => {
-      (btn as HTMLElement).style.display = 'block';
-    });
-  }
+  deck.querySelectorAll<HTMLButtonElement>('.card-delete-btn').forEach(button => {
+    button.hidden = !enabled;
+    button.disabled = !enabled || __IS_SENDING_ACTION;
+  });
 }
 
 // 切换状态详情显示

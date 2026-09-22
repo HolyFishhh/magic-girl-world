@@ -1,5 +1,5 @@
 /** Keep a modal in the visible part of a possibly tall Tavern message iframe. */
-export function pinSelectionToVisibleViewport(dialog: HTMLElement): () => void {
+export function pinSelectionToVisibleViewport(dialog: HTMLElement, maxWidth = 660): () => void {
   const view = dialog.ownerDocument.defaultView;
   if (!view) return () => {};
   const windows: Window[] = [view];
@@ -65,7 +65,7 @@ export function pinSelectionToVisibleViewport(dialog: HTMLElement): () => void {
     dialog.style.position = 'fixed';
     dialog.style.margin = '0';
     dialog.style.inset = 'auto';
-    dialog.style.width = `${Math.min(660, width - pad * 2)}px`;
+    dialog.style.width = `${Math.min(maxWidth, width - pad * 2)}px`;
     dialog.style.maxWidth = `${width - pad * 2}px`;
     dialog.style.maxHeight = `${height - pad * 2}px`;
     const rect = dialog.getBoundingClientRect();

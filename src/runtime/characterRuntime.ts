@@ -1480,6 +1480,8 @@ function summarizeMvuUpdate(result: unknown): string[] {
 #mwg-mvu-monitor .mwg-process-grid{display:grid!important;gap:8px;margin-top:9px}
 #mwg-mvu-monitor .mwg-process-block{min-width:0;border:1px solid #e7d8d2;border-radius:11px;background:#fff;overflow:hidden}
 #mwg-mvu-monitor .mwg-process-block>summary{padding:9px 11px;color:#7b4a60;font:500 11px/1.35 var(--mwg-body);cursor:pointer}
+#mwg-mvu-monitor [data-mwg-diagnostic-feedback]{display:block;margin:8px 0;color:#715b65;font:400 12px/1.6 var(--mwg-body);overflow-wrap:anywhere}
+#mwg-mvu-monitor [data-mwg-mvu-request-meta]{color:#715b65;font:400 11px/1.5 var(--mwg-body)}
 #mwg-mvu-monitor .mwg-process-block pre{display:block!important;max-height:230px;margin:0!important;padding:10px 11px!important;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;border-top:1px dashed #eadbd5;background:#fffdfc;color:#67545b;font:400 10px/1.55 var(--mwg-body)!important;scrollbar-width:thin}
 #mwg-mvu-monitor .mwg-refresh-design{display:flex!important;width:100%!important;min-height:36px!important;margin:9px 0 0!important;padding:0 12px!important;align-items:center!important;justify-content:center!important;border:1px solid #d9bdc8!important;border-radius:10px!important;background:#fff7fa!important;color:#88405f!important;font:500 12px/1 var(--mwg-body)!important;cursor:pointer}
 #mwg-mvu-monitor .mwg-mvu-panel{position:fixed;top:max(12px,env(safe-area-inset-top));left:50%;display:none;width:min(700px,calc(100vw - 24px));max-height:min(74vh,720px);overflow:hidden;pointer-events:auto;transform:translateX(-50%);border:1px solid #e2c8bd;border-radius:18px;background:#fffaf7;box-shadow:0 20px 60px #30202a55}
@@ -2087,7 +2089,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
         render();
       },
       stream(text: unknown, generationId?: string) {
-        if (monitorState.phase === 'idle') return;
+        if (monitorState.phase === 'idle' || monitorState.phase === 'success' || monitorState.phase === 'error') return;
         if (generationId && monitorState.generationId && generationId !== monitorState.generationId) {
           if (monitorState.generationId.startsWith('mvu-extra-')) {
             // MVU exposes its real generation id only after the lifecycle flag
@@ -2102,12 +2104,16 @@ function summarizeMvuUpdate(result: unknown): string[] {
         queueStreamRender();
       },
       reasoning(text: unknown) {
-        if (monitorState.phase === 'idle') return;
+        if (monitorState.phase === 'idle' || monitorState.phase === 'success' || monitorState.phase === 'error') return;
         monitorState.reasoning = typeof text === 'string' ? text : '';
         if (monitorState.reasoning) pushTimeline('收到分析内容');
         render();
       },
       complete(result: unknown, generationId?: string) {
+        // COMMAND_PARSED also fires for program-created user messages (including
+        // battle summaries). A completed MVU request must stay completed until
+        // the next begin(), even when that unrelated event carries no request ID.
+        if (monitorState.phase === 'success') return;
         if (
           generationId
           && monitorState.generationId

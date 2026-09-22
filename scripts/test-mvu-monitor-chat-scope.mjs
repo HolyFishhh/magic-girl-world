@@ -290,3 +290,18 @@ assert.equal(monitor.getSnapshot().phase, 'idle', 'late manual failure cannot ov
 assert.equal((await monitor.getDiagnosticExportReport()).manualRepairFailureEvidence, null, 'late manual failure cannot retain old-chat raw evidence');
 console.log('PASS manual failure evidence and pending callbacks are isolated by original chat ID.');
 
+monitor.resetForChat('story-battle-summary');
+monitor.begin({ generationId: 'encounter-update' });
+monitor.complete('<UpdateVariable>_.set(\'status.time\', \'旧\', \'新\');</UpdateVariable>');
+monitor.success();
+const completedEncounter = JSON.stringify(monitor.getSnapshot());
+monitor.applying();
+monitor.complete('【战斗结果】胜利\n请根据以下按回合战斗摘要继续剧情。'.padEnd(848, '。'));
+monitor.stream('late unscoped tokens'); monitor.reasoning('late unrelated reasoning'); monitor.success();
+assert.equal(JSON.stringify(monitor.getSnapshot()), completedEncounter, 'the battle-summary user message cannot replace a completed response or fabricate a failure');
+monitor.begin({ generationId: 'actual-next-update' });
+monitor.success(); monitor.complete('没有更新块的真实第二轮返回');
+assert.equal(monitor.getSnapshot().phase, 'error', 'an actual new request without an update block must still fail');
+assert.match(monitor.getSnapshot().detail, /没有返回可解析/);
+console.log('PASS story battle-summary late parse isolation and real next-request failure preservation.');
+

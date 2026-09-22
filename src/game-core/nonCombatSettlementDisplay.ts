@@ -54,7 +54,7 @@ export function describeNonCombatSettlement(value: unknown, options: NonCombatSe
     signed('点生命', plan.hpDelta), signed('点生命上限', plan.maxHpDelta),
     signed('点欲望', plan.lustDelta), signed('点欲望上限', plan.maxLustDelta),
     signed('金币', plan.goldDelta),
-    plan.cardRemovalDelta ? (plan.cardRemovalDelta > 0 ? `获得${plan.cardRemovalDelta}次删牌机会，领取后立即选择并永久移除；未确认的次数保留` : `失去${Math.abs(plan.cardRemovalDelta)}次删牌机会`) : '',
+    plan.cardRemovalDelta ? (plan.cardRemovalDelta > 0 ? `获得${plan.cardRemovalDelta}次删牌机会，选择后永久移除指定卡牌；未使用的次数保留` : `失去${Math.abs(plan.cardRemovalDelta)}次删牌机会`) : '',
     ...Object.entries(plan.resourceDeltas).map(([id, amount]) => signed(options.resourceNames?.[id] || id, amount)),
     plan.costs.hp ? `支付${plan.costs.hp}点生命` : '',
     plan.costs.maxHp ? `支付${plan.costs.maxHp}点生命上限` : '',
