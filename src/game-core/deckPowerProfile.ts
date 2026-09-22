@@ -1,7 +1,7 @@
 import { profileDeckArchetypes, type ArchetypeAffinity, type DeckArchetypeProfile } from './archetypeGraph';
 import { analyzeContentScenarios } from './contentAnalysis';
 import { normalizeCardCost } from './combatResource';
-import { createContentMechanicsFingerprint } from './contentFingerprint';
+import { createContentEvaluationFingerprint, playerEvaluationState } from './contentFingerprint';
 import { createContentPack, type ContentDefinition, type ContentPack } from './contentPack';
 import { scoreDeckPower } from './deckPowerScore';
 import {
@@ -530,15 +530,7 @@ export function createDeckPowerProfileFingerprint(input: {
   const maxHp = Math.max(1, Number(input.maxHp) || 1);
   const maxLust = Math.max(1, Number(input.maxLust) || 100);
   const seeds = Math.max(8, Math.min(64, Math.floor(input.seeds ?? 16)));
-  return `${createContentMechanicsFingerprint({
-    cards: input.pack.cards,
-    statuses: input.pack.statuses,
-    relics: input.pack.relics,
-    abilities: input.pack.abilities,
-    activeStatuses: input.pack.activeStatuses,
-    playerResources: input.pack.playerResources || [],
-    playerDesireEffect: input.pack.desireEffects.player,
-  })}:hp${round(maxHp)}:lust${round(maxLust)}:s${seeds}`;
+  return `${createContentEvaluationFingerprint(playerEvaluationState(input.pack))}:hp${round(maxHp)}:lust${round(maxLust)}:s${seeds}`;
 }
 
 export function profileDeckPower(input: {
@@ -564,7 +556,12 @@ export function profileDeckPower(input: {
   const deckQuality = assessDeckQuality(input.pack, archetypeProfile, staticScore.budget.energy);
   const totalScore = round(simulatedScore, 1);
   frontiers.forEach(frontier => { frontier.score = round(totalScore * frontier.scale / Math.max(0.01, harmonicMean(frontiers.map((entry, index) => ({ value: entry.scale, weight: STANDARD_PROBES[index].weight })))), 1); });
-  const unsupportedFeatures = benchmark.coverage.unsupportedFeatures;
+  const unsupportedFeatures = [...new Set([...benchmark.coverage.unsupportedFeatures,
+    ...(input.pack.playerStance ? ['初始姿态'] : []),
+    ...(input.pack.playerOrbs?.length ? ['初始球体'] : []),
+    ...(input.pack.playerCardPatches?.length ? ['持续卡牌改造'] : []),
+    ...(input.pack.playerSummonGrowth?.length ? ['持续召唤成长'] : []),
+  ])];
   const approximatedFeatures = benchmark.coverage.approximatedFeatures;
   const assessmentKind: DeckPowerAssessmentKind = unsupportedFeatures.length
     ? 'partial-shadow-estimate'

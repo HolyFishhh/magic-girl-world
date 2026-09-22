@@ -11,9 +11,9 @@ const {buildTowerFoundationGuidance}=require('../src/game-core/towerFoundationGu
 const {buildTowerGenerationContext}=require('../src/sillytavern-extension/towerCoordinator.ts');
 const {formatTowerNodeGenerationPrompt,formatTowerOpeningGenerationPrompt}=require('../src/game-core/towerRequest.ts');
 const selection=buildTowerArchetypePrompt([presets.find(p=>p.id==='summon-single-core'),presets.find(p=>p.id==='scry')]);
-const card={id:'known_strike',name:'已有攻击',type:'Attack',cost:1,effects:{damage:7}};
+const card={id:'known_strike',name:'已有攻击',type:'Attack',cost:1,effects:{damage:7,hits:2}};
 const starterGuidance=buildTowerFoundationGuidance(createContentPack({cards:[{...card,effects:{damage:6}}]}),selection);
-assert.ok(!starterGuidance.observedMechanisms.some(p=>p.id==='direct-damage'),'basic damage below 7 must not bias future generation as an owned foundation');
+assert.ok(!starterGuidance.observedMechanisms.some(p=>p.id==='direct-damage'),'plain numeric starter damage must not bias future generation as a distinctive foundation');
 const pack=createContentPack({cards:[card]});
 const before=JSON.stringify(pack);
 const guidance=buildTowerFoundationGuidance(pack,selection);

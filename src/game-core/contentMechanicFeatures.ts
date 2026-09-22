@@ -24,13 +24,14 @@ export interface ContentMechanicFeatures {
 }
 
 /**
- * A starter attack or guard is deliberately not a deck identity.  This is a
+ * A plain numeric attack or guard is deliberately not a deck identity. This is a
  * recognition-only predicate: callers may omit it from archetype evidence,
  * while combat analysis still sees the authored card unchanged.
  */
-export function isPlainLowValueStarterDefinition(value: unknown): boolean {
+export function isPlainStarterDefinition(value: unknown): boolean {
   if (!isRecord(value)) return false;
   if (!['attack', 'skill'].includes(String(value.type || '').toLowerCase())) return false;
+  if (value.cost === 0 || isRecord(value.cost) && Object.values(value.cost).every(amount => amount === 0)) return false;
   const allowedCardFields = new Set(['id', 'name', 'type', 'cost', 'quantity', 'description', 'emoji', 'rarity', 'flavor', 'flavorText', 'metadata', 'effects', 'effectProgram', 'retain', 'free', 'innate', 'ethereal', 'exhaust', 'consumable',
     // Runtime-instance identity/progression survives MVU normalization and is
     // not a card mechanism. It must not turn a basic starter into an identity.
@@ -49,7 +50,7 @@ export function isPlainLowValueStarterDefinition(value: unknown): boolean {
     if (!kind || Object.hasOwn(effect, kind === 'damage' ? 'block' : 'damage')) return false;
     if (keys.some(key => ![kind, 'to', 'hits', 'bypass_block', 'lifesteal'].includes(key))) return false;
     const amount = effect[kind];
-    if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0 || amount >= 7) return false;
+    if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) return false;
     if (Object.hasOwn(effect, 'hits') && effect.hits !== 1) return false;
     if (Object.hasOwn(effect, 'bypass_block') && effect.bypass_block !== false) return false;
     if (Object.hasOwn(effect, 'lifesteal') && effect.lifesteal !== 0) return false;
@@ -67,7 +68,7 @@ export function isPlainLowValueStarterDefinition(value: unknown): boolean {
     if (Object.hasOwn(step, 'hitGroup') && !/^\$(?:\[0\])?:damage$/.test(String(step.hitGroup))) return false;
     if (Object.hasOwn(step, 'bypassBlock') && step.bypassBlock !== false) return false;
     if (Object.hasOwn(step, 'lifesteal') && step.lifesteal !== 0) return false;
-    if (typeof step.amount !== 'number' || !Number.isFinite(step.amount) || step.amount <= 0 || step.amount >= 7) return false;
+    if (typeof step.amount !== 'number' || !Number.isFinite(step.amount) || step.amount <= 0) return false;
     return step.target === (step.op === 'damage' ? 'opponent' : 'self');
   };
   // Some adapters retain authored compact effects beside a compiled program.

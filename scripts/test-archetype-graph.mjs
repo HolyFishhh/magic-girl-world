@@ -54,7 +54,7 @@ assert.ok(first.scatterShare >= 0, 'non-archetype utility remains represented as
 const starterOnly = core.createContentPack({ cards: [{ id: 'starter', name: '基础斩击', type: 'Attack', effects: { damage: 6 } }] });
 assert.equal(core.profileDeckArchetypes(starterOnly).affinities.some(entry => entry.id === 'direct-pressure'), false, 'plain 6 damage must not establish graph affinity');
 const sevenDamage = core.createContentPack({ cards: [{ id: 'seven', name: '强力斩击', type: 'Attack', effects: { damage: 7 } }] });
-assert.equal(core.profileDeckArchetypes(sevenDamage).affinities.some(entry => entry.id === 'direct-pressure'), true, '7 damage remains graph evidence');
+assert.equal(core.profileDeckArchetypes(sevenDamage).affinities.some(entry => entry.id === 'direct-pressure'), false, 'a numeric-only starter upgrade must not establish a new identity');
 
 const discardDeck = core.createContentPack({
   cards: [

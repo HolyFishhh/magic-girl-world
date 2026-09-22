@@ -1,6 +1,6 @@
 import { type ContentDefinition, type ContentPack } from './contentPack';
 import { matchTowerFoundation } from './towerFoundationPredicates';
-import { extractContentMechanicFeatures, isPlainLowValueStarterDefinition } from './contentMechanicFeatures';
+import { extractContentMechanicFeatures, isPlainStarterDefinition } from './contentMechanicFeatures';
 import { TOWER_ARCHETYPE_PRESETS, type TowerArchetypePreset } from './towerArchetypeCatalog';
 
 /**
@@ -115,7 +115,7 @@ function records(pack: ContentPack): DefinitionEvidence[] {
   }
   const entries = [...roots, ['status', reachableStatuses] as [string, readonly ContentDefinition[]]];
   return entries.flatMap(([kind, values]) => values
-    .filter(value => kind !== 'card' || !isPlainLowValueStarterDefinition(value))
+    .filter(value => kind !== 'card' || !isPlainStarterDefinition(value))
     .map((value, index) => {
     // Presentation and extension metadata are intentionally not mechanism
     // evidence.  Keep the executable shape while retaining selectors, formulae,

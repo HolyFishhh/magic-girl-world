@@ -1,12 +1,12 @@
 import {
-  isPlainLowValueStarterDefinition,
+  isPlainStarterDefinition,
   mergeContentMechanicFeatures,
   type ContentMechanicFeatures,
   type ContentMechanicRole,
 } from './contentMechanicFeatures';
 import type { ContentDefinition, ContentPack } from './contentPack';
-import { createContentMechanicsFingerprint } from './contentFingerprint';
-import { extractArchetypeEvidence } from './archetypeEvidence';
+import { createContentEvaluationFingerprint, playerEvaluationState } from './contentFingerprint';
+import { extractArchetypeEvidence, playerArchetypeDefinitions } from './archetypeEvidence';
 
 export const ARCHETYPE_GRAPH_SPEC = 'mwg.archetype-graph/v1' as const;
 
@@ -122,7 +122,7 @@ const RAW_ARCHETYPES: RawNode[] = [
   },
   {
     id: 'critical-scaling', label: '倍率爆发', description: '通过条件、修饰符或资源把普通伤害放大为爆发。',
-    requiredFeatures: [op('damage'), anyOp('condition', 'modify', 'x_formula', 'history_formula')],
+    requiredFeatures: [op('exact_damage_scaling')],
     optionalFeatures: [weighted(anyOp('resource', 'set_resource', 'apply_status'), 2)], payoffFeatures: [op('damage')],
     genericRoles: ['启动', '终结'], antiSynergies: ['flat-only'], neighborHints: ['direct-pressure', 'resource-cashout', 'status-detonation'],
   },
@@ -184,13 +184,13 @@ const RAW_ARCHETYPES: RawNode[] = [
   },
   {
     id: 'desire-overflow', label: '欲望溢出', description: '围绕欲望满溢效果安排终结、反转或叙事后果。',
-    requiredFeatures: [axis('欲望压制'), anyOp('damage', 'apply_status', 'resource', 'heal', 'block')],
+    requiredFeatures: [op('exact_desire_overflow')],
     optionalFeatures: [weighted(anyOp('trigger', 'condition'), 2)], payoffFeatures: [anyAxis('生命压制', '状态', '自定义资源')],
     genericRoles: ['终结', '桥接'], antiSynergies: [], neighborHints: ['desire-pressure', 'desire-conversion', 'status-stack'],
   },
   {
     id: 'desire-conversion', label: '欲望转化', description: '把欲望变化转换为生命、资源、防护或伤害。',
-    requiredFeatures: [axis('欲望压制'), anyAxis('生命压制', '格挡', '恢复', '自定义资源')],
+    requiredFeatures: [op('exact_desire_conversion')],
     optionalFeatures: [weighted(anyOp('condition', 'trigger', 'modify'), 3)], payoffFeatures: [anyOp('damage', 'block', 'heal', 'resource')],
     genericRoles: ['桥接', '收益'], antiSynergies: [], neighborHints: ['desire-pressure', 'desire-overflow', 'resource-engine'],
   },
@@ -226,13 +226,13 @@ const RAW_ARCHETYPES: RawNode[] = [
   },
   {
     id: 'healing-engine', label: '恢复循环', description: '通过稳定恢复延长资源交换并支撑成长。',
-    requiredFeatures: [anyOp('heal', 'lifesteal')], optionalFeatures: [weighted(anyOp('trigger', 'resource', 'draw'), 2)],
-    payoffFeatures: [op('heal')], genericRoles: ['循环', '成长'], antiSynergies: ['healing-disabled'],
+    requiredFeatures: [op('exact_self_heal')], optionalFeatures: [weighted(anyOp('trigger', 'resource', 'draw'), 2)],
+    payoffFeatures: [op('exact_self_heal')], genericRoles: ['循环', '成长'], antiSynergies: ['healing-disabled'],
     neighborHints: ['healing-conversion', 'self-damage', 'resource-engine'],
   },
   {
     id: 'healing-conversion', label: '恢复转化', description: '把治疗、吸血或生命变化转化为进攻与资源。',
-    requiredFeatures: [anyAxis('恢复', '生存'), anyAxis('生命压制', '欲望压制', '自定义资源')],
+    requiredFeatures: [op('exact_healing_conversion')],
     optionalFeatures: [weighted(anyOp('trigger', 'history_formula', 'condition'), 3)], payoffFeatures: [anyOp('damage', 'lust', 'resource')],
     genericRoles: ['桥接', '收益'], antiSynergies: [], neighborHints: ['healing-engine', 'self-damage', 'resource-cashout'],
   },
@@ -302,7 +302,7 @@ const RAW_ARCHETYPES: RawNode[] = [
   },
   {
     id: 'zero-cost-engine', label: '零费连锁', description: '围绕免费或极低费用卡牌扩展单回合行动量。',
-    requiredFeatures: [anyOp('free', 'reduce_cost')], optionalFeatures: [weighted(anyOp('draw', 'replay', 'history_formula'), 3)],
+    requiredFeatures: [anyOp('free', 'reduce_cost', 'native_zero_cost')], optionalFeatures: [weighted(anyOp('draw', 'replay', 'history_formula'), 3)],
     payoffFeatures: [anyOp('draw', 'replay', 'damage', 'apply_status')], genericRoles: ['启动', '循环'], antiSynergies: ['play-limit'],
     neighborHints: ['draw-engine', 'replay-chain', 'cost-shift', 'on-play-engine'],
   },
@@ -644,10 +644,14 @@ function quantity(definition: ContentDefinition): number {
 export function profileDeckArchetypes(pack: ContentPack): DeckArchetypeProfile {
   const scores = new Map<string, { cards: Set<string>; evidence: Map<number, { score: number; missing: readonly string[] }> }>();
   const definitions: Array<{ value: ContentDefinition; weight: number; label: string }> = [
-    ...pack.cards.filter(value => !isPlainLowValueStarterDefinition(value)).map((value, index) => ({ value, weight: quantity(value), label: definitionLabel(value, index) })),
+    ...pack.cards.filter(value => !isPlainStarterDefinition(value)).map((value, index) => ({ value, weight: quantity(value), label: definitionLabel(value, index) })),
     ...pack.relics.map((value, index) => ({ value, weight: 1.5, label: definitionLabel(value, index) })),
     ...pack.abilities.map((value, index) => ({ value, weight: 1.25, label: definitionLabel(value, index) })),
-    ...pack.activeStatuses.map((value, index) => ({ value, weight: 0.75, label: definitionLabel(value, index) })),
+    ...pack.activeStatuses.map((value, index) => ({ value: { ...pack.statuses.find(status => status.id === value.id), ...value }, weight: 0.75, label: definitionLabel(value, index) })),
+    ...(pack.desireEffects.player && playerArchetypeDefinitions(pack).includes(pack.desireEffects.player)
+      ? [{ value: pack.desireEffects.player, weight: 0.75, label: definitionLabel(pack.desireEffects.player, 0) }] : []),
+    ...(pack.playerStance ? [{ value: pack.playerStance, weight: 0.75, label: definitionLabel(pack.playerStance, 0) }] : []),
+    ...(pack.playerOrbs || []).map((value, index) => ({ value, weight: 0.75, label: definitionLabel(value, index) })),
   ];
   const featured = definitions.map((definition, key) => ({ ...definition, key, features: expandedContentFeatures(definition.value, pack) }));
   const weightedContent = featured.reduce((sum, definition) => sum + definition.weight, 0);
@@ -714,9 +718,11 @@ export function profileDeckArchetypes(pack: ContentPack): DeckArchetypeProfile {
   const discardMembers = featured.filter(member => member.features.operations.some(operation => operation === 'discard' || operation === 'exact_discard_payoff'));
   if (discardMembers.some(member => member.features.operations.includes('discard'))
     && discardMembers.some(member => member.features.operations.includes('exact_discard_payoff'))) {
-    const node = ARCHETYPE_GRAPH.find(node => node.id === 'discard-payoff')!;
-    const result = scoreNode(mergeContentMechanicFeatures(discardMembers.map(member => member.features)), node);
-    add(node.id, result.score, discardMembers, result.missingPayoffs);
+    for (const id of ['discard-payoff', 'discard-engine']) {
+      const node = ARCHETYPE_GRAPH.find(node => node.id === id)!;
+      const result = scoreNode(mergeContentMechanicFeatures(discardMembers.map(member => member.features)), node);
+      add(node.id, result.score, discardMembers, result.missingPayoffs);
+    }
   }
   const nodes = new Map(ARCHETYPE_GRAPH.map(node => [node.id, node]));
   // Each owned instance contributes one finite evidence budget, divided among
@@ -776,7 +782,7 @@ export function profileDeckArchetypes(pack: ContentPack): DeckArchetypeProfile {
     });
   return {
     spec: ARCHETYPE_GRAPH_SPEC,
-    fingerprint: createContentMechanicsFingerprint({ cards: pack.cards, statuses: pack.statuses, relics: pack.relics, abilities: pack.abilities, activeStatuses: pack.activeStatuses, playerResources: pack.playerResources }),
+    fingerprint: createContentEvaluationFingerprint(playerEvaluationState(pack)),
     affinities,
     scatterShare,
     primary,

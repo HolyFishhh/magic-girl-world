@@ -1,7 +1,7 @@
 import {
   assessContentDesign,
   createDeckPowerProfileFingerprint,
-  createContentMechanicsFingerprint,
+  createContentEvaluationFingerprint,
   normalizeDifficultyPercent,
   profileDeckPower,
   summarizeBuildBudget,
@@ -165,7 +165,7 @@ export function refreshMvuContentDesignContext(
     const feasibility = context.balance?.target?.feasibility;
     if (
       context.spec === 'mwg.content-design/v3' &&
-      context.fingerprint === createContentMechanicsFingerprint(pack) &&
+      context.fingerprint === createContentEvaluationFingerprint(pack) &&
       context.settings?.difficultyPercent === difficulty &&
       context.settings?.autoCalibration === autoCalibration &&
       context.balance?.deck?.maxHp === maxHp &&

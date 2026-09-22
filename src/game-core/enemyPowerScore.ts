@@ -4,7 +4,7 @@ import {
   desireOverflowActivationRate,
 } from './contentAnalysis';
 import { type ContentDefinition, type ContentPack } from './contentPack';
-import { createContentMechanicsFingerprint } from './contentFingerprint';
+import { createContentEvaluationFingerprint } from './contentFingerprint';
 import {
   extractContentMechanicFeatures,
   mergeContentMechanicFeatures,
@@ -87,13 +87,17 @@ function finite(value: unknown, fallback = 0): number {
 }
 
 function actionWeight(enemy: ContentDefinition, action: ContentDefinition): number {
+  const sequence = enemy.action_config?.sequence;
+  if (enemy.action_mode === 'sequence' && Array.isArray(sequence) && sequence.length) {
+    return sequence.filter(key => key === action.id || key === action.name).length;
+  }
   const explicit = finite(action.weight, 0);
   if (explicit > 0) return explicit;
   const name = String(action.name || action.id || '');
   const probability = enemy.action_config?.probability;
   if (record(probability)) {
-    const configured = finite(probability[name], 0);
-    if (configured > 0) return configured;
+    const configured = probability[action.id] ?? probability[name];
+    if (configured !== undefined) return Math.max(0, finite(configured));
   }
   return 1;
 }
@@ -132,7 +136,7 @@ export function scoreEnemyPower(pack: ContentPack, target: EnemyPowerScoreTarget
   if (enemyList.length === 0) return null;
   const targetMaxHp = Math.max(1, finite(target.maxHp, 100));
   const targetMaxLust = Math.max(1, finite(target.maxLust, 100));
-  const fingerprint = createContentMechanicsFingerprint({
+  const fingerprint = createContentEvaluationFingerprint({
     enemy: pack.enemy,
     enemies: pack.enemies || [],
     // Overflow effects can reference a status tick, so definitions are a score dependency.
@@ -206,7 +210,14 @@ export function scoreEnemyPower(pack: ContentPack, target: EnemyPowerScoreTarget
   const totalScore = round(Math.max(1, durabilityRaw + pressureRaw + controlRaw + scalingRaw));
   const currentRatio = clamp(currentHp / Math.max(1, maxHp), 0, 1);
   const currentEncounterScore = round(totalScore - durabilityRaw * (1 - currentRatio));
-  const coverage = clamp(1 - (uncertainCount + uncertainOverflowCount) * 0.1 - Math.max(0, features.complexity - 65) / 220, 0.25, 1);
+  // Passive frequency/targets and conditional action schedules require actual
+  // opposing cards. Keep the static subtotal explicit rather than inventing a
+  // per-turn frequency for e.g. thorns or spending-triggered growth.
+  const passiveUnknown = enemyList.some(enemy => enemy.abilities?.length || enemy.status_effects?.length);
+  const scheduleUnknown = enemyList.some(enemy => enemy.action_mode === 'sequence_then_probability'
+    || enemy.actions?.some((action: any) => action.condition || action.when || action.cooldown || action.trigger));
+  const coverage = clamp(1 - (uncertainCount + uncertainOverflowCount) * 0.1 - (passiveUnknown ? 0.4 : 0)
+    - (scheduleUnknown ? 0.3 : 0) - Math.max(0, features.complexity - 65) / 220, 0.25, 1);
   const dimensions: EnemyPowerDimensions = {
     durability: round(clamp(durabilityRaw / Math.max(1, totalScore) * 150)),
     pressure: round(clamp(pressureRaw / Math.max(1, totalScore) * 150)),
@@ -236,6 +247,9 @@ export function scoreEnemyPower(pack: ContentPack, target: EnemyPowerScoreTarget
       `满状态强度 ${totalScore}，剧情当前状态强度 ${currentEncounterScore}`,
       `耐久 ${round(maxHp)}，每回合预计生命伤害 ${round(expectedDamage)}、欲望压力 ${round(expectedLust)}、满溢伤害 ${round(expectedOverflowDamage)}`,
       `峰值生命伤害 ${round(peakDamage)}，估算覆盖率 ${Math.round(coverage * 100)}%`,
+      ...(enemyList.some(enemy => enemy.action_mode === 'sequence') ? ['固定行动按完整周期平均；短局首轮爆发需结合公开意图判断'] : []),
+      ...(passiveUnknown ? ['被动能力和持有状态的实际收益未完整计入此静态分；反伤、出牌/花费响应须结合玩家卡组试打，不能用此分比较被动强弱'] : []),
+      ...(scheduleUnknown ? ['条件、冷却或阶段行动未完整计入静态行动频率'] : []),
     ],
   };
   scoreCache.set(cacheKey, result);

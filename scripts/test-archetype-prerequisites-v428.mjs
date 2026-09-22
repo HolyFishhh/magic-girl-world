@@ -10,7 +10,8 @@ for(const effects of [{damage:6},{block:6},{draw:2},{heal:3}]) {
   assert.ok(!result.some(a=>a.id.startsWith('desire-')||a.id==='mixed-pressure'),'ordinary payoffs cannot establish a desire mechanic');
 }
 const mixed=scoreContentArchetypes(card('mixed',[{lust:5},{damage:8}]));
-assert.ok(mixed.some(a=>a.id==='desire-conversion'));
+assert.ok(!mixed.some(a=>a.id==='desire-conversion'), 'parallel damage and desire are not causal conversion');
+assert.ok(mixed.some(a=>a.id==='mixed-pressure'));
 const pack=createContentPack({cards:[card('knife',{damage:5}),card('dodge',{block:5}),card('flow',{draw:2})]});
 assert.ok(!profileDeckArchetypes(pack).affinities.some(a=>a.id.startsWith('desire-')));
 const named={...card('renamed',{damage:5}),name:'欲望之刃',description:'只是题材，不携带欲望机制'};

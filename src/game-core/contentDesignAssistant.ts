@@ -6,6 +6,7 @@ import {
 } from './contentPack';
 import {
   createContentMechanicsFingerprint,
+  createContentEvaluationFingerprint,
   createContentStructuralFingerprint,
 } from './contentFingerprint';
 import {
@@ -1158,7 +1159,7 @@ export function assessContentDesign(input: ContentDesignAssistantInput): Content
   const previousRewardStructures = Array.isArray(previous.recentRewardStructures)
     ? compactUnique(previous.recentRewardStructures.map(String), 8)
     : [];
-  const fingerprint = createContentMechanicsFingerprint(input.pack);
+  const fingerprint = createContentEvaluationFingerprint(input.pack);
   const deckPower = scoreDeckPower({
     pack: input.pack,
     maxHp: input.player.maxHp,

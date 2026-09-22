@@ -1,4 +1,16 @@
 import { stableHash32, stableSerialize } from './deterministicRandom';
+import type { ContentPack } from './contentPack';
+
+/** Evaluation caches preserve identities and every authored dependency. Reskin
+ * matching below is intentionally coarser and must never key execution results. */
+export function createContentEvaluationFingerprint(value: unknown): string {
+  const serialized = stableSerialize(value);
+  return `evaluation2:${stableHash32(serialized).toString(36)}:${serialized.length}`;
+}
+
+export function playerEvaluationState(pack: ContentPack) {
+  return { ...pack, enemy: null, enemies: [], desireEffects: { player: pack.desireEffects.player, enemy: null } };
+}
 
 const PRESENTATION_KEYS = new Set([
   'id',

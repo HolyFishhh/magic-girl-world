@@ -31,7 +31,7 @@ for (const compiledForm of [false, true]) {
   const card = { id: `starter_${compiledForm}`, type: 'Attack', ...(compiledForm ? { effectProgram: compiled(effects) } : { effects }) };
   assert.equal(read({ cards: [card] }).get('direct-damage')?.detected, false, `plain 6 damage starter is not a foundation (${compiledForm ? 'compiled' : 'compact'})`);
 }
-for (const [kind, value, expected] of [['damage', 6, false], ['damage', 7, true], ['block', 6, false], ['block', 7, true]]) {
+for (const [kind, value, expected] of [['damage', 6, false], ['damage', 7, false], ['block', 6, false], ['block', 7, false]]) {
   for (const compiledForm of [false, true]) {
     const effects = { [kind]: value };
     const card = { id: `${kind}_${value}_${compiledForm}`, type: kind === 'damage' ? 'Attack' : 'Skill', ...(compiledForm ? { effectProgram: compiled(effects) } : { effects }) };
@@ -68,7 +68,7 @@ for (const effects of [{ damage: 6, hits: 2 }, { damage: 6, bypass_block: true }
 }
 const compiledSpecial = { id: 'compiled_special', type: 'Attack', effects: { damage: 6 }, effectProgram: compiled({ damage: 6, hits: 2 }) };
 assert.equal(read({ cards: [compiledSpecial] }).get('direct-damage')?.detected, true, 'a retained special compiled program overrides an ordinary compact shadow');
-assert.equal(read({ cards: [{ id: 'seven', type: 'Attack', effects: { damage: 7 } }] }).get('direct-damage')?.detected, true, '7 damage remains foundation evidence');
+assert.equal(read({ cards: [{ id: 'seven', type: 'Attack', effects: { damage: 7 } }] }).get('direct-damage')?.detected, false, 'numeric-only upgrades preserve starter classification');
 for (const compiledForm of [false, true]) {
   const effects = { damage: 7 };
   const card = { id: `seven_single_hit_${compiledForm}`, type: 'Attack', ...(compiledForm ? { effectProgram: compiled(effects) } : { effects }) };

@@ -422,6 +422,7 @@ async function trial(input: EncounterEvaluationInput, policy: EncounterPolicy, s
   return { seed, policy, outcome, turns, hpRemaining: state.player.currentHp, lustRemaining: state.player.currentLust,
     netHpLost, netLustGained, conditionLoss: netHpLost / referenceMaxHp + netLustGained / referenceMaxLust, hpLost: measured.lost,
     damageDealt: measured.damage, lustDealt: measured.lustDealt, blocked: measured.blocked, summonHpLost: measured.summonHpLost,
+    enemyHpRemaining: (state.enemies || (state.enemy ? [state.enemy] : [])).reduce((sum, enemy) => sum + Math.max(0, enemy.currentHp), 0),
     summonBlocked: measured.summonBlocked, summonHpRemaining: measured.summonHpRemaining, cardsPlayed: measured.cards,
     deadTurns, decisions, defensiveChoices, killOrder: (state.defeatedEnemies || []).map(enemy => enemy.id),
     horizons, statusUptime: [...statusUptime.values()], limitations: [...limitations], decisionCoverage: decisionLimited ? 'limited' : 'bounded' };

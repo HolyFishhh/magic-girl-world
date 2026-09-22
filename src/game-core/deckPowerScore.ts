@@ -5,7 +5,8 @@ import {
   type ContentDefinition,
   type ContentPack,
 } from './contentPack';
-import { createContentMechanicsFingerprint } from './contentFingerprint';
+import { createContentEvaluationFingerprint, playerEvaluationState } from './contentFingerprint';
+import { extractArchetypeEvidence, playerArchetypeDefinitions } from './archetypeEvidence';
 import {
   extractContentMechanicFeatures,
   mergeContentMechanicFeatures,
@@ -76,16 +77,7 @@ function quantity(value: ContentDefinition): number {
 
 function buildOnlyFingerprint(pack: ContentPack, maxHp: number): string {
   return [
-    createContentMechanicsFingerprint({
-      cards: pack.cards,
-      statuses: pack.statuses,
-      relics: pack.relics,
-      items: pack.items,
-      abilities: pack.abilities,
-      activeStatuses: pack.activeStatuses,
-      playerResources: pack.playerResources || [],
-      playerDesireEffect: pack.desireEffects.player,
-    }),
+    createContentEvaluationFingerprint(playerEvaluationState(pack)),
     `maxhp:${round(maxHp, 2)}`,
   ].join(':');
 }
@@ -98,14 +90,17 @@ function operationCount(features: ContentMechanicFeatures, operations: readonly 
   return operations.filter(operation => features.operations.includes(operation)).length;
 }
 
-function playableCardRatio(cards: readonly ContentDefinition[]): number {
+function playableCardRatio(cards: readonly ContentDefinition[], pack: ContentPack): number {
   if (cards.length === 0) return 0;
   const playable = cards.filter(card => {
     if (card.type === 'Curse') return false;
     const cost = normalizeCardCost(card.cost ?? 0);
     return Object.entries(cost).every(([resource, amount]) => {
       if (amount === 'all') return true;
-      return resource === 'energy' ? amount <= 3 : amount <= 2;
+      const supply = pack.playerResources?.find(entry => entry.id === resource);
+      const available = resource === 'energy' ? 3 : supply?.refresh === 'reset'
+        ? Number(supply.max) || 0 : Number(supply?.current ?? supply?.start) || 0;
+      return amount <= available;
     });
   }).length;
   return playable / cards.length;
@@ -164,7 +159,7 @@ function curve(
  */
 export function scoreDeckPower(input: { pack: ContentPack; maxHp: number; fullHealthBudget?: BuildBudget }): DeckPowerScore {
   const maxHp = Math.max(1, Number(input.maxHp) || 1);
-  const fingerprint = buildOnlyFingerprint(input.pack, maxHp);
+  const fingerprint = `${buildOnlyFingerprint(input.pack, maxHp)}:${createContentEvaluationFingerprint(input.fullHealthBudget ?? null)}`;
   const cached = scoreCache.get(fingerprint);
   if (cached) return cached;
 
@@ -174,21 +169,15 @@ export function scoreDeckPower(input: { pack: ContentPack; maxHp: number; fullHe
     ? suppliedBudget
     : summarizeBuildBudgetScenarios(input.pack, { hp: maxHp, maxHp }).expected;
   const cards = cardDefinitions(input.pack);
-  const allDefinitions = [
-    ...input.pack.cards,
-    ...input.pack.statuses,
-    ...input.pack.relics,
-    ...input.pack.abilities,
-    ...input.pack.activeStatuses,
-    ...(input.pack.desireEffects.player ? [input.pack.desireEffects.player] : []),
-  ];
-  const features = mergeContentMechanicFeatures(allDefinitions.map(extractContentMechanicFeatures));
+  const allDefinitions = playerArchetypeDefinitions(input.pack);
+  const featureSets = allDefinitions.map(value => extractArchetypeEvidence(value, input.pack));
+  const features = mergeContentMechanicFeatures(featureSets);
   const overflowPayload = input.pack.desireEffects.player
     ? analyzeDesireOverflowPayload(input.pack.desireEffects.player, { opponentMaxHp: 100 }, input.pack.statuses)
     : null;
   const routes = numericRoutePressure(input.pack);
-  const playableRatio = playableCardRatio(cards);
-  const roleCount = new Set(allDefinitions.flatMap(value => extractContentMechanicFeatures(value).roles)).size;
+  const playableRatio = playableCardRatio(cards, input.pack);
+  const roleCount = new Set(featureSets.flatMap(value => value.roles)).size;
   const freeCopies = cards.filter(card => Object.values(normalizeCardCost(card.cost ?? 0)).every(value => value === 0)).length;
   const curseCopies = cards.filter(card => card.type === 'Curse').length;
   const dynamicOperations = operationCount(features, [
@@ -203,7 +192,7 @@ export function scoreDeckPower(input: { pack: ContentPack; maxHp: number; fullHe
   ]);
   const unsupportedComplexity = operationCount(features, [
     'apply_status', 'remove_status', 'trigger', 'replay', 'replay_current', 'auto_play', 'schedule', 'extra_turn',
-    'spawn_summon', 'spawn_enemy', 'channel_orb', 'evoke_orb', 'modify_orb',
+    'spawn_summon', 'spawn_enemy', 'channel_orb', 'evoke_orb', 'modify_orb', 'sly', 'discard_remove', 'discard_purge',
   ]);
 
   const consistency = clamp(
@@ -254,6 +243,9 @@ export function scoreDeckPower(input: { pack: ContentPack; maxHp: number; fullHe
     `每回合压力约 ${round(budget.attack)}，防护约 ${round(budget.defense)}，恢复约 ${round(budget.sustain)}`,
     `最大生命 ${round(maxHp)}；当前生命不参与基础分`,
     `稳定性 ${round(consistency)}，成长性 ${round(scaling)}，估算覆盖率 ${Math.round(coverage * 100)}%`,
+    ...(playableRatio < 1 ? ['部分卡牌超出初始或固定刷新资源；后续产能与连招需以试打核对'] : []),
+    ...(features.operations.includes('discard_remove') ? ['遗弃：弃牌会本场移除，可能精简循环，也可能失去关键牌'] : []),
+    ...(features.operations.includes('discard_purge') ? ['遗忘：弃牌会永久删牌，单场估分不能代表长期收益'] : []),
     ...(survivalSignals ? [`生存识别：${Object.entries({ heal: '治疗', lifesteal: '吸血', damage_taken_reduction: '伤害减免', summon_intercept: '召唤护卫' }).filter(([operation]) => features.operations.includes(operation)).map(([, label]) => label).join('、')}`] : []),
     ...(overflowPayload?.uncertain ? ['欲望满溢含动态或未登记状态 payload，已保守降低覆盖率'] : []),
     features.axes.length ? `主要机械轴：${features.axes.slice(0, 6).join('、')}` : '尚未形成明确机械轴',

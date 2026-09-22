@@ -5,7 +5,7 @@ import {
 } from './contentAnalysis';
 import { resolveCardLifecycle, type LifecycleCard } from './cardLifecycle';
 import { type ContentDefinition, type ContentPack } from './contentPack';
-import { createContentMechanicsFingerprint } from './contentFingerprint';
+import { createContentMechanicsFingerprint, createContentEvaluationFingerprint } from './contentFingerprint';
 import { extractContentMechanicFeatures, mergeContentMechanicFeatures } from './contentMechanicFeatures';
 import { createBattleRandomState, drawBattleRandom, stableHash32, type BattleRandomState } from './deterministicRandom';
 import { selectEnemyAction } from './enemyActionSelector';
@@ -783,7 +783,7 @@ export function simulateEncounterShadow(input: {
   const compiled = compileEncounter(input.pack);
   if (!compiled) return null;
   const seeds = Math.max(8, Math.min(256, Math.floor(input.seeds ?? 64)));
-  const mechanicsFingerprint = createContentMechanicsFingerprint(input.pack);
+  const mechanicsFingerprint = createContentEvaluationFingerprint(input.pack);
   const requestedStrategies = [...new Set(input.strategies?.filter(value => STRATEGIES.includes(value)) || STRATEGIES)];
   const activeStrategies = requestedStrategies.length ? requestedStrategies : [...STRATEGIES];
   const cacheKey = [

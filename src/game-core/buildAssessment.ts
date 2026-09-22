@@ -15,10 +15,12 @@ export function assessMeasuredBuild(measurement: TowerBuildMeasurement | null | 
     const candidates = ['tempo', 'survival', 'engine'].flatMap(policy => {
       const rows = result?.trials.filter(row => row.policy === policy) || [];
       if (!rows.length || !(measurement.maxHp > 0) || new Set(rows.map(row => row.seed)).size !== rows.length || !rows.every(row => result?.seeds.includes(row.seed)) || rows.length !== result?.seeds.length || rows.some(row => !['victory', 'defeat', 'horizon'].includes(row.outcome)
-        || ![row.damageDealt, row.hpRemaining, row.cardsPlayed, row.turns, row.deadTurns, row.lustDealt ?? 0].every(Number.isFinite))) return [];
+        || ![row.damageDealt, row.enemyHpRemaining, row.hpRemaining, row.cardsPlayed, row.turns, row.deadTurns, row.lustDealt ?? 0].every(Number.isFinite))) return [];
       const score = (row: EncounterTrial) => {
         if (row.outcome === 'victory') return 100;
-        const progress = clamp(Math.max(row.damageDealt / reference.hp, (row.lustDealt || 0) / (100 * reference.count)));
+        // Desire only contributes through its executed payoff. Repeated lust,
+        // healing loops and overkill are not additional enemy-clearing progress.
+        const progress = clamp(1 - row.enemyHpRemaining / reference.hp);
         const health = row.outcome === 'defeat' ? 0 : clamp(row.hpRemaining / measurement.maxHp);
         const value = 100 * (0.65 * progress + 0.35 * health);
         return row.outcome === 'defeat' ? Math.min(25, value) : value;
@@ -65,6 +67,7 @@ export function assessMeasuredBuild(measurement: TowerBuildMeasurement | null | 
     ...(strong ? [`擅长应对：${strong.label}（表现达成度${strong.best!.score}%）。`] : []),
     ...(weak ? [`优先改善：${weak.label}（表现达成度${weak.best!.score}%）。${weak.best!.rows.some(row => row.outcome === 'defeat') ? '尝试增加防护，或更早打出关键卡，减少展开时受到的伤害。' : weak.best!.rows.every(row => row.outcome === 'victory') ? '本次测试均已获胜，可以继续尝试不同敌人与抽牌顺序。' : '未能在限定回合内稳定击败敌人，可以增加有效输出、过牌或加快关键配合。'}`] : []),
     '这是固定对手试打的表现达成度（百分比）；越高表示这些测试中的清敌进度与保命表现越接近本测试目标。它不是胜率，也不是敌人难度使用的强度预算。',
+    '清敌进度按敌方实际剩余生命计算；欲望通过满溢后的伤害、控制或恢复产生收益，不直接折成清敌进度。',
     '自动试打不一定能发挥复杂连招的全部实力，分数供构筑参考，不代表你的操作上限。',
   ];
   const scenarioBreakdown = [...complete]
@@ -80,5 +83,5 @@ export function assessMeasuredBuild(measurement: TowerBuildMeasurement | null | 
     ...(scenarioBreakdown.length ? [`本次场景对账（按达成度从高到低）：${scenarioBreakdown.join('；')}。总分${total ?? '—'}%是这些场景达成度的中位数，不是把各场景或输出、生命等分量相加。`] : []),
     '百分比来自实际试打：胜利记为100%；未结束样本按65%清敌进度与35%剩余生命计算；战败样本最高25%。每类对手先选实际样本整体表现最好的打法，再取各类对手达成度的中位数。案例中的中位输出和中位剩余生命只用于核对记录，不单独解释分数高低；原因只引用试打记录中的输出、失血、剩余生命、有效行动与胜负，不推断未测得的归因。',
   ];
-  return { spec: 'mwg.measured-build-assessment/v1', score: total, cases, dimensions, recommendations, methodology, completed: complete.length };
+  return { spec: 'mwg.measured-build-assessment/v2', score: total, cases, dimensions, recommendations, methodology, completed: complete.length };
 }

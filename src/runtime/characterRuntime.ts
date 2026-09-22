@@ -1273,7 +1273,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
         })),
         '当前构筑尚未形成稳定流派，通用散卡仍可正常使用。',
       );
-      setAllText('[data-mwg-scatter-share]', profile ? `按实际机制证据分配占比，同一张牌的多个作用分摊权重。通用散卡 ${Math.round(Number(profile.scatterShare || 0))}%；基础纯攻击／格挡不参与流派，仍参与战斗计算。` : '');
+      setAllText('[data-mwg-scatter-share]', profile ? `占比是机制证据权重，不是强度、胜率或成型概率；同一张牌的多个作用分摊权重。通用散卡 ${Math.round(Number(profile.scatterShare || 0))}%；基础纯攻击／格挡不参与流派，仍参与战斗计算。` : '');
       const graphNodes = Array.isArray(snapshot?.knowledgeGraph?.nodes)
         ? snapshot.knowledgeGraph.nodes.filter((node: any) => node?.kind === 'archetype').slice(0, 8)
         : [];
