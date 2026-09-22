@@ -292,7 +292,7 @@ assert.equal(typeof sharedRuntime.getGenerationDiagnosticExportReport, 'function
 assert.match(runtimeSource, /复制轻量排查信息/);
 assert.match(runtimeSource, /导出排查记录（含保留原文）/);
 assert.match(runtimeSource, /分享前请检查隐私/);
-assert.match(runtimeSource, /report.originalResponse.availability/);
+assert.match(runtimeSource, /report\.originalResponse\?\.availability/);
 
 const retainedOriginal = `当前生成的完整最终输出：${'原'.repeat(10_109 - '当前生成的完整最终输出：'.length)}`;
 let retainedEvidence = {
@@ -392,6 +392,21 @@ const foreignRunExport = (await sharedRuntime.getGenerationDiagnosticExportRepor
 assert.equal(foreignRunExport.evidence.availability, 'missing');
 assert.match(foreignRunExport.evidence.reason, /没有保留完整原文/);
 assert.doesNotMatch(JSON.stringify(foreignRunExport), /OTHER_GENERATION_MUST_NOT_LEAK/);
+
+// Archived evidence is asynchronous. Never return a partial export after a file
+// failure, or combine an old read with a newly selected chat/generation.
+evidenceProvider.getTowerGenerationEvidence = async () => { throw Error('synthetic archive unavailable'); };
+await assert.rejects(sharedRuntime.getGenerationDiagnosticExportReport(), /archive unavailable/);
+for (const change of ['generation', 'chat']) {
+  let finishRead;
+  evidenceProvider.getTowerGenerationEvidence = () => new Promise(resolve => { finishRead = resolve; });
+  const pendingExport = sharedRuntime.getGenerationDiagnosticExportReport();
+  if (change === 'generation') context.MagicGirlWorldMvuMonitor.begin({ generationId: 'new-export-generation' });
+  else context.MagicGirlWorldMvuMonitor.resetForChat('new-export-chat');
+  finishRead({ chatId: 'diagnostic-current-chat', records: [{ response: 'STALE_ARCHIVE' }] });
+  await assert.rejects(pendingExport, /已取消旧排查记录导出/);
+}
+delete evidenceProvider.getTowerGenerationEvidence;
 // Isolate these diagnostic fixtures from the existing lifecycle tests below.
 context.MagicGirlWorldMvuMonitor.resetForChat(null);
 retainedEvidence = null;
