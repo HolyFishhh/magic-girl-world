@@ -77,6 +77,7 @@ assert.equal(store.getSummonById(attacker.instanceId).currentHp, 8, 'player reta
 store.resetGame();
 store.updatePlayer({ currentHp: 40, maxHp: 40, block: 0 });
 store.setEnemies([enemy('enemy_a'), enemy('enemy_b')], 'enemy_a');
+store.updatePlayer({ statusEffects: [status('test_thorns', 2)] });
 const guard = store.spawnSummons('player', {
   id: 'defense_guard', name: '防御守卫', emoji: 'G', maxHp: 10, block: 1,
   statusEffects: [status('test_cap', 1), status('test_buffer', 2), status('test_thorns', 2)],
@@ -111,5 +112,50 @@ assert.deepEqual(
   store.getSummonById(guard.instanceId).statusEffects,
   'snapshot restore preserves exact summon defense status stacks',
 );
+
+
+// Preview uses the same cap for attacks and HP loss, without consuming Buffer.
+store.resetGame();
+store.updatePlayer({ currentHp: 40, maxHp: 40, statusEffects: [status('test_cap', 1), status('test_buffer', 2)] });
+store.setEnemies([enemy('preview', 20, 0, [status('test_cap', 1)])], 'preview');
+const previewSnapshot = structuredClone(store.getGameState());
+for (const kind of ['attack', 'effect', 'hp_loss']) {
+  assert.equal(executor.previewPlayerCardDamage(9, 'opponent', kind).value, 1);
+  assert.equal(executor.previewEnemyIntentDamage(store.getEnemy(), 9, 'opponent', kind), 1);
+}
+assert.deepEqual(store.getGameState(), previewSnapshot, 'previews do not consume defenses or mutate state');
+await executor.executeEffectProgram({ spec: 'mwg.effect/v1', steps: [{ op: 'damage', target: 'opponent', amount: 9, damageKind: 'attack' }] }, true, { cardContext: { type: 'Attack' } });
+assert.equal(store.getEnemy().currentHp, 19, 'preview matches actual capped damage');
+
+// Defeated/kill reactions resolve for both sides before the terminal rule.
+executor.battleEndHost = { presentBattleEnd: async () => {} };
+store.resetGame();
+store.updatePlayer({ currentHp: 5, maxHp: 5, block: 0, statusEffects: [status('test_thorns', 2)] });
+store.setEnemies([enemy('mutual_lethal', 2)], 'mutual_lethal');
+await executor.executeEffectProgram({ spec: 'mwg.effect/v1', steps: [{ op: 'damage', target: 'opponent', amount: 5 }] }, false, {
+  battleContext: { enemyId: 'mutual_lethal', intent: { id: 'lethal', name: '致命攻击' } },
+});
+assert.equal(store.getPlayer().currentHp, 0);
+assert.equal(store.getGameState().battleResult, 'victory');
+const defeats = store.getGameState().eventJournal.events.filter(event => event.kind === 'entity_defeated');
+assert.deepEqual(new Set(defeats.map(event => event.targetId)), new Set(['player', 'mutual_lethal']));
+assert.equal(defeats.length, 2, 'one finalized defeat event per participant');
+
+store.resetGame();
+store.updatePlayer({ currentHp: 5, maxHp: 5 });
+store.setEnemies([enemy('survivor', 20)], 'survivor');
+await executor.executeEffectProgram({ spec: 'mwg.effect/v1', steps: [{ op: 'damage', target: 'opponent', amount: 5 }] }, false, {
+  battleContext: { enemyId: 'survivor', intent: { id: 'lethal', name: '致命攻击' } },
+});
+assert.equal(store.getGameState().battleResult, 'defeat', 'a surviving enemy still defeats the player');
+
+// A nested effect must not finalize the outer damage program's player death:
+// the outer program still owns its defeated/revival reactions.
+store.resetGame();
+store.updatePlayer({ currentHp: 0, maxHp: 5 });
+store.setEnemies([enemy('nested_survivor', 20)], 'nested_survivor');
+executor.pendingDeaths = new Set();
+await executor.processPendingDeaths();
+assert.equal(store.getGameState().isGameOver, false, 'only the program owning the fatal player packet may finalize defeat');
 
 console.log('PASS status defense E2E covers exact player/enemy/summon retaliation, non-recursion, summon interception, hp_loss, Buffer, and snapshots');

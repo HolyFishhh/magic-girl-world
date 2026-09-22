@@ -526,6 +526,7 @@ export class BattleEffectRuntime {
         }
         value = Math.max(0, roundBattleValue(intercepted.remainingDamage));
       }
+      const receivedAttackPacket = value > 0 && context.damageKind === 'attack';
       // A fully redirected/intercepted packet has no recipient-side packet
       // left. In particular, additive vulnerability must not resurrect zero
       // damage on the original target after a complete protection resolution.
@@ -592,7 +593,7 @@ export class BattleEffectRuntime {
       }
       value = absorption.damage;
       if (value > 0 && this.ports.preventHpLossByStatus && await this.ports.preventHpLossByStatus({ target, ...(enemyId ? { targetEnemyId: enemyId } : {}), damageKind: context.damageKind || 'effect' })) value = 0;
-      if (context.damageKind === 'attack' && this.ports.retaliateAttackByStatus) await this.ports.retaliateAttackByStatus({ source, target, ...(context.sourceEnemyId ? { sourceEnemyId: context.sourceEnemyId } : {}), ...(context.sourceSummonId ? { sourceSummonId: context.sourceSummonId } : {}), ...(enemyId ? { targetEnemyId: enemyId } : {}) });
+      if (receivedAttackPacket && this.ports.retaliateAttackByStatus) await this.ports.retaliateAttackByStatus({ source, target, ...(context.sourceEnemyId ? { sourceEnemyId: context.sourceEnemyId } : {}), ...(context.sourceSummonId ? { sourceSummonId: context.sourceSummonId } : {}), ...(enemyId ? { targetEnemyId: enemyId } : {}) });
 
     }
 

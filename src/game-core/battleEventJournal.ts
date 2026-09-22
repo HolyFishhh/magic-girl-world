@@ -341,14 +341,6 @@ export interface RunEventHistoryState {
   records: RunBattleEventRecord[];
 }
 
-/**
- * A three-act run can create thousands of small events. Keep one generous hard
- * ceiling at the storage reader so corrupted/AI-written host variables cannot
- * make every history formula scan an unbounded array. Runtime-owned archives
- * are expected to remain well below this limit.
- */
-export const MAX_RUN_EVENT_HISTORY_RECORDS = 20_000;
-
 export interface EventCounterFilter {
   kind?: BattleEventKind;
   phase?: BattleEventPhase;
@@ -487,7 +479,6 @@ function isStoredBattleEvent(value: unknown): value is BattleEvent {
 /** Strict reader for run-owned history restored from host variables. */
 export function readRunEventHistory(value: unknown): RunEventHistoryState | null {
   if (!isRecord(value) || value.schemaVersion !== 1 || !Array.isArray(value.records)) return null;
-  if (value.records.length > MAX_RUN_EVENT_HISTORY_RECORDS) return null;
   const records: RunBattleEventRecord[] = [];
   for (const record of value.records) {
     if (
@@ -497,7 +488,7 @@ export function readRunEventHistory(value: unknown): RunEventHistoryState | null
     ) return null;
     records.push({ encounterId: record.encounterId, event: structuredClone(record.event) });
   }
-  return createRunEventHistory(records);
+  return { schemaVersion: 1, records };
 }
 
 export function createBattleEventJournal(

@@ -21,11 +21,13 @@ for(const change of [c=>c.hasSelectableRewards=()=>true,c=>c.isCurrentMessageLat
  const f=fixture();change(f.context);f.execute();assert.equal(f.calls.length,0,'pending, failed, reward, opening, locked or stale state cannot enter');
 }
 const activation=source.match(/async function activateTowerNode\([\s\S]*?\n\}/)?.[0];assert.ok(activation);
-const js=ts.transpileModule(activation,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+const lockFunctions=['setSendingState','clearSendingOwner'].map(name=>source.match(new RegExp(`function ${name}\\([\\s\\S]*?\\n\\}`))?.[0]);
+assert.ok(lockFunctions.every(Boolean));
+const js=ts.transpileModule([activation,...lockFunctions].join('\n'),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
 for(const fail of [false,true]){
- const notices=[],errors=[],focus=[],sending=[];
- const sandbox=vm.createContext({__IS_SENDING_ACTION:false,setSendingState:v=>sending.push(v),setRunButtonsDisabled:()=>{},runActionHost:{activateTowerRunNode:async()=>{if(fail)throw Error('fixture failed');}},requestUserFocus:id=>focus.push(id),toastr:{success:(...args)=>notices.push(args)},loadGameData:async()=>{},showRunError:(...args)=>errors.push(args),__PENDING_REWARD_SUMMARY:null,__PENDING_RUN_SUMMARY:null,__RUN_ERROR:null});
+ const notices=[],errors=[],focus=[];
+ const sandbox=vm.createContext({__IS_SENDING_ACTION:false,__sendingOwner:undefined,setRunButtonsDisabled:()=>{},runActionHost:{activateTowerRunNode:async()=>{if(fail)throw Error('fixture failed');}},requestUserFocus:id=>focus.push(id),toastr:{success:(...args)=>notices.push(args)},loadGameData:async()=>{},showRunError:(...args)=>errors.push(args),__PENDING_REWARD_SUMMARY:null,__PENDING_RUN_SUMMARY:null,__RUN_ERROR:null});
  vm.runInContext(js,sandbox);await vm.runInContext("activateTowerNode({id:'node_a'}, true)",sandbox);
- assert.equal(notices.length,fail?0:1,'only successful activation announces entry');assert.equal(errors.length,fail?1:0);assert.equal(focus.length,fail?0:1);assert.equal(sending.at(-1),false);
+ assert.equal(notices.length,fail?0:1,'only successful activation announces entry');assert.equal(errors.length,fail?1:0);assert.equal(focus.length,fail?0:1);assert.equal(sandbox.__IS_SENDING_ACTION,false);
 }
 console.log('PASS preselected node actual UI gate: ready/duplicate/pending/failure/reward/opening/stale/locked and success-only notification');

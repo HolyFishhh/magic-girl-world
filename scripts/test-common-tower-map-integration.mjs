@@ -94,7 +94,7 @@ assert.doesNotMatch(
 );
 assert.match(
   commonSource,
-  /async function activateTowerNode[\s\S]*?finally\s*\{[\s\S]*?setSendingState\(false\);[\s\S]*?setRunButtonsDisabled\(false\);/,
+  /async function activateTowerNode[\s\S]*?finally\s*\{[\s\S]*?setSendingState\(false, actionToken\);[\s\S]*?setRunButtonsDisabled\(false\);/,
   'successful map activation must always release its visible interaction lock',
 );
 assert.match(

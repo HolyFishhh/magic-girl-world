@@ -1,3 +1,4 @@
+import { withMvuWriteLock } from './mvuWriteCoordinator';
 type RepairApi = Record<string, any>;
 
 function equal(left: any, right: any): boolean {
@@ -44,21 +45,23 @@ export async function commitMvuRepairSnapshot(
   after: ReturnType<typeof readMvuRepairSnapshot>,
   assertCurrent: () => void,
 ): Promise<void> {
-  const matches = (snapshot: typeof before): boolean => equal(readMvuRepairSnapshot(api, messageId), snapshot);
-  assertCurrent();
-  if (!matches(before)) throw new Error('修复期间正文或变量已变化，已保留新数据并停止旧结果提交');
-  const write = (snapshot: typeof before) => api.setChatMessages(
-    [{ message_id: messageId, message: snapshot.message, data: structuredClone(snapshot.variables) }],
-    { refresh: 'affected' },
-  );
-  try {
-    await write(after);
+  return withMvuWriteLock(async () => {
+    const matches = (snapshot: typeof before): boolean => equal(readMvuRepairSnapshot(api, messageId), snapshot);
     assertCurrent();
-    if (!matches(after)) throw new Error('修复刷新期间正文或变量已变化，已保留新数据');
-  } catch (error) {
-    let ownsWrittenPair = false;
-    try { assertCurrent(); ownsWrittenPair = matches(after); } catch { /* No writes into another owner. */ }
-    if (ownsWrittenPair) await write(before);
-    throw error;
-  }
+    if (!matches(before)) throw new Error('修复期间正文或变量已变化，已保留新数据并停止旧结果提交');
+    const write = (snapshot: typeof before) => api.setChatMessages(
+      [{ message_id: messageId, message: snapshot.message, data: structuredClone(snapshot.variables) }],
+      { refresh: 'affected' },
+    );
+    try {
+      await write(after);
+      assertCurrent();
+      if (!matches(after)) throw new Error('修复刷新期间正文或变量已变化，已保留新数据');
+    } catch (error) {
+      let ownsWrittenPair = false;
+      try { assertCurrent(); ownsWrittenPair = matches(after); } catch { /* No writes into another owner. */ }
+      if (ownsWrittenPair) await write(before);
+      throw error;
+    }
+  });
 }

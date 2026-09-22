@@ -1,6 +1,7 @@
+import { redactDiagnosticText } from './diagnosticRedaction';
 import { renderGenerationEvidencePage } from './generationEvidenceView';
 import { assessMeasuredBuild } from '../game-core/buildAssessment';
-import { mergeMessageVariableUpdate } from './messageVariableMerge';
+import { commitMvuUpdate } from './mvuWriteCoordinator';
 type RuntimeViewName = 'start' | 'common' | 'fish' | 'update';
 
 type RuntimeViewAsset = Readonly<{
@@ -741,11 +742,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
       persistDiagnostic();
     };
 
-    const diagnosticText = (value: unknown): string => String(value || '').slice(0, 12000)
-      .replace(/https?:\/\/[^\s<>"']+/gi, '[地址已隐藏]')
-      .replace(/Bearer\s+[^\s,;]+/gi, 'Bearer [已隐藏]')
-      .replace(/\bsk-[A-Za-z0-9_-]+/g, '[密钥已隐藏]')
-      .replace(/((?:api[_-]?key|authorization|token|password|cookie)\s*[=:]\s*)[^\s,;]+/gi, '$1[已隐藏]');
+    const diagnosticText = (value: unknown): string => redactDiagnosticText(value).slice(0, 12000);
     const currentDiagnostic = () => ({
       spec: 'mwg.generation-diagnostic/v1', chatId: monitorState.chatId,
       generationId: monitorState.generationId, phase: monitorState.phase,
@@ -931,11 +928,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
       // Unlike the lightweight copy, the file export must not silently shorten
       // usable fallback output. It still redacts transport secrets and removes
       // embedded reasoning, and declares both transformations below.
-      const text = withoutReasoning
-        .replace(/https?:\/\/[^\s<>"']+/gi, '[地址已隐藏]')
-        .replace(/Bearer\s+[^\s,;]+/gi, 'Bearer [已隐藏]')
-        .replace(/\bsk-[A-Za-z0-9_-]+/g, '[密钥已隐藏]')
-        .replace(/((?:api[_-]?key|authorization|token|password|cookie)\s*[=:]\s*)[^\s,;]+/gi, '$1[已隐藏]');
+      const text = redactDiagnosticText(withoutReasoning);
       if (!text) return null;
       return {
         source: 'mvu-monitor-live-output',
@@ -957,11 +950,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
       const withoutReasoning = retained.rawOutput
         .replace(/<(?:Analysis|Reasoning|Thinking)>[\s\S]*?<\/(?:Analysis|Reasoning|Thinking)>/gi, '')
         .trim();
-      const text = withoutReasoning
-        .replace(/https?:\/\/[^\s<>"']+/gi, '[地址已隐藏]')
-        .replace(/Bearer\s+[^\s,;]+/gi, 'Bearer [已隐藏]')
-        .replace(/\bsk-[A-Za-z0-9_-]+/g, '[密钥已隐藏]')
-        .replace(/((?:api[_-]?key|authorization|token|password|cookie)\s*[=:]\s*)[^\s,;]+/gi, '$1[已隐藏]');
+      const text = redactDiagnosticText(withoutReasoning);
       if (!text) return null;
       return {
         source: 'manual-repair-structured-output',
@@ -2473,6 +2462,17 @@ function summarizeMvuUpdate(result: unknown): string[] {
     updater: (variables: Record<string, any>) => Record<string, any> | Promise<Record<string, any>>,
   ): Promise<Record<string, any>> => {
     if (typeof updater !== 'function') throw new Error('消息变量更新器无效');
+    if (messageId === 'latest') messageId = Number(host.getLastMessageId());
+    if (!Number.isInteger(messageId)) throw new Error('无法确定待保存的消息');
+    const chatId = mvuMonitor.getSnapshot().chatId;
+    const latestMessageId = host.getLastMessageId();
+    const swipeId = host.getChatMessages?.(messageId)?.at(-1)?.swipe_id;
+    const assertCurrent = () => {
+      if (destroyed || mvuMonitor.getSnapshot().chatId !== chatId
+        || host.getLastMessageId() !== latestMessageId
+        || host.getChatMessages?.(messageId)?.at(-1)?.swipe_id !== swipeId)
+        throw new Error('聊天、楼层或回复已变化，已取消旧页面保存');
+    };
     const key = String(messageId);
     const previous = messageVariableUpdateQueues.get(key) || Promise.resolve();
     let operation!: Promise<Record<string, any>>;
@@ -2482,32 +2482,16 @@ function summarizeMvuUpdate(result: unknown): string[] {
         const mvu = getMvuApi();
         if (!mvu || typeof mvu.replaceMvuData !== 'function') throw new Error('MVU replaceMvuData 接口不可用');
 
+        assertCurrent();
         const base = readMvuMessageVariables(messageId);
-        let next = await updater(cloneSettlementValue(base));
-        if (!isSettlementRecord(next) || !isSettlementRecord(next.stat_data)) {
+        const next = await updater(cloneSettlementValue(base));
+        if (!isSettlementRecord(next) || !isSettlementRecord(next.stat_data))
           throw new Error('消息变量更新器返回了无效根结构');
-        }
-
-        // Content completion can change this snapshot without advancing route
-        // revision. Merge disjoint changes without replaying player actions.
-        const latest = readMvuMessageVariables(messageId);
-        next = mergeMessageVariableUpdate(base, next, latest);
-
-        const nextRevision = runRevision(next);
-        const authoritativeRevision = runRevision(latest);
-        if (
-          nextRevision !== null
-          && authoritativeRevision !== null
-          && nextRevision < authoritativeRevision
-        ) {
-          throw new Error(`拒绝写入旧爬塔状态：${nextRevision} < ${authoritativeRevision}`);
-        }
-
-        await mvu.replaceMvuData(cloneSettlementValue(next), {
-          type: 'message',
-          message_id: messageId,
+        return commitMvuUpdate({
+          base, next, assertCurrent,
+          read: () => readMvuMessageVariables(messageId),
+          write: value => mvu.replaceMvuData(value, { type: 'message', message_id: messageId }),
         });
-        return cloneSettlementValue(next);
       });
     const tail = operation.then(() => undefined, () => undefined);
     messageVariableUpdateQueues.set(key, tail);

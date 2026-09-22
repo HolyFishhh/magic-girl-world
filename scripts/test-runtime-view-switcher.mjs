@@ -111,6 +111,9 @@ function createFakeDocument() {
     createElement(tagName) {
       return new FakeNode(tagName, document);
     },
+    getElementById(id) {
+      return document.nodes.find(node => !node.removed && node.id === id) || null;
+    },
     querySelectorAll(selector) {
       const key =
         selector === '[data-mwg-runtime-style]'
@@ -334,3 +337,10 @@ delete globalThis.__MWG_TEST_MOUNT__;
 delete globalThis.MagicGirlWorld;
 
 console.log('runtime common/fish switching and battle-exit boundaries passed');
+const fonts = fakeDocument.nodes.filter(node => node.id === 'mwg-optional-fonts');
+assert.equal(fonts.length, 1, 'view switches reuse one optional font request');
+assert.equal(fonts[0].media, 'print', 'view lifecycle completed while remote fonts remain pending');
+fonts[0].onload();
+assert.equal(fonts[0].media, 'all');
+assert.doesNotMatch(readFileSync('src/common/_diary-theme.scss', 'utf8'), /@import\s+url\(['"]https:/);
+console.log('PASS optional font stylesheet never blocks initialization and is deduplicated across views');

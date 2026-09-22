@@ -1443,6 +1443,7 @@ function routePrompt(node: RunNodeChoice): string {
 }
 
 function setRunButtonsDisabled(disabled: boolean): void {
+  disabled = disabled || __IS_SENDING_ACTION;
   document.querySelectorAll<HTMLButtonElement>('[data-run-action]').forEach(button => {
     button.disabled = disabled;
   });
@@ -1468,27 +1469,29 @@ function showRunError(error: unknown, fallback: string): void {
 
 async function sendEnteredRunNode(node: RunNodeChoice): Promise<void> {
   if (__IS_SENDING_ACTION) return;
-  setSendingState(true);
+  const actionToken = setSendingState(true);
   setRunButtonsDisabled(true);
   try {
     await runActionHost.enterRunNode(node, routePrompt(node));
+    if (actionToken !== __sendingOwner) return;
     __PENDING_REWARD_SUMMARY = null;
     __PENDING_RUN_SUMMARY = null;
   } catch (error) {
-    showRunError(error, '路线进入失败');
+    if (actionToken === __sendingOwner) showRunError(error, '路线进入失败');
     setRunButtonsDisabled(false);
   } finally {
-    setSendingState(false);
+    setSendingState(false, actionToken);
     setRunButtonsDisabled(false);
   }
 }
 
 async function activateTowerNode(node: RunNodeChoice, notifyPreselection = false): Promise<void> {
   if (__IS_SENDING_ACTION) return;
-  setSendingState(true);
+  const actionToken = setSendingState(true);
   setRunButtonsDisabled(true);
   try {
     await runActionHost.activateTowerRunNode(node.id);
+    if (actionToken !== __sendingOwner) return;
     requestUserFocus('@room');
     if (notifyPreselection && typeof toastr !== 'undefined') toastr.success('预选关卡已生成，已进入关卡。', '路线准备完成');
     __PENDING_REWARD_SUMMARY = null;
@@ -1496,34 +1499,36 @@ async function activateTowerNode(node: RunNodeChoice, notifyPreselection = false
     __RUN_ERROR = null;
     await loadGameData();
   } catch (error) {
-    showRunError(error, '爬塔路线进入失败');
+    if (actionToken === __sendingOwner) showRunError(error, '爬塔路线进入失败');
     setRunButtonsDisabled(false);
   } finally {
-    setSendingState(false);
+    setSendingState(false, actionToken);
     setRunButtonsDisabled(false);
   }
 }
 
 async function settleInitialArtifacts(): Promise<void> {
   if (__IS_SENDING_ACTION) return;
-  setSendingState(true);
+  const actionToken = setSendingState(true);
   setRunButtonsDisabled(true);
   try {
     const receipt = readPendingInitialArtifactAcquisition(__STAT__);
     if (!receipt) return;
     const answers = await collectArtifactAcquisitionAnswers({ stat: __STAT__ || {}, artifacts: receipt.artifacts });
+    if (actionToken !== __sendingOwner) return;
     if (answers === null) return;
     await runActionHost.settleInitialArtifactAcquisition(receipt.generationId, answers);
+    if (actionToken !== __sendingOwner) return;
     __USER_MUTATION_PILLS.push('初始遗物效果已领取');
     __RUN_ERROR = null;
     await loadGameData();
-  } catch (error) { showRunError(error, '初始遗物领取失败'); }
-  finally { setSendingState(false); setRunButtonsDisabled(false); }
+  } catch (error) { if (actionToken === __sendingOwner) showRunError(error, '初始遗物领取失败'); }
+  finally { setSendingState(false, actionToken); setRunButtonsDisabled(false); }
 }
 
 async function settleTowerOpeningChoice(choiceId: string): Promise<void> {
   if (__IS_SENDING_ACTION) return;
-  setSendingState(true);
+  const actionToken = setSendingState(true);
   setRunButtonsDisabled(true);
   try {
     const opening = readRunState(__STAT__)?.opening;
@@ -1535,8 +1540,10 @@ async function settleTowerOpeningChoice(choiceId: string): Promise<void> {
       ? content.choices.find((entry: any) => entry?.id === choiceId)
       : null;
     const acquisitionAnswers = await collectArtifactAcquisitionAnswers(previewAcquisition(__STAT__ || {}, { kind: 'opening', choiceId }));
+    if (actionToken !== __sendingOwner) return;
     if (acquisitionAnswers === null) return;
     const result = await runActionHost.settleTowerOpeningChoice(choiceId, acquisitionAnswers);
+    if (actionToken !== __sendingOwner) return;
     __USER_MUTATION_PILLS.push(`开局馈赠：${String(choice?.label || choiceId)}`);
     __PENDING_RUN_SUMMARY = `{{user}}选择了开局馈赠：${String(choice?.label || choiceId)}`;
     if (result.cards.length) __USER_MUTATION_PILLS.push(`新增卡牌：${result.cards.join('、')}`);
@@ -1546,32 +1553,33 @@ async function settleTowerOpeningChoice(choiceId: string): Promise<void> {
     requestUserFocus('#tower-map-root');
     await loadGameData();
   } catch (error) {
-    showRunError(error, '开局馈赠结算失败');
+    if (actionToken === __sendingOwner) showRunError(error, '开局馈赠结算失败');
   } finally {
-    setSendingState(false);
+    setSendingState(false, actionToken);
     setRunButtonsDisabled(false);
   }
 }
 
 async function retryTowerOpening(): Promise<void> {
   if (__IS_SENDING_ACTION) return;
-  setSendingState(true);
+  const actionToken = setSendingState(true);
   setRunButtonsDisabled(true);
   try {
     await runActionHost.retryTowerOpeningGeneration();
+    if (actionToken !== __sendingOwner) return;
     __RUN_ERROR = null;
     await loadGameData();
   } catch (error) {
-    showRunError(error, '开局馈赠重新生成失败');
+    if (actionToken === __sendingOwner) showRunError(error, '开局馈赠重新生成失败');
   } finally {
-    setSendingState(false);
+    setSendingState(false, actionToken);
     setRunButtonsDisabled(false);
   }
 }
 
 async function settleTowerEventChoice(choiceId: string): Promise<void> {
   if (__IS_SENDING_ACTION) return;
-  setSendingState(true);
+  const actionToken = setSendingState(true);
   setRunButtonsDisabled(true);
   try {
     const event = __STAT__?.run_event;
@@ -1601,9 +1609,9 @@ async function settleTowerEventChoice(choiceId: string): Promise<void> {
     requestUserFocus('@room');
     await loadGameData();
   } catch (error) {
-    showRunError(error, '事件选择结算失败');
+    if (actionToken === __sendingOwner) showRunError(error, '事件选择结算失败');
   } finally {
-    setSendingState(false);
+    setSendingState(false, actionToken);
     setRunButtonsDisabled(false);
   }
 }
@@ -1617,32 +1625,34 @@ function handleTowerRestCardAction(action: TowerRestCardAction, node: RunNodeCho
 
 async function retryTowerMapNode(nodeId: string): Promise<void> {
   if (__IS_SENDING_ACTION) return;
-  setSendingState(true);
+  const actionToken = setSendingState(true);
   setRunButtonsDisabled(true);
   try {
     await runActionHost.retryTowerNodeGeneration(nodeId);
+    if (actionToken !== __sendingOwner) return;
     __RUN_ERROR = null;
     await loadGameData();
   } catch (error) {
-    showRunError(error, '爬塔地点重新生成失败');
+    if (actionToken === __sendingOwner) showRunError(error, '爬塔地点重新生成失败');
   } finally {
-    setSendingState(false);
+    setSendingState(false, actionToken);
     setRunButtonsDisabled(false);
   }
 }
 
 async function retryActiveRunNode(node: RunNodeChoice): Promise<void> {
   if (__IS_SENDING_ACTION) return;
-  setSendingState(true);
+  const actionToken = setSendingState(true);
   setRunButtonsDisabled(true);
   try {
     await runActionHost.retryRunNode(node, routePrompt(node));
+    if (actionToken !== __sendingOwner) return;
     __RUN_ERROR = null;
   } catch (error) {
-    showRunError(error, '节点重试失败');
+    if (actionToken === __sendingOwner) showRunError(error, '节点重试失败');
     setRunButtonsDisabled(false);
   } finally {
-    setSendingState(false);
+    setSendingState(false, actionToken);
     setRunButtonsDisabled(false);
   }
 }
@@ -1661,7 +1671,7 @@ async function requestInitialContentRepair(
   if (__IS_SENDING_ACTION || readiness.ok) return;
   let repaired = false;
   let finalError: unknown = null;
-  setSendingState(true);
+  const actionToken = setSendingState(true);
   setRunButtonsDisabled(true);
   try {
     const outcome = await runInitialContentRepairLoop(
@@ -1692,6 +1702,7 @@ async function requestInitialContentRepair(
         }
       },
     );
+    if (actionToken !== __sendingOwner) return;
     repaired = outcome.repaired;
     finalError = outcome.error;
     if (repaired) __RUN_ERROR = null;
@@ -1705,10 +1716,10 @@ async function requestInitialContentRepair(
   } catch (error) {
     finalError = error;
     reportMvuValidationFailure(error);
-    showRunError(error, '请求修复初始战斗内容失败');
+    if (actionToken === __sendingOwner) showRunError(error, '请求修复初始战斗内容失败');
     setRunButtonsDisabled(false);
   } finally {
-    setSendingState(false);
+    setSendingState(false, actionToken);
     setRunButtonsDisabled(false);
   }
   // The repair rewrites the current floor in place.  Tavern Helper does not
@@ -1866,10 +1877,11 @@ function scheduleAutomaticInitialTowerRepair(readiness: PlayerContentReadiness):
 
 async function requestRestUpgrade(node: RunNodeChoice, card: Record<string, any>): Promise<void> {
   if (__IS_SENDING_ACTION) return;
-  setSendingState(true);
+  const actionToken = setSendingState(true);
   setRunButtonsDisabled(true);
   try {
     await runActionHost.requestRestUpgrade(node, card);
+    if (actionToken !== __sendingOwner) return;
     __RUN_ERROR = null;
     // The extra model only writes the upgrade candidate.  Re-read the current
     // message immediately so syncPendingRunState can apply that candidate,
@@ -1877,104 +1889,140 @@ async function requestRestUpgrade(node: RunNodeChoice, card: Record<string, any>
     // iframe rebuild or manual refresh.
     await loadGameData();
   } catch (error) {
-    showRunError(error, '升级请求失败');
+    if (actionToken === __sendingOwner) showRunError(error, '升级请求失败');
     setRunButtonsDisabled(false);
   } finally {
-    setSendingState(false);
+    setSendingState(false, actionToken);
     setRunButtonsDisabled(false);
   }
 }
 
 async function requestRestTransform(node: RunNodeChoice, card: Record<string, any>): Promise<void> {
   if (__IS_SENDING_ACTION) return;
-  setSendingState(true);
+  const actionToken = setSendingState(true);
   setRunButtonsDisabled(true);
   try {
     await runActionHost.requestRestTransform(node, card);
+    if (actionToken !== __sendingOwner) return;
     __RUN_ERROR = null;
     await loadGameData();
   } catch (error) {
-    showRunError(error, '变形请求失败');
+    if (actionToken === __sendingOwner) showRunError(error, '变形请求失败');
     setRunButtonsDisabled(false);
   } finally {
-    setSendingState(false);
+    setSendingState(false, actionToken);
     setRunButtonsDisabled(false);
   }
 }
 
 async function removeRestCard(card: Record<string, any>): Promise<void> {
+  if (__IS_SENDING_ACTION) return;
+  const actionToken = setSendingState(true);
+  setRunButtonsDisabled(true);
   try {
     const result = await runActionHost.removeCardAtRest(String(card.runInstanceId || ''));
+    if (actionToken !== __sendingOwner) return;
     __USER_MUTATION_PILLS.push(`移除卡牌：${result.cardName}`);
     __PENDING_RUN_SUMMARY = `{{user}}在营火移除了${result.cardName}`;
     __RUN_ERROR = null;
     await loadGameData();
   } catch (error) {
-    showRunError(error, '营火删卡失败');
+    if (actionToken === __sendingOwner) showRunError(error, '营火删卡失败');
   }
+  finally { setSendingState(false, actionToken); setRunButtonsDisabled(false); }
 }
 
 async function duplicateRestCard(card: Record<string, any>): Promise<void> {
+  if (__IS_SENDING_ACTION) return;
+  const actionToken = setSendingState(true);
+  setRunButtonsDisabled(true);
   try {
     const result = await runActionHost.duplicateCardAtRest(String(card.runInstanceId || ''));
+    if (actionToken !== __sendingOwner) return;
     __USER_MUTATION_PILLS.push(`复制卡牌：${result.cardName}`);
     __PENDING_RUN_SUMMARY = `{{user}}在营火复制了${result.cardName}`;
     __RUN_ERROR = null;
     await loadGameData();
   } catch (error) {
-    showRunError(error, '营火复制失败');
+    if (actionToken === __sendingOwner) showRunError(error, '营火复制失败');
   }
+  finally { setSendingState(false, actionToken); setRunButtonsDisabled(false); }
 }
 
 async function actAtCampfire(action: 'train' | 'scavenge' | 'recall', cardId?: string): Promise<void> {
+  if (__IS_SENDING_ACTION) return;
+  const actionToken = setSendingState(true);
+  setRunButtonsDisabled(true);
   try {
     const summary = await runActionHost.actAtCampfire(action, cardId);
+    if (actionToken !== __sendingOwner) return;
     __USER_MUTATION_PILLS.push(summary); __PENDING_RUN_SUMMARY = summary; __RUN_ERROR = null;
     requestUserFocus('@room');
     await loadGameData();
-  } catch (error) { showRunError(error, '营火行动失败'); }
+  } catch (error) { if (actionToken === __sendingOwner) showRunError(error, '营火行动失败'); }
+  finally { setSendingState(false, actionToken); setRunButtonsDisabled(false); }
 }
 
 async function healAtRest(): Promise<void> {
+  if (__IS_SENDING_ACTION) return;
+  const actionToken = setSendingState(true);
+  setRunButtonsDisabled(true);
   try {
     const result = await runActionHost.healAtRest();
+    if (actionToken !== __sendingOwner) return;
     __USER_MUTATION_PILLS.push(`营火恢复：${result.healed}生命`);
     __PENDING_RUN_SUMMARY = `{{user}}在营火恢复了${result.healed}点生命`;
     __RUN_ERROR = null;
     requestUserFocus('@room');
     await loadGameData();
   } catch (error) {
-    showRunError(error, '营火恢复失败');
+    if (actionToken === __sendingOwner) showRunError(error, '营火恢复失败');
   }
+  finally { setSendingState(false, actionToken); setRunButtonsDisabled(false); }
 }
 
 async function removeCardAtShop(id: string): Promise<void> {
+  if (__IS_SENDING_ACTION) return;
+  const actionToken = setSendingState(true);
+  setRunButtonsDisabled(true);
   try {
     await runActionHost.removeCardAtShop(id);
+    if (actionToken !== __sendingOwner) return;
     __RUN_ERROR = null; await loadGameData();
-  } catch (error) { showRunError(error, '商店删卡失败'); }
+  } catch (error) { if (actionToken === __sendingOwner) showRunError(error, '商店删卡失败'); }
+  finally { setSendingState(false, actionToken); setRunButtonsDisabled(false); }
 }
 
 async function leaveCurrentShop(): Promise<void> {
+  if (__IS_SENDING_ACTION) return;
+  const actionToken = setSendingState(true);
+  setRunButtonsDisabled(true);
   try {
     await runActionHost.leaveShop(); requestUserFocus('#tower-map-root');
+    if (actionToken !== __sendingOwner) return;
     __PENDING_RUN_SUMMARY = '{{user}}离开了商店';
     __RUN_ERROR = null;
     await loadGameData();
   } catch (error) {
-    showRunError(error, '离开商店失败');
+    if (actionToken === __sendingOwner) showRunError(error, '离开商店失败');
   }
+  finally { setSendingState(false, actionToken); setRunButtonsDisabled(false); }
 }
 
 async function restartCurrentRun(): Promise<void> {
+  if (__IS_SENDING_ACTION) return;
+  const actionToken = setSendingState(true);
+  setRunButtonsDisabled(true);
   try {
     await runActionHost.restartRun();
+    if (actionToken !== __sendingOwner) return;
     __PENDING_RUN_SUMMARY = '{{user}}开始了一次新的远征';
     __RUN_ERROR = null;
     await loadGameData();
   } catch (error) {
-    showRunError(error, '新冒险初始化失败');
+    if (actionToken === __sendingOwner) showRunError(error, '新冒险初始化失败');
   }
+  finally { setSendingState(false, actionToken); setRunButtonsDisabled(false); }
 }
 
 function teardownTowerMap(): void {
@@ -2791,7 +2839,7 @@ async function offerPendingCardRemovals(force = false): Promise<void> {
   const sequence = __commonViewSequence;
   const controller = new AbortController();
   pendingRemovalAbort = controller;
-  setSendingState(true); setRunButtonsDisabled(true);
+  const actionToken = setSendingState(true); setRunButtonsDisabled(true);
   try {
     await pendingCardRemoval.offer({
       read: () => getStatRootRef(getCurrentMessageVariables()) || {},
@@ -2799,14 +2847,15 @@ async function offerPendingCardRemovals(force = false): Promise<void> {
       choose: (stat, remaining) => choosePendingCardRemoval(stat, remaining, controller.signal),
       commit: async (id, revision) => {
         const result = await runActionHost.removeCardWithAllowance(id, revision);
+    if (actionToken !== __sendingOwner) return;
         __USER_MUTATION_PILLS.push(`永久移除：${result.cardName}`);
       },
       changed: loadGameData,
     }, force);
-  } catch (error) { showRunError(error, '删卡未完成，次数已保留'); }
+  } catch (error) { if (actionToken === __sendingOwner) showRunError(error, '删卡未完成，次数已保留'); }
   finally {
     if (pendingRemovalAbort === controller) pendingRemovalAbort = null;
-    if (sequence === __commonViewSequence) { setSendingState(false); setRunButtonsDisabled(false); }
+    if (sequence === __commonViewSequence) { setSendingState(false, actionToken); setRunButtonsDisabled(false); }
   }
 }
 let pendingRemovalTimer: ReturnType<typeof setTimeout> | null = null;
@@ -3470,7 +3519,7 @@ function renderNPCData(rpgData: any) {
 function renderActionArea() {
   const actionSection = document.querySelector('.action-section') as HTMLElement | null;
   if (!actionSection) return;
-  setSendingState(false);
+  setRunButtonsDisabled(__IS_SENDING_ACTION);
   actionSection.style.display = '';
   renderRewardInline();
 }
@@ -3478,8 +3527,19 @@ function renderActionArea() {
 // 添加全局标记防止重复发送
 let __IS_SENDING_ACTION = false;
 
-function setSendingState(value: boolean) {
-  __IS_SENDING_ACTION = value;
+let __sendingOwner: symbol | undefined;
+function setSendingState(value: boolean, owner?: symbol): symbol | undefined {
+  if (value) {
+    __sendingOwner = Symbol('common-action');
+    __IS_SENDING_ACTION = true;
+    return __sendingOwner;
+  }
+  if (owner === __sendingOwner) clearSendingOwner();
+  return undefined;
+}
+function clearSendingOwner(): void {
+  __sendingOwner = undefined;
+  __IS_SENDING_ACTION = false;
 }
 
 // 渲染九宫格阵营
@@ -3812,6 +3872,7 @@ function destroyCommonView(): void {
   pendingRemovalAbort = null;
   if (pendingRemovalTimer !== null) clearTimeout(pendingRemovalTimer);
   pendingRemovalTimer = null;
+  clearSendingOwner();
   __commonViewInitialized = false;
   __commonViewSequence += 1;
   if (__storyRefreshTimer !== null) clearInterval(__storyRefreshTimer);
@@ -3858,7 +3919,7 @@ function initializeCommonView(): void {
     }
     listenForTowerGenerationUpdates();
   }
-  setSendingState(false);
+  clearSendingOwner();
   initializeUI();
   void loadGameData();
   // Prose can be committed after the room UI; refresh its read-only view alone.

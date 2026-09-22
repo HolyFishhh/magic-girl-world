@@ -79,8 +79,11 @@ function requireRecord(value: unknown, message: string): Record<string, any> {
 /** Read the program-owned cross-battle history without trusting arbitrary MVU objects. */
 export function readRunEventHistoryInStat(statValue: unknown): RunEventHistoryState {
   if (!statValue || typeof statValue !== 'object' || Array.isArray(statValue)) return createRunEventHistory();
-  return readRunEventHistory((statValue as Record<string, unknown>)[RUN_EVENT_HISTORY_KEY])
-    || createRunEventHistory();
+  const stored = (statValue as Record<string, unknown>)[RUN_EVENT_HISTORY_KEY];
+  if (stored === undefined || stored === null) return createRunEventHistory();
+  const history = readRunEventHistory(stored);
+  if (!history) throw new Error('战斗历史格式无效或版本不受支持，已停止保存并保留原数据');
+  return history;
 }
 
 /** Archive one completed encounter idempotently inside the same settlement transaction. */

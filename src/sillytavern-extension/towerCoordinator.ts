@@ -63,6 +63,7 @@ export interface TowerCoordinatorPorts {
     data: Record<string, any>,
     expectedChatId: string,
     expectedMessageId: number | 'latest',
+    base: Record<string, any>,
   ): Promise<void>;
   requestGeneration(request: TowerCoordinatorGenerationRequest): Promise<unknown>;
   cancelGeneration?(request: TowerCoordinatorGenerationRequest, reason: string): boolean;
@@ -584,7 +585,7 @@ export class TowerLookaheadCoordinator {
     if (!scope) return null;
     const draft = clone(scope.mvuData);
     retryTowerNodeGenerationInStat(draft.stat_data, String(nodeId || '').trim());
-    await this.ports.replaceLatest(draft, scope.chatId, scope.messageId);
+    await this.ports.replaceLatest(draft, scope.chatId, scope.messageId, scope.mvuData);
     this.schedule('manual-node-retry');
     return true;
   }
@@ -597,7 +598,7 @@ export class TowerLookaheadCoordinator {
     if (!scope) return null;
     const draft = clone(scope.mvuData);
     queueTowerOpeningInStat(draft.stat_data);
-    await this.ports.replaceLatest(draft, scope.chatId, scope.messageId);
+    await this.ports.replaceLatest(draft, scope.chatId, scope.messageId, scope.mvuData);
     this.schedule('manual-opening-retry');
     return true;
   }
@@ -630,7 +631,7 @@ export class TowerLookaheadCoordinator {
         const openingRecovery = recoverTowerOpeningInStat(draft.stat_data);
         const nodeRecovery = recoverTowerGenerationsInStat(draft.stat_data);
         if (openingRecovery.changed || nodeRecovery.changed) {
-          await this.ports.replaceLatest(draft, scope.chatId, scope.messageId);
+          await this.ports.replaceLatest(draft, scope.chatId, scope.messageId, scope.mvuData);
           if (epoch !== this.epoch) return;
           scope = this.currentScope();
           if (!scope) return;
@@ -687,7 +688,7 @@ export class TowerLookaheadCoordinator {
       act: claimed.request.act,
       context: buildTowerGenerationContext({ ...scope, mvuData: draft }),
     });
-    await this.ports.replaceLatest(draft, scope.chatId, scope.messageId);
+    await this.ports.replaceLatest(draft, scope.chatId, scope.messageId, scope.mvuData);
     if (epoch !== this.epoch) return;
     this.setStatus('opening', '正在生成开局馈赠事件');
     const generationRequest: TowerCoordinatorGenerationRequest = {
@@ -715,7 +716,7 @@ export class TowerLookaheadCoordinator {
     const queued = queueTowerLookaheadInStat(draft.stat_data, 3, { retryFailed: false });
     const claimed = claimQueuedTowerGenerationsInStat(draft.stat_data, 3);
     if (queued.changed || claimed.changed) {
-      await this.ports.replaceLatest(draft, scope.chatId, scope.messageId);
+      await this.ports.replaceLatest(draft, scope.chatId, scope.messageId, scope.mvuData);
       if (epoch !== this.epoch) return;
     }
     const requests = claimed.requests;
@@ -811,7 +812,7 @@ export class TowerLookaheadCoordinator {
         // Do not turn a newer authoritative state back into a failure.
       }
     }
-    if (changed) await this.ports.replaceLatest(draft, scope.chatId, scope.messageId);
+    if (changed) await this.ports.replaceLatest(draft, scope.chatId, scope.messageId, latest.mvuData);
   }
 
   private currentScope(): TowerCoordinatorScope | null {

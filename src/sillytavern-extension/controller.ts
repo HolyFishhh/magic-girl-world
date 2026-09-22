@@ -1,3 +1,5 @@
+import { commitMvuUpdate, withMvuWriteLock } from '../runtime/mvuWriteCoordinator';
+import { redactDiagnosticText } from '../runtime/diagnosticRedaction';
 import { normalizeStatusDefenseRule } from '../game-core/statusDefense';
 import { towerBattleStories, towerBattleNarrativePrompt } from './towerBattleNarrative';
 import { OPENING_TRANSFORM_GUIDANCE } from '../game-core/towerOpeningTransforms';
@@ -3995,6 +3997,7 @@ export class DesignAssistantController {
   private readonly reasoningFinalRecoveryHost = new ReasoningFinalRecoveryHost();
   private reasoningRecoveryWatchGeneration = 0;
   private readonly towerCoordinator: TowerLookaheadCoordinator | null;
+  private readonly towerWriteBases = new WeakMap<Record<string, any>, Record<string, any>>();
   private towerChatId: string | null = null;
   private readonly publishedTowerTerminals = new Set<string>();
   /** Child balance-feedback queue ids are displayed under their parent request. */
@@ -4093,7 +4096,7 @@ export class DesignAssistantController {
       : new TowerLookaheadCoordinator({
         snapshot: () => this.towerCoordinatorScope(),
         prepareDesignSnapshot: async () => { await this.warmup(); },
-        replaceLatest: (data, chatId, messageId) => this.replaceLatestMvuData(data, chatId, messageId),
+        replaceLatest: (data, chatId, messageId, base) => this.replaceLatestMvuData(data, chatId, messageId, base),
         requestGeneration: request => this.requestTowerGeneration(
           request as TowerCoordinatorGenerationRequest & TowerGenerationBridgeRequest,
         ),
@@ -4662,7 +4665,7 @@ export class DesignAssistantController {
       throw new TowerGenerationCancelledError('开局提交前变量已变化，未覆盖现有状态');
     }
     input.operation.committing = true;
-    await this.replaceLatestMvuData(draft, input.chatId, input.messageId);
+    await this.replaceLatestMvuData(draft, input.chatId, input.messageId, baseline);
     assertScope();
     const committed = this.readLatestMvuData(input.messageId);
     const committedReceipt = readTowerInitialCommitReceipt(committed, input.chatId, input.messageId);
@@ -5265,7 +5268,7 @@ export class DesignAssistantController {
           const readiness = assessInitialTowerContent(draft);
           if (readiness?.ok) {
             ensureRunStateInStat(draft.stat_data, deriveRunSeed(draft.stat_data));
-            await this.replaceLatestMvuData(draft, chatId, messageId);
+            await this.replaceLatestMvuData(draft, chatId, messageId, root);
             this.scheduleTowerChatActivityTouch(draft);
             this.scheduleTowerGeneration(`initial-content-ready:${reason}`);
             this.debug(`initialized tower run after durable player-content gate (${reason})`, {
@@ -5768,7 +5771,7 @@ export class DesignAssistantController {
       const claimedCandidate = validateRunState({ ...claimedRun.value, opening: claimedOpening });
       if (!claimedCandidate.ok) throw new Error(`开局剧情生成状态无效：${claimedCandidate.message}`);
       claimed.stat_data.run = claimedCandidate.value;
-      await this.replaceLatestMvuData(claimed, chatId, messageId);
+      await this.replaceLatestMvuData(claimed, chatId, messageId, before);
       this.towerPreGenerationSnapshots.set(key, clone(before));
 
       try {
@@ -5898,7 +5901,7 @@ export class DesignAssistantController {
       claimedNode.narrative_phase = 'generating';
       claimedNode.narrative_request_id = requestId;
       delete claimedNode.narrative_error;
-      await this.replaceLatestMvuData(claimed, chatId, messageId);
+      await this.replaceLatestMvuData(claimed, chatId, messageId, before);
       this.towerPreGenerationSnapshots.set(key, clone(before));
 
       try {
@@ -6066,9 +6069,7 @@ export class DesignAssistantController {
   }
 
   private captureTowerGenerationFailure(request: TowerGenerationRequest, error: unknown): void {
-    const message = String(error instanceof Error ? error.message : error)
-      .replace(/(authorization|api[-_ ]?key|cookie|bearer)\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]')
-      .slice(0, 1000);
+    const message = redactDiagnosticText(error instanceof Error ? error.message : error).slice(0, 1000);
     this.towerGenerationEvidence.append({
       chatId: request.chatId, nodeId: request.nodeId, requestId: request.requestId,
       ...(request.runScope ? { runScope: request.runScope } : {}),
@@ -6160,8 +6161,7 @@ export class DesignAssistantController {
         this.persistInitialGenerationEvidence(chatId);
       })
       .catch(error => {
-        const message = String(error instanceof Error ? error.message : error)
-          .replace(/(authorization|api[-_ ]?key|cookie|bearer)\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]').slice(0, 240);
+        const message = redactDiagnosticText(error instanceof Error ? error.message : error).slice(0, 240);
         this.initialGenerationEvidence.setArchive(chatId, generationId, { status: 'failed', error: message });
         this.persistInitialGenerationEvidence(chatId);
         this.debug('initial generation evidence archive upload failed', error);
@@ -7293,48 +7293,32 @@ export class DesignAssistantController {
     if (!data) {
       throw new Error('最新楼层 MVU 数据不可用');
     }
-    return clone(data);
+    const draft = clone(data);
+    this.towerWriteBases.set(draft, clone(data));
+    return draft;
   }
 
   private async replaceLatestMvuData(
     data: Record<string, any>,
     expectedChatId: string,
     expectedMessageId: number | 'latest' = this.latestMessageId(),
+    base: Record<string, any> | undefined = this.towerWriteBases.get(data),
   ): Promise<void> {
-    if (!this.isTowerLockedScope(expectedChatId, expectedMessageId)) {
-      throw new Error('聊天或游戏模式已变化，拒绝写入旧爬塔结果');
-    }
-    const mvu = this.host.mvu();
-    if (!mvu || typeof mvu.replaceMvuData !== 'function') throw new Error('MVU replaceMvuData 接口不可用');
-    const normalized = normalizeLatestMvuRoot(data);
-    const current = normalizeLatestMvuRoot(
-      mvu.getMvuData({ type: 'message', message_id: expectedMessageId }),
-    );
-    if (!current) throw new Error('MVU state became unavailable before the tower update was written.');
-    const incomingRevision = Number(normalized?.stat_data?.run?.stateRevision);
-    const currentRevision = Number(current.stat_data?.run?.stateRevision);
-    if (
-      Number.isFinite(incomingRevision)
-      && Number.isFinite(currentRevision)
-      && incomingRevision < currentRevision
-    ) {
-      throw new TowerGenerationCancelledError(
-        `Refused stale tower state revision ${incomingRevision}; current revision is ${currentRevision}.`,
-      );
-    }
-    if (!normalized) throw new Error('拒绝写入根结构异常的 MVU 数据');
-    // Call through the owning object. Some host bridges expose a method rather
-    // than a context-free function, so extracting it first is not safe.
-    await mvu.replaceMvuData(clone(normalized), { type: 'message', message_id: expectedMessageId });
-    const written = normalizeLatestMvuRoot(
-      mvu.getMvuData({ type: 'message', message_id: expectedMessageId }),
-    );
-    if (!written) throw new Error('MVU 写入后根结构异常，已停止后续后台生成');
-    if (!this.isTowerLockedScope(expectedChatId, expectedMessageId)) {
-      throw new Error('写入完成前聊天已切换，爬塔结果不再派发');
-    }
-    // Recovery writes have no model-request completion event. Notify the view
-    // only after the authoritative write and scope checks have succeeded.
+    if (!base) throw new Error('后台保存缺少读取基线，已停止以保护存档');
+    const assertCurrent = () => {
+      if (!this.isTowerLockedScope(expectedChatId, expectedMessageId))
+        throw new TowerGenerationCancelledError('聊天或游戏模式已变化，拒绝写入旧爬塔结果');
+    };
+    const written = await commitMvuUpdate({
+      base, next: data, assertCurrent,
+      read: () => this.readLatestMvuData(expectedMessageId),
+      write: value => this.host.mvu()!.replaceMvuData!(value, { type: 'message', message_id: expectedMessageId }),
+    });
+    // A caller may reuse the draft after saving. Advance both draft and base,
+    // otherwise its next save would undo unrelated fields merged above.
+    for (const field of Object.keys(data)) delete data[field];
+    Object.defineProperties(data, Object.getOwnPropertyDescriptors(clone(written)));
+    this.towerWriteBases.set(data, clone(written));
     try {
       this.towerMonitor()?.receiveTowerStateChanged?.({ chatId: expectedChatId, messageId: expectedMessageId });
     } catch (error) {
@@ -7360,35 +7344,40 @@ export class DesignAssistantController {
     if (!mvu || typeof mvu.replaceMvuData !== 'function') {
       throw new Error('MVU replaceMvuData is unavailable during persisted tower restoration.');
     }
-    let current: Record<string, any> | null = null;
-    try {
-      current = normalizeLatestMvuRoot(
+    const restoredRevision = await withMvuWriteLock(async () => {
+      if (!isCurrent()) throw new TowerGenerationCancelledError('The chat changed before restoration.');
+      let current: Record<string, any> | null = null;
+      try {
+        current = normalizeLatestMvuRoot(
+          mvu.getMvuData({ type: 'message', message_id: expectedMessageId }),
+        );
+      } catch {
+        // A missing current root is the exact state this recovery path repairs.
+      }
+      const assessment = assessPersistedTowerMvuRestore(persisted, current);
+      if (assessment.action !== 'restore') return undefined;
+      if (!isCurrent()) throw new TowerGenerationCancelledError('The chat changed before tower MVU restoration.');
+      await mvu.replaceMvuData!(clone(persisted), { type: 'message', message_id: expectedMessageId });
+      if (!isCurrent()) throw new TowerGenerationCancelledError('The chat changed while tower MVU was being restored.');
+      const written = normalizeLatestMvuRoot(
         mvu.getMvuData({ type: 'message', message_id: expectedMessageId }),
       );
-    } catch {
-      // A missing current root is the exact state this recovery path repairs.
-    }
-    const assessment = assessPersistedTowerMvuRestore(persisted, current);
-    if (assessment.action !== 'restore') return;
-    if (!isCurrent()) throw new TowerGenerationCancelledError('The chat changed before tower MVU restoration.');
-    await mvu.replaceMvuData(clone(persisted), { type: 'message', message_id: expectedMessageId });
-    if (!isCurrent()) throw new TowerGenerationCancelledError('The chat changed while tower MVU was being restored.');
-    const written = normalizeLatestMvuRoot(
-      mvu.getMvuData({ type: 'message', message_id: expectedMessageId }),
-    );
-    const writtenRun = validateRunState(written?.stat_data?.run);
-    if (
-      !written
-      || written.stat_data?.game_mode !== 'tower'
-      || !writtenRun.ok
-      || writtenRun.value.stateRevision !== assessment.persistedRevision
-    ) {
-      throw new Error('Persisted tower MVU restoration did not retain the expected run revision.');
-    }
+      const writtenRun = validateRunState(written?.stat_data?.run);
+      if (
+        !written
+        || written.stat_data?.game_mode !== 'tower'
+        || !writtenRun.ok
+        || writtenRun.value.stateRevision !== assessment.persistedRevision
+      ) {
+        throw new Error('Persisted tower MVU restoration did not retain the expected run revision.');
+      }
+      return assessment.persistedRevision;
+    });
+    if (restoredRevision === undefined) return;
     this.rerenderMessageAfterTowerMvuRestore(
       expectedChatId,
       expectedMessageId,
-      assessment.persistedRevision,
+      restoredRevision,
     );
   }
 

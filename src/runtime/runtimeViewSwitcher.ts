@@ -2,6 +2,7 @@ export type MagicGirlRuntimeView = 'start' | 'common' | 'fish' | 'update';
 
 import { ensureRuntimeFrameHeightSync } from './runtimeFrameHeight';
 import { claimRuntimeMountEpoch } from './runtimeMountGuard';
+import { ensureOptionalFonts } from './optionalFonts';
 
 type RuntimeViewAsset = Readonly<{
   title: string;
@@ -51,6 +52,7 @@ function sharedRuntime(): SharedRuntime {
  * webpack bundles even when tower mode mounts both in one message iframe.
  */
 export function registerRuntimeViewLifecycle(view: MagicGirlRuntimeView, destroy: () => void): () => void {
+  if (typeof document !== 'undefined') ensureOptionalFonts();
   const host = lifecycleHost();
   const existing = host[LIFECYCLE_KEY] as ViewLifecycle | undefined;
   if (existing && existing.destroy !== destroy && !existing.switching) existing.destroy();

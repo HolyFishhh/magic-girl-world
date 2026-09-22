@@ -274,7 +274,7 @@ assert.match(scriptSource, /不可领取：/);
 assert.match(scriptSource, /TavernRunActionHost/);
 assert.match(
   scriptSource,
-  /async function retryTowerMapNode[\s\S]{0,900}finally \{\s*setSendingState\(false\);\s*setRunButtonsDisabled\(false\);\s*\}/,
+  /async function retryTowerMapNode[\s\S]{0,900}finally \{\s*setSendingState\(false, actionToken\);\s*setRunButtonsDisabled\(false\);\s*\}/,
   'a completed tower-node retry must release the map busy overlay',
 );
 assert.match(scriptSource, /MAX_AUTOMATIC_INITIAL_TOWER_REPAIRS = 2/);

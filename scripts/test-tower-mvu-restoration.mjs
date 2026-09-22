@@ -167,4 +167,23 @@ assert.equal(switchedFixture.replacements.length, 0, 'a stale recovery watcher m
 assert.equal(switchedFixture.rerenders.length, 0, 'a stale recovery watcher must not rerender a new chat');
 switchedFixture.controller.deactivate();
 
-console.log('Persisted tower saves restore into MVU memory and rerender only the matching visible floor.');
+// Real controller writers share a commit queue and advance reusable baselines.
+const concurrent = createFixture(towerVariables());
+concurrent.controller.activate();
+const draftStory = concurrent.controller.readLatestMvuData(1);
+const draftCards = concurrent.controller.readLatestMvuData(1);
+draftStory.stat_data.story = '并发剧情';
+draftCards.stat_data.battle.cards.push({ id: 'new_reward', name: '奖励', quantity: 1 });
+await Promise.all([
+  concurrent.controller.replaceLatestMvuData(draftStory, 'tower-chat', 1),
+  concurrent.controller.replaceLatestMvuData(draftCards, 'tower-chat', 1),
+]);
+assert.equal(concurrent.value().stat_data.story, '并发剧情');
+assert.equal(concurrent.value().stat_data.battle.cards.at(-1).id, 'new_reward');
+draftCards.stat_data.testField = 1;
+await concurrent.controller.replaceLatestMvuData(draftCards, 'tower-chat', 1);
+assert.equal(concurrent.value().stat_data.story, '并发剧情', 'reusing a draft preserves merged fields');
+concurrent.context.chatId = 'switched-chat';
+await assert.rejects(concurrent.controller.replaceLatestMvuData(draftCards, 'tower-chat', 1));
+concurrent.controller.deactivate();
+console.log('Persisted tower saves restore only into the matching floor; concurrent controller writes merge without losing cards or prose.');

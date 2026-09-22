@@ -74,7 +74,7 @@ const {animateCardDeparture}=require('../src/fish/ui/cardLifecycleAnimation.ts')
 const effects=[],timers=[];
 global.document={
   getElementById:()=>({getBoundingClientRect:()=>({left:10,top:20,width:500,height:180})}),
-  querySelectorAll:()=>[],body:{append:x=>effects.push(x)},
+  querySelector:()=>null,querySelectorAll:()=>[],body:{append:x=>effects.push(x)},
   createElement:()=>({children:[],style:{setProperty(){}},setAttribute(){},append(x){this.children.push(x)},remove(){this.removed=true}}),
 };
 global.window={setTimeout:fn=>timers.push(fn),matchMedia:()=>({matches:false})};

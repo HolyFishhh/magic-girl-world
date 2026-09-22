@@ -7,6 +7,8 @@ const equal = (a: any, b: any): boolean => {
   return keys.length === Object.keys(b).length && keys.every(key => Object.hasOwn(b, key) && equal(a[key], b[key]));
 };
 
+export const messageVariableValuesEqual = equal;
+
 /** Apply only the UI transaction's delta to the latest snapshot. Node content
  * completion does not increment route revision, so revision checks alone lose it.
  * Conflicting leaves/arrays reject atomically; never replay an effectful updater. */
@@ -24,10 +26,10 @@ export function mergeMessageVariableUpdate(base: RecordValue, next: RecordValue,
           delete result[key];
         } else if (!had) {
           if (now && !equal(after[key], current[key])) throw new Error(`后台已更新 ${path}.${key}，本次操作未保存，请重试`);
-          result[key] = structuredClone(after[key]);
+          Object.defineProperty(result, key, { value: structuredClone(after[key]), enumerable: true, writable: true, configurable: true });
         } else {
           if (!now) throw new Error(`后台已移除 ${path}.${key}，本次操作未保存，请重试`);
-          result[key] = merge(before[key], after[key], current[key], `${path}.${key}`);
+          Object.defineProperty(result, key, { value: merge(before[key], after[key], current[key], `${path}.${key}`), enumerable: true, writable: true, configurable: true });
         }
       }
       return result;

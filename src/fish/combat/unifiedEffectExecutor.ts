@@ -153,11 +153,7 @@ export class UnifiedEffectExecutor {
         const entity = request.target === 'player'
           ? this.gameStateManager.getPlayer()
           : (request.targetEnemyId ? this.gameStateManager.getEnemyById(request.targetEnemyId) : this.gameStateManager.getEnemy());
-        if (!entity) return request.amount;
-        const caps = entity.statusEffects
-          .map(status => this.dynamicStatusManager.getStatusDefinition(status.id)?.defense?.damage_cap)
-          .filter((cap): cap is number => cap !== undefined);
-        return caps.length ? Math.min(request.amount, ...caps) : request.amount;
+        return this.capDamageForEntity(request.amount, entity);
       },
       preventHpLossByStatus: async request => {
         const entity = request.target === 'player'
@@ -507,6 +503,15 @@ export class UnifiedEffectExecutor {
     }
     return { remainingDamage: targetAmount, redirectedHpLost };
   }
+  private capDamageForEntity(amount: number, entity: { statusEffects: { id: string }[] } | null | undefined): number {
+    let capped = amount;
+    for (const status of entity?.statusEffects || []) {
+      const cap = this.dynamicStatusManager.getStatusDefinition(status.id)?.defense?.damage_cap;
+      if (cap !== undefined) capped = Math.min(capped, cap);
+    }
+    return Math.max(0, roundBattleValue(capped));
+  }
+
   /** Current-state intent preview; never dispatches triggers or writes battle state. */
   public previewPlayerCardDamage(amount: NumericExpression, target: 'self' | 'opponent', damageKind?: DamageKind, payment?: import('../../game-core').CardResourcePayment): { base: number; value: number } {
     const enemy = this.gameStateManager.getEnemy();
@@ -532,12 +537,12 @@ export class UnifiedEffectExecutor {
         value = roundBattleValue(value);
       }
     }
-    return { base, value: Math.max(0, value) };
+    return { base, value: this.capDamageForEntity(value, target === 'self' ? this.gameStateManager.getPlayer() : enemy) };
   }
 
   public previewEnemyIntentDamage(enemy: Enemy, amount: NumericExpression, target: 'self' | 'opponent', damageKind?: DamageKind): number {
     let value = roundBattleValue(evaluateNumericExpression(amount, this.createCoreEffectState(false, undefined, enemy), { spentEnergy: 0 }));
-    if (damageKind === 'hp_loss') return Math.max(0, value);
+    if (damageKind === 'hp_loss') return this.capDamageForEntity(value, target === 'self' ? enemy : this.gameStateManager.getPlayer());
     const targetSide = target === 'self' ? 'enemy' : 'player';
     for (const [side, attribute] of [['enemy', 'damage_modifier'], [targetSide, 'damage_taken_modifier']] as const) {
       for (const source of this.getDeclarativeModifierOperations(side, attribute, enemy)) {
@@ -548,7 +553,7 @@ export class UnifiedEffectExecutor {
       const direct = entity.modifiers?.[attribute];
       if (typeof direct === 'number' && direct !== 0) value = applyModifierOperation(value, { operator: '+', value: direct });
     }
-    return Math.max(0, roundBattleValue(value));
+    return this.capDamageForEntity(value, target === 'self' ? enemy : this.gameStateManager.getPlayer());
   }
 
   private async scheduleEffectCommand(
@@ -2889,16 +2894,14 @@ export class UnifiedEffectExecutor {
       this.pendingDeathDetails.clear();
       return;
     }
+    let finalizedPlayerDeath = false;
     if (this.pendingDeaths.has('player')) {
       await this.triggerHost.processAbilitiesByTrigger('player', 'defeated', {
         actorId: 'player', targetId: 'player', eventJournal: this.gameStateManager.getGameState().eventJournal,
       });
       if (this.gameStateManager.getPlayer().currentHp <= 0) {
         await this.recordFinalizedDefeat('player');
-        this.pendingDeaths.clear();
-        this.pendingDeathDetails.clear();
-        await this.completeBattleEnd('defeat');
-        return;
+        finalizedPlayerDeath = true;
       }
       this.pendingDeaths.delete('player');
       this.pendingDeathDetails.delete('player');
@@ -2936,10 +2939,10 @@ export class UnifiedEffectExecutor {
     if (!objectiveDefeated) await this.admitEnemyReinforcements();
     const result = objectiveDefeated || (this.gameStateManager.getEnemies({ livingOnly: true }).length === 0 && this.gameStateManager.getReserveEnemies().every(enemy => enemy.currentHp <= 0) && removedEnemies.length > 0)
       ? 'victory'
-      : null;
+      : finalizedPlayerDeath && this.gameStateManager.getPlayer().currentHp <= 0 ? 'defeat' : null;
     this.pendingDeaths.clear();
     this.pendingDeathDetails.clear();
-    if (result) await this.completeBattleEnd(result);
+    if (result && !this.gameStateManager.isGameOver()) await this.completeBattleEnd(result);
   }
 
   /** Record death only after all defeated/revival reactions have completed. */

@@ -1,4 +1,5 @@
-import { MAX_RUN_EVENT_HISTORY_RECORDS } from '../game-core/battleEventJournal';
+// Encoding budget only: larger valid histories use the complete JSON fallback.
+const MAX_COLUMN_ENCODING_RECORDS = 20_000;
 
 const FORMAT = 'mwg.run-event-history-columns/v1';
 const MAX_FIELD_SETS = 128;
@@ -67,7 +68,7 @@ export function compactRunEventHistoryForPrompt(history: unknown): unknown {
   const fallback = () => structuredClone(history);
   if (!isObject(history) || history.schemaVersion !== 1 || !Array.isArray(history.records)
     || Object.keys(history).some(key => key !== 'schemaVersion' && key !== 'records')
-    || history.records.length > MAX_RUN_EVENT_HISTORY_RECORDS || !isJson(history)) return fallback();
+    || history.records.length > MAX_COLUMN_ENCODING_RECORDS || !isJson(history)) return fallback();
 
   const fieldSets: string[][][] = [];
   const indices = new Map<string, number>();
