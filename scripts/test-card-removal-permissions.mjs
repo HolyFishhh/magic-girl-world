@@ -99,11 +99,19 @@ for (const reason of ['effect', 'player_choice', 'turn_cleanup']) {
   host.relicTriggerHost = { triggerRelics: async () => {} };
   const logs = [];
   host.presentation = { animateCardDeparture() {}, logDiscardCardDetail() {}, addLog(text) { logs.push(text); } };
-  await host.discardCard(cards[0].id, reason);
+  if (reason === 'turn_cleanup') {
+    const { UnifiedEffectExecutor } = require('../src/fish/combat/unifiedEffectExecutor.ts');
+    const previousInstance = UnifiedEffectExecutor.getInstance;
+    try {
+      UnifiedEffectExecutor.getInstance = () => ({ getCardPlayRules: () => [] });
+      await host.discardHand();
+    } finally { UnifiedEffectExecutor.getInstance = previousInstance; }
+    assert.equal(store.getPlayer().discardPile.length, 0, 'protected forget still leaves the battle on cleanup');
+  } else await host.discardCard(cards[0].id, reason);
   assert.equal(store.getPlayer().hand.length, 0);
   assert.equal(store.getPlayer().deck.length, 2);
   assert.equal(store.getGameState().purgedRunInstanceIds?.length || 0, 0);
-  if (reason !== 'turn_cleanup') assert.ok(logs.some(text => text.includes('原持有牌组保留')));
+  assert.ok(logs.some(text => text.includes('原持有牌组保留')));
   // A transformed combat incarnation cannot evade the original's protection.
   store.purgeOwnedCard({ ...cards[0], lifecycle: {} });
   const restored = new BattleStateStore(JSON.parse(JSON.stringify(store.getGameState())));
