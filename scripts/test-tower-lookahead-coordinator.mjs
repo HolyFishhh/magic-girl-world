@@ -1114,6 +1114,7 @@ console.log('PASS idle UI scheduling does not recompute design simulation.');
   const claimed = structuredClone(stat);
   // A save written before this fix retains the two rejected alternatives.
   stat.reward.artifact = beforeClaim.reward.artifact.filter(artifact => artifact.id !== 'boss_relic_2');
+  stat.reward.card_choice_groups = [{ id: 'boss-cards', indices: [0], pick: 0 }];
   assert.equal(hasSelectableRewards(stat), false);
   const restored = structuredClone(stat);
   harness.setVariables({ ...harness.variables(), stat_data: restored });

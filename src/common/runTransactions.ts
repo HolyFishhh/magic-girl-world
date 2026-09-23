@@ -710,6 +710,10 @@ export function settleTowerOpeningChoiceInStat(statValue: unknown, choiceId: str
     }
   }
 
+  // Gift rewards replace the finished boss pool, including its card partitions.
+  // An old zero-pick partition refers to old indices and must not validate the gift.
+  reward.card_choice_groups = null;
+
   const oldMaxHp = Number(core.max_hp);
   const oldHp = Number(core.hp);
   const oldRemovalCount = Number(core.card_removal_count ?? 0);
