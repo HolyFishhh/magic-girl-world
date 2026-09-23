@@ -58,11 +58,16 @@ export function expandBuiltinStatusDefinitions(values: readonly unknown[], conte
   return result;
 }
 
+/** Authoring-only scope: never used as an execution or repair quality gate. */
+export function builtinStatusUsageContract(): string {
+  return '生成范围：这15项预设状态仅用于低质量敌人（无剧情身份、机制简单的普通杂兵）或偏中立卡牌（不承载角色专属设定的通用卡牌）。剧情相关敌人、复杂敌人以及为玩家生成的整套卡组（含开局与后续专属卡牌）都必须根据剧情设定、角色身份、能力来源与当前构筑具体创作，生成对应的名称、独立ID、触发条件和可执行效果；不得套用这15项预设，也不得仅改名字或堆叠通用buff来代替剧情设计。这里的低质量不是允许敷衍或缺少完整规则；仅因数值较低、稀有度较低或处于普通战斗节点，不代表可以使用预设。以上是新内容生成要求，不是程序质量硬门槛；结构修复不得据此拒绝、删除或改写已合法的卡牌、敌人和玩家存档。';
+}
+
 /** Shared reference boundary for worldbooks, generation and finite repair. */
 export function builtinStatusReferenceContract(): string {
-  return '预设状态白名单：' + BUILTIN_STATUS_DEFINITIONS.map(value => value.id).join('/') + '。仅这些精确 ID 可直接引用，程序按实际引用自动展开完整定义及依赖并随存档保存；已登记同 ID 定义优先。各处“先登记/补齐定义”要求仅针对非预设 ID。其他状态必须先完整定义后引用，中文名称或任意 sts_ 前缀不构成内置机制。核心剧情状态仍应独立创作，不能用通用预设替换其身份与规则。';
+  return '预设状态白名单：' + BUILTIN_STATUS_DEFINITIONS.map(value => value.id).join('/') + '。仅这些精确 ID 可直接引用，程序按实际引用自动展开完整定义及依赖并随存档保存；已登记同 ID 定义优先。各处“先登记/补齐定义”要求仅针对非预设 ID。其他状态必须先完整定义后引用，中文名称或任意 sts_ 前缀不构成内置机制。' + '\n' + builtinStatusUsageContract();
 }
 
 export function builtinStatusAuthoringContract(): string {
-  return builtinStatusReferenceContract() + '\n' + '内置通用状态可直接用 apply_status 引用以下 sts_ ID，程序只展开实际引用的完整定义并随存档保存，无需重复登记；已显式登记的同ID定义优先，不会替换剧情自定义状态。主要用于小兵和非关键内容。玩家核心流派、剧情角色和招牌能力应优先创作独立中文名称、ID与效果，例如黑暗仪式应保留其剧情身份，不得偷换成力量；也不要给所有怪物套同一组状态。自定义状态仍须登记完整定义。内置规则使用本项目时机：中毒在持有者行动前结算，负一衰减在持有者回合末；虚弱/易伤/脆弱层数延长期限、不叠乘倍率；力量、活力、虚弱、易伤只修饰攻击伤害，敏捷/脆弱修饰格挡获取；荆棘仅响应攻击伤害事件、反伤不触发自身连锁；活力在玩家下一张攻击牌结算后清除，敌人没有出牌事件，勿对敌人使用它模拟下一次行动。完整可执行目录：' + JSON.stringify(BUILTIN_STATUS_DEFINITIONS);
+  return builtinStatusReferenceContract() + '\n' + '内置通用状态可直接用 apply_status 引用以下 sts_ ID，程序只展开实际引用的完整定义并随存档保存，无需重复登记；已显式登记的同ID定义优先，不会替换剧情自定义状态。使用范围严格遵循上方生成要求；例如剧情角色的黑暗仪式必须从其设定生成独立机制，不得偷换成力量或只给力量换名，也不能给所有怪物套同一组状态。自定义状态仍须登记完整定义。内置规则使用本项目时机：中毒在持有者行动前结算，负一衰减在持有者回合末；虚弱/易伤/脆弱层数延长期限、不叠乘倍率；力量、活力、虚弱、易伤只修饰攻击伤害，敏捷/脆弱修饰格挡获取；荆棘仅响应攻击伤害事件、反伤不触发自身连锁；活力在玩家下一张攻击牌结算后清除，敌人没有出牌事件，勿对敌人使用它模拟下一次行动。完整可执行目录：' + JSON.stringify(BUILTIN_STATUS_DEFINITIONS);
 }

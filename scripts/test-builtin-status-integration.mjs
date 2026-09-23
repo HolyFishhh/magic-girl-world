@@ -6,7 +6,7 @@ const require = createRequire(import.meta.url);
 process.env.TS_NODE_COMPILER_OPTIONS = JSON.stringify({ module: 'CommonJS', moduleResolution: 'node' });
 require('ts-node/register/transpile-only');
 
-const { BUILTIN_STATUS_DEFINITIONS, builtinStatusReferenceContract } = require('../src/game-core/builtinStatusCatalog.ts');
+const { BUILTIN_STATUS_DEFINITIONS, builtinStatusReferenceContract, builtinStatusUsageContract } = require('../src/game-core/builtinStatusCatalog.ts');
 const { compileInitialDraftToMvu, INITIAL_DRAFT_SPEC } = require('../src/game-core/initialDraft.ts');
 const { createContentPackFromMvuBattle } = require('../src/runtime/contentPackAdapter.ts');
 const { prepareTowerBattleForActivation } = require('../src/runtime/towerContentActivation.ts');
@@ -78,15 +78,21 @@ assert.doesNotMatch(display.rulesText, /sts_ritual/);
 console.log('Builtin status integration: initial draft, reward claim, enemy activation, sparse restore, and Chinese rule display passed.');
 
 const reference = builtinStatusReferenceContract();
+const usage = builtinStatusUsageContract();
+for (const requirement of ['仅用于低质量敌人', '或偏中立卡牌', '剧情相关敌人、复杂敌人', '为玩家生成的整套卡组', '都必须根据剧情设定', '不得套用这15项预设', '不得仅改名字', '不是程序质量硬门槛', '结构修复不得据此拒绝、删除或改写已合法']) {
+  assert.ok(usage.includes(requirement), `preset scope keeps authoring requirement: ${requirement}`);
+}
+assert.ok(reference.includes(usage));
 for (const file of ['2战斗内容生成要求.md', '3战斗场景生成.md', '4首条消息变量更新.md', '5变量更新.MD', '7初始战斗内容修复.md', '8战斗场景修复.md', '9卡牌常驻规范.md']) {
   const text = readFileSync(`worldbook_new/${file}`, 'utf8').replaceAll('\r\n', '\n');
   assert.equal(text.split('<!-- shared:builtin-status-reference -->\n')[1].split('\n<!-- /shared:builtin-status-reference -->')[0], reference, `${file} shares the executable preset whitelist`);
-  assert.doesNotMatch(text, /程序没有内置状态|系统没有任何按名称自动生效的内置状态/);
+  assert.doesNotMatch(text, /程序没有内置状态|系统没有任何按名称自动生效的内置状态|主要供小兵|预设优先用于|玩家核心流派.*应优先/);
 }
 const guide = readFileSync('worldbook_new/2战斗内容生成要求.md', 'utf8');
 assert.equal(guide.split('### 程序内置通用状态目录').length, 2, 'catalog appears once, avoiding stale conflicting rule copies');
 for (const definition of BUILTIN_STATUS_DEFINITIONS) {
   assert.equal(guide.split(`| \`${definition.id}\` |`).length, 2, `${definition.id} has one documented rule row`);
+  assert.ok(guide.includes('| `' + definition.id + '` | ' + definition.name + ' | ' + (definition.type === 'buff' ? '增益' : '减益') + ' |'), 'worldbook names and categories match executable definitions');
 }
 assert.match(guide, /`sly:true` 为灵巧/);
 assert.match(guide, /`on_discard:"purge"` 的公开词条名为“遗忘”/);
@@ -94,5 +100,5 @@ const { formatCompactEffectAuthoringContract, createTowerNodeJsonSchema, formatC
 for (const placement of ['runtime', 'initial-draft']) assert.ok(formatCompactEffectAuthoringContract(placement).includes(reference));
 console.log('Builtin status worldbooks and both authoring protocols share one whitelist; sly/forget are documented.');
 
-for (const kind of ['battle', 'elite', 'boss']) assert.ok(JSON.stringify(createTowerNodeJsonSchema(kind)).includes(reference), `${kind} response schema carries the same preset whitelist`);
+for (const kind of ['battle', 'elite', 'boss']) assert.ok(JSON.stringify(createTowerNodeJsonSchema(kind)).includes(JSON.stringify(reference).slice(1, -1)), `${kind} response schema carries the same preset whitelist`);
 assert.match(formatCompactEffectRepairContract('apply_status: INVALID_STATUS_REFERENCE'), /非预设/);
