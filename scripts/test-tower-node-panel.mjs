@@ -312,6 +312,24 @@ const battle = {
   assert.equal(selected, 'gold');
 }
 
+// A saved Act 2 gift must not invite a claim while a boss reward remains.
+{
+  const run = runCore.createRunState({ seed: 87 });
+  run.opening = { phase: 'ready', attempts: 1, content: { title: '第二幕馈赠', choices: [
+    { id: 'later', label: '旅途馈赠', outcome: { reward: {} } },
+  ] } };
+  const stat = { battle, reward: { card: [], artifact: [], item: [], limits: {}, gold: 30, gold_claimed: false } };
+  let selected = 0;
+  const render = () => renderTowerNodePanel({ root, stat, run, isLatest: true, callbacks: { onOpeningChoice: () => { selected += 1; } } });
+  render();
+  assert.match(root.textContent, /先领取上一幕剩余战利品/);
+  assert.equal(withClass(root, 'tower-opening-confirm').length, 0, 'gift confirm remains unavailable until boss gold is claimed');
+  assert.equal(selected, 0);
+  stat.reward.gold_claimed = true;
+  render();
+  assert.equal(withClass(root, 'tower-opening-confirm').length, 1, 'gift choices return after all boss rewards are processed');
+}
+
 // Opening reward faces use the ordinary choice surface, but the existing
 // callback runs only after the explicit confirm action.
 {

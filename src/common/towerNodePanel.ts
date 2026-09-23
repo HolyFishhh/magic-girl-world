@@ -14,6 +14,7 @@ import type { ContentRuleReference } from '../game-core/contentDescription';
 import { parseTowerEventFlow, requireTowerEventStage } from '../game-core/towerEventFlow';
 import { describeNonCombatSettlement } from '../game-core/nonCombatSettlementDisplay';
 import { planNonCombatCosts } from '../game-core/nonCombatSettlement';
+import { hasSelectableRewards } from './rewardTransactions';
 import { renderCardFace } from '../shared/cardFace';
 import { renderSupportDetails } from '../shared/supportPresentation';
 import { escapeHtml } from '../fish/shared/html';
@@ -436,6 +437,10 @@ function renderOpening(options: TowerNodePanelOptions, shell: HTMLElement): bool
           `原预设剧情生成失败，已保留事件摘要：${text(opening.narrativeError, '可继续选择，不影响本局。')}`,
         ));
       }
+    }
+    if (hasSelectableRewards(options.stat)) {
+      shell.append(createElement(document, 'p', 'tower-node-generation', '请先领取上一幕剩余战利品，再选择本幕馈赠。'));
+      return true;
     }
     const choices = Array.isArray(opening.content.choices) ? opening.content.choices.filter(isRecord) : [];
     const choiceGrid = createElement(document, 'div', 'tower-story-choices');

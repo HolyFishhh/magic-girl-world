@@ -34,7 +34,9 @@ const {
 } = require(resolve('src/game-core/towerRequest.ts'));
 const towerState = require(resolve('src/runtime/towerStateAdapter.ts'));
 const towerOpening = require(resolve('src/runtime/towerOpeningAdapter.ts'));
-const { settleTowerOpeningChoiceInStat } = require(resolve('src/common/runTransactions.ts'));
+const { settleTowerOpeningChoiceInStat, executeUnifiedRunTransactionInStat } = require(resolve('src/common/runTransactions.ts'));
+const { hasSelectableRewards } = require(resolve('src/common/rewardTransactions.ts'));
+const { towerScreenFor } = require(resolve('src/common/towerScreenPresentation.ts'));
 const {
   DESIGN_ASSISTANT_STATE_SPEC,
   DEFAULT_DESIGN_ASSISTANT_SETTINGS,
@@ -1079,7 +1081,11 @@ console.log('PASS idle UI scheduling does not recompute design simulation.');
   const boss = first.map.acts[0].nodes.find(node => node.kind === 'boss');
   saved.stat_data.run = completeRunNode({ ...first, opening: { ...first.opening, phase: 'consumed' },
     phase: 'in_node', floor: boss.floor - 1, currentNode: { ...boss }, choices: [] }, { outcome: 'cleared' });
-  saved.stat_data.reward = { card: [], artifact: [], item: [], limits: {}, gold: 151, gold_claimed: true };
+  saved.stat_data.reward = {
+    card: [{ id: 'boss_card', name: '战后守势', type: 'Skill', rarity: 'Common', cost: 1, quantity: 1, effects: { block: 5 } }],
+    artifact: [1, 2, 3].map(i => ({ id: `boss_relic_${i}`, name: `战后遗物${i}`, trigger: 'battle_start', effects: { block: i } })),
+    item: [], limits: { cards: 1, artifacts: 1, items: 0 }, gold: 151, gold_claimed: false,
+  };
   assert.equal(saved.stat_data.run.act, 2);
   assert.equal(saved.stat_data.run.opening.phase, 'pending');
   const deckBefore = JSON.stringify(saved.stat_data.battle.cards);
@@ -1089,7 +1095,35 @@ console.log('PASS idle UI scheduling does not recompute design simulation.');
   assert.equal(harness.requests[0].generationType, 'opening');
   assert.equal(harness.variables().stat_data.run.act, 2);
   assert.equal(JSON.stringify(harness.variables().stat_data.battle.cards), deckBefore);
+  const stat = harness.variables().stat_data;
+  const beforeClaim = structuredClone(stat);
+  assert.equal(towerScreenFor(stat, hasSelectableRewards(stat)), 'battle-reward');
+  assert.throws(() => settleTowerOpeningChoiceInStat(stat, 'accept'), /请先领取上一幕剩余奖励/);
+  assert.deepEqual(stat, beforeClaim, 'premature opening choice never changes saved loot or run state');
+  const claim = (selections, extra = {}) => executeUnifiedRunTransactionInStat(stat, {
+    kind: 'reward_claim', selections, partial: true, ...extra,
+  });
+  claim({ cards: [0], artifacts: [], items: [] });
+  assert.equal(hasSelectableRewards(stat), true, 'other boss loot remains available after claiming one category');
+  claim({ cards: [], artifacts: [1], items: [] });
+  assert.deepEqual(stat.reward.artifact, [], 'unchosen boss relics leave the pool when their allowance is spent');
+  assert.equal(hasSelectableRewards(stat), true, 'unclaimed boss gold still prevents gift settlement');
+  claim({ cards: [], artifacts: [], items: [] }, { claimGold: true });
+  assert.equal(hasSelectableRewards(stat), false);
+  assert.deepEqual(stat.battle.artifacts.map(artifact => artifact.id), ['boss_relic_2']);
+  const claimed = structuredClone(stat);
+  // A save written before this fix retains the two rejected alternatives.
+  stat.reward.artifact = beforeClaim.reward.artifact.filter(artifact => artifact.id !== 'boss_relic_2');
+  assert.equal(hasSelectableRewards(stat), false);
+  const restored = structuredClone(stat);
+  harness.setVariables({ ...harness.variables(), stat_data: restored });
   settleTowerOpeningChoiceInStat(harness.variables().stat_data, 'accept');
+  assert.deepEqual(harness.variables().stat_data.reward.artifact, [], 'saved zero-allowance relics are discarded at gift settlement');
+  assert.deepEqual(harness.variables().stat_data.battle.artifacts, claimed.battle.artifacts, 'recovery retains only the claimed boss relic');
+  assert.ok(harness.variables().stat_data.battle.cards.some(card => card.id === 'boss_card'), 'the boss card survives save/load and gift selection');
+  assert.equal(harness.variables().stat_data.run.gold, claimed.run.gold, 'claimed boss gold survives recovery');
+  assert.equal(harness.variables().stat_data.run.opening.phase, 'consumed', 'restored second-act gift settles once');
+  assert.throws(() => settleTowerOpeningChoiceInStat(harness.variables().stat_data, 'accept'), /当前没有可结算的开局馈赠/, 'repeat gift clicks are rejected');
   harness.coordinator.schedule('opening-consumed');
   await waitFor(() => harness.variables().stat_data.run.choices.every(node =>
     harness.variables().stat_data.run.nodeContent[node.id]?.phase === 'ready'), 'second-act entrances ready');

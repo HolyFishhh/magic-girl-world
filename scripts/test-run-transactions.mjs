@@ -459,6 +459,21 @@ transactions.executeUnifiedRunTransactionInStat(partialRewardStat, {
 });
 assert.deepEqual(partialRewardStat.reward.artifact, [], 'the later same-category relic claim consumes the remaining candidate');
 assert.equal(partialRewardStat.reward.limits.artifacts, 0);
+// A one-pick offer with several alternatives must not leave rejected relics
+// stranded in a future act's reward pool.
+const onePick = structuredClone(partialRewardStat);
+onePick.reward.artifact = [
+  { id: 'one_pick_a', name: '候选A', trigger: 'battle_start', effects: { block: 2 } },
+  { id: 'one_pick_b', name: '候选B', trigger: 'battle_start', effects: { block: 3 } },
+  { id: 'one_pick_c', name: '候选C', trigger: 'battle_start', effects: { block: 4 } },
+];
+onePick.reward.limits.artifacts = 1;
+transactions.executeUnifiedRunTransactionInStat(onePick, {
+  kind: 'reward_claim', selections: { cards: [], artifacts: [1], items: [] }, partial: true,
+});
+assert.deepEqual(onePick.battle.artifacts.map(relic => relic.id), ['partial_relic_a', 'partial_relic_b', 'one_pick_b']);
+assert.deepEqual(onePick.reward.artifact, [], 'exhausted one-pick alternatives are rejected in the same claim');
+assert.equal(onePick.reward.limits.artifacts, 0);
 const skippedRewardStat = structuredClone(partialRewardStat);
 skippedRewardStat.reward.gold = 19;
 skippedRewardStat.reward.gold_claimed = false;

@@ -31,6 +31,8 @@ import {
   applyFixedRewardGrant,
   mutateRewardPoolInStat,
   normalizeMvuList,
+  hasSelectableRewards,
+  readRewardEntitlements,
   readRewardLimits,
   type RewardPoolMutationResult,
   type RewardSelections,
@@ -695,12 +697,17 @@ export function settleTowerOpeningChoiceInStat(statValue: unknown, choiceId: str
   const battle = requireRecord(draft.battle, '开局馈赠结算失败：battle 数据不存在');
   const core = requireRecord(battle.core, '开局馈赠结算失败：battle.core 数据不存在');
   const reward = requireRecord(draft.reward, '开局馈赠结算失败：reward 数据不存在');
-  if (
-    normalizeMvuList(reward.card).length ||
-    normalizeMvuList(reward.artifact).length ||
-    normalizeMvuList(reward.item).length
-  ) {
-    throw new Error('开局馈赠结算失败：仍有未处理的奖励');
+  // Saved runs may contain candidates rejected by an earlier partial claim
+  // (notably the two unchosen boss relics). They have no remaining allowance.
+  // Only discard those exhausted/disabled candidates in the private draft;
+  // never overwrite a claimable reward or unclaimed gold with a new gift.
+  if (hasSelectableRewards(draft)) throw new Error('开局馈赠结算失败：请先领取上一幕剩余奖励');
+  const entitlements = readRewardEntitlements(draft);
+  for (const [category, key] of [['cards', 'card'], ['artifacts', 'artifact'], ['items', 'item']] as const) {
+    if (normalizeMvuList(reward[key]).length) {
+      if (entitlements[category] > 0) throw new Error('开局馈赠结算失败：仍有未处理的奖励');
+      reward[key] = [];
+    }
   }
 
   const oldMaxHp = Number(core.max_hp);

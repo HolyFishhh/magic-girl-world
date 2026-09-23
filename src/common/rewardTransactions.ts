@@ -420,14 +420,18 @@ function applyRewardSelectionsDraft(
     for (const category of selectedCategories) {
       const selected = new Set(plan.selections[category]);
       const remaining = candidates[category].filter((_candidate, index) => !(category==='cards'?cardClaim.removed:selected).has(index));
-      reward[REWARD_KEYS[category]] = remaining.map(clonePlainValue);
-      // A partial claim spends only the selected allowances.  This matters for
-      // multi-pick relic drops: claiming A must leave B and one relic pick.
+      // The other candidates are rejected when the last pick is spent. Keep
+      // them only while another pick remains (e.g. a two-pick relic offer).
       nextLimits[category] = Math.max(0, readRewardEntitlements(stat)[category] - selected.size);
+      reward[REWARD_KEYS[category]] = category === 'cards' || nextLimits[category] > 0 ? remaining.map(clonePlainValue) : [];
     }
     if(selectedCategories.has('cards')) {
       reward.card_choice_groups = cardClaim.groups;
       nextLimits.cards = cardClaim.groups.reduce((sum,group)=>sum+group.pick,0);
+      if (nextLimits.cards === 0) {
+        reward.card = [];
+        reward.card_choice_groups = [];
+      }
     }
     reward.limits = nextLimits;
   } else {
