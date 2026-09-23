@@ -302,6 +302,54 @@ assert.equal(JSON.stringify(monitor.getSnapshot()), completedEncounter, 'the bat
 monitor.begin({ generationId: 'actual-next-update' });
 monitor.success(); monitor.complete('没有更新块的真实第二轮返回');
 assert.equal(monitor.getSnapshot().phase, 'error', 'an actual new request without an update block must still fail');
-assert.match(monitor.getSnapshot().detail, /没有返回可解析/);
+assert.match(monitor.getSnapshot().detail, /未得到可解析/);
 console.log('PASS story battle-summary late parse isolation and real next-request failure preservation.');
 
+
+// Regression: COMMAND_PARSED can echo the unchanged story after the second stage
+// fails. Never label that echo as provider output; keep transport evidence separate.
+activeChatId = 'ordinary-mvu-provenance';
+monitor.resetForChat(activeChatId);
+monitor.syncExtraAnalysis(false);
+monitor.syncExtraAnalysis(true);
+monitor.captureMvuRequest({ source: 'official', payload: {
+  api_key: 'SECRET_REQUEST_KEY', messages: [
+    {role:'system', content:'固定顺序：<UpdateVariable> _.set( 紧急变量更新任务 [当前 MVU 游戏事实]'},
+    {role:'user', content:'PRIVATE_STORY_REQUEST'},
+  ],
+} });
+monitor.captureHelperFinal('PRIVATE_OTHER_GENERATION', 'ordinary-response'); // binds the MVU temporary ID
+monitor.captureHelperFinal('WRONG_ID_OUTPUT', 'unrelated-response');
+monitor.captureHelperFinal('FINAL_RESPONSE <Analysis>HIDDEN_REASONING</Analysis> token=private-final-token', 'ordinary-response');
+monitor.complete('既有剧情正文\n<CHARACTER_INIT_PENDING>');
+monitor.success();
+for (const [id, callback] of [...timers]) if (!startupTimers.has(id)) { timers.delete(id); callback(); }
+assert.equal(monitor.getSnapshot().phase, 'error');
+assert.match(monitor.getSnapshot().detail, /解析事件可能仅含原楼层剧情/);
+const provenance = await monitor.getDiagnosticExportReport();
+assert.equal(provenance.originalResponse.availability, 'missing', 'helper and parser events are not raw provider responses');
+assert.equal(provenance.evidence.liveOutput.stage, 'mvu-command-parsed');
+assert.equal(provenance.mvuRequestAudit.hasUpdateVariable, true);
+assert.equal(provenance.mvuRequestAudit.hasMvuTask, true);
+assert.equal(provenance.mvuRequestAudit.hasOutputContract, true);
+assert.equal(provenance.mvuRequestAudit.hasCurrentMvuFacts, true);
+assert.equal(provenance.mvuRequestAudit.messageCount, 2);
+assert.equal(provenance.mvuHelperFinal.generationId, 'ordinary-response');
+assert.match(provenance.mvuHelperFinal.text, /FINAL_RESPONSE/);
+assert.doesNotMatch(JSON.stringify(provenance), /SECRET_REQUEST_KEY|PRIVATE_STORY_REQUEST|WRONG_ID_OUTPUT|PRIVATE_OTHER_GENERATION|HIDDEN_REASONING|private-final-token/);
+assert.doesNotMatch(stored.get('mwg-generation-diagnostics-v1'), /FINAL_RESPONSE|PRIVATE_STORY_REQUEST/);
+monitor.syncExtraAnalysis(false);
+monitor.syncExtraAnalysis(true);
+assert.equal((await monitor.getDiagnosticExportReport()).mvuHelperFinal, null, 'new operation clears prior final output');
+monitor.captureMvuRequest({payload:{messages:[{role:'user',content:'Only story, no variable protocol'}]}});
+monitor.captureHelperFinal('', 'empty-response');
+const emptyTransport = await monitor.getDiagnosticExportReport();
+assert.equal(emptyTransport.mvuHelperFinal.text, '', 'an observed empty final is distinguishable from no final event');
+assert.equal(emptyTransport.mvuRequestAudit.hasUpdateVariable, false);
+monitor.resetForChat('other-provenance-chat');
+monitor.captureHelperFinal('STALE_OUTPUT', 'empty-response');
+const otherExport = await monitor.getDiagnosticExportReport();
+assert.equal(otherExport.mvuHelperFinal, null);
+assert.equal(otherExport.mvuRequestAudit, null);
+assert.equal(monitor.getSnapshot().phase, 'idle');
+console.log('PASS ordinary MVU parser/transport provenance, content-free request audit, empty final, redaction and chat/operation isolation.');

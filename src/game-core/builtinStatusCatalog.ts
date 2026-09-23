@@ -58,6 +58,11 @@ export function expandBuiltinStatusDefinitions(values: readonly unknown[], conte
   return result;
 }
 
+/** Shared reference boundary for worldbooks, generation and finite repair. */
+export function builtinStatusReferenceContract(): string {
+  return '预设状态白名单：' + BUILTIN_STATUS_DEFINITIONS.map(value => value.id).join('/') + '。仅这些精确 ID 可直接引用，程序按实际引用自动展开完整定义及依赖并随存档保存；已登记同 ID 定义优先。各处“先登记/补齐定义”要求仅针对非预设 ID。其他状态必须先完整定义后引用，中文名称或任意 sts_ 前缀不构成内置机制。核心剧情状态仍应独立创作，不能用通用预设替换其身份与规则。';
+}
+
 export function builtinStatusAuthoringContract(): string {
-  return '内置通用状态可直接用 apply_status 引用以下 sts_ ID，程序只展开实际引用的完整定义并随存档保存，无需重复登记；已显式登记的同ID定义优先，不会替换剧情自定义状态。主要用于小兵和非关键内容。玩家核心流派、剧情角色和招牌能力应优先创作独立中文名称、ID与效果，例如黑暗仪式应保留其剧情身份，不得偷换成力量；也不要给所有怪物套同一组状态。自定义状态仍须登记完整定义。内置规则使用本项目时机：中毒在持有者行动前结算，负一衰减在持有者回合末；虚弱/易伤/脆弱层数延长期限、不叠乘倍率；力量、活力、虚弱、易伤只修饰攻击伤害，敏捷/脆弱修饰格挡获取；荆棘仅响应攻击伤害事件、反伤不触发自身连锁；活力在玩家下一张攻击牌结算后清除，敌人没有出牌事件，勿对敌人使用它模拟下一次行动。完整可执行目录：' + JSON.stringify(BUILTIN_STATUS_DEFINITIONS);
+  return builtinStatusReferenceContract() + '\n' + '内置通用状态可直接用 apply_status 引用以下 sts_ ID，程序只展开实际引用的完整定义并随存档保存，无需重复登记；已显式登记的同ID定义优先，不会替换剧情自定义状态。主要用于小兵和非关键内容。玩家核心流派、剧情角色和招牌能力应优先创作独立中文名称、ID与效果，例如黑暗仪式应保留其剧情身份，不得偷换成力量；也不要给所有怪物套同一组状态。自定义状态仍须登记完整定义。内置规则使用本项目时机：中毒在持有者行动前结算，负一衰减在持有者回合末；虚弱/易伤/脆弱层数延长期限、不叠乘倍率；力量、活力、虚弱、易伤只修饰攻击伤害，敏捷/脆弱修饰格挡获取；荆棘仅响应攻击伤害事件、反伤不触发自身连锁；活力在玩家下一张攻击牌结算后清除，敌人没有出牌事件，勿对敌人使用它模拟下一次行动。完整可执行目录：' + JSON.stringify(BUILTIN_STATUS_DEFINITIONS);
 }

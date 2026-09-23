@@ -3309,11 +3309,11 @@ function towerSingleFloorInitialContentPrompt(input: {
     '最后扫描全部 when 字符串：禁止 self.is_xxx/opponent.is_xxx、self.target.xxx、self.summon.xxx 等未公开成员。判断某个已登记状态必须逐字使用 self.status.状态ID.stacks > 0 或 opponent.status.状态ID.stacks > 0；判断任意召唤是否存在才使用 self.has_summon/opponent.has_summon。',
     '最后逐个检查三个 opening.choices 的 outcome：只允许 hp、max_hp、lust、max_lust、gold、card_removals、reward、deck_transforms；绝不能出现 energy、max_energy、block、status、resource、set_resource 或 effects。若馈赠主体是战斗内能量、格挡、状态或自定义资源收益，必须放进 reward 的完整卡牌、遗物或道具中执行，不能直接塞进 outcome。',
     OPENING_TRANSFORM_GUIDANCE,
-    '提交前在内部建立状态 ID 对照（不要输出对照表）：收集 player.cards/artifacts/items/player_abilities/player_lust_effect 中每个 apply_status、remove_status 和 self/opponent.status.ID 引用，再逐项确认其 ID 已存在于 player.statuses；收集每个 opening 奖励候选的同类引用，再确认它复用 player.statuses，或由该候选自己的非空 statuses 完整定义。任一差集非空都必须先补齐真实定义或删除整个无法唯一实现的可选机制，绝不能带着未注册状态提交。',
+    '提交前在内部建立状态 ID 对照（不要输出对照表）：收集 player.cards/artifacts/items/player_abilities/player_lust_effect 中每个 apply_status、remove_status 和 self/opponent.status.ID 引用，再逐项确认其 ID 属于预设白名单或已存在于 player.statuses；收集每个 opening 奖励候选的同类引用，再确认它属于预设白名单、复用 player.statuses，或由该候选自己的非空 statuses 完整定义。任一差集非空都必须先补齐真实定义或删除整个无法唯一实现的可选机制，绝不能带着未注册状态提交。',
     '根 trigger.on 只能使用完整契约列出的公开名字；resource_changed/damage_resolved/card_moved/status_applied 等底层事件名只属于 event/history.event，绝不能写进 on。当前没有资源变化触发器；若想按资源变化响应，改用现有可执行触发时机并同步说明，不得发明 event.metric。',
     '修复时保留已经合法且符合剧情的设计，只改程序指出的结构；优先用单个JSON对象表达修复数据，不输出UpdateVariable、battle包装或思考过程。',
-    '最终返回前只做一次状态闭包复核，尤其检查 player_lust_effect：它引用的每个状态 ID 都必须已在 player.statuses 完整定义。若不想定义，就把该项改成同一欲望主题下无需状态、但真实可执行的直接效果并同步 description；绝不能留下仅凭“易伤/中毒/强化”等名称自动生效的未注册状态。',
-    '系统没有任何按名称自动生效的内置状态；名字再常见也必须拥有对应稳定 ID 和完整 triggers 定义。player_lust_effect 是可选内容：能用直接伤害、治疗、欲望、能量、资源或牌区效果完整表达时优先使用直接效果；只有确实需要持续规则时才引用状态，并先完成上一条闭包复核。',
+    '最终返回前只做一次状态闭包复核，尤其检查 player_lust_effect：它引用的每个非预设状态 ID 都必须已在 player.statuses 完整定义。若不想定义，就把该项改成同一欲望主题下无需状态、但真实可执行的直接效果并同步 description；绝不能留下仅凭“易伤/中毒/强化”等名称自动生效的未注册状态。',
+    '状态不能按中文名称自动生效；白名单内置 ID 可直接引用并自动展开，其余状态必须拥有对应稳定 ID 和完整 triggers 定义。player_lust_effect 是可选内容：能用直接伤害、治疗、欲望、能量、资源或牌区效果完整表达时优先使用直接效果；只有确实需要持续规则时才引用状态，并先完成上一条闭包复核。',
   ].filter(Boolean).join('\n');
 }
 

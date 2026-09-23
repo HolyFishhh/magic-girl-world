@@ -672,7 +672,7 @@ assert.doesNotThrow(() => {
   variableUpdateEndedListener({ stat_data: { battle: { cards: [] } } });
   commandParsedListener({}, [], '只有剧情正文，没有变量更新块');
   assert.equal(context.MagicGirlWorldMvuMonitor.getSnapshot().phase, 'error');
-  assert.match(context.MagicGirlWorldMvuMonitor.getSnapshot().detail, /没有返回可解析的 <UpdateVariable>/);
+  assert.match(context.MagicGirlWorldMvuMonitor.getSnapshot().detail, /未得到可解析的 <UpdateVariable>/);
 });
 assert.doesNotThrow(() => {
   context.MagicGirlWorldMvuMonitor.begin({ generationId: 'extra-test' });

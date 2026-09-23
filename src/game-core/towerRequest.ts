@@ -1,3 +1,4 @@
+import { builtinStatusReferenceContract } from './builtinStatusCatalog';
 import { INTERCEPTION_SCHEMA } from './interception';
 import { STATUS_DEFENSE_SCHEMA } from './statusDefense';
 import { createOpeningDeckTransformsSchema, OPENING_TRANSFORM_GUIDANCE } from './towerOpeningTransforms';
@@ -870,7 +871,7 @@ export function formatCompactEffectRepairContract(error: unknown): string {
   }
   if (/apply_status|remove_status/i.test(detail)) {
     lines.push(
-      '若 apply_status/remove_status 的值是对象，必须拆平：状态 ID 直接作为操作值，stacks 与 to 移到同一个 effects 项的同级。例如 {apply_status:"status_id",stacks:2,to:"opponent"}；绝不能写 {apply_status:{id:"status_id"}}、{apply_status:{status_id:2}} 或 {apply_status:{apply_status:"status_id"}}。对象原有 id、stacks、to 必须原样搬到这些规范位置，不能改名或丢失。引用的新状态必须补入 statuses 完整定义。',
+      '若 apply_status/remove_status 的值是对象，必须拆平：状态 ID 直接作为操作值，stacks 与 to 移到同一个 effects 项的同级。例如 {apply_status:"status_id",stacks:2,to:"opponent"}；绝不能写 {apply_status:{id:"status_id"}}、{apply_status:{status_id:2}} 或 {apply_status:{apply_status:"status_id"}}。对象原有 id、stacks、to 必须原样搬到这些规范位置，不能改名或丢失。引用的非预设新状态必须补入 statuses 完整定义。',
     );
   }
   if (/(?:remove_status[^\n;；]*stacks|stacks[^\n;；]*remove_status|triggers\.tick[^\n;；]*stacks)/i.test(detail)) {
@@ -933,7 +934,7 @@ export function formatCompactEffectRepairContract(error: unknown): string {
     lines.push(
       isTowerRewardStatusError
         ? '状态 apply/stack/tick/remove 的值直接是一次性浅层效果；hold 只放 modify/card_rule 持续规则，不要再包一层 effects。奖励候选引用的一个或多个新状态由该候选自身同级 statuses:[完整定义...] 闭合，不使用节点根 statuses、reward.statuses 或 payload.battle.statuses 代替；定义之间可以互相引用，但都必须从候选的真实效果沿依赖链可达。'
-        : '状态 apply/stack/tick/remove 的值直接是一次性浅层效果；hold 只放 modify/card_rule 持续规则，不要再包一层 effects。每个 apply_status、remove_status、active status 与 status 公式引用的 ID 都必须在该内容所属的状态定义容器中恰好登记一次；修复时补齐原机制需要的完整状态定义，不能只造一个没有维护逻辑的空标记状态，也不能仅删除引用来掩盖错误。',
+        : '状态 apply/stack/tick/remove 的值直接是一次性浅层效果；hold 只放 modify/card_rule 持续规则，不要再包一层 effects。每个 apply_status、remove_status、active status 与 status 公式引用的非预设 ID 都必须在该内容所属的状态定义容器中恰好登记一次；修复时补齐原机制需要的完整状态定义，不能只造一个没有维护逻辑的空标记状态，也不能仅删除引用来掩盖错误。',
     );
   }
   if (/UNKNOWN_STATUS|unregistered status|引用了未注册状态|状态未注册/i.test(detail)) {
@@ -1018,10 +1019,10 @@ function towerBattleDslContract(): string {
     '持续被动使用 trigger:{on:"passive",effects:{modify:"damage|damage_taken|lust|lust_taken|heal|block|summon_capacity|draw_per_turn",add|subtract|multiply|divide|set:数值}}；modify 不得是对象。',
     'modify 与出牌规则都是持续规则：只能放在独立 ability/遗物/Power 卡的 trigger.on="passive"，或状态 triggers.hold 中；不能放进敌人 action、普通卡牌 effects、欲望效果、turn_start 等非 passive 触发。Power 的 passive 会在打出后登记为本场能力。反过来，passive 与状态 triggers.hold 只能放 modify/出牌规则，damage、block、draw、apply_status 等即时效果应使用真实事件 trigger，或状态的 tick、apply、stack、remove、threshold_execute。',
     '卡牌数值修改写成独立项，例如 {modify_card:"damage",multiply:1.5,from:"hand",pick:"random"}；不得嵌套 modify_card，也不得改 hits。',
-    '状态先登记在本节点自己的 battle.statuses：{id,name,emoji,type,triggers}；系统没有任何按名称自动生效的内置状态，即使名称很常见，只要当前完整游戏事实中没有同 ID 定义，本节点 action、ability、lust_effect、status_effects、公式或奖励引用它之前就必须在本节点 battle.statuses 写出完整定义。批量结果中的每个节点各自闭合，绝不能借用同批另一个节点的定义。triggers 的生命周期键 apply/stack/tick/remove/hold/threshold_execute 与事件键 battle_start/ability_gain/turn_start/turn_end/card_played/attack_played/skill_played/power_played/on_discard/on_exhaust/on_draw/on_shuffle/take_damage/take_heal/deal_damage/deal_heal/lust_increase/lust_decrease/deal_lust_increase/deal_lust_decrease/gain_buff/gain_debuff/lose_buff/lose_debuff/enemy_gain_buff/enemy_gain_debuff/enemy_lose_buff/enemy_lose_debuff/gain_block/lose_block/defeated 都直接对应浅层效果，不再包 effects 或 {on,effects}。hold 只放持续 modify/card_rule；所有事件键只放一次性效果。敌人 status_effects 只引用已登记状态 id 与当前 stacks。',
-    '敌人欲望效果如果存在，写 lust_effect:{name,description?,effects}，不写 trigger；无欲望体系时直接省略，绝不写空壳。任何状态 id 都必须先在 battle.statuses 注册。初始 enemies 的每项可选 escape_when:"条件公式"：满足后先显示准备逃跑，至少预警一回合；头顶倒计时为0时，在本回合结束时播放逃跑动画后离场；只用公开 self/opponent 数值、状态、summon_count、ally_count 等条件，不能写叙事或未公开变量。ally_count 只数其他存活非召唤战斗实体，不含条件主体；召唤数量另用 summon_count。初始 enemies 的每项还可选 defeat_reward:{cards?:完整卡牌数组,artifacts?:完整遗物数组,items?:完整道具数组,gold?:非负整数}，仅该原始敌人实际被击败时发放；逃跑、增援、分裂或复制敌人都不产生这份掉落。动态增援固定写成独占项 {spawn_enemy:{完整敌人字段...,count?:数量,capacity?:场上容量}}，count/capacity 绝不能放到 spawn_enemy 外层；增援必须重复提供完整敌人基础结构与非空 actions 数组，只有有欲望体系才附带 lust_effect:{name,effects}，不得写 defeat_reward。敌人治疗或强化指定同阵营实体时，实体 ID 写入 targets:{mode:"by_id",id:"敌人ID",team:"self"}，to 写 "self" 或省略，绝不能把实体 ID 写进 to；玩家选择敌方实体时用 team:"opponent" 且 to:"opponent"。targets.team 只能是 self 或 opponent，必须和 to 一致。',
+    '自定义状态先登记在本节点自己的 battle.statuses：{id,name,emoji,type,triggers}；状态不能按中文名称自动生效；白名单内置 ID 可直接引用，其余 ID 只要当前完整游戏事实中没有同 ID 定义，本节点 action、ability、lust_effect、status_effects、公式或奖励引用它之前就必须在本节点 battle.statuses 写出完整定义。批量结果中的每个节点各自闭合，绝不能借用同批另一个节点的定义。triggers 的生命周期键 apply/stack/tick/remove/hold/threshold_execute 与事件键 battle_start/ability_gain/turn_start/turn_end/card_played/attack_played/skill_played/power_played/on_discard/on_exhaust/on_draw/on_shuffle/take_damage/take_heal/deal_damage/deal_heal/lust_increase/lust_decrease/deal_lust_increase/deal_lust_decrease/gain_buff/gain_debuff/lose_buff/lose_debuff/enemy_gain_buff/enemy_gain_debuff/enemy_lose_buff/enemy_lose_debuff/gain_block/lose_block/defeated 都直接对应浅层效果，不再包 effects 或 {on,effects}。hold 只放持续 modify/card_rule；所有事件键只放一次性效果。敌人 status_effects 只引用已登记或白名单预设状态 id 与当前 stacks。',
+    '敌人欲望效果如果存在，写 lust_effect:{name,description?,effects}，不写 trigger；无欲望体系时直接省略，绝不写空壳。任何非预设状态 id 都必须先在 battle.statuses 注册。初始 enemies 的每项可选 escape_when:"条件公式"：满足后先显示准备逃跑，至少预警一回合；头顶倒计时为0时，在本回合结束时播放逃跑动画后离场；只用公开 self/opponent 数值、状态、summon_count、ally_count 等条件，不能写叙事或未公开变量。ally_count 只数其他存活非召唤战斗实体，不含条件主体；召唤数量另用 summon_count。初始 enemies 的每项还可选 defeat_reward:{cards?:完整卡牌数组,artifacts?:完整遗物数组,items?:完整道具数组,gold?:非负整数}，仅该原始敌人实际被击败时发放；逃跑、增援、分裂或复制敌人都不产生这份掉落。动态增援固定写成独占项 {spawn_enemy:{完整敌人字段...,count?:数量,capacity?:场上容量}}，count/capacity 绝不能放到 spawn_enemy 外层；增援必须重复提供完整敌人基础结构与非空 actions 数组，只有有欲望体系才附带 lust_effect:{name,effects}，不得写 defeat_reward。敌人治疗或强化指定同阵营实体时，实体 ID 写入 targets:{mode:"by_id",id:"敌人ID",team:"self"}，to 写 "self" 或省略，绝不能把实体 ID 写进 to；玩家选择敌方实体时用 team:"opponent" 且 to:"opponent"。targets.team 只能是 self 或 opponent，必须和 to 一致。',
     '敌人 status_effects 只登记当前确实拥有的活动状态，每项 stacks 必须是正整数；尚未施加或 0 层状态只在 battle.statuses 保留定义，不得用 status_effects 中的 stacks:0 占位。',
-    '普通 apply_status 只能作用于玩家或战斗敌人，固定写成 {apply_status:"状态ID",stacks?,to?}；不能在其值内嵌 id/stacks/targets，也不能用 targets 选召唤。给召唤施加状态必须改用独占项 {apply_summon_status:{selector,id,stacks?}}，状态定义仍先登记在 payload.battle.statuses。',
+    '普通 apply_status 只能作用于玩家或战斗敌人，固定写成 {apply_status:"状态ID",stacks?,to?}；不能在其值内嵌 id/stacks/targets，也不能用 targets 选召唤。给召唤施加状态必须改用独占项 {apply_summon_status:{selector,id,stacks?}}，非预设状态定义仍先登记在 payload.battle.statuses。',
   ].join('\n');
 }
 
@@ -2403,7 +2404,7 @@ function createTowerNodePayloadJsonSchema(kind: RunNodeKind, scope?: TowerNodeSc
               type: 'array',
               items: createTowerStatusDefinitionJsonSchema(),
               description:
-                '本节点独立状态定义表。没有内置状态；本节点敌人、能力、行动、欲望效果、活动状态、公式与奖励引用的每个非既有状态 ID 都必须在这里完整登记，不能借用批量中的兄弟节点。',
+                builtinStatusReferenceContract() + '本节点独立状态定义表。本节点敌人、能力、行动、欲望效果、活动状态、公式与奖励引用的每个非既有且非预设状态 ID 都必须在这里完整登记，不能借用批量中的兄弟节点。',
             },
             player_abilities: { type: 'array', items: createTowerTriggeredDefinitionJsonSchema() },
             player_status_effects: { type: 'array', items: createTowerActiveStatusJsonSchema() },

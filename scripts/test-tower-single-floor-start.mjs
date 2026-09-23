@@ -1636,7 +1636,7 @@ try {
   assert.match(structuredConfig.user_input, /禁止 self\.is_xxx\/opponent\.is_xxx/);
   assert.match(structuredConfig.user_input, /都必须在同一内容的真实 effects 中执行 spawn_summon/);
   assert.match(structuredConfig.user_input, /尤其检查 player_lust_effect/);
-  assert.match(structuredConfig.user_input, /系统没有任何按名称自动生效的内置状态/);
+  assert.match(structuredConfig.user_input, /状态不能按中文名称自动生效；白名单内置 ID 可直接引用/);
   assert.ok(structuredConfig.user_input.includes(formatCompactEffectAuthoringContract()), 'legacy request retains the entire current public contract, not only its old heading');
   assert.match(structuredConfig.user_input, /完整玩法、生成方法与 DSL 契约，不是关键词提示/);
   assert.match(structuredConfig.user_input, /不能像奖励候选一样携带 status\/statuses 外壳/);

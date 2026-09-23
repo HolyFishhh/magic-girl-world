@@ -56,7 +56,7 @@ assert.match(
 assert.match(prompt, /targets\.team 只能是 self 或 opponent，必须和 to 一致/);
 assert.match(prompt, /优先使用该 action 的稳定英文 id/);
 assert.match(prompt, /状态 triggers\.hold 只能放 modify\/出牌规则/);
-assert.match(prompt, /系统没有任何按名称自动生效的内置状态/);
+assert.match(prompt, /状态不能按中文名称自动生效；白名单内置 ID 可直接引用/);
 assert.match(prompt, /批量结果中的每个节点各自闭合/);
 assert.match(prompt, /监听事件直接用triggers的对应事件键，不能嵌入hold/);
 assert.match(prompt, /apply\/stack\/tick\/remove及事件键只承载一次性effects/);

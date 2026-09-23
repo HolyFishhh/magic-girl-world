@@ -352,7 +352,7 @@ assert.match(
   /`count\/last_damage\/last_hp_loss\/last_heal\/last_resource_spent\/last_turn\/last_sequence`/,
 );
 assert.match(battleGuide, /`run` 作用域只在宿主明确提供跨战斗历史时生效/);
-assert.match(battleGuide, /程序没有内置状态/);
+assert.match(battleGuide, /白名单内的预设状态自动展开，其他状态须先完整定义后引用/);
 assert.match(battleGuide, /首次引用前用 `_.assign\('battle\.statuses'/);
 assert.match(battleGuide, /容器固定为数组/);
 assert.match(
@@ -399,7 +399,7 @@ assert.match(firstMessageGuide, /`description` 可省略/);
 assert.match(firstMessageGuide, /必须与真实时机、条件、目标和结果一致/);
 assert.match(firstMessageGuide, /界面由结构生成权威规则/);
 assert.match(firstMessageGuide, /实际结算仍只由 `effects` 决定/);
-assert.match(firstMessageGuide, /程序没有内置状态/);
+assert.match(firstMessageGuide, /白名单内的预设状态自动展开，其他状态须先完整定义后引用/);
 assert.match(firstMessageGuide, /每个引用 ID 都必须在同一更新中先完整注册且只注册一次/);
 assert.match(firstMessageGuide, /效果、触发、临时牌模板和费用只按通用契约输出/);
 assert.match(firstMessageGuide, /本条不另设效果语法/);
@@ -546,7 +546,7 @@ for (const [entryName, guide] of [
 assert.match(sceneGuide, /没有能力或活动状态时分别写空的 `abilities\/status_effects` 数组/);
 assert.match(sceneGuide, /普通敌人不强制为空能力或空状态/);
 assert.match(sceneGuide, /一个或多个独立特色被动、临时牌、牌库干扰、增援或形态变化/);
-assert.match(sceneGuide, /程序没有内置状态/);
+assert.match(sceneGuide, /白名单内的预设状态自动展开，其他状态须先完整定义后引用/);
 assert.match(sceneGuide, /机制必须有可读预告或合理应对窗口/);
 assert.match(sceneGuide, /禁止 `pattern\/rotation\/cycle\/attack`/);
 assert.match(sceneGuide, /只允许更新 `status\.time\/status\.location`/);
@@ -574,7 +574,7 @@ assert.match(sceneGuide, /敌人治疗、格挡、强化或清除同阵营敌人
 assert.match(sceneGuide, /玩家效果默认作用当前活动目标/);
 assert.match(sceneGuide, /名称各自唯一/);
 assert.match(sceneGuide, /主模型的敌人描述为唯一叙事依据/);
-assert.match(sceneGuide, /程序没有内置状态/);
+assert.match(sceneGuide, /白名单内的预设状态自动展开，其他状态须先完整定义后引用/);
 assert.match(sceneGuide, /不能因 ID 名称常见而省略定义/);
 assert.match(sceneGuide, /浅层 `effects`/);
 assert.match(sceneGuide, /不要因为出现欲望、诱惑或精神影响主题就把敌人固定成纯欲望流/);
@@ -721,7 +721,7 @@ assert.match(
 assert.match(repairGuide, /只有卡组为空或卡组结构本身无法执行时才完整替换 `battle\.cards`/);
 assert.match(repairGuide, /原楼层修复/);
 assert.match(repairGuide, /所有卡牌只能写入 `battle\.cards`/);
-assert.match(repairGuide, /程序没有内置状态/);
+assert.match(repairGuide, /白名单内的预设状态自动展开，其他状态须先完整定义后引用/);
 assert.match(repairGuide, /已有合法定义直接复用/);
 assert.match(repairGuide, /未被问题路径指出的合法卡牌、状态、遗物和道具必须保留/);
 assert.match(repairGuide, /逐项复核 `问题=` 中的每一个路径/);
@@ -766,7 +766,7 @@ assert.match(battleRepairGuide, /不得清空整份状态定义表/);
 assert.match(battleRepairGuide, /保持 `battle\.core\/cards\/artifacts\/items\/player_lust_effect\/level\/exp`/);
 assert.match(battleRepairGuide, /`status\/factions\/npcs\/run\/run_result\/run_upgrade\/reward` 不变/);
 assert.match(battleRepairGuide, /只输出一个 `<UpdateVariable>`/);
-assert.match(battleRepairGuide, /程序没有内置状态/);
+assert.match(battleRepairGuide, /白名单内的预设状态自动展开，其他状态须先完整定义后引用/);
 assert.match(battleRepairGuide, /不得重复注册同一 ID/);
 assert.match(battleRepairGuide, /不输出 `<BATTLE_START>`/);
 assert.match(battleRepairGuide, /逐项复核 `问题=` 中的每一个路径/);

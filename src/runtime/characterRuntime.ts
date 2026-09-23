@@ -639,6 +639,11 @@ function summarizeMvuUpdate(result: unknown): string[] {
     let applyTimer: number | undefined;
     let streamRenderTimer: number | undefined;
     let extraAnalysisActive = false;
+    // Ephemeral evidence only: never persist prompts or final text in lightweight diagnostics.
+    let parsedFloorObserved = false;
+    let helperFinalOutput: { generationId: string; text: string; capturedAt: number } | null = null;
+    let requestAudit: Record<string, unknown> | null = null;
+    const missingUpdateDetail = '本轮 MVU 未得到可解析的 <UpdateVariable> 变量更新块；解析事件可能仅含原楼层剧情，请查看请求摘要和助手完成输出，不能据此断言模型原始返回内容';
     let manualRepairActive = false;
     let manualRepairSession = 0;
     let manualRepairGenerationId: string | null = null;
@@ -933,7 +938,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
       if (!text) return null;
       return {
         source: 'mvu-monitor-live-output',
-        stage: isPartial ? 'streaming-partial' : 'monitor-raw-output',
+        stage: isPartial ? 'streaming-partial' : parsedFloorObserved ? 'mvu-command-parsed' : 'monitor-raw-output',
         completeness: isPartial ? 'partial' : 'latest-monitor-value',
         text,
         characters: text.length,
@@ -1031,6 +1036,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
       const liveOrRaw = monitorState.rawOutput || monitorState.pendingOutput;
       setAllText('[data-mwg-mvu-timeline]', timeline || '尚未开始新的 MVU 请求');
       setAllText('[data-mwg-mvu-summary]', monitorState.output || (monitorState.phase === 'generating' ? '等待模型返回…' : '本次尚无变量变化摘要'));
+      setAllText('[data-mwg-mvu-raw-label]', parsedFloorObserved ? 'MVU 楼层解析内容（非模型原始响应）' : '当前生成输出');
       setAllText('[data-mwg-mvu-raw]', liveOrRaw || '模型尚未返回完整内容');
       setAllText(
         '[data-mwg-mvu-request]',
@@ -1590,7 +1596,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
     <button class="mwg-card-repair-button" type="button" data-action="cancel-tower-generation" hidden>停止本次后台生成</button>
     <small data-mwg-diagnostic-feedback aria-live="polite">复制仅含阶段与校验信息；导出包含本次保留原文及候选，不附请求头或独立思考字段。含生成内容，分享前请检查隐私。</small>
   </div>
-  <div class="mwg-monitor-body"><div class="mwg-monitor-loading" data-mwg-monitor-loading><div><span class="mwg-monitor-spinner" aria-hidden="true"></span><strong data-mwg-monitor-loading-title>正在生成变量</strong><small data-mwg-monitor-loading-detail></small><small class="mwg-initial-wait-advisory" data-mwg-initial-wait-advisory></small><button class="mwg-card-repair-button mwg-initial-stop" type="button" data-action="cancel-tower-initial-start">停止本次开局生成</button><small class="mwg-initial-stop-feedback" data-mwg-initial-stop-feedback aria-live="polite"></small></div></div><div class="mwg-monitor-complete" data-mwg-monitor-complete><div><strong>变量更新已完成</strong><small>可以在下方查看实际请求、变化摘要与模型完整返回。</small></div></div><div class="mwg-monitor-process mwg-process-grid"><details class="mwg-process-block" open><summary>阶段时间线</summary><pre data-mwg-mvu-timeline></pre></details><details class="mwg-process-block" open><summary>变量变化摘要</summary><pre data-mwg-mvu-summary></pre></details><details class="mwg-process-block"><summary>实际模型请求 <small data-mwg-mvu-request-meta></small></summary><pre data-mwg-mvu-request></pre></details><details class="mwg-process-block"><summary>模型返回原文</summary><pre data-mwg-mvu-raw></pre></details><details class="mwg-process-block"><summary>服务返回的分析内容</summary><pre data-mwg-mvu-reasoning></pre></details></div></div>
+  <div class="mwg-monitor-body"><div class="mwg-monitor-loading" data-mwg-monitor-loading><div><span class="mwg-monitor-spinner" aria-hidden="true"></span><strong data-mwg-monitor-loading-title>正在生成变量</strong><small data-mwg-monitor-loading-detail></small><small class="mwg-initial-wait-advisory" data-mwg-initial-wait-advisory></small><button class="mwg-card-repair-button mwg-initial-stop" type="button" data-action="cancel-tower-initial-start">停止本次开局生成</button><small class="mwg-initial-stop-feedback" data-mwg-initial-stop-feedback aria-live="polite"></small></div></div><div class="mwg-monitor-complete" data-mwg-monitor-complete><div><strong>变量更新已完成</strong><small>可以在下方查看捕获请求、变化摘要与标明来源的输出。</small></div></div><div class="mwg-monitor-process mwg-process-grid"><details class="mwg-process-block" open><summary>阶段时间线</summary><pre data-mwg-mvu-timeline></pre></details><details class="mwg-process-block" open><summary>变量变化摘要</summary><pre data-mwg-mvu-summary></pre></details><details class="mwg-process-block"><summary>实际模型请求 <small data-mwg-mvu-request-meta></small></summary><pre data-mwg-mvu-request></pre></details><details class="mwg-process-block"><summary data-mwg-mvu-raw-label>当前生成输出</summary><pre data-mwg-mvu-raw></pre></details><details class="mwg-process-block"><summary>服务返回的分析内容</summary><pre data-mwg-mvu-reasoning></pre></details></div></div>
 </section>`;
       doc.body.appendChild(root);
       const diagnosticReport = () => api.getDiagnosticReport();
@@ -1969,6 +1975,9 @@ function summarizeMvuUpdate(result: unknown): string[] {
           startedAt: 0, finishedAt: 0, candidateHasUpdateBlock: false,
           variableWriteObserved: false, open: false, background: false, cardRepairFormVisible: false,
         });
+        parsedFloorObserved = false;
+        helperFinalOutput = null;
+        requestAudit = null;
         manualRepairActive = false;
         manualRepairSession += 1;
         manualRepairGenerationId = null;
@@ -1984,6 +1993,9 @@ function summarizeMvuUpdate(result: unknown): string[] {
         const preserveCapturedRequest = monitorState.phase === 'generating'
           && monitorState.requestCapturedAt > 0
           && Date.now() - monitorState.requestCapturedAt < 5_000;
+        parsedFloorObserved = false;
+        helperFinalOutput = null;
+        if (!preserveCapturedRequest) requestAudit = null;
         monitorState.phase = 'generating';
         monitorState.background = meta.structured === true;
         monitorState.generationId = String(meta.generationId || '');
@@ -2043,6 +2055,26 @@ function summarizeMvuUpdate(result: unknown): string[] {
         monitorState.requestContent = requestContent;
         monitorState.requestSource = String(input.source || 'MVU 二次请求');
         monitorState.requestCapturedAt = Date.now();
+        // A content-free audit can reveal routing/format gaps without exporting
+        // the captured request, credentials, hidden reasoning or story text.
+        const payload = input.payload && typeof input.payload === 'object' ? input.payload as Record<string, any> : {};
+        const messages = [payload.messages, payload.prompt, payload.chat].find(Array.isArray) || [];
+        const textOf = (value: unknown): string => typeof value === 'string' ? value
+          : Array.isArray(value) ? value.map(part => typeof part === 'string' ? part : typeof part?.text === 'string' ? part.text : '').join('\n') : '';
+        const texts = messages.length ? messages.map((message: any) => textOf(message?.content ?? message))
+          : [textOf(typeof input.payload === 'string' ? input.payload : payload.prompt)];
+        const joined = texts.join('\n');
+        requestAudit = {
+          source: monitorState.requestSource, capturedAt: monitorState.requestCapturedAt,
+          purpose: narrative ? 'preset-narrative' : 'observed-mvu-request',
+          messageCount: messages.length, characters: joined.length,
+          roles: messages.map((message: any) => ['system', 'user', 'assistant', 'tool'].includes(message?.role) ? message.role : 'unknown'),
+          hasUpdateVariable: /<UpdateVariable>/i.test(joined),
+          hasMvuTask: /紧急变量更新任务|必须立即停止角色扮演|除了<UpdateVariable>块外不输出任何内容/.test(joined),
+          hasOutputContract: joined.includes('固定顺序：') && joined.includes('_.set('),
+          hasCurrentMvuFacts: joined.includes('[当前 MVU 游戏事实]'),
+          note: '仅为请求捕获事件的固定标记检测摘要，不含请求正文；未命中不等于没有等义指令，也不证明提供方实际收到了这些指令。',
+        };
         // Node narrative capture is passive inspection, not an MVU operation:
         // it has no variable-update terminal event. Only an explicit structured
         // begin (e.g. opening) owns that lifecycle; preserve it when active.
@@ -2103,6 +2135,17 @@ function summarizeMvuUpdate(result: unknown): string[] {
         monitorState.pendingOutput = typeof text === 'string' ? text : JSON.stringify(text, null, 2);
         queueStreamRender();
       },
+      captureHelperFinal(text: unknown, generationId?: string) {
+        // Only the active ordinary MVU request owns this observation. Structured
+        // requests keep their own durable evidence; unrelated/late IDs are ignored.
+        if (monitorState.background || !extraAnalysisActive || !monitorState.requestCapturedAt
+          || !['generating', 'applying'].includes(monitorState.phase) || !generationId || typeof text !== 'string') return;
+        if (monitorState.generationId.startsWith('mvu-extra-')) monitorState.generationId = generationId;
+        if (generationId !== monitorState.generationId
+          && !generationId.startsWith(`${monitorState.generationId}-attempt-`)) return;
+        helperFinalOutput = { generationId, text, capturedAt: Date.now() };
+        pushTimeline('收到助手生成完成输出', `${text.length} 字符；此快照独立于 MVU 楼层解析`);
+      },
       reasoning(text: unknown) {
         if (monitorState.phase === 'idle' || monitorState.phase === 'success' || monitorState.phase === 'error') return;
         monitorState.reasoning = typeof text === 'string' ? text : '';
@@ -2123,21 +2166,21 @@ function summarizeMvuUpdate(result: unknown): string[] {
         if (monitorState.phase === 'idle') return;
         const updateOutput = extractUpdateOutput(result);
         const candidateHasUpdateBlock = /<UpdateVariable>[\s\S]*?<\/UpdateVariable>/i.test(updateOutput);
-        // COMMAND_PARSED receives the whole assistant floor in current MVU
-        // builds.  The monitor is for the second-stage response, so never
-        // repeat the first-stage story in the "raw model output" panel.
+        // COMMAND_PARSED receives the whole assistant floor, including the
+        // unchanged story after a failed extra request. It is not provider output.
+        parsedFloorObserved = true;
         monitorState.rawOutput = updateOutput;
         monitorState.candidateHasUpdateBlock = candidateHasUpdateBlock;
         monitorState.output = summarizeMvuUpdate(updateOutput).join('\n');
         monitorState.pendingOutput = '';
         if (!monitorState.reasoning) monitorState.reasoning = extractReturnedReasoning(result);
-        pushTimeline('模型返回完成', `${monitorState.rawOutput.length} 字符`);
+        pushTimeline('MVU 楼层解析完成', `${monitorState.rawOutput.length} 字符；${candidateHasUpdateBlock ? '含更新块' : '未含更新块，不代表第二轮模型原文'}`);
         // COMMAND_PARSED may arrive after VARIABLE_UPDATE_ENDED in some MVU builds.
         // A variable event alone is not success: program writes and rollback
         // events also use the same hook. Require a complete model update block.
         if (monitorState.variableWriteObserved) {
           if (candidateHasUpdateBlock) api.success();
-          else api.fail(new Error('第二轮模型没有返回可解析的 <UpdateVariable> 变量更新块'));
+          else api.fail(new Error(missingUpdateDetail));
           return;
         }
         if (monitorState.phase === 'success' || monitorState.phase === 'error') {
@@ -2203,7 +2246,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
           clearApplyTimer();
           applyTimer = host.setTimeout?.(() => {
             if (monitorState.phase !== 'applying' || monitorState.candidateHasUpdateBlock) return;
-            api.fail(new Error('第二轮模型没有返回可解析的 <UpdateVariable> 变量更新块'));
+            api.fail(new Error(missingUpdateDetail));
           }, 1200) as number | undefined;
           render();
           return;
@@ -2297,7 +2340,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
           spec: 'mwg.generation-diagnostic-export/v2',
           exportedAt: Date.now(),
           localOnly: true,
-          note: '导出仅保存在本机。轻量诊断不含请求、正文、思考或完整模型响应；如 evidence 可用，仅含同一聊天、同一生成轮次的既有最终输出快照；没有快照时才会附上标明来源与完成度的当前监视器输出。',
+          note: '导出仅保存在本机。轻量诊断不含请求正文、剧情、思考或完整模型响应；evidence 优先附同聊天同轮次的保留记录，否则附标明来源的监视器回退。普通 MVU 另附无正文的请求检测摘要与当前页面观察到的助手完成输出；后者和楼层解析内容均不等于提供方原始网络响应。生成内容可能含隐私，分享前请检查。',
           diagnostic: diagnostic || {
             availability: 'missing',
             reason: matched
@@ -2305,6 +2348,17 @@ function summarizeMvuUpdate(result: unknown): string[] {
               : '当前聊天没有轻量阶段记录。',
           },
           originalResponse,
+          mvuRequestAudit: monitorState.generationId === generationId && requestAudit
+            ? { generationId, ...requestAudit } : null,
+          mvuHelperFinal: monitorState.generationId === generationId && helperFinalOutput
+            ? (() => {
+                const withoutReasoning = helperFinalOutput.text.replace(/<(?:Analysis|Reasoning|Thinking)>[\s\S]*?<\/(?:Analysis|Reasoning|Thinking)>/gi, '').trim();
+                const text = redactDiagnosticText(withoutReasoning);
+                return { source: 'tavern-helper-generation-ended', generationId: helperFinalOutput.generationId,
+                  capturedAt: helperFinalOutput.capturedAt, text, characters: text.length, truncated: false,
+                  reasoningRemoved: withoutReasoning !== helperFinalOutput.text.trim(), secretsRedacted: text !== withoutReasoning,
+                  note: '助手完成事件快照，按活动 MVU 轮次观察；临时轮次 ID 会绑定首个流式或完成事件，非网络级请求关联。可能已经过接口适配，不是提供方原始响应或 MVU 楼层正文。仅当前页面保留。' };
+              })() : null,
           evidence,
           manualRepairEvidence: manualGenerationId
             ? manualMatched
@@ -2428,6 +2482,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
     syncThinkingSetting();
     ensureDom();
     listen('js_stream_token_received_fully', (text: string, generationId: string) => api.stream(text, generationId));
+    listen('js_generation_ended', (text: string, generationId: string) => api.captureHelperFinal(text, generationId));
     listen('stream_reasoning_done', (reasoning: string) => api.reasoning(reasoning));
     const syncExtraAnalysis = (): void => {
       try {
