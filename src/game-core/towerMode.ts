@@ -42,7 +42,7 @@ export function readGameMode(statValue: unknown): GameMode {
   const lock = readGameModeLock(stat);
   if (lock) return lock.mode;
   if (stat.game_mode === 'expedition' || asRecord(stat.game_mode_lock)?.mode === 'expedition') {
-    throw new Error('此旧版模式存档不受支持，请使用1.0.3角色卡新开局；原存档未修改。');
+    throw new Error('此旧版模式存档不受支持，请使用1.0.4角色卡新开局；原存档未修改。');
   }
   return normalizeGameMode(stat.game_mode) ?? 'story';
 }
