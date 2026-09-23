@@ -26,6 +26,35 @@ function both(label, effects, expected, card = {}, options = {}) {
 }
 
 both('packet', { damage: 3, hits: 2, bypass_block: true, lifesteal: 1 }, ['direct-damage', 'multi-hit', 'piercing', 'lifesteal']);
+
+for (const [mode, id] of [['copy', 'status-copy'], ['transfer', 'status-transfer']]) {
+  const effect = { status_action: { mode, from: 'opponent', to: 'self', pick: 'first', filter: { type: 'buff' }, stacks: 1 } };
+  both(`status_${mode}`, effect, [id]);
+  const other = mode === 'copy' ? 'status-transfer' : 'status-copy';
+  assert.equal(read({ cards: [{ id: mode, type: 'Skill', effects: effect }] }).get(other)?.detected, false, `${mode} must not impersonate ${other}`);
+  assert.equal(read({ cards: [{ id: mode, type: 'Skill', effects: effect }] }).get('status-cleanse')?.detected, false, `${mode} must not impersonate cleansing`);
+}
+for (const [payment, id, other] of [
+  [{ additional: { hp: 2 } }, 'additional-payment', 'alternative-payment'],
+  [{ alternatives: [{ id: 'blood', name: '血誓', cost: 0, hp: 2 }] }, 'alternative-payment', 'additional-payment'],
+]) {
+  const card = { id, name: id, type: 'Skill', cost: 1, payment, effects: { block: 8 } };
+  const result = read({ cards: [card] });
+  assert.equal(result.get(id)?.detected, true, `${id} must recognize executable payment structure`);
+  assert.equal(result.get(other)?.detected, false, `${id} must not imply ${other}`);
+}
+for (const [window, id, other] of [
+  ['before_damage', 'damage-interception', 'card-play-interception'],
+  ['before_card_play', 'card-play-interception', 'damage-interception'],
+]) {
+  const status = { id, type: 'buff', intercepts: [{ id: 'rule', window, cancel: true }] };
+  const result = read({ activeStatuses: [status] });
+  assert.equal(result.get(id)?.detected, true, `${id} must recognize a held interception rule`);
+  assert.equal(result.get(other)?.detected, false, `${window} must not imply ${other}`);
+  assert.equal(read({ statuses: [status] }).get(id)?.detected, false, 'an unused status definition is not evidence of a build');
+}
+assert.equal(read({ cards: [{ id: 'named_only', name: '状态复制、血誓和伤害拦截', type: 'Skill', effects: { block: 8 } }] }).get('status-copy')?.detected, false, 'a flavor-only name is never structural evidence');
+
 for (const compiledForm of [false, true]) {
   const effects = { damage: 6 };
   const card = { id: `starter_${compiledForm}`, type: 'Attack', ...(compiledForm ? { effectProgram: compiled(effects) } : { effects }) };

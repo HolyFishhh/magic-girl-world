@@ -48,6 +48,8 @@ export function matchTowerFoundation(id: string, entry: FoundationEvidence): boo
     case 'block-value': return reads(/\b(?:self|opponent)\.block\b/);
     case 'status-value': return reads(/\b(?:self|opponent)\.status\.[\w]+\.stacks\b/);
     case 'resource-value': return reads(/\b(?:x_resource|self\.resource|opponent\.resource)\.[\w]+/);
+    case 'status-cleanse': return operation('remove_status') || any(v => op(v, 'status_action') && (v.spec?.mode ?? v.mode ?? v.status_action?.mode) === 'remove');
+    case 'status-copy': case 'status-transfer': return any(v => op(v, 'status_action') && (v.spec?.mode ?? v.mode ?? v.status_action?.mode) === (id === 'status-copy' ? 'copy' : 'transfer'));
     case 'timed-status': return ['status','active-status'].includes(entry.kind) && any(v=>Number(v.duration)>0 || Number(v.duration?.turns)>0 || Number(v.lifecycle?.turns)>0 || Number(v.stacks_change)<0 || v.stacks_change==='reset');
     case 'periodic-damage': return ['status','active-status'].includes(entry.kind) && operation('damage') && trigger('turn_start','turn_end');
     case 'status-gate': return condition(/\b(?:self|opponent)\.(?:status\.|has_(?:status|buff|debuff)|(?:status|buff|debuff)_count)/);
@@ -71,6 +73,8 @@ export function matchTowerFoundation(id: string, entry: FoundationEvidence): boo
     case 'topdeck': case 'bottomdeck': return any(v=>op(v,'move_card','move_cards') && (()=>{const p=payload(v,'move_card');return ['draw','drawPile'].includes(p.destination??p.to) && (p.position??'top')===(id==='topdeck'?'top':'bottom');})());
     case 'retain': return root.retain === true || rule('retain_hand');
     case 'free-play': return rule('free');
+    case 'additional-payment': return entry.kind === 'card' && any(v => record(v.payment) && nonempty(v.payment.additional));
+    case 'alternative-payment': return entry.kind === 'card' && any(v => record(v.payment) && Array.isArray(v.payment.alternatives) && v.payment.alternatives.length > 0);
     case 'x-cost': return any(v=>v.cost==='energy' || record(v.cost) && Object.values(v.cost).some(x=>x==='all'));
     case 'double-effect': return operation('double','double_card_effect');
     case 'play-restriction': return rule('limit_card_play','deny_card_play','allow_card_play');
@@ -111,6 +115,7 @@ export function matchTowerFoundation(id: string, entry: FoundationEvidence): boo
     case 'unit-count': return condition(/\b(?:self|opponent)\.(?:ally_count|summon_count|has_ally|has_summon)\b/);
     case 'conditional-guard': return operation('guard') || operation('if');
     case 'negative-control': return ['status','active-status'].includes(entry.kind) && (root.type==='debuff'||root.category==='debuff');
+    case 'damage-interception': case 'card-play-interception': return ['status', 'active-status'].includes(entry.kind) && Array.isArray(root.intercepts) && root.intercepts.some((rule: RecordValue) => rule.window === (id === 'damage-interception' ? 'before_damage' : 'before_card_play'));
     case 'on-play': return trigger('card_played','attack_played','skill_played','power_played');
     case 'on-hit': return trigger('deal_damage','damage_dealt','hit');
     case 'on-discard': return trigger('on_discard');

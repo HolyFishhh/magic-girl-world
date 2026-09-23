@@ -26,6 +26,27 @@ assert.ok(presets.length>=110, 'a broad catalog of independently described found
 assert.deepEqual([...covered].sort(), [...graphIds].sort(), 'graph families are available directly or through player combinations');
 for (const [op, reason] of Object.entries(exclusions)) assert.ok(publicOps.has(op) && !usedOps.has(op) && reason.trim());
 assert.deepEqual([...new Set([...usedOps, ...Object.keys(exclusions)])].sort(), [...publicOps].sort(), 'all player operations remain represented');
+const catalogContracts = [
+  { id: 'status-copy', category: 'status', operations: ['status_action'], archetypeIds: ['status-stack'] },
+  { id: 'status-transfer', category: 'status', operations: ['status_action'], archetypeIds: ['status-stack'] },
+  { id: 'additional-payment', category: 'cost', operations: [], archetypeIds: ['cost-shift'] },
+  { id: 'alternative-payment', category: 'cost', operations: [], archetypeIds: ['cost-shift'] },
+  { id: 'damage-interception', category: 'timing', operations: [], archetypeIds: ['rule-control'] },
+  { id: 'card-play-interception', category: 'timing', operations: [], archetypeIds: ['rule-control'] },
+];
+const selectedContracts = catalogContracts.map(contract => {
+  const preset = presets.find(candidate => candidate.id === contract.id);
+  assert.ok(preset, `${contract.id} is directly selectable from the player catalog`);
+  assert.equal(preset.category, contract.category);
+  assert.deepEqual(preset.operations, contract.operations);
+  assert.deepEqual(preset.archetypeIds, contract.archetypeIds);
+  preset.archetypeIds.forEach(id => assert.ok(graphIds.has(id), `${contract.id} keeps its existing graph family`));
+  return preset;
+});
+const contractPrompt = buildTowerArchetypePrompt(selectedContracts);
+for (const preset of selectedContracts) assert.match(contractPrompt, new RegExp(`- ${preset.name}：${preset.summary}`), `${preset.id} summary reaches the tower opening prompt`);
+assert.deepEqual(presets.find(preset => preset.id === 'status-cleanse')?.operations, ['remove_status'], 'status cleansing remains only cleansing');
+assert.deepEqual(presets.find(preset => preset.id === 'status-cleanse')?.archetypeIds, ['status-detonation'], 'status cleansing retains its related foundation');
 const [first, second, third] = presets, custom = '保留我的世界与角色\n偏好短回合，不要强制固定题材。';
 const multi = replaceTowerArchetypePrompt(custom, [first, second, third]);
 assert.deepEqual(readTowerArchetypePresets(multi).map(preset => preset.id), [first.id, second.id, third.id]);
