@@ -38,7 +38,17 @@ export function validateCardPayment(value: unknown): string | null {
     return !alternative || (typeof v.id === 'string' && v.id !== 'normal' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(v.id) && typeof v.name === 'string' && !!v.name.trim() && v.cost !== undefined && !validateCardCost(v.cost));
   };
   if (value.additional !== undefined && !extra(value.additional)) return 'additional 额外费用无效';
-  if (value.alternatives !== undefined && (!Array.isArray(value.alternatives) || !value.alternatives.length || value.alternatives.length > 8 || value.alternatives.some((v: unknown) => !extra(v, true)) || new Set(value.alternatives.map((v: any) => v.id)).size !== value.alternatives.length)) return 'alternatives 需要 1..8 个独立命名的有效付款方案';
+  if (value.alternatives !== undefined) {
+    if (!Array.isArray(value.alternatives) || !value.alternatives.length || value.alternatives.length > 8)
+      return 'alternatives 需要 1..8 个独立命名的有效付款方案';
+    for (const [index, option] of value.alternatives.entries()) {
+      if (record(option) && Object.prototype.hasOwnProperty.call(option, 'additional'))
+        return `alternatives[${index}].additional 不合法：替代方案的 hp/discard/sacrifice 必须与 id/name/cost 同层填写，例如 {id:"blood",name:"以血施法",cost:1,hp:6}`;
+      if (!extra(option, true)) return `alternatives[${index}] 需要有效的 id/name/cost；额外费用 hp/discard/sacrifice 直接写在方案同层`;
+    }
+    if (new Set(value.alternatives.map(option => option.id)).size !== value.alternatives.length)
+      return 'alternatives 的方案 id 不能重复';
+  }
   return null;
 }
 export function cardPaymentPlans(card: PaymentCard, state: PaymentState, waiver?: CardResourceWaiver): CardPaymentPlan[] {
@@ -71,4 +81,4 @@ export function describeCardPayment(value: unknown, resourceNames?: Readonly<Rec
   const resources = Object.fromEntries(Object.entries(resourceNames || {}).map(([id, name]) => [id, { name, emoji: resourceEmojis?.[id] || '' }]));
   return [spec.additional ? `通常费用额外要求：${describeExtraCardCost(spec.additional, summonNames)}` : '', ...(spec.alternatives || []).map(p => `替代费用「${p.name}」：${[describeCardCost(p.cost, resources), describeExtraCardCost(p, summonNames)].filter(Boolean).join('，')}（替换全部通常费用）`)].filter(Boolean);
 }
-export const CARD_PAYMENT_CONTRACT = '卡牌和卡牌模板根部 payment 支持 additional:{hp:正整数,discard:{count:正整数,card_type?:Attack/Skill/Power/Curse/Status,tag?:标签},sacrifice:{count:正整数,template_id?:召唤模板ID}}，以及 alternatives:[{id:唯一ID(不能normal),name:剧情名称,cost:标准费用,...额外费用字段}]。additional 加在通常动态 cost 上；每个 alternatives 完整替换通常资源和额外费用，不继承 additional。玩家从可支付方案中选择，再选精确弃牌/献祭实例；取消整次出牌无消耗。HP直接扣除且至少保留1点，不是伤害；弃牌不能选正打出的牌，触发正常弃牌含灵巧/遗弃/遗忘；献祭执行离场/被击败触发，不留尸体。全部费用先同时扣除再触发收益，不得用费用触发收益支付本次费用。免费只豁免资源费用，自动打出选择首个可支付方案及符合条件的首批实例；重放仅首次付费。实际能量/资源统计不混入生命或实例数量。';
+export const CARD_PAYMENT_CONTRACT = '卡牌和卡牌模板根部 payment 支持 additional:{hp:正整数,discard:{count:正整数,card_type?:Attack/Skill/Power/Curse/Status,tag?:标签},sacrifice:{count:正整数,template_id?:召唤模板ID}}，以及 alternatives:[{id:唯一ID(不能normal),name:剧情名称,cost:标准费用,...额外费用字段}]。additional 加在通常动态 cost 上；每个 alternatives 完整替换通常资源和额外费用，不继承 additional。替代方案内部的生命、弃牌与献祭费用必须直接与id/name/cost同层写hp/discard/sacrifice，不能嵌套additional；例如 payment:{"alternatives":[{"id":"magic","name":"消耗能量","cost":2},{"id":"blood","name":"以血施法","cost":1,"hp":6}]}。玩家从可支付方案中选择，再选精确弃牌/献祭实例；取消整次出牌无消耗。HP直接扣除且至少保留1点，不是伤害；弃牌不能选正打出的牌，触发正常弃牌含灵巧/遗弃/遗忘；献祭执行离场/被击败触发，不留尸体。全部费用先同时扣除再触发收益，不得用费用触发收益支付本次费用。免费只豁免资源费用，自动打出选择首个可支付方案及符合条件的首批实例；重放仅首次付费。实际能量/资源统计不混入生命或实例数量。';

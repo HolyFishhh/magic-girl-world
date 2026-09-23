@@ -17,6 +17,42 @@ assert.equal(schema(authored),true,JSON.stringify(schema.errors));
 assert.equal(validateCardPayment(payment),null);
 for(const invalid of [{alternatives:[{id:'normal',name:'x',cost:0}]},{additional:{hp:0}},{additional:{discard:{count:1,bogus:2}}}]) assert.ok(validateCardPayment(invalid));
 
+// Regression from the reported story-mode card trio: alternatives.additional is invalid,
+// and flattening only that proven error slot preserves its exact HP payment semantics.
+const storyOptions = [
+  { id: 'guardian_barrier', name: '守护结界', hp: 6 },
+  { id: 'piercing_starlight', name: '贯穿星光', hp: 4 },
+  { id: 'desperate_blessing', name: '绝境加护', hp: 8 },
+];
+const storyCards = storyOptions.map(({ id, name, hp }) => ({
+  id, name, type: 'Skill', rarity: 'Uncommon', cost: 2, quantity: 1,
+  effects: { block: 5 },
+  payment: { alternatives: [
+    { id: 'magic', name: '消耗能量', cost: 2 },
+    { id: 'blood', name: '以血施法', cost: 1, additional: { hp } },
+  ] },
+}));
+for (const card of storyCards) {
+  assert.match(validateCardPayment(card.payment), /alternatives\[1\]\.additional.*hp.*同层/);
+  assert.equal(schema(card), false, 'story card with nested alternative additional fails official schema');
+}
+const correctedStoryCards = storyCards.map(card => ({ ...card, payment: {
+  alternatives: [card.payment.alternatives[0], {
+    id: card.payment.alternatives[1].id, name: card.payment.alternatives[1].name,
+    cost: card.payment.alternatives[1].cost, hp: card.payment.alternatives[1].additional.hp,
+  }],
+} }));
+for (const [index, card] of correctedStoryCards.entries()) {
+  assert.equal(validateCardPayment(card.payment), null);
+  assert.equal(schema(card), true, JSON.stringify(schema.errors));
+  const choice = cardPaymentPlans(card, { hp: 30, hand: [card], resources: { energy: 2 } })
+    .find(option => option.id === 'blood');
+  assert.equal(choice.affordable, true);
+  assert.equal(choice.extra.hp, storyOptions[index].hp, 'corrected HP cost remains executable');
+}
+assert.equal(core.validateContentPackContract(core.createContentPack({cards: correctedStoryCards})).ok, true,
+  'all three corrected story cards pass the content contract together');
+
 // Explicit inline generation validates the same template contract.
 const template=core.compileCompactEffectList({add_card:'ritual'}, {creates:[Object.fromEntries(Object.entries(authored).filter(([k])=>k!=='quantity'))]});
 assert.equal(template.ok,true,JSON.stringify(template));

@@ -32,6 +32,15 @@ const compiled = compileInitialDraftToMvu(draft);
 assert.equal(compiled.ok, true, JSON.stringify(compiled));
 assert.deepEqual(ids(compiled.value.player.statuses).sort(), ['sts_ritual', 'sts_strength'],
   'initial draft materializes only referenced built-ins and ritual dependency');
+const requestedStrength = { ...starter, id: 'requested_strength', name: '通用力量',
+  effects: { apply_status: 'sts_strength', stacks: 1, to: 'self' } };
+const strengthOnly = compileInitialDraftToMvu({ ...draft,
+  player: { ...draft.player, cards: [requestedStrength] },
+});
+assert.equal(strengthOnly.ok, true, JSON.stringify(strengthOnly));
+assert.deepEqual(ids(strengthOnly.value.player.statuses), ['sts_strength'],
+  'explicit player request can directly use the executable strength preset without fabricating a duplicate status');
+
 
 const baseBattle = () => ({
   core: { emoji: '✨', hp: 50, max_hp: 50, lust: 0, max_lust: 100, resources: [] },
@@ -79,7 +88,7 @@ console.log('Builtin status integration: initial draft, reward claim, enemy acti
 
 const reference = builtinStatusReferenceContract();
 const usage = builtinStatusUsageContract();
-for (const requirement of ['仅用于低质量敌人', '或偏中立卡牌', '剧情相关敌人、复杂敌人', '为玩家生成的整套卡组', '都必须根据剧情设定', '不得套用这15项预设', '不得仅改名字', '不是程序质量硬门槛', '结构修复不得据此拒绝、删除或改写已合法']) {
+for (const requirement of ['默认仅用于低质量敌人', '或偏中立卡牌', '未明确要求时应避免', '玩家明确要求通用状态', '允许直接引用对应预设ID', 'sts_strength', '剧情相关敌人和复杂敌人', '不能给玩家卡组或重要敌人只改名字', '不是程序质量硬门槛', '结构修复不得据此拒绝、删除或改写已合法']) {
   assert.ok(usage.includes(requirement), `preset scope keeps authoring requirement: ${requirement}`);
 }
 assert.ok(reference.includes(usage));
@@ -95,9 +104,11 @@ for (const definition of BUILTIN_STATUS_DEFINITIONS) {
   assert.ok(guide.includes('| `' + definition.id + '` | ' + definition.name + ' | ' + (definition.type === 'buff' ? '增益' : '减益') + ' |'), 'worldbook names and categories match executable definitions');
 }
 assert.match(guide, /`sly:true` 为灵巧/);
+assert.match(guide, /只想要弃牌触发独立效果用 `discard_effects`/);
 assert.match(guide, /`on_discard:"purge"` 的公开词条名为“遗忘”/);
 const { formatCompactEffectAuthoringContract, createTowerNodeJsonSchema, formatCompactEffectRepairContract } = require('../src/game-core/towerRequest.ts');
 for (const placement of ['runtime', 'initial-draft']) assert.ok(formatCompactEffectAuthoringContract(placement).includes(reference));
+for (const placement of ['runtime', 'initial-draft']) assert.match(formatCompactEffectAuthoringContract(placement), /玩家明确要求通用力量buff.*sts_strength/);
 console.log('Builtin status worldbooks and both authoring protocols share one whitelist; sly/forget are documented.');
 
 for (const kind of ['battle', 'elite', 'boss']) assert.ok(JSON.stringify(createTowerNodeJsonSchema(kind)).includes(JSON.stringify(reference).slice(1, -1)), `${kind} response schema carries the same preset whitelist`);

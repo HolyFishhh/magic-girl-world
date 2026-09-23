@@ -344,6 +344,18 @@ assert.equal(store.getGameState().eventJournal.events.filter(event =>
   event.kind === 'card_played' && event.cardInstanceId === slyCard.id,
 ).every(event => event.paidEnergy === 0), true);
 
+resetAudit('on_discard');
+const compoundDiscard = {
+  ...auditCard('compound_discard'), cost: 2, sly: true,
+  discardEffectProgram: { spec: 'mwg.effect/v1', steps: [{ op: 'gain_block', target: 'self', amount: 2 }] },
+};
+store.updatePlayer({ hand: [compoundDiscard], deck: [compoundDiscard], energy: 0, block: 0 });
+assert.equal(await cards.discardCard(compoundDiscard.id, 'effect'), true);
+assert.equal(store.getPlayer().block, 3, '单独弃牌效果先赋予2格挡，灵巧随后完整打出赋予1格挡，二者各执行一次');
+assert.equal(store.getGameState().eventJournal.events.filter(event =>
+  event.kind === 'card_played' && event.phase === 'after' && event.cardInstanceId === compoundDiscard.id).length, 1);
+assert.equal(store.getPlayer().energy, 0, '灵巧完整打出不支付普通资源费用');
+
 resetAudit('turn_end');
 const cleanupSly = { ...auditCard('cleanup_sly'), sly: true };
 store.updatePlayer({ hand: [cleanupSly], deck: [cleanupSly], block: 0 });
