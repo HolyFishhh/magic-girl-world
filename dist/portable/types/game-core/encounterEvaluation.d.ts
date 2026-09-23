@@ -1,5 +1,5 @@
 /** Public evidence from the production battle engine, not a second effect interpreter. */
-export declare const ENCOUNTER_EVALUATION_SPEC: "mwg.encounter-evaluation/v1";
+export declare const ENCOUNTER_EVALUATION_SPEC: "mwg.encounter-evaluation/v2";
 export type EncounterPolicy = 'tempo' | 'survival' | 'engine';
 export interface EncounterTrial {
     seed: number;
@@ -13,6 +13,8 @@ export interface EncounterTrial {
     netHpLost: number;
     hpLost: number;
     damageDealt: number;
+    /** Actual remaining enemy HP, including reinforcements; not cumulative damage. */
+    enemyHpRemaining: number;
     lustDealt?: number;
     /** Observed at the end of each player action phase, before turn-end expiry. */
     statusUptime?: {

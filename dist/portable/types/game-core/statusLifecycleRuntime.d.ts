@@ -2,6 +2,7 @@ import type { BattleTriggerDispatch } from './battleEventDispatch';
 import type { BattleStateStore, StatusEffect } from './battleState';
 import type { BattleTriggerEventContext } from './battleEventJournal';
 import type { StatusEventTrigger, StatusLifecycleTrigger, StatusTrigger } from './battleTriggers';
+import { type StatusReceiveOptions } from './statusAction';
 import type { RuntimeStatusDefinition, StatusRuntimeEffect, StatusTickTiming } from './statusDefinitionRuntime';
 import { type TriggerTransactionPorts } from './triggerTransaction';
 type MaybePromise<T> = T | Promise<T>;
@@ -72,8 +73,11 @@ export interface StatusLifecycleRuntimePorts<TToken> {
 export declare class StatusLifecycleRuntime<TToken> {
     private readonly ports;
     constructor(ports: StatusLifecycleRuntimePorts<TToken>);
-    apply(target: StatusLifecycleTarget, statusId: string, stacks: number): Promise<StatusEffect | null>;
+    apply(target: StatusLifecycleTarget, statusId: string, stacks: number, options?: StatusReceiveOptions): Promise<StatusEffect | null>;
     remove(target: StatusLifecycleTarget, selection: string): Promise<StatusEffect[]>;
+    removeStacks(target: StatusLifecycleTarget, id: string, count: number): Promise<void>;
+    /** Consume precisely one holder-local defensive layer, including remove lifecycle. */
+    consumeLayer(target: StatusLifecycleTarget, statusId: string): Promise<boolean>;
     /** Resolve tick effects for one exact holder at its declared action boundary. */
     processActionTiming(target: StatusLifecycleTarget, timing: StatusTickTiming, enemyId?: string): Promise<void>;
     /** Stack decay is independent of tick timing and occurs once at the holder's turn end. */

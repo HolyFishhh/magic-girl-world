@@ -4,6 +4,7 @@ export type ModifierOperator = '+' | '-' | '*' | '/' | '=';
 export interface ModifierOperation {
     operator: ModifierOperator;
     value: number;
+    damageKind?: import('./battleEventJournal').DamageKind;
 }
 export interface ModifierBreakdown {
     add: number;

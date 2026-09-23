@@ -44,6 +44,7 @@ export interface ProgressionCard extends PatchableCard {
     upgradeHistory?: CardUpgradeRecord[];
 }
 export interface PersistentCardCarrier extends Record<string, any> {
+    lifecycle?: import('./cardLifecycle').CardLifecycle;
     id?: string;
     originalId?: string;
     templateId?: string;

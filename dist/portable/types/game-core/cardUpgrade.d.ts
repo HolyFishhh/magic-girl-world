@@ -18,6 +18,7 @@ export interface CardUpgradePatch {
     exhaust?: boolean;
     ethereal?: boolean;
     innate?: boolean;
+    sly?: boolean;
 }
 export interface CardUpgradeOptions {
     maxLevel?: number;

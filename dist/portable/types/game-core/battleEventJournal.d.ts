@@ -70,6 +70,13 @@ export type BattleEvent = (BattleEventBase & {
     tags?: string[];
     origin?: CardOrigin;
     upgraded?: boolean;
+    /** Immutable actual payment for this accepted card play/replay event. */
+    paidEnergy?: number;
+    paidHp?: number;
+    paidDiscard?: number;
+    paidSacrifices?: number;
+    paidTotal?: number;
+    paidResources?: Record<string, number>;
     automatic: boolean;
     replayIndex: number;
 }) | (BattleEventBase & {
@@ -252,13 +259,6 @@ export interface RunEventHistoryState {
     schemaVersion: 1;
     records: RunBattleEventRecord[];
 }
-/**
- * A three-act run can create thousands of small events. Keep one generous hard
- * ceiling at the storage reader so corrupted/AI-written host variables cannot
- * make every history formula scan an unbounded array. Runtime-owned archives
- * are expected to remain well below this limit.
- */
-export declare const MAX_RUN_EVENT_HISTORY_RECORDS = 20000;
 export interface EventCounterFilter {
     kind?: BattleEventKind;
     phase?: BattleEventPhase;
@@ -313,6 +313,12 @@ export interface BattleTriggerEventContext {
     targetId?: string;
     actorSide?: 'player' | 'enemy';
     targetSide?: 'player' | 'enemy';
+    paidEnergy?: number;
+    paidHp?: number;
+    paidDiscard?: number;
+    paidSacrifices?: number;
+    paidTotal?: number;
+    paidResources?: Readonly<Record<string, number>>;
     /** Runtime-owned actor ids used when an AI-facing query selects team scope. */
     teamActorIds?: readonly string[];
     eventJournal?: BattleEventJournalState;

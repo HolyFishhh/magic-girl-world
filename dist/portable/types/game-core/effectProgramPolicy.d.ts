@@ -12,6 +12,7 @@ export interface EffectProgramPolicyOptions {
     allowSpentResources?: ReadonlySet<string>;
     /** Resource IDs whose resolved `all`/X value may be read by the program. */
     allowXResources?: ReadonlySet<string>;
+    allowPendingResolution?: boolean;
     allowStatusStacks?: boolean;
     allowNarrate?: boolean;
     requireSingleNarrate?: boolean;

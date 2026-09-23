@@ -13,7 +13,9 @@ export interface CardRuleCard {
     retain?: boolean;
     exhaust?: boolean;
     ethereal?: boolean;
+    sly?: boolean;
     innate?: boolean;
+    payment?: import('./cardPayment').CardPaymentSpec;
     lifecycle?: CardLifecycle;
     /** Added after paying an X-cost card; does not consume extra energy. */
     xValueBonus?: number;
@@ -44,7 +46,7 @@ export declare function resolvePlayedCardDestination(card: Pick<CardRuleCard, 't
 /** Freeze the curses that were present when turn-end card processing began. */
 export declare function selectTurnEndCurseTriggers<TCard extends CardRuleCard>(hand: readonly TCard[]): TCard[];
 /** Partition the current hand after curse effects have finished mutating it. */
-export declare function resolveTurnEndHandDisposition<TCard extends CardRuleCard>(hand: readonly TCard[], retainAll?: boolean): TurnEndHandDisposition<TCard>;
+export declare function resolveTurnEndHandDisposition<TCard extends CardRuleCard>(hand: readonly TCard[], retainAll?: boolean, gainsEthereal?: (card: TCard) => boolean): TurnEndHandDisposition<TCard>;
 export declare function getCardSourceId(card: Pick<CardRuleCard, 'id' | 'name' | 'originalId' | 'templateId'>): string;
 /** Count cards owned across persistent piles plus cards temporarily in a play transaction. */
 export declare function countCardOwnership(cards: ReadonlyArray<Pick<CardRuleCard, 'id' | 'name' | 'originalId' | 'templateId'>>, inFlightCounts?: ReadonlyMap<string, number>): Map<string, number>;

@@ -19,6 +19,7 @@ export interface SelectableCard extends CardZoneCard {
     retain?: boolean;
     exhaust?: boolean;
     ethereal?: boolean;
+    sly?: boolean;
     innate?: boolean;
 }
 /** `all` intentionally preserves its legacy meaning and excludes the exhaust pile. */

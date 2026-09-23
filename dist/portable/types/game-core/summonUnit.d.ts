@@ -3,6 +3,7 @@ import type { EventTriggerQuery } from './battleEventJournal';
 import type { BattleTriggerDispatch } from './battleEventDispatch';
 import type { BattleTriggerEventContext } from './battleEventJournal';
 import type { CardValueOperator, CardValueStat, EffectProgram } from './effectDsl';
+import { type StatusReceiveOptions } from './statusAction';
 import type { RuntimeStatusDefinition, StatusRuntimeEffect, StatusTickTiming } from './statusDefinitionRuntime';
 import type { StatusEventTrigger, StatusTrigger } from './battleTriggers';
 import { type TriggerTransactionPorts } from './triggerTransaction';
@@ -12,6 +13,7 @@ export type SummonPick = 'left' | 'right' | 'choose'
 /** Compatibility aliases retained for already-authored content. */
  | 'first' | 'last' | 'random' | 'random_n' | 'all' | 'lowest_hp' | 'highest_hp' | 'by_id' | 'source';
 export interface SummonStatusState {
+    interceptionUses?: import('./interception').InterceptionUsage;
     id: string;
     name: string;
     emoji: string;
@@ -145,6 +147,7 @@ export interface SummonDamageResult {
         modified?: number;
         blocked: number;
         hpLost: number;
+        prevented?: number;
         defeated: boolean;
     }>;
 }
@@ -237,7 +240,7 @@ export declare function resolveSummonTargets(state: SummonCollectionState, selec
 export declare function copySummonUnits(current: SummonCollectionState, targetIds: readonly string[], owner: BattleOwner, capacity?: number, overflow?: SummonOverflowPolicy, createdTurn?: number, binding?: {
     summonerId: string | null;
 } | 'preserve'): SummonCopyResult;
-export declare function damageSummonUnits(current: SummonCollectionState, targetIds: readonly string[], requestedDamage: number, bypassBlock?: boolean): SummonDamageResult;
+export declare function damageSummonUnits(current: SummonCollectionState, targetIds: readonly string[], requestedDamage: number, bypassBlock?: boolean, preventHpLoss?: boolean): SummonDamageResult;
 export declare function interceptUnblockedAttack(current: SummonCollectionState, owner: BattleOwner, requestedDamage: number, mitigate?: (unit: SummonUnit, incoming: number) => number, 
 /** Exact enemy holder being damaged. Enemy summons never fall back to active aliases. */
 protectedEnemyId?: string): SummonInterceptResult;
@@ -271,7 +274,7 @@ export declare function removeSummonStatus(current: SummonCollectionState, targe
 export declare class SummonStatusLifecycleRuntime<TToken> {
     private readonly ports;
     constructor(ports: SummonStatusLifecycleRuntimePorts<TToken>);
-    apply(targetIds: readonly string[], statusId: string, stacks: number): Promise<Array<{
+    apply(targetIds: readonly string[], statusId: string, stacks: number, options?: StatusReceiveOptions): Promise<Array<{
         summon: SummonUnit;
         status: SummonStatusState;
     }>>;
@@ -279,6 +282,9 @@ export declare class SummonStatusLifecycleRuntime<TToken> {
         summon: SummonUnit;
         status: SummonStatusState;
     }>>;
+    /** Consume precisely one layer from one exact summon holder. */
+    removeStacks(summonId: string, statusId: string, count: number): Promise<void>;
+    consumeLayer(summonId: string, statusId: string): Promise<boolean>;
     /** Resolve tick effects for one exact summon at its declared action boundary. */
     processActionTiming(summonId: string, timing: StatusTickTiming): Promise<void>;
     /** Stack decay is independent of tick timing and occurs once at each owner's turn end. */

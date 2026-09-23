@@ -68,6 +68,9 @@ export type EffectCommand = {
     targetSelector?: EnemyTargetSelector;
     status: string;
 } | {
+    type: 'status_action';
+    spec: import('./statusAction').StatusActionSpec;
+} | {
     type: 'draw_cards';
     amount: number;
 } | {
@@ -238,6 +241,7 @@ export type EffectCommand = {
     target: EffectTarget;
     targetSelector?: EnemyTargetSelector;
     stat: ModifierStat;
+    damageKind?: import('./battleEventJournal').DamageKind;
     operator: EffectModifierOperator;
     value: number;
 } | {

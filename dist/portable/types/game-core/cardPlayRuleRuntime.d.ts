@@ -17,6 +17,8 @@ export interface ActiveCardPlayRules {
     extraReplays: number;
     retainHand: boolean;
     retainBlock: boolean;
+    /** Matching cards gain turn-end ethereal while the continuous source exists. */
+    ethereal: boolean;
     drawLimit?: number;
     blockGainLimit?: number;
     energyGainLimit?: number;

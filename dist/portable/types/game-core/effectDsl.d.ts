@@ -1,3 +1,4 @@
+import { type StatusActionSpec } from './statusAction';
 import { type AbilityTrigger, type RuntimeRegisteredEffectTrigger } from './battleTriggers';
 import type { CardOrigin } from './cardIdentity';
 import type { PlayedCardDestination } from './cardRules';
@@ -19,7 +20,7 @@ export type ModifierStat = 'damage' | 'damage_taken' | 'lust' | 'lust_taken' | '
 export type EffectModifierOperator = 'add' | 'subtract' | 'multiply' | 'divide' | 'set';
 export type CardValueStat = 'damage' | 'block' | 'lust' | 'stacks';
 export type CardValueOperator = 'add' | 'subtract' | 'multiply' | 'divide';
-export type CardPlayRuleKind = 'replay' | 'free' | 'retain_hand' | 'retain_block' | 'limit_draw' | 'limit_block_gain' | 'limit_energy_gain' | 'deny_card_play' | 'allow_card_play' | 'limit_card_play' | 'card_destination';
+export type CardPlayRuleKind = 'replay' | 'free' | 'retain_hand' | 'retain_block' | 'limit_draw' | 'limit_block_gain' | 'limit_energy_gain' | 'deny_card_play' | 'allow_card_play' | 'limit_card_play' | 'card_destination' | 'ethereal';
 export type EffectTrigger = RuntimeRegisteredEffectTrigger;
 export type EffectSchedulePhase = 'turn_start' | 'before_draw' | 'after_draw' | 'turn_end';
 export interface CardSelector {
@@ -148,6 +149,7 @@ export interface EffectCardAttachmentDefinition {
 }
 export interface GeneratedCardDefinition {
     unique?: boolean;
+    payment?: import('./cardPayment').CardPaymentSpec;
     lifecycle?: import('./cardLifecycle').CardLifecycle;
     id: string;
     name: string;
@@ -161,6 +163,7 @@ export interface GeneratedCardDefinition {
     retain?: boolean;
     exhaust?: boolean;
     ethereal?: boolean;
+    sly?: boolean;
     requiresSummonTemplateId?: string;
 }
 /** A listener owned by the active stance, never a permanently registered ability. */
@@ -391,6 +394,9 @@ export type EffectNode = {
     targetSelector?: EnemyTargetSelector;
     status: string;
 } | {
+    op: 'status_action';
+    spec: StatusActionSpec;
+} | {
     op: 'draw_cards';
     amount: NumericExpression;
 } | {
@@ -575,6 +581,7 @@ export type EffectNode = {
     target: EffectTarget;
     targetSelector?: EnemyTargetSelector;
     stat: ModifierStat;
+    damageKind?: import('./battleEventJournal').DamageKind;
     operator: EffectModifierOperator;
     value: NumericExpression;
 } | {
@@ -729,6 +736,7 @@ export interface CoreCardView {
     exhaust?: boolean;
     ethereal?: boolean;
     innate?: boolean;
+    sly?: boolean;
 }
 export interface EffectExecutionContext {
     /** Immutable identity of the currently dispatched status ownership event. */
@@ -739,6 +747,14 @@ export interface EffectExecutionContext {
     /** Latest completed discard command in this program invocation, not journal history. */
     discardResult?: import('./cardEffectRuntime').DiscardCommandResult;
     spentEnergy: number;
+    /** Actual payment of the card-play event currently dispatched to a listener. */
+    eventPaidEnergy?: number;
+    pendingAmount?: number;
+    eventPaidHp?: number;
+    eventPaidDiscard?: number;
+    eventPaidSacrifices?: number;
+    eventPaidTotal?: number;
+    eventPaidResources?: Readonly<Record<string, number>>;
     spentResources?: Readonly<Record<string, number>>;
     xValues?: Readonly<Record<string, number>>;
     xValue?: number;
@@ -826,6 +842,9 @@ export type CoreEffectEvent = {
     type: 'remove_status';
     target: EffectTarget;
     status: string;
+} | {
+    type: 'status_action';
+    spec: StatusActionSpec;
 } | {
     type: 'draw_cards';
     amount: number;
@@ -989,6 +1008,7 @@ export type CoreEffectEvent = {
     type: 'modify';
     target: EffectTarget;
     stat: ModifierStat;
+    damageKind?: import('./battleEventJournal').DamageKind;
     operator: EffectModifierOperator;
     value: number;
 } | {

@@ -65,7 +65,9 @@ export interface BattleSessionCardPlayPorts<TCard extends CardPlayCard, TToken> 
     readCardPlayState(): CardPlayState<TCard>;
     isTerminal(): boolean;
     presentCardPlay?(prepared: PreparedCardPlay<TCard>): MaybePromise<void>;
+    chooseCardPayment?(prepared: PreparedCardPlay<TCard>): MaybePromise<import('./cardPayment').CardPaymentSelection>;
     applyCardPlayCommit(committed: CommittedCardPlay<TCard>): MaybePromise<void>;
+    resolveCardPaymentEffects?(committed: CommittedCardPlay<TCard>): MaybePromise<void>;
     beginCardTransit(card: TCard): MaybePromise<void>;
     endCardTransit(card: TCard): MaybePromise<void>;
     /** Return extra complete resolutions requested by the current card program. */

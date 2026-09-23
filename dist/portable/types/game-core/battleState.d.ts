@@ -25,6 +25,7 @@ export interface Card extends Partial<CardIdentity> {
     /** Optional player-facing line shown when this card resolves. */
     dialogue?: string;
     unique?: boolean;
+    payment?: import('./cardPayment').CardPaymentSpec;
     lifecycle?: import('./cardLifecycle').CardLifecycle;
     id: string;
     originalId?: string;
@@ -40,6 +41,7 @@ export interface Card extends Partial<CardIdentity> {
     exhaust?: boolean;
     ethereal?: boolean;
     innate?: boolean;
+    sly?: boolean;
     doubleEffect?: boolean;
     origin?: CardOrigin;
     tags?: string[];
@@ -53,6 +55,7 @@ export interface Card extends Partial<CardIdentity> {
     requiresSummonTemplateId?: string;
 }
 export interface StatusEffect {
+    interceptionUses?: import('./interception').InterceptionUsage;
     id: string;
     name: string;
     type: 'buff' | 'debuff' | 'neutral' | 'ens';
@@ -76,7 +79,7 @@ export interface Relic {
     /** Omitted for acquisition-only relics; battle trigger resolution treats them as no-ops. */
     effectProgram?: EffectProgram;
     emoji: string;
-    rarity: 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary' | 'Boss' | 'ENS';
+    rarity: 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary' | 'Corrupt' | 'Boss' | 'ENS';
     trigger?: string;
     eventQuery?: import('./battleEventJournal').EventTriggerQuery;
     onAcquire?: import('./nonCombatSettlement').NonCombatSettlementPlan;
@@ -294,7 +297,7 @@ export declare class BattleStateStore {
     copySummons(targetIds: readonly string[], owner: BattleOwner, capacity?: number, overflow?: SummonOverflowPolicy, binding?: {
         summonerId: string | null;
     } | 'preserve'): ReturnType<typeof copySummonUnits>;
-    damageSummons(targetIds: readonly string[], amount: number, bypassBlock?: boolean): SummonDamageResult;
+    damageSummons(targetIds: readonly string[], amount: number, bypassBlock?: boolean, preventHpLoss?: boolean): SummonDamageResult;
     healSummons(targetIds: readonly string[], amount: number): ReturnType<typeof healSummonUnits>;
     modifySummons(targetIds: readonly string[], stat: 'max_hp' | 'block' | 'actions_per_activation' | 'speed' | 'action_priority', operator: '+' | '-' | '*' | '/' | '=', value: number): SummonCollectionState;
     modifySummonEffects(targetIds: readonly string[], stat: import('./effectDsl').CardValueStat, operator: import('./effectDsl').CardValueOperator, value: number): SummonCollectionState;
@@ -376,7 +379,7 @@ export declare class BattleStateStore {
     removeOwnedCardFromZone(cardId: string, zone: CardPileZone): Card | null;
     moveCardToDiscard(card: Card): void;
     moveCardToExhaust(card: Card): void;
-    purgeOwnedCard(card: Card): void;
+    purgeOwnedCard(card: Card): boolean;
     placeResolvedCard(card: Card, destination: PlayedCardDestination): PlayedCardDestination;
     moveOwnedCardsToExhaust(cardIds: readonly string[]): Card[];
     recoverOwnedCards(cardIds: readonly string[], source: 'draw' | 'discard' | 'exhaust'): Card[];

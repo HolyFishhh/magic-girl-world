@@ -1,9 +1,51 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	"use strict";
 
+;// ./src/runtime/diagnosticRedaction.ts
+const secretKey = /^(?:api[_-]?key|authorization|(?:access[_-]?|refresh[_-]?)?token|password|passwd|secret|client[_-]?secret|cookie|set-cookie)$/i;
+const diagnosticRedaction_hidden = '[已隐藏]';
+/** Only diagnostic/export copies pass here. Gameplay data is never rewritten. */
+function redactDiagnosticValue(value) {
+    if (typeof value === 'string')
+        return redactDiagnosticText(value);
+    if (Array.isArray(value))
+        return value.map(redactDiagnosticValue);
+    if (value && typeof value === 'object')
+        return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, secretKey.test(key) ? diagnosticRedaction_hidden : redactDiagnosticValue(entry)]));
+    return value;
+}
+function redactDiagnosticText(value) {
+    const text = String(value ?? '');
+    if (/^\s*[\[{]/.test(text)) {
+        try {
+            const parsed = JSON.parse(text);
+            const redacted = redactDiagnosticValue(parsed);
+            // Preserve formatting when nothing needed redaction. Object/array/numeric
+            // credentials need structured masking, not just a quoted-string regex.
+            if (JSON.stringify(parsed) !== JSON.stringify(redacted))
+                return JSON.stringify(redacted);
+        }
+        catch { /* Embedded or incomplete JSON still gets textual redaction. */ }
+    }
+    return text
+        // Match JSON string values including escaped quotes and decoded key names.
+        .replace(/("(?:[^"\\]|\\.)*"\s*:\s*)("(?:[^"\\]|\\.)*")/g, (pair, prefix) => {
+        try {
+            return secretKey.test(JSON.parse(prefix.slice(0, prefix.lastIndexOf(':')).trim())) ? `${prefix}"${diagnosticRedaction_hidden}"` : pair;
+        }
+        catch {
+            return pair;
+        }
+    })
+        .replace(/((?:api[_-]?key|authorization|(?:access[_-]?|refresh[_-]?)?token|password|passwd|secret|client[_-]?secret|cookie|set-cookie)\s*[=:]\s*)(?:"(?:[^"\\]|\\.)*"|'[^']*'|(?:Bearer|Basic)\s+[^\s,;]+|[^\s,;]+)/gi, `$1${diagnosticRedaction_hidden}`)
+        .replace(/\b(?:Bearer|Basic)\s+[^\s,;"'<>]+/gi, diagnosticRedaction_hidden)
+        .replace(/\bsk-[A-Za-z0-9_-]+/g, '[密钥已隐藏]')
+        .replace(/https?:\/\/[^\s<>"']+/gi, '[地址已隐藏]');
+}
+
 ;// ./src/runtime/generationEvidenceView.ts
 /** Bounded DOM only. Export continues to use the untouched complete archive. */
-function renderGenerationEvidencePage(container, page, loadMore) {
+function renderGenerationEvidencePage(container, page, loadMore, loadRecord) {
     const doc = container.ownerDocument;
     const open = new Set(Array.from(container.querySelectorAll('details[open]')).map(el => el.dataset.evidenceKey));
     container.replaceChildren();
@@ -23,21 +65,75 @@ function renderGenerationEvidencePage(container, page, loadMore) {
         more.type = 'button';
         more.textContent = '继续显示这条原文';
         more.hidden = true;
-        let shown = 0;
+        const download = doc.createElement('button');
+        download.type = 'button';
+        download.textContent = '下载这条完整记录';
+        download.hidden = true;
+        let shown = 0, text = record.text, full = record.text, loading = false;
         const reveal = () => {
-            const next = Math.min(record.text.length, shown + 12000);
-            pre.append(doc.createTextNode(record.text.slice(shown, next)));
+            if (text === undefined)
+                return;
+            const next = Math.min(text.length, shown + 12000);
+            pre.append(doc.createTextNode(text.slice(shown, next)));
             shown = next;
-            more.hidden = shown >= record.text.length;
+            more.hidden = shown >= text.length;
+            download.hidden = false;
         };
-        detail.append(summary, pre, more);
+        const openRecord = async () => {
+            if (loading)
+                return;
+            if (text !== undefined) {
+                if (!shown)
+                    reveal();
+                return;
+            }
+            loading = true;
+            pre.textContent = '正在读取并校验原文…';
+            more.hidden = true;
+            try {
+                if (!loadRecord)
+                    throw Error('原文读取接口不可用，请刷新页面');
+                const loaded = await loadRecord(record.key);
+                if (!container.contains(detail))
+                    return;
+                text = loaded.text;
+                full = loaded.full;
+                pre.textContent = '';
+                more.textContent = '继续显示这条原文';
+                reveal();
+            }
+            catch (error) {
+                if (!container.contains(detail))
+                    return;
+                pre.textContent = error instanceof Error ? error.message : String(error);
+                more.textContent = '重试读取原文';
+                more.hidden = false;
+            }
+            finally {
+                loading = false;
+            }
+        };
+        detail.append(summary, pre, more, download);
         detail.addEventListener('toggle', () => { if (detail.open && shown === 0)
+            void openRecord(); });
+        more.addEventListener('click', () => { if (text === undefined)
+            void openRecord();
+        else
             reveal(); });
-        more.addEventListener('click', reveal);
+        download.addEventListener('click', () => {
+            if (full === undefined)
+                return;
+            const blob = new Blob([typeof full === 'string' ? full : JSON.stringify(full, null, 2)], { type: 'application/json;charset=utf-8' });
+            const url = URL.createObjectURL(blob), link = doc.createElement('a');
+            link.href = url;
+            link.download = `mwg-generation-record-${record.recordedAt}.json`;
+            link.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        });
         container.append(detail);
         if (open.has(record.key)) {
             detail.open = true;
-            reveal();
+            void openRecord();
         }
     }
     if (page.records.length < page.total) {
@@ -51,7 +147,7 @@ function renderGenerationEvidencePage(container, page, loadMore) {
 
 ;// ./src/game-core/encounterEvaluation.ts
 /** Public evidence from the production battle engine, not a second effect interpreter. */
-const ENCOUNTER_EVALUATION_SPEC = 'mwg.encounter-evaluation/v1';
+const ENCOUNTER_EVALUATION_SPEC = 'mwg.encounter-evaluation/v2';
 function encounterEvaluation_evaluationMedian(values) {
     if (!values.length)
         return 0;
@@ -133,12 +229,14 @@ function assessMeasuredBuild(measurement) {
         const candidates = ['tempo', 'survival', 'engine'].flatMap(policy => {
             const rows = result?.trials.filter(row => row.policy === policy) || [];
             if (!rows.length || !(measurement.maxHp > 0) || new Set(rows.map(row => row.seed)).size !== rows.length || !rows.every(row => result?.seeds.includes(row.seed)) || rows.length !== result?.seeds.length || rows.some(row => !['victory', 'defeat', 'horizon'].includes(row.outcome)
-                || ![row.damageDealt, row.hpRemaining, row.cardsPlayed, row.turns, row.deadTurns, row.lustDealt ?? 0].every(Number.isFinite)))
+                || ![row.damageDealt, row.enemyHpRemaining, row.hpRemaining, row.cardsPlayed, row.turns, row.deadTurns, row.lustDealt ?? 0].every(Number.isFinite)))
                 return [];
             const score = (row) => {
                 if (row.outcome === 'victory')
                     return 100;
-                const progress = clamp(Math.max(row.damageDealt / reference.hp, (row.lustDealt || 0) / (100 * reference.count)));
+                // Desire only contributes through its executed payoff. Repeated lust,
+                // healing loops and overkill are not additional enemy-clearing progress.
+                const progress = clamp(1 - row.enemyHpRemaining / reference.hp);
                 const health = row.outcome === 'defeat' ? 0 : clamp(row.hpRemaining / measurement.maxHp);
                 const value = 100 * (0.65 * progress + 0.35 * health);
                 return row.outcome === 'defeat' ? Math.min(25, value) : value;
@@ -185,6 +283,7 @@ function assessMeasuredBuild(measurement) {
         ...(strong ? [`擅长应对：${strong.label}（表现达成度${strong.best.score}%）。`] : []),
         ...(weak ? [`优先改善：${weak.label}（表现达成度${weak.best.score}%）。${weak.best.rows.some(row => row.outcome === 'defeat') ? '尝试增加防护，或更早打出关键卡，减少展开时受到的伤害。' : weak.best.rows.every(row => row.outcome === 'victory') ? '本次测试均已获胜，可以继续尝试不同敌人与抽牌顺序。' : '未能在限定回合内稳定击败敌人，可以增加有效输出、过牌或加快关键配合。'}`] : []),
         '这是固定对手试打的表现达成度（百分比）；越高表示这些测试中的清敌进度与保命表现越接近本测试目标。它不是胜率，也不是敌人难度使用的强度预算。',
+        '清敌进度按敌方实际剩余生命计算；欲望通过满溢后的伤害、控制或恢复产生收益，不直接折成清敌进度。',
         '自动试打不一定能发挥复杂连招的全部实力，分数供构筑参考，不代表你的操作上限。',
     ];
     const scenarioBreakdown = [...complete]
@@ -200,7 +299,7 @@ function assessMeasuredBuild(measurement) {
         ...(scenarioBreakdown.length ? [`本次场景对账（按达成度从高到低）：${scenarioBreakdown.join('；')}。总分${total ?? '—'}%是这些场景达成度的中位数，不是把各场景或输出、生命等分量相加。`] : []),
         '百分比来自实际试打：胜利记为100%；未结束样本按65%清敌进度与35%剩余生命计算；战败样本最高25%。每类对手先选实际样本整体表现最好的打法，再取各类对手达成度的中位数。案例中的中位输出和中位剩余生命只用于核对记录，不单独解释分数高低；原因只引用试打记录中的输出、失血、剩余生命、有效行动与胜负，不推断未测得的归因。',
     ];
-    return { spec: 'mwg.measured-build-assessment/v1', score: total, cases, dimensions, recommendations, methodology, completed: complete.length };
+    return { spec: 'mwg.measured-build-assessment/v2', score: total, cases, dimensions, recommendations, methodology, completed: complete.length };
 }
 
 ;// ./src/runtime/messageVariableMerge.ts
@@ -213,6 +312,7 @@ const equal = (a, b) => {
     const keys = Object.keys(a);
     return keys.length === Object.keys(b).length && keys.every(key => Object.hasOwn(b, key) && equal(a[key], b[key]));
 };
+const messageVariableValuesEqual = equal;
 /** Apply only the UI transaction's delta to the latest snapshot. Node content
  * completion does not increment route revision, so revision checks alone lose it.
  * Conflicting leaves/arrays reject atomically; never replay an effectful updater. */
@@ -236,12 +336,12 @@ function mergeMessageVariableUpdate(base, next, latest) {
                 else if (!had) {
                     if (now && !equal(after[key], current[key]))
                         throw new Error(`后台已更新 ${path}.${key}，本次操作未保存，请重试`);
-                    result[key] = structuredClone(after[key]);
+                    Object.defineProperty(result, key, { value: structuredClone(after[key]), enumerable: true, writable: true, configurable: true });
                 }
                 else {
                     if (!now)
                         throw new Error(`后台已移除 ${path}.${key}，本次操作未保存，请重试`);
-                    result[key] = merge(before[key], after[key], current[key], `${path}.${key}`);
+                    Object.defineProperty(result, key, { value: merge(before[key], after[key], current[key], `${path}.${key}`), enumerable: true, writable: true, configurable: true });
                 }
             }
             return result;
@@ -251,7 +351,57 @@ function mergeMessageVariableUpdate(base, next, latest) {
     return merge(base, next, latest, '变量');
 }
 
+;// ./src/runtime/mvuWriteCoordinator.ts
+
+// The extension and character iframe load separate bundles. Their coordinator
+// must live on their common same-origin window, not in either module closure.
+const key = Symbol.for('mwg.mvu-write-coordinator/v1');
+function owner() {
+    const root = globalThis;
+    return root.window?.top || root.parent || root;
+}
+/** Serialize only the short authoritative commit, never AI work or user input. */
+function withMvuWriteLock(operation, registry = owner()) {
+    const previous = registry[key] || Promise.resolve();
+    const result = previous.catch(() => undefined).then(operation);
+    const tail = result.then(() => undefined, () => undefined);
+    registry[key] = tail;
+    void tail.then(() => { if (registry[key] === tail)
+        delete registry[key]; });
+    return result;
+}
+async function commitMvuUpdate(input) {
+    return withMvuWriteLock(async () => {
+        input.assertCurrent();
+        const latest = input.read();
+        const runSeed = input.base.stat_data?.run?.seed;
+        if (runSeed !== undefined && latest.stat_data?.run?.seed !== runSeed)
+            throw new Error('当前冒险已变化，已取消旧冒险保存');
+        const merged = mergeMessageVariableUpdate(input.base, input.next, latest);
+        if (!merged.stat_data || typeof merged.stat_data !== 'object' || Array.isArray(merged.stat_data))
+            throw new Error('拒绝保存根结构无效的 MVU 数据');
+        const beforeRevision = Number(latest.stat_data?.run?.stateRevision);
+        const nextRevision = Number(merged.stat_data.run?.stateRevision);
+        if (Number.isFinite(beforeRevision) && Number.isFinite(nextRevision) && nextRevision < beforeRevision)
+            throw new Error(`拒绝写入旧爬塔状态：${nextRevision} < ${beforeRevision}`);
+        input.assertCurrent();
+        await input.write(structuredClone(merged));
+        input.assertCurrent();
+        const written = input.read();
+        // Verify our write set. Unrelated host metadata may change during a write.
+        let verified = false;
+        try {
+            verified = messageVariableValuesEqual(mergeMessageVariableUpdate(input.base, input.next, written), written);
+        }
+        catch { /* A post-write conflict is not a promise that nothing was saved. */ }
+        if (!verified)
+            throw new Error('MVU 保存回读与本次修改不一致，保存结果未确认，已停止后续操作');
+        return written;
+    });
+}
+
 ;// ./src/runtime/characterRuntime.ts
+
 
 
 
@@ -365,7 +515,7 @@ function normalizeEmbeddedBattleVariables(variables) {
                 continue;
             const transferable = operation === 'apply_status' ? ['stacks', 'to', 'targets'] : ['to', 'targets'];
             const allowed = new Set([
-                'id', 'name', 'emoji', 'description', 'type', 'stacks_change', 'tick_timing', 'maxStacks', 'stun', 'character_emoji', 'protection', 'triggers', '$meta',
+                'id', 'name', 'emoji', 'description', 'type', 'stacks_change', 'tick_timing', 'tags', 'intercepts', 'defense', 'creates', 'maxStacks', 'stun', 'character_emoji', 'protection', 'triggers', '$meta',
                 ...transferable,
             ]);
             if (Object.keys(nested).some(key => !allowed.has(key)))
@@ -658,7 +808,7 @@ function summarizeMvuUpdate(result) {
             }
         }
     };
-    const requiredTowerExtensionVersion = '1.0.2';
+    const requiredTowerExtensionVersion = '1.0.4';
     const towerExtensionRepositoryUrl = 'https://github.com/HolyFishhh/magic-girl-world.git';
     const towerExtensionManifestUrl = 'https://raw.githubusercontent.com/HolyFishhh/magic-girl-world/extension/manifest.json';
     const compareTowerExtensionVersions = (left, right) => {
@@ -773,26 +923,8 @@ function summarizeMvuUpdate(result) {
             const extensionName = installedExtensionName.split(/[\\/]/).filter(Boolean).pop()
                 || 'magic-girl-world';
             const globalExtension = extensionModule?.extensionTypes?.[installedExtensionName] === 'global';
-            // Early ZIP releases were copied as `magic-girl-design-assistant` and
-            // therefore have no .git directory. SillyTavern's update endpoint can
-            // only pull Git repositories. Migrate that known legacy folder once to
-            // the official extension-branch installation; all later updates then
-            // use the normal update endpoint.
             if (/^magic-girl-design-assistant$/i.test(extensionName)) {
-                const removed = await parentWindow.fetch('/api/extensions/delete', {
-                    method: 'POST',
-                    headers: scriptModule.getRequestHeaders(),
-                    body: JSON.stringify({ extensionName, global: globalExtension }),
-                });
-                if (!removed?.ok) {
-                    const detail = await removed?.text?.();
-                    throw new Error(detail || `旧版组件迁移失败（${removed?.status || 'network'}）`);
-                }
-                const installed = await extensionModule.installExtension(towerExtensionRepositoryUrl, globalExtension, 'extension');
-                if (!installed)
-                    throw new Error('旧版组件已移除，但新版组件安装没有完成，请重新点击安装');
-                towerExtensionVersionCache = null;
-                return true;
+                throw new Error('旧手动安装不支持自动迁移，请手动安装当前版本组件后刷新酒馆。现有组件未改动。');
             }
             const response = await parentWindow.fetch('/api/extensions/update', {
                 method: 'POST',
@@ -821,6 +953,7 @@ function summarizeMvuUpdate(result) {
             designAssistantEnabled: true,
             simulationSeeds: 8,
             showNotifications: true,
+            towerBattleNarrative: true,
             debug: false,
         };
         let settings = { ...defaultSettings };
@@ -835,6 +968,7 @@ function summarizeMvuUpdate(result) {
                 ? Number(settings.simulationSeeds)
                 : 8;
             settings.showNotifications = settings.showNotifications !== false;
+            settings.towerBattleNarrative = settings.towerBattleNarrative !== false;
             settings.debug = settings.debug === true;
             if (Number.isFinite(stored?.orbPosition?.x) && Number.isFinite(stored?.orbPosition?.y)) {
                 orbPosition = { x: Number(stored.orbPosition.x), y: Number(stored.orbPosition.y) };
@@ -872,6 +1006,28 @@ function summarizeMvuUpdate(result) {
         let applyTimer;
         let streamRenderTimer;
         let extraAnalysisActive = false;
+        // Ephemeral evidence only: never persist prompts or final text in lightweight diagnostics.
+        let parsedFloorObserved = false;
+        let helperFinalOutput = null;
+        const supersededHelperGenerationIds = new Set();
+        let requestAudit = null;
+        const missingUpdateDetail = '本轮 MVU 未得到可解析的 <UpdateVariable> 变量更新块；解析事件可能仅含原楼层剧情，请查看请求摘要和助手完成输出，不能据此断言模型原始返回内容';
+        const getMissingUpdateDetail = () => {
+            // COMMAND_PARSED can be the previous story, not the second request's answer.
+            // Only an explicit refusal at the start of the current request's observed
+            // helper final can refine this error; never use story/stream text as proof.
+            const final = helperFinalOutput;
+            if (!final || !monitorState.requestCapturedAt || final.capturedAt < monitorState.requestCapturedAt
+                || (final.generationId !== monitorState.generationId
+                    && !final.generationId.startsWith(`${monitorState.generationId}-attempt-`)))
+                return missingUpdateDetail;
+            const visible = final.text.replace(/<(?:Analysis|Reasoning|Thinking)>[\s\S]*?<\/(?:Analysis|Reasoning|Thinking)>/gi, '').trim();
+            if (/^(?:I (?:can't|cannot) help with (?:this|that) request\b|I (?:can't|cannot|won't) (?:comply|assist)\b|(?:抱歉[，,。\s]*)?(?:我(?:无法|不能)(?:帮助|协助|继续)|无法协助))/i.test(visible)
+                && !/<UpdateVariable>[\s\S]*?<\/UpdateVariable>/i.test(visible)) {
+                return '本轮助手完成输出明确表示无法协助，没有提供 <UpdateVariable> 变量更新块；请检查助手完成输出并调整请求内容。此事件并非提供方网络原始响应';
+            }
+            return missingUpdateDetail;
+        };
         let manualRepairActive = false;
         let manualRepairSession = 0;
         let manualRepairGenerationId = null;
@@ -948,6 +1104,7 @@ function summarizeMvuUpdate(result) {
                     ? Number(remote.simulationSeeds)
                     : settings.simulationSeeds,
                 showNotifications: remote.showNotifications !== false,
+                towerBattleNarrative: remote.towerBattleNarrative !== false,
                 debug: remote.debug === true,
             };
             const changed = Object.keys(next).some(key => next[key] !== settings[key]);
@@ -974,11 +1131,7 @@ function summarizeMvuUpdate(result) {
             monitorState.timeline = monitorState.timeline.slice(-40);
             persistDiagnostic();
         };
-        const diagnosticText = (value) => String(value || '').slice(0, 12000)
-            .replace(/https?:\/\/[^\s<>"']+/gi, '[地址已隐藏]')
-            .replace(/Bearer\s+[^\s,;]+/gi, 'Bearer [已隐藏]')
-            .replace(/\bsk-[A-Za-z0-9_-]+/g, '[密钥已隐藏]')
-            .replace(/((?:api[_-]?key|authorization|token|password|cookie)\s*[=:]\s*)[^\s,;]+/gi, '$1[已隐藏]');
+        const diagnosticText = (value) => redactDiagnosticText(value).slice(0, 12000);
         const currentDiagnostic = () => ({
             spec: 'mwg.generation-diagnostic/v1', chatId: monitorState.chatId,
             generationId: monitorState.generationId, phase: monitorState.phase,
@@ -1107,6 +1260,7 @@ function summarizeMvuUpdate(result) {
             });
         };
         let evidenceHistorySignature = '';
+        let evidenceHistoryRequest = 0;
         let evidenceHistoryLimit = 5;
         let evidenceHistoryChat = null;
         const readEvidenceProvider = () => registryHost.MagicGirlDesignAssistant || host.MagicGirlDesignAssistant || null;
@@ -1179,16 +1333,12 @@ function summarizeMvuUpdate(result) {
             // Unlike the lightweight copy, the file export must not silently shorten
             // usable fallback output. It still redacts transport secrets and removes
             // embedded reasoning, and declares both transformations below.
-            const text = withoutReasoning
-                .replace(/https?:\/\/[^\s<>"']+/gi, '[地址已隐藏]')
-                .replace(/Bearer\s+[^\s,;]+/gi, 'Bearer [已隐藏]')
-                .replace(/\bsk-[A-Za-z0-9_-]+/g, '[密钥已隐藏]')
-                .replace(/((?:api[_-]?key|authorization|token|password|cookie)\s*[=:]\s*)[^\s,;]+/gi, '$1[已隐藏]');
+            const text = redactDiagnosticText(withoutReasoning);
             if (!text)
                 return null;
             return {
                 source: 'mvu-monitor-live-output',
-                stage: isPartial ? 'streaming-partial' : 'monitor-raw-output',
+                stage: isPartial ? 'streaming-partial' : parsedFloorObserved ? 'mvu-command-parsed' : 'monitor-raw-output',
                 completeness: isPartial ? 'partial' : 'latest-monitor-value',
                 text,
                 characters: text.length,
@@ -1207,11 +1357,7 @@ function summarizeMvuUpdate(result) {
             const withoutReasoning = retained.rawOutput
                 .replace(/<(?:Analysis|Reasoning|Thinking)>[\s\S]*?<\/(?:Analysis|Reasoning|Thinking)>/gi, '')
                 .trim();
-            const text = withoutReasoning
-                .replace(/https?:\/\/[^\s<>"']+/gi, '[地址已隐藏]')
-                .replace(/Bearer\s+[^\s,;]+/gi, 'Bearer [已隐藏]')
-                .replace(/\bsk-[A-Za-z0-9_-]+/g, '[密钥已隐藏]')
-                .replace(/((?:api[_-]?key|authorization|token|password|cookie)\s*[=:]\s*)[^\s,;]+/gi, '$1[已隐藏]');
+            const text = redactDiagnosticText(withoutReasoning);
             if (!text)
                 return null;
             return {
@@ -1236,24 +1382,67 @@ function summarizeMvuUpdate(result) {
             const container = root?.querySelector('[data-mwg-evidence-history]');
             if (!container || !monitorState.settingsVisible)
                 return;
-            if (evidenceHistoryChat !== monitorState.chatId) {
-                evidenceHistoryChat = monitorState.chatId;
+            const chatId = monitorState.chatId;
+            if (evidenceHistoryChat !== chatId) {
+                evidenceHistoryChat = chatId;
                 evidenceHistoryLimit = 5;
                 evidenceHistorySignature = '';
+                container.replaceChildren();
             }
             const provider = readEvidenceProvider();
             if (typeof provider?.getRecentGenerationEvidence !== 'function') {
-                container.textContent = '请刷新页面加载新版原文列表；完整记录仍可导出。';
+                container.textContent = '生成记录组件尚未就绪，请刷新完整酒馆页面。';
                 return;
             }
-            const page = provider.getRecentGenerationEvidence(evidenceHistoryLimit);
-            if (page.chatId !== monitorState.chatId)
-                return;
-            const signature = JSON.stringify([page.chatId, page.total, evidenceHistoryLimit, page.records.map((r) => [r.key, r.recordedAt, r.text.length])]);
+            const signature = JSON.stringify([chatId, evidenceHistoryLimit, provider.getGenerationEvidenceStatus?.()]);
             if (signature === evidenceHistorySignature && container.childElementCount)
                 return;
             evidenceHistorySignature = signature;
-            renderGenerationEvidencePage(container, page, () => { evidenceHistoryLimit += 5; renderEvidenceHistory(); });
+            const request = ++evidenceHistoryRequest;
+            const current = () => request === evidenceHistoryRequest && monitorState.chatId === chatId && root?.contains(container);
+            if (!container.childElementCount)
+                container.textContent = '正在读取生成记录索引…';
+            void Promise.resolve().then(() => provider.getRecentGenerationEvidence(evidenceHistoryLimit)).then(page => {
+                if (!current() || page.chatId !== chatId)
+                    return;
+                renderGenerationEvidencePage(container, page, () => { evidenceHistoryLimit += 5; renderEvidenceHistory(); }, async (key) => {
+                    const record = await provider.getGenerationEvidenceRecord(key);
+                    if (!current())
+                        throw new Error('聊天或列表已变化，已取消旧原文读取');
+                    return { text: record.prompt ?? record.response ?? JSON.stringify({ outcome: record.outcome, error: record.error }, null, 2), full: record };
+                });
+                const status = container.ownerDocument.createElement('small');
+                status.textContent = page.storage?.error
+                    ? `文件保存未完成：${page.storage.error}。未归档原文仍保留在聊天内。`
+                    : page.storage?.pending ? `有 ${page.storage.pending} 条爬塔或修改记录尚未归档，原文仍保留在聊天内。` : '爬塔及修改记录归档后保存在本地酒馆文件中，展开时读取并校验；开局记录沿用原存储方式。';
+                container.prepend(status);
+                if (page.storage?.error || page.storage?.pending) {
+                    const retry = container.ownerDocument.createElement('button');
+                    retry.type = 'button';
+                    retry.textContent = '重试保存完整记录';
+                    retry.addEventListener('click', () => {
+                        retry.disabled = true;
+                        void Promise.resolve().then(() => provider.retryGenerationEvidenceArchive()).then(() => {
+                            if (current()) {
+                                evidenceHistorySignature = '';
+                                renderEvidenceHistory();
+                            }
+                        }).catch(error => { if (current())
+                            status.textContent = diagnosticText(error); })
+                            .finally(() => { retry.disabled = false; });
+                    });
+                    container.prepend(retry);
+                }
+            }).catch(error => {
+                if (!current())
+                    return;
+                container.textContent = diagnosticText(error instanceof Error ? error.message : error);
+                const retry = container.ownerDocument.createElement('button');
+                retry.type = 'button';
+                retry.textContent = '重试读取记录';
+                retry.addEventListener('click', () => { evidenceHistorySignature = ''; renderEvidenceHistory(); });
+                container.append(retry);
+            });
         };
         const renderMvuProcess = () => {
             // Generation evidence is diagnostic UI only. A malformed retained record
@@ -1272,6 +1461,7 @@ function summarizeMvuUpdate(result) {
             const liveOrRaw = monitorState.rawOutput || monitorState.pendingOutput;
             setAllText('[data-mwg-mvu-timeline]', timeline || '尚未开始新的 MVU 请求');
             setAllText('[data-mwg-mvu-summary]', monitorState.output || (monitorState.phase === 'generating' ? '等待模型返回…' : '本次尚无变量变化摘要'));
+            setAllText('[data-mwg-mvu-raw-label]', parsedFloorObserved ? 'MVU 楼层解析内容（非模型原始响应）' : '当前生成输出');
             setAllText('[data-mwg-mvu-raw]', liveOrRaw || '模型尚未返回完整内容');
             setAllText('[data-mwg-mvu-request]', monitorState.requestContent
                 || '尚未捕获本轮实际模型请求。');
@@ -1480,7 +1670,7 @@ function summarizeMvuUpdate(result) {
                 ].filter(Boolean).join(' · '),
                 value: `${Number(entry.share || 0).toFixed(1)}%`,
             })), '当前构筑尚未形成稳定流派，通用散卡仍可正常使用。');
-            setAllText('[data-mwg-scatter-share]', profile ? `按实际机制证据分配占比，同一张牌的多个作用分摊权重。通用散卡 ${Math.round(Number(profile.scatterShare || 0))}%；基础纯攻击／格挡不参与流派，仍参与战斗计算。` : '');
+            setAllText('[data-mwg-scatter-share]', profile ? `占比是机制证据权重，不是强度、胜率或成型概率；同一张牌的多个作用分摊权重。通用散卡 ${Math.round(Number(profile.scatterShare || 0))}%；基础纯攻击／格挡不参与流派，仍参与战斗计算。` : '');
             const graphNodes = Array.isArray(snapshot?.knowledgeGraph?.nodes)
                 ? snapshot.knowledgeGraph.nodes.filter((node) => node?.kind === 'archetype').slice(0, 8)
                 : [];
@@ -1692,6 +1882,8 @@ function summarizeMvuUpdate(result) {
 #mwg-mvu-monitor .mwg-process-grid{display:grid!important;gap:8px;margin-top:9px}
 #mwg-mvu-monitor .mwg-process-block{min-width:0;border:1px solid #e7d8d2;border-radius:11px;background:#fff;overflow:hidden}
 #mwg-mvu-monitor .mwg-process-block>summary{padding:9px 11px;color:#7b4a60;font:500 11px/1.35 var(--mwg-body);cursor:pointer}
+#mwg-mvu-monitor [data-mwg-diagnostic-feedback]{display:block;margin:8px 0;color:#715b65;font:400 12px/1.6 var(--mwg-body);overflow-wrap:anywhere}
+#mwg-mvu-monitor [data-mwg-mvu-request-meta]{color:#715b65;font:400 11px/1.5 var(--mwg-body)}
 #mwg-mvu-monitor .mwg-process-block pre{display:block!important;max-height:230px;margin:0!important;padding:10px 11px!important;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;border-top:1px dashed #eadbd5;background:#fffdfc;color:#67545b;font:400 10px/1.55 var(--mwg-body)!important;scrollbar-width:thin}
 #mwg-mvu-monitor .mwg-refresh-design{display:flex!important;width:100%!important;min-height:36px!important;margin:9px 0 0!important;padding:0 12px!important;align-items:center!important;justify-content:center!important;border:1px solid #d9bdc8!important;border-radius:10px!important;background:#fff7fa!important;color:#88405f!important;font:500 12px/1 var(--mwg-body)!important;cursor:pointer}
 #mwg-mvu-monitor .mwg-mvu-panel{position:fixed;top:max(12px,env(safe-area-inset-top));left:50%;display:none;width:min(700px,calc(100vw - 24px));max-height:min(74vh,720px);overflow:hidden;pointer-events:auto;transform:translateX(-50%);border:1px solid #e2c8bd;border-radius:18px;background:#fffaf7;box-shadow:0 20px 60px #30202a55}
@@ -1746,6 +1938,7 @@ function summarizeMvuUpdate(result) {
         <label class="mwg-difficulty-row"><span class="mwg-setting-copy"><strong>剧情战斗强度</strong><small>爬塔以80%为标准档，调节敌人耐久与出招压力；不是胜率，也不是双方评分的比例</small></span><select class="mwg-difficulty-select" data-mwg-difficulty aria-label="剧情战斗强度"><option value="10">10% 剧情体验</option><option value="50">50% 轻松</option><option value="80">80% 标准</option><option value="100">100% 困难</option><option value="110">110% 高压</option></select></label>
         <label class="mwg-setting-row"><span class="mwg-setting-copy"><strong>强度分析建议</strong><small>生成前提供数值范围，生成后只评分记录，不自动改写或拒绝敌人</small></span><input type="checkbox" data-mwg-design-setting="autoCalibration"><span class="mwg-switch" aria-hidden="true"></span></label>
         <label class="mwg-difficulty-row"><span class="mwg-setting-copy"><strong>模拟精度</strong><small>精度越高，随机牌序覆盖越多，后台计算耗时也会增加</small></span><select class="mwg-difficulty-select" data-mwg-design-setting="simulationSeeds" aria-label="模拟精度"><option value="8">快速 · 8组</option><option value="12">均衡 · 12组</option><option value="16">精细 · 16组</option><option value="24">深入 · 24组</option></select></label>
+        <label class="mwg-setting-row"><span class="mwg-setting-copy"><strong>爬塔战后剧情</strong><small>默认开启：按战斗日志生成剧情，在路线图上方显示；不阻塞后续节点生成</small></span><input type="checkbox" data-mwg-design-setting="towerBattleNarrative"><span class="mwg-switch" aria-hidden="true"></span></label>
         <label class="mwg-setting-row"><span class="mwg-setting-copy"><strong>显示强度提示</strong><small>在评分发现明显强弱偏差时显示建议，不修改当前敌人</small></span><input type="checkbox" data-mwg-design-setting="showNotifications"><span class="mwg-switch" aria-hidden="true"></span></label>
         <label class="mwg-setting-row"><span class="mwg-setting-copy"><strong>调试日志</strong><small>在控制台输出本轮注入的紧凑设计上下文和失败原因</small></span><input type="checkbox" data-mwg-design-setting="debug"><span class="mwg-switch" aria-hidden="true"></span></label>
         <button class="mwg-refresh-design" type="button" data-action="refresh-design">立即重新评估卡组</button>
@@ -1780,7 +1973,7 @@ function summarizeMvuUpdate(result) {
     <details class="mwg-settings-group" data-mwg-component="tower-install" open>
       <summary>爬塔组件需要安装</summary>
       <div class="mwg-group-body">
-        <div class="mwg-design-status-card"><strong data-mwg-tower-extension>需要设计辅助器 1.0.2 或更高版本</strong><small data-mwg-tower-requirement>安装完整扩展包后刷新酒馆；剧情模式不受影响。</small></div>
+        <div class="mwg-design-status-card"><strong data-mwg-tower-extension>需要设计辅助器 1.0.4 或更高版本</strong><small data-mwg-tower-requirement>安装完整扩展包后刷新酒馆；剧情模式不受影响。</small></div>
         <button class="mwg-extension-download" type="button" data-action="install-tower-extension">快捷安装爬塔组件</button>
         <a class="mwg-extension-download" href="${towerExtensionReleaseUrl}" target="_blank" rel="noopener noreferrer">安装失败时打开手动下载页面</a>
       </div>
@@ -1799,7 +1992,7 @@ function summarizeMvuUpdate(result) {
     <button class="mwg-card-repair-button" type="button" data-action="cancel-tower-generation" hidden>停止本次后台生成</button>
     <small data-mwg-diagnostic-feedback aria-live="polite">复制仅含阶段与校验信息；导出包含本次保留原文及候选，不附请求头或独立思考字段。含生成内容，分享前请检查隐私。</small>
   </div>
-  <div class="mwg-monitor-body"><div class="mwg-monitor-loading" data-mwg-monitor-loading><div><span class="mwg-monitor-spinner" aria-hidden="true"></span><strong data-mwg-monitor-loading-title>正在生成变量</strong><small data-mwg-monitor-loading-detail></small><small class="mwg-initial-wait-advisory" data-mwg-initial-wait-advisory></small><button class="mwg-card-repair-button mwg-initial-stop" type="button" data-action="cancel-tower-initial-start">停止本次开局生成</button><small class="mwg-initial-stop-feedback" data-mwg-initial-stop-feedback aria-live="polite"></small></div></div><div class="mwg-monitor-complete" data-mwg-monitor-complete><div><strong>变量更新已完成</strong><small>可以在下方查看实际请求、变化摘要与模型完整返回。</small></div></div><div class="mwg-monitor-process mwg-process-grid"><details class="mwg-process-block" open><summary>阶段时间线</summary><pre data-mwg-mvu-timeline></pre></details><details class="mwg-process-block" open><summary>变量变化摘要</summary><pre data-mwg-mvu-summary></pre></details><details class="mwg-process-block"><summary>实际模型请求 <small data-mwg-mvu-request-meta></small></summary><pre data-mwg-mvu-request></pre></details><details class="mwg-process-block"><summary>模型返回原文</summary><pre data-mwg-mvu-raw></pre></details><details class="mwg-process-block"><summary>服务返回的分析内容</summary><pre data-mwg-mvu-reasoning></pre></details></div></div>
+  <div class="mwg-monitor-body"><div class="mwg-monitor-loading" data-mwg-monitor-loading><div><span class="mwg-monitor-spinner" aria-hidden="true"></span><strong data-mwg-monitor-loading-title>正在生成变量</strong><small data-mwg-monitor-loading-detail></small><small class="mwg-initial-wait-advisory" data-mwg-initial-wait-advisory></small><button class="mwg-card-repair-button mwg-initial-stop" type="button" data-action="cancel-tower-initial-start">停止本次开局生成</button><small class="mwg-initial-stop-feedback" data-mwg-initial-stop-feedback aria-live="polite"></small></div></div><div class="mwg-monitor-complete" data-mwg-monitor-complete><div><strong>变量更新已完成</strong><small>可以在下方查看捕获请求、变化摘要与标明来源的输出。</small></div></div><div class="mwg-monitor-process mwg-process-grid"><details class="mwg-process-block" open><summary>阶段时间线</summary><pre data-mwg-mvu-timeline></pre></details><details class="mwg-process-block" open><summary>变量变化摘要</summary><pre data-mwg-mvu-summary></pre></details><details class="mwg-process-block"><summary>实际模型请求 <small data-mwg-mvu-request-meta></small></summary><pre data-mwg-mvu-request></pre></details><details class="mwg-process-block"><summary data-mwg-mvu-raw-label>当前生成输出</summary><pre data-mwg-mvu-raw></pre></details><details class="mwg-process-block"><summary>服务返回的分析内容</summary><pre data-mwg-mvu-reasoning></pre></details></div></div>
 </section>`;
             doc.body.appendChild(root);
             const diagnosticReport = () => api.getDiagnosticReport();
@@ -1823,34 +2016,49 @@ function summarizeMvuUpdate(result) {
                     .catch(() => { if (feedback)
                     feedback.textContent = '复制不可用，请点击导出排查记录'; });
             });
-            root.querySelector('[data-action="export-generation-diagnostic"]')?.addEventListener('click', () => {
-                const report = api.getDiagnosticExportReport();
-                const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json;charset=utf-8' });
-                const url = URL.createObjectURL(blob), link = doc.createElement('a');
-                link.href = url;
-                link.download = `mwg-generation-diagnostic-${Date.now()}.json`;
-                link.click();
-                setTimeout(() => URL.revokeObjectURL(url), 1000);
+            const exportRecords = async (button, diagnostic) => {
+                if (button.disabled)
+                    return;
+                const exportChatId = monitorState.chatId;
                 const feedback = root?.querySelector('[data-mwg-diagnostic-feedback]');
-                if (feedback)
-                    feedback.textContent = report.towerEvidence?.records?.some((record) => record.stage === 'response')
-                        ? '已导出含爬塔响应原文的排查记录；分享前请检查剧情和变量隐私。'
-                        : report.originalResponse.availability === 'available'
-                            ? '已导出含本次保留原文的排查记录；分享前请检查生成内容中的隐私。'
-                            : `已导出排查记录；没有可确认的原始响应：${report.originalResponse.reason}`;
-            });
-            root.querySelector('[data-action="export-generation-evidence"]')?.addEventListener('click', () => {
-                const history = readEvidenceHistory();
-                const towerHistory = readTowerEvidenceHistory();
-                const exportValue = { initialGeneration: history || { runs: [] }, towerGeneration: towerHistory || { records: [] } };
-                const blob = new Blob([JSON.stringify(exportValue, null, 2)], { type: 'application/json;charset=utf-8' });
-                const url = URL.createObjectURL(blob);
-                const link = doc.createElement('a');
-                link.href = url;
-                link.download = `mwg-generation-records-${Date.now()}.json`;
-                link.click();
-                setTimeout(() => URL.revokeObjectURL(url), 1000);
-            });
+                button.disabled = true;
+                const label = button.textContent;
+                button.textContent = '正在读取并校验记录…';
+                try {
+                    const initial = diagnostic ? null : readEvidenceHistory();
+                    const report = diagnostic ? await api.getDiagnosticExportReport()
+                        : { initialGeneration: initial || { runs: [] }, towerGeneration: await readTowerEvidenceHistory() || { records: [] } };
+                    if (monitorState.chatId !== exportChatId)
+                        throw new Error('聊天已切换，已取消旧记录导出');
+                    const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json;charset=utf-8' });
+                    const url = URL.createObjectURL(blob), link = doc.createElement('a');
+                    link.href = url;
+                    link.download = `mwg-generation-${diagnostic ? 'diagnostic' : 'records'}-${Date.now()}.json`;
+                    link.click();
+                    setTimeout(() => URL.revokeObjectURL(url), 1000);
+                    if (feedback)
+                        feedback.textContent = diagnostic && report.originalResponse?.availability !== 'available' && !report.towerEvidence?.records?.some((record) => record.stage === 'response')
+                            ? `已导出排查记录；没有可确认的原始响应：${report.originalResponse?.reason || '原文未保留'}`
+                            : '已导出完整保留记录；分享前请检查剧情和变量隐私。';
+                }
+                catch (error) {
+                    if (monitorState.chatId === exportChatId) {
+                        const message = diagnosticText(error instanceof Error ? error.message : error);
+                        if (feedback)
+                            feedback.textContent = `导出失败：${message}`;
+                        host.toastr?.error?.(message, '生成记录导出失败');
+                    }
+                }
+                finally {
+                    button.disabled = false;
+                    button.textContent = label;
+                }
+            };
+            for (const action of ['export-generation-diagnostic', 'export-generation-evidence']) {
+                root.querySelector(`[data-action="${action}"]`)?.addEventListener('click', event => {
+                    void exportRecords(event.currentTarget, action === 'export-generation-diagnostic');
+                });
+            }
             root.querySelector('[data-action="open-settings"]')?.addEventListener('click', () => {
                 if (root?.dataset.dragged === 'true') {
                     root.dataset.dragged = 'false';
@@ -2217,6 +2425,10 @@ function summarizeMvuUpdate(result) {
                     startedAt: 0, finishedAt: 0, candidateHasUpdateBlock: false,
                     variableWriteObserved: false, open: false, background: false, cardRepairFormVisible: false,
                 });
+                parsedFloorObserved = false;
+                helperFinalOutput = null;
+                supersededHelperGenerationIds.clear();
+                requestAudit = null;
                 manualRepairActive = false;
                 manualRepairSession += 1;
                 manualRepairGenerationId = null;
@@ -2232,6 +2444,11 @@ function summarizeMvuUpdate(result) {
                 const preserveCapturedRequest = monitorState.phase === 'generating'
                     && monitorState.requestCapturedAt > 0
                     && Date.now() - monitorState.requestCapturedAt < 5_000;
+                parsedFloorObserved = false;
+                helperFinalOutput = null;
+                supersededHelperGenerationIds.clear();
+                if (!preserveCapturedRequest)
+                    requestAudit = null;
                 monitorState.phase = 'generating';
                 monitorState.background = meta.structured === true;
                 monitorState.generationId = String(meta.generationId || '');
@@ -2287,11 +2504,53 @@ function summarizeMvuUpdate(result) {
                 if (narrative && ['success', 'error'].includes(monitorState.phase))
                     return;
                 const requestContent = serializeCapturedRequest(input.payload);
-                const duplicateNarrative = narrative && monitorState.timeline.at(-1)?.label === '捕获 preset 剧情请求'
-                    && requestContent === monitorState.requestContent && Date.now() - monitorState.requestCapturedAt < 1000;
+                const duplicateRequest = requestContent === monitorState.requestContent
+                    && monitorState.requestCapturedAt > 0 && Date.now() - monitorState.requestCapturedAt < 1000;
+                const duplicateNarrative = narrative && duplicateRequest
+                    && monitorState.timeline.at(-1)?.label === '捕获 preset 剧情请求';
+                if (!narrative && !duplicateRequest && !monitorState.background && !manualRepairActive) {
+                    // A story completion can arrive before the actual MVU request in the
+                    // same lifecycle. Never export that earlier helper final as the later
+                    // request's response, or pin the new request to its old generation ID.
+                    if (helperFinalOutput)
+                        supersededHelperGenerationIds.add(helperFinalOutput.generationId);
+                    helperFinalOutput = null;
+                    if (extraAnalysisActive && ['generating', 'applying'].includes(monitorState.phase)) {
+                        if (monitorState.generationId && !monitorState.generationId.startsWith('mvu-extra-')) {
+                            supersededHelperGenerationIds.add(monitorState.generationId);
+                        }
+                        monitorState.generationId = `mvu-extra-${Date.now()}`;
+                    }
+                }
                 monitorState.requestContent = requestContent;
                 monitorState.requestSource = String(input.source || 'MVU 二次请求');
                 monitorState.requestCapturedAt = Date.now();
+                // A content-free audit can reveal routing/format gaps without exporting
+                // the captured request, credentials, hidden reasoning or story text.
+                const payload = input.payload && typeof input.payload === 'object' ? input.payload : {};
+                // Match the actual prompt-transport priority used by injectDesignContext;
+                // auditing `messages` first can report a false missing-facts result when
+                // both `messages` and `prompt` exist and only `prompt` is sent/modified.
+                const requestField = ['prompt', 'messages', 'chat'].find(key => Array.isArray(payload[key]));
+                const messages = requestField ? payload[requestField] : [];
+                const textOf = (value) => typeof value === 'string' ? value
+                    : Array.isArray(value) ? value.map(part => typeof part === 'string' ? part : typeof part?.text === 'string' ? part.text : '').join('\n') : '';
+                const texts = messages.length ? messages.map((message) => textOf(message?.content ?? message))
+                    : [textOf(typeof input.payload === 'string' ? input.payload : payload.prompt)];
+                const joined = texts.join('\n');
+                requestAudit = {
+                    source: monitorState.requestSource, capturedAt: monitorState.requestCapturedAt,
+                    purpose: narrative ? 'preset-narrative' : 'observed-mvu-request',
+                    requestField: requestField || (typeof payload.prompt === 'string' ? 'prompt-text' : 'unknown'),
+                    messageCount: messages.length, characters: joined.length,
+                    roles: messages.map((message) => ['system', 'user', 'assistant', 'tool'].includes(message?.role) ? message.role : 'unknown'),
+                    hasDesignContextMarker: joined.includes('[MWG_DESIGN_CONTEXT/v1]'),
+                    hasUpdateVariable: /<UpdateVariable>/i.test(joined),
+                    hasMvuTask: /紧急变量更新任务|必须立即停止角色扮演|除了<UpdateVariable>块外不输出任何内容/.test(joined),
+                    hasOutputContract: joined.includes('固定顺序：') && joined.includes('_.set('),
+                    hasCurrentMvuFacts: joined.includes('[当前 MVU 游戏事实]'),
+                    note: '仅为请求捕获事件的固定标记检测摘要，不含请求正文；未命中不等于没有等义指令，也不证明提供方实际收到了这些指令。',
+                };
                 // Node narrative capture is passive inspection, not an MVU operation:
                 // it has no variable-update terminal event. Only an explicit structured
                 // begin (e.g. opening) owns that lifecycle; preserve it when active.
@@ -2341,7 +2600,8 @@ function summarizeMvuUpdate(result) {
                 render();
             },
             stream(text, generationId) {
-                if (monitorState.phase === 'idle')
+                if (monitorState.phase === 'idle' || monitorState.phase === 'success' || monitorState.phase === 'error'
+                    || (generationId && supersededHelperGenerationIds.has(generationId)))
                     return;
                 if (generationId && monitorState.generationId && generationId !== monitorState.generationId) {
                     if (monitorState.generationId.startsWith('mvu-extra-')) {
@@ -2357,8 +2617,26 @@ function summarizeMvuUpdate(result) {
                 monitorState.pendingOutput = typeof text === 'string' ? text : JSON.stringify(text, null, 2);
                 queueStreamRender();
             },
+            captureHelperFinal(text, generationId) {
+                // Only the active ordinary MVU request owns this observation. Structured
+                // requests keep their own durable evidence; unrelated/late IDs are ignored.
+                // MVU may lower its lifecycle flag before Tavern Helper announces the
+                // request's final. Require an observed request and active ordinary phase,
+                // not a still-high flag; old generation IDs are rejected separately.
+                if (monitorState.background || !monitorState.requestCapturedAt
+                    || !['generating', 'applying'].includes(monitorState.phase) || !generationId
+                    || supersededHelperGenerationIds.has(generationId) || typeof text !== 'string')
+                    return;
+                if (monitorState.generationId.startsWith('mvu-extra-'))
+                    monitorState.generationId = generationId;
+                if (generationId !== monitorState.generationId
+                    && !generationId.startsWith(`${monitorState.generationId}-attempt-`))
+                    return;
+                helperFinalOutput = { generationId, text, capturedAt: Date.now() };
+                pushTimeline('收到助手生成完成输出', `${text.length} 字符；此快照独立于 MVU 楼层解析`);
+            },
             reasoning(text) {
-                if (monitorState.phase === 'idle')
+                if (monitorState.phase === 'idle' || monitorState.phase === 'success' || monitorState.phase === 'error')
                     return;
                 monitorState.reasoning = typeof text === 'string' ? text : '';
                 if (monitorState.reasoning)
@@ -2366,6 +2644,11 @@ function summarizeMvuUpdate(result) {
                 render();
             },
             complete(result, generationId) {
+                // COMMAND_PARSED also fires for program-created user messages (including
+                // battle summaries). A completed MVU request must stay completed until
+                // the next begin(), even when that unrelated event carries no request ID.
+                if (monitorState.phase === 'success')
+                    return;
                 if (generationId
                     && monitorState.generationId
                     && generationId !== monitorState.generationId
@@ -2375,16 +2658,16 @@ function summarizeMvuUpdate(result) {
                     return;
                 const updateOutput = extractUpdateOutput(result);
                 const candidateHasUpdateBlock = /<UpdateVariable>[\s\S]*?<\/UpdateVariable>/i.test(updateOutput);
-                // COMMAND_PARSED receives the whole assistant floor in current MVU
-                // builds.  The monitor is for the second-stage response, so never
-                // repeat the first-stage story in the "raw model output" panel.
+                // COMMAND_PARSED receives the whole assistant floor, including the
+                // unchanged story after a failed extra request. It is not provider output.
+                parsedFloorObserved = true;
                 monitorState.rawOutput = updateOutput;
                 monitorState.candidateHasUpdateBlock = candidateHasUpdateBlock;
                 monitorState.output = summarizeMvuUpdate(updateOutput).join('\n');
                 monitorState.pendingOutput = '';
                 if (!monitorState.reasoning)
                     monitorState.reasoning = extractReturnedReasoning(result);
-                pushTimeline('模型返回完成', `${monitorState.rawOutput.length} 字符`);
+                pushTimeline('MVU 楼层解析完成', `${monitorState.rawOutput.length} 字符；${candidateHasUpdateBlock ? '含更新块' : '未含更新块，不代表第二轮模型原文'}`);
                 // COMMAND_PARSED may arrive after VARIABLE_UPDATE_ENDED in some MVU builds.
                 // A variable event alone is not success: program writes and rollback
                 // events also use the same hook. Require a complete model update block.
@@ -2392,7 +2675,7 @@ function summarizeMvuUpdate(result) {
                     if (candidateHasUpdateBlock)
                         api.success();
                     else
-                        api.fail(new Error('第二轮模型没有返回可解析的 <UpdateVariable> 变量更新块'));
+                        api.fail(new Error(getMissingUpdateDetail()));
                     return;
                 }
                 if (monitorState.phase === 'success' || monitorState.phase === 'error') {
@@ -2467,7 +2750,7 @@ function summarizeMvuUpdate(result) {
                     applyTimer = host.setTimeout?.(() => {
                         if (monitorState.phase !== 'applying' || monitorState.candidateHasUpdateBlock)
                             return;
-                        api.fail(new Error('第二轮模型没有返回可解析的 <UpdateVariable> 变量更新块'));
+                        api.fail(new Error(getMissingUpdateDetail()));
                     }, 1200);
                     render();
                     return;
@@ -2504,8 +2787,11 @@ function summarizeMvuUpdate(result) {
                     elapsedMs: Math.max(0, (latest.finishedAt || Date.now()) - latest.startedAt),
                     recentRequests: history.filter(entry => entry.generationId !== latest.generationId) };
             },
-            getDiagnosticExportReport: () => {
-                const retainedTowerHistory = readTowerEvidenceHistory();
+            getDiagnosticExportReport: async () => {
+                const exportChatId = monitorState.chatId, exportGenerationId = monitorState.generationId;
+                const retainedTowerHistory = await readTowerEvidenceHistory();
+                if (monitorState.chatId !== exportChatId || monitorState.generationId !== exportGenerationId)
+                    throw new Error('聊天或生成轮次已变化，已取消旧排查记录导出');
                 const towerEvidence = retainedTowerHistory?.chatId === monitorState.chatId
                     ? retainedTowerHistory : null;
                 const diagnostic = api.getDiagnosticReport();
@@ -2561,7 +2847,7 @@ function summarizeMvuUpdate(result) {
                     spec: 'mwg.generation-diagnostic-export/v2',
                     exportedAt: Date.now(),
                     localOnly: true,
-                    note: '导出仅保存在本机。轻量诊断不含请求、正文、思考或完整模型响应；如 evidence 可用，仅含同一聊天、同一生成轮次的既有最终输出快照；没有快照时才会附上标明来源与完成度的当前监视器输出。',
+                    note: '导出仅保存在本机。轻量诊断不含请求正文、剧情、思考或完整模型响应；evidence 优先附同聊天同轮次的保留记录，否则附标明来源的监视器回退。普通 MVU 另附无正文的请求检测摘要与当前页面观察到的助手完成输出；后者和楼层解析内容均不等于提供方原始网络响应。生成内容可能含隐私，分享前请检查。',
                     diagnostic: diagnostic || {
                         availability: 'missing',
                         reason: matched
@@ -2569,6 +2855,17 @@ function summarizeMvuUpdate(result) {
                             : '当前聊天没有轻量阶段记录。',
                     },
                     originalResponse,
+                    mvuRequestAudit: monitorState.generationId === generationId && requestAudit
+                        ? { generationId, ...requestAudit } : null,
+                    mvuHelperFinal: monitorState.generationId === generationId && helperFinalOutput
+                        ? (() => {
+                            const withoutReasoning = helperFinalOutput.text.replace(/<(?:Analysis|Reasoning|Thinking)>[\s\S]*?<\/(?:Analysis|Reasoning|Thinking)>/gi, '').trim();
+                            const text = redactDiagnosticText(withoutReasoning);
+                            return { source: 'tavern-helper-generation-ended', generationId: helperFinalOutput.generationId,
+                                capturedAt: helperFinalOutput.capturedAt, text, characters: text.length, truncated: false,
+                                reasoningRemoved: withoutReasoning !== helperFinalOutput.text.trim(), secretsRedacted: text !== withoutReasoning,
+                                note: '助手完成事件快照，按活动 MVU 轮次观察；临时轮次 ID 会绑定首个流式或完成事件，非网络级请求关联。可能已经过接口适配，不是提供方原始响应或 MVU 楼层正文。仅当前页面保留。' };
+                        })() : null,
                     evidence,
                     manualRepairEvidence: manualGenerationId
                         ? manualMatched
@@ -2706,6 +3003,7 @@ function summarizeMvuUpdate(result) {
         syncThinkingSetting();
         ensureDom();
         listen('js_stream_token_received_fully', (text, generationId) => api.stream(text, generationId));
+        listen('js_generation_ended', (text, generationId) => api.captureHelperFinal(text, generationId));
         listen('stream_reasoning_done', (reasoning) => api.reasoning(reasoning));
         const syncExtraAnalysis = () => {
             try {
@@ -2778,6 +3076,19 @@ function summarizeMvuUpdate(result) {
     const updateMvuMessageVariablesWith = async (messageId, updater) => {
         if (typeof updater !== 'function')
             throw new Error('消息变量更新器无效');
+        if (messageId === 'latest')
+            messageId = Number(host.getLastMessageId());
+        if (!Number.isInteger(messageId))
+            throw new Error('无法确定待保存的消息');
+        const chatId = mvuMonitor.getSnapshot().chatId;
+        const latestMessageId = host.getLastMessageId();
+        const swipeId = host.getChatMessages?.(messageId)?.at(-1)?.swipe_id;
+        const assertCurrent = () => {
+            if (destroyed || mvuMonitor.getSnapshot().chatId !== chatId
+                || host.getLastMessageId() !== latestMessageId
+                || host.getChatMessages?.(messageId)?.at(-1)?.swipe_id !== swipeId)
+                throw new Error('聊天、楼层或回复已变化，已取消旧页面保存');
+        };
         const key = String(messageId);
         const previous = messageVariableUpdateQueues.get(key) || Promise.resolve();
         let operation;
@@ -2787,27 +3098,16 @@ function summarizeMvuUpdate(result) {
             const mvu = getMvuApi();
             if (!mvu || typeof mvu.replaceMvuData !== 'function')
                 throw new Error('MVU replaceMvuData 接口不可用');
+            assertCurrent();
             const base = readMvuMessageVariables(messageId);
-            let next = await updater(cloneSettlementValue(base));
-            if (!isSettlementRecord(next) || !isSettlementRecord(next.stat_data)) {
+            const next = await updater(cloneSettlementValue(base));
+            if (!isSettlementRecord(next) || !isSettlementRecord(next.stat_data))
                 throw new Error('消息变量更新器返回了无效根结构');
-            }
-            // Content completion can change this snapshot without advancing route
-            // revision. Merge disjoint changes without replaying player actions.
-            const latest = readMvuMessageVariables(messageId);
-            next = mergeMessageVariableUpdate(base, next, latest);
-            const nextRevision = runRevision(next);
-            const authoritativeRevision = runRevision(latest);
-            if (nextRevision !== null
-                && authoritativeRevision !== null
-                && nextRevision < authoritativeRevision) {
-                throw new Error(`拒绝写入旧爬塔状态：${nextRevision} < ${authoritativeRevision}`);
-            }
-            await mvu.replaceMvuData(cloneSettlementValue(next), {
-                type: 'message',
-                message_id: messageId,
+            return commitMvuUpdate({
+                base, next, assertCurrent,
+                read: () => readMvuMessageVariables(messageId),
+                write: value => mvu.replaceMvuData(value, { type: 'message', message_id: messageId }),
             });
-            return cloneSettlementValue(next);
         });
         const tail = operation.then(() => undefined, () => undefined);
         messageVariableUpdateQueues.set(key, tail);

@@ -2,7 +2,7 @@ import type { CardSelectorFilter, CardValueOperator, CardValueStat, EffectProgra
 import { type SelectableCard } from './cardSelectorRuntime';
 import type { CardCost } from './combatResource';
 export type CardPatchScope = 'resolution' | 'turn' | 'until_played' | 'combat' | 'run' | 'permanent';
-export type CardKeyword = 'retain' | 'exhaust' | 'ethereal' | 'innate';
+export type CardKeyword = 'retain' | 'exhaust' | 'ethereal' | 'innate' | 'sly';
 export type CardCostOperator = 'add' | 'subtract' | 'multiply' | 'divide' | 'set' | 'min' | 'max';
 export type CardPatchSourceKind = 'card' | 'relic' | 'status' | 'ability' | 'system' | 'enemy_action' | 'summon' | 'enchantment' | 'affliction';
 export interface CardPatchSource {
@@ -74,6 +74,7 @@ export interface CardPatchBaseSnapshot {
     exhaust?: boolean;
     ethereal?: boolean;
     innate?: boolean;
+    sly?: boolean;
     replayCount?: number;
     xValueBonus?: number;
 }
@@ -83,6 +84,7 @@ export interface PatchableCard extends SelectableCard {
     exhaust?: boolean;
     ethereal?: boolean;
     innate?: boolean;
+    sly?: boolean;
     replayCount?: number;
     xValueBonus?: number;
     doubleEffect?: boolean;

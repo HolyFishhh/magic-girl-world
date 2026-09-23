@@ -1,10 +1,13 @@
+import { type InterceptionRule } from './interception';
 import { type StatusTrigger } from './battleTriggers';
 import { type CompactCardDescriptionOptions } from './contentDescription';
 import type { EffectProgram } from './effectDsl';
 import { type DamageProtectionRule } from './damageProtection';
+import { type StatusDefenseRule } from './statusDefense';
 export type StatusRuntimeEffect = EffectProgram;
 export type StatusTickTiming = 'before_action' | 'after_action';
 export interface RuntimeStatusDefinition {
+    tags?: string[];
     id: string;
     name: string;
     emoji: string;
@@ -20,6 +23,9 @@ export interface RuntimeStatusDefinition {
     character_emoji?: string;
     triggers: Partial<Record<StatusTrigger, EffectProgram[]>>;
     protection?: DamageProtectionRule;
+    defense?: StatusDefenseRule;
+    intercepts?: InterceptionRule[];
+    interceptCreates?: unknown;
 }
 export interface StatusDefinitionRegistryLoadResult {
     loaded: readonly RuntimeStatusDefinition[];

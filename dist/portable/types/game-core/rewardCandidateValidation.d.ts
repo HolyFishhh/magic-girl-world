@@ -38,7 +38,7 @@ export declare function readRewardCandidateQuantity(category: RewardCandidateCat
  * `statuses`. Equal duplicate ids are harmless and collapse to one definition;
  * conflicting duplicates are rejected before anything reaches persistent MVU.
  */
-export declare function readRewardCandidateSupportStatuses(value: unknown): RewardCandidateSupportStatusesResult;
+export declare function readRewardCandidateSupportStatuses(value: unknown, referenceDefinitions?: readonly unknown[]): RewardCandidateSupportStatusesResult;
 export declare function rewardStatusDefinitionsEqual(left: Record<string, unknown>, right: Record<string, unknown>): boolean;
 /** Validate an AI reward before it is committed to persistent MUV state. */
 export declare function validateRewardCandidate(category: RewardCandidateCategory, value: unknown): RewardCandidateValidationResult;

@@ -4,6 +4,7 @@ import { type DynamicCardCostRule } from './dynamicCardCost';
 import type { CoreEffectState, EffectExecutionContext } from './effectDsl';
 import type { SelectableCard } from './cardSelectorRuntime';
 import { type CardAttachment } from './cardAttachment';
+import { type CardPaymentPlan, type CardPaymentSelection, type PaymentSummon } from './cardPayment';
 import { type CardResourcePayment, type CardCost, type CombatResourcePool } from './combatResource';
 export interface CardPlayCard extends CardRuleCard {
     /** Card-level pre-payment gate: a matching living summon must be present. */
@@ -17,6 +18,9 @@ export interface CardPlayState<TCard extends CardPlayCard> {
     hasOpponent: boolean;
     summonTemplateIds?: Iterable<string>;
     hand: readonly TCard[];
+    hp?: number;
+    summons?: readonly PaymentSummon[];
+    selectedPayment?: CardPaymentSelection;
     energy: number;
     /** Custom/current resource amounts; energy is always read from the dedicated compatibility field. */
     resources?: CombatResourcePool;
@@ -32,7 +36,7 @@ export interface CardPlayState<TCard extends CardPlayCard> {
     dynamicCostState?: CoreEffectState;
     dynamicCostContext?: EffectExecutionContext;
 }
-export type CardPlayFailureCode = 'NO_OPPONENT' | 'WRONG_PHASE' | 'CARD_NOT_FOUND' | 'CURSE_UNPLAYABLE' | 'STUNNED' | 'DOMINATED_ATTACK' | 'SILENCED_SKILL' | 'RULE_DENIED' | 'RULE_LIMIT_REACHED' | 'INSUFFICIENT_ENERGY' | 'INSUFFICIENT_RESOURCE' | 'REQUIRED_SUMMON_MISSING';
+export type CardPlayFailureCode = 'NO_OPPONENT' | 'WRONG_PHASE' | 'CARD_NOT_FOUND' | 'CURSE_UNPLAYABLE' | 'STUNNED' | 'DOMINATED_ATTACK' | 'SILENCED_SKILL' | 'RULE_DENIED' | 'RULE_LIMIT_REACHED' | 'INSUFFICIENT_ENERGY' | 'INSUFFICIENT_RESOURCE' | 'INSUFFICIENT_ADDITIONAL_COST' | 'REQUIRED_SUMMON_MISSING';
 export interface CardPlayFailure {
     ok: false;
     code: CardPlayFailureCode;
@@ -51,9 +55,14 @@ export interface PreparedCardPlay<TCard extends CardPlayCard> {
     payment: CardResourcePayment;
     destination: PlayedCardDestination;
     repeatCount: number;
+    paymentPlans: CardPaymentPlan[];
+    selectedPayment: CardPaymentSelection;
 }
 export interface CommittedCardPlay<TCard extends CardPlayCard> extends PreparedCardPlay<TCard> {
     hand: TCard[];
+    hp?: number;
+    discardedCards: TCard[];
+    sacrificedIds: string[];
     energy: number;
     resources: Record<string, number>;
     cardsPlayedThisTurn: number;

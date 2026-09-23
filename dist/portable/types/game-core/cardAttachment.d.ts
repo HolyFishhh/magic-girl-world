@@ -112,13 +112,14 @@ export interface DiscardAutoPlayResolution {
 }
 export interface CardDiscardLifecycleResolution {
     triggersDiscardLifecycle: boolean;
+    sly: boolean;
     autoPlay: DiscardAutoPlayResolution | null;
 }
 /** Resolve one deterministic auto-play request without treating cleanup, scry, or ordinary moves as a discard. */
-export declare function resolveDiscardAutoPlay(card: Pick<CardWithAttachments, 'attachments'>, reason: CardMoveReason, phase: string): DiscardAutoPlayResolution | null;
+export declare function resolveDiscardAutoPlay(card: Pick<CardWithAttachments, 'attachments' | 'sly'>, reason: CardMoveReason, phase: string): DiscardAutoPlayResolution | null;
 /**
  * Classify one completed card move before firing discard programs, relics or Sly.
  * Cleanup, scry and non-hand moves remain journal events, but are not gameplay discards.
  */
-export declare function resolveCardDiscardLifecycle(card: Pick<CardWithAttachments, 'attachments'>, reason: CardMoveReason, source: 'hand' | 'drawPile' | 'discardPile' | 'exhaustPile', phase: string): CardDiscardLifecycleResolution;
+export declare function resolveCardDiscardLifecycle(card: Pick<CardWithAttachments, 'attachments' | 'sly'>, reason: CardMoveReason, source: 'hand' | 'drawPile' | 'discardPile' | 'exhaustPile', phase: string): CardDiscardLifecycleResolution;
 export declare function describeCardAttachmentRemaining(attachment: CardAttachment): string;

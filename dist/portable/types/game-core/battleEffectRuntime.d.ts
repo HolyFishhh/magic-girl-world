@@ -123,6 +123,7 @@ export interface BattleEffectRuntimePorts {
         amount: number;
         damageKind: import('./battleEventJournal').DamageKind;
         sourceEnemyId?: string;
+        sourceSummonId?: string;
         targetEnemyId?: string;
         /** Preserve an independent attacker's outgoing modifier snapshot during redirects. */
         sourceModifierSources?: Partial<Record<BattleModifierAttribute, readonly BattleModifierSource[]>>;
@@ -138,6 +139,7 @@ export interface BattleEffectRuntimePorts {
         amount: number;
         damageKind: import('./battleEventJournal').DamageKind;
         sourceEnemyId?: string;
+        sourceSummonId?: string;
         targetEnemyId?: string;
     }): Promise<{
         remainingDamage: number;
@@ -149,12 +151,41 @@ export interface BattleEffectRuntimePorts {
             defeated: boolean;
         }>;
     }>;
+    beforeDamageResolution?(request: {
+        target: BattleSide;
+        targetEnemyId?: string;
+        amount: number;
+        damageKind: import('./battleEventJournal').DamageKind;
+    }): Promise<{
+        amount: number;
+        cancelled: boolean;
+    }>;
+    capDamageByStatus?(request: {
+        target: BattleSide;
+        targetEnemyId?: string;
+        amount: number;
+        damageKind: import('./battleEventJournal').DamageKind;
+    }): Promise<number>;
+    preventHpLossByStatus?(request: {
+        target: BattleSide;
+        targetEnemyId?: string;
+        damageKind: import('./battleEventJournal').DamageKind;
+    }): Promise<boolean>;
+    retaliateAttackByStatus?(request: {
+        source: BattleSide;
+        target: BattleSide;
+        sourceEnemyId?: string;
+        sourceSummonId?: string;
+        targetEnemyId?: string;
+    }): Promise<void>;
     present?(event: BattleEffectRuntimeEvent): void;
 }
 export interface BattleEffectRuntimeContext {
     source: BattleSide;
     /** Stable identity for an enemy source while the legacy active alias may move. */
     sourceEnemyId?: string;
+    /** Stable identity when a summon, rather than its owning combatant, created the packet. */
+    sourceSummonId?: string;
     /** Stable identity for an enemy target selected by a multi-enemy selector. */
     targetEnemyId?: string;
     damageKind?: import('./battleEventJournal').DamageKind;

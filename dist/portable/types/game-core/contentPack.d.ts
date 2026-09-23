@@ -26,6 +26,8 @@ export interface ContentPack {
     };
 }
 export interface CreateContentPackInput {
+    /** Definitions owned by the calling library must not be replaced by a convenience preset. */
+    knownStatusIds?: Iterable<string>;
     cards?: unknown;
     statuses?: unknown;
     relics?: unknown;
