@@ -98,4 +98,37 @@ await assert.rejects(core.playBattleSessionCard(card.id,{...ports,executeCardEff
 assert.deepEqual(state,before);assert.equal(rollbacks,2);
 paymentEvents.length=0;
 const result=await core.playBattleSessionCard(card.id,ports);assert.equal(result.status,'completed');assert.equal(commits,1);assert.equal(executions,2);assert.equal(state.hp,9);assert.deepEqual(paymentEvents.map(e=>[e.replayIndex,e.phase,e.paidHp,e.paidDiscard,e.paidSacrifices]),[[0,'before',3,1,1],[0,'after',3,1,1],[1,'before',0,0,0],[1,'after',0,0,0]],'replay journals payment only on its first resolution');
+// Payment discard selection uses the same transactional host as authored card choices.
+// Cancelling the modal must abort the entire card play, not just close the UI.
+const { TavernCardSelectionHost } = require('../src/fish/core/cardSelectionHost.ts');
+const { CardSystem } = require('../src/fish/combat/cardSystem.ts');
+const paymentSelectionHost = TavernCardSelectionHost.getInstance();
+const previousPresenter = paymentSelectionHost.presentation;
+const paymentCandidates = [{ id: 'cost_card_a' }, { id: 'cost_card_b' }];
+const paymentPlan = { id: 'normal', name: '通常支付', affordable: true,
+  extra: { discard: { count: 1 } }, discardCandidates: paymentCandidates, sacrificeCandidates: [] };
+const paymentSystem = Object.create(CardSystem.prototype);
+paymentSystem.cardSelectionHost = paymentSelectionHost;
+paymentSystem.gameStateManager = { getPlayer: () => ({ resources: {} }) };
+let paymentModalRequest;
+try {
+  paymentSelectionHost.presentation = { selectCards: async (_cards, request) => {
+    paymentModalRequest = request;
+    return null;
+  } };
+  await assert.rejects(paymentSystem.choosePayment([paymentPlan]), error => error.code === 'CHOICE_CANCELLED');
+  assert.equal(paymentModalRequest.allowCancel, true);
+  assert.equal(paymentModalRequest.cancelLabel, '取消出牌');
+  paymentSelectionHost.presentation.selectCards = async (_cards, request) => {
+    paymentModalRequest = request;
+    return ['cost_card_b'];
+  };
+  assert.deepEqual(await paymentSystem.choosePayment([paymentPlan]), {
+    optionId: 'normal', discardIds: ['cost_card_b'], sacrificeIds: [],
+  });
+  paymentSelectionHost.presentation.selectCards = async () => ['not_a_candidate'];
+  await assert.rejects(paymentSystem.choosePayment([paymentPlan]), /选择弃牌费用无效/);
+} finally {
+  paymentSelectionHost.presentation = previousPresenter;
+}
 console.log('PASS card payment: schema/compile/display, alternative X/resource affordability, exact HP/discard/sacrifice costs, free constraints, stale/corrupt choices, save parity, replay and cancellation/effect rollback');
