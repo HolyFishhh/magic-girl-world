@@ -1,3 +1,4 @@
+import { INTERCEPTION_CONTRACT } from './interception';
 import { builtinStatusAuthoringContract } from './builtinStatusCatalog';
 import { STATUS_ACTION_CONTRACT } from './statusAction';
 import { DAMAGE_PROTECTION_AUTHORING_CLAUSES } from './damageProtection';
@@ -58,6 +59,7 @@ export function compactEffectProtocolSections(placement: EffectProtocolPlacement
       '基础抽牌修饰：passive/hold 使用 {modify:"draw_per_turn",add|subtract|multiply|divide|set:数值或合法stacks公式}，只调整玩家开局及每回合自动抽牌，结算时向下取整且至少0；主动draw不受影响，固有牌仍按原规则进入开局手牌。按状态当前层数计算，移除状态即失效；即时draw的负数不是少抽牌，limit_draw是每次抽牌上限，不是基础抽牌增减。',
       '状态操作：{apply_status:"状态ID",stacks?:层数,to?:目标}；{remove_status:"状态ID|all|buffs|debuffs",to?:目标}。值为字符串，stacks/to 与操作同级。block/energy/hp/max_hp/lust/max_lust/max_energy 是数值池而非状态ID，不为其补造状态。清空格挡用 set_block:0，增加格挡用 block，其余数值池用对应数值操作。',
       STATUS_ACTION_CONTRACT,
+      INTERCEPTION_CONTRACT,
     ] },
     { id: 'formulas', title: '公式与局部结果', clauses: [
       ...formulaAuthoringContractClauses(),
@@ -78,12 +80,12 @@ export function compactEffectProtocolSections(placement: EffectProtocolPlacement
     ] },
     { id: 'resources', title: '资源与支付', clauses: [
       formatCombatResourceAuthoringContract(placement),
-      '费用公式中，spent_energy 表示当前卡牌本次实际支付的能量，固定能量费与 energy X 费都可读取；card_played/attack_played/skill_played/power_played 的能力或遗物也可读取触发它的这次出牌实际支付能量，0费、减费、免费与X费均按实际值，不读卡面基础费用。x_value 只属于当前正在结算的 cost:"energy" 单能量 X 费。凡当前卡牌公式读取 spent_resource.资源ID，该卡 cost 必须包含同一资源ID；出牌事件监听指定资源支付则写 event_paid_resource.资源ID，全部组件合计写 event_paid_total。延迟效果及其他未来事件不继承支付上下文。',
+      '费用公式中，spent_energy 表示当前卡牌本次实际支付的能量，固定能量费与 energy X 费都可读取；card_played/attack_played/skill_played/power_played 的能力或遗物也可读取触发它的这次出牌实际支付能量，0费、减费、免费与X费均按实际值，不读卡面基础费用。x_value 只属于当前正在结算的 cost:"energy" 单能量 X 费。凡当前卡牌公式读取 spent_resource.资源ID，该卡至少一个付款方案的 cost 必须包含同一资源ID（本次未用的组件为0）；出牌事件监听指定资源支付则写 event_paid_resource.资源ID，全部组件合计写 event_paid_total。延迟效果及其他未来事件不继承支付上下文。',
     ] },
     { id: 'persistent', title: '持续规则', clauses: [
       '持续修饰：{modify:"damage"|"damage_taken"|"lust"|"lust_taken"|"heal"|"block"|"summon_capacity"|"draw_per_turn",add|subtract|multiply|divide|set:数值}。modify 为属性字符串，只配一种运算，不写 scope/selector/targets/stat/attribute/event；不存在 scope:"summon" 或 modify:"summon_damage"。',
       '持续数值只由常数和当前状态层数组成。状态自身 hold 中读取层数必须写裸 stacks，不读 self.status.ID.stacks。Power/遗物/能力的 passive 无状态层数上下文，使用常数。百分比写倍数：提高50%用 multiply:1.5，降低20%用 multiply:0.8，不写带百分号的字符串。',
-      'card_rule 的值同样直接是规则字符串，绝不能写成对象。replay 配 limit:数量或"all"、extra:正数、筛选字段，每回合前N张匹配牌额外完整结算，费用只付一次；free 配 limit:数量或"all"、可选 resources:"all"|资源ID数组及筛选字段，免除费用。',
+      'card_rule 的值同样直接是规则字符串，绝不能写成对象。replay 配 limit:数量或"all"、extra:正数、筛选字段，每回合前N张匹配牌额外完整结算，费用只付一次；free 配 limit:数量或"all"、可选 resources:"all"|资源ID数组及筛选字段，免除指定资源费用（不豁免 payment 中的生命/弃牌/献祭）。',
       '其他 card_rule：retain_hand/retain_block 不写 limit；limit_draw/limit_block_gain/limit_energy_gain 写非负 limit；deny_card_play/allow_card_play 至少一个筛选字段；limit_card_play 配筛选字段和非负 limit；card_destination 配筛选字段、destination、可选 priority。不需要的筛选字段省略，绝不写 name:""、origin:""、空数组或null。',
       '持续规则位置：modify/card_rule 仅在 Power/遗物/独立能力的 passive 或状态 triggers.hold；普通 Attack/Skill/Event/Curse 的根 effects 绝不能直接放 card_rule。card_rule 本身没有 scope:"turn"；card_rule 不接受 when/on；card_rule 额外不接受 trigger 专用的 ordinal/n/scope/event/phase/reason/source_kind/source_id/damage_type。limit 表示每回合前N张，“每回合第一张”只写 limit:1。',
       `条件持续规则通过状态存在与否控制：apply_status/remove_status、stacks_change 决定寿命，规则放 triggers.hold。普通 Attack/Skill 实现“本回合下一张或前N张牌免费/重放”：根 effects 写 {apply_status:"临时状态ID",stacks:1,to:"self"}，在 ${placement === 'initial-draft' ? 'registry.statuses' : '同一结果 statuses'} 中登记该状态，hold 放 card_rule，根 stacks_change:"reset" 使其回合末清除；说明与此时机一致。`,

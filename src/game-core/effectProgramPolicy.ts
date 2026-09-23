@@ -1,3 +1,4 @@
+import { paymentCostComponents } from './cardPayment';
 import {
   validateEffectProgram,
   type ConditionExpression,
@@ -22,6 +23,7 @@ export interface EffectProgramPolicyOptions {
   allowSpentResources?: ReadonlySet<string>;
   /** Resource IDs whose resolved `all`/X value may be read by the program. */
   allowXResources?: ReadonlySet<string>;
+  allowPendingResolution?: boolean;
   allowStatusStacks?: boolean;
   allowNarrate?: boolean;
   requireSingleNarrate?: boolean;
@@ -60,6 +62,7 @@ interface NormalizedPolicy {
   allowXValue: boolean;
   allowSpentResources: ReadonlySet<string>;
   allowXResources: ReadonlySet<string>;
+  allowPendingResolution: boolean;
   allowStatusStacks: boolean;
   allowNarrate: boolean;
   requireSingleNarrate: boolean;
@@ -81,6 +84,7 @@ function normalizePolicy(options: EffectProgramPolicyOptions): NormalizedPolicy 
     allowXValue: options.allowXValue === true,
     allowSpentResources: new Set(options.allowSpentResources || []),
     allowXResources: new Set(options.allowXResources || []),
+    allowPendingResolution: options.allowPendingResolution === true,
     allowStatusStacks: options.allowStatusStacks === true,
     allowNarrate: options.allowNarrate === true,
     requireSingleNarrate: options.requireSingleNarrate === true,
@@ -110,6 +114,7 @@ function visitNumber(
 ): void {
   if (typeof expression === 'number') return;
   if (expression.op === 'var') {
+    if (expression.path === 'context.pending_amount' && !policy.allowPendingResolution) addIssue(issues, path, 'PENDING_AMOUNT_NOT_ALLOWED', 'pending_amount 仅能用于结算前拦截');
     if (expression.path === 'context.spent_energy' && !policy.allowSpentEnergy) {
       addIssue(issues, path, 'SPENT_ENERGY_NOT_ALLOWED', 'spent_energy 只允许用于当前实际支付能量的卡牌主效果');
     }
@@ -177,7 +182,7 @@ function visitCondition(
 function generatedCardPolicy(card: GeneratedCardDefinition): NormalizedPolicy {
   const isPower = card.type === 'Power';
   const isEvent = card.type === 'Event';
-  const costs = normalizeCardCost(card.cost);
+  const costs = paymentCostComponents(card);
   return normalizePolicy({
     triggerPolicy: isPower ? 'require_root_or_status' : 'forbid',
     modifierPolicy: 'forbid',

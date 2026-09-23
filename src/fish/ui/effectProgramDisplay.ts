@@ -83,12 +83,13 @@ export class EffectProgramDisplay {
     return compactContentToDisplayTags({
       protection: (value as { protection?: unknown })?.protection,
       defense: (value as { defense?: unknown })?.defense,
+      intercepts: (value as { intercepts?: unknown })?.intercepts,
     }, { enemyNames });
   }
 
-  public cardToTags(card: { effectProgram?: EffectProgram; program?: EffectProgram; requiresSummonTemplateId?: string }, context: Pick<EffectDisplayContext, 'damageAmountText'> = {}): EffectDisplayTag[] {
+  public cardToTags(card: { effectProgram?: EffectProgram; program?: EffectProgram; requiresSummonTemplateId?: string; payment?: unknown }, context: Pick<EffectDisplayContext, 'damageAmountText'> = {}): EffectDisplayTag[] {
     const state = GameStateManager.getInstance().getGameState();
-    return [...cardRequirementDisplayTags(card.requiresSummonTemplateId, {summonNames: collectSummonDisplayNames(state, card)}), ...this.programToTags(card.effectProgram || card.program, context)];
+    return [...compactContentToDisplayTags({ requires_summon: card.requiresSummonTemplateId, payment: card.payment }, { ...resolveResourceContext(context), summonNames: collectSummonDisplayNames(state, card) }), ...this.programToTags(card.effectProgram || card.program, context)];
   }
 
   public attachmentToTags(attachments?: readonly CardAttachment[]): EffectDisplayTag[] {

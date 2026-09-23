@@ -1,3 +1,4 @@
+import { paymentCostComponents, validateCardPayment } from '../../game-core/cardPayment';
 import { validateStructuredTriggerInput } from '../../game-core/compactEffectDsl';
 import { isEmptyProtectionEffect } from '../../game-core/damageProtection';
 import {
@@ -71,7 +72,7 @@ function compileCardEffects(
   cost: CardCost | undefined,
   options: { statusNames?: Readonly<Record<string, string>> } = {},
 ): EffectProgram | null {
-  const costComponents = normalizeCardCost(cost);
+  const costComponents = paymentCostComponents({ cost, payment: value.payment });
   const validateProgram = (program: EffectProgram): EffectProgram | null => {
     const policy = validateEffectProgramPolicy(program, {
       triggerPolicy: type === 'Power' ? 'require_root_or_status' : 'forbid',
@@ -138,6 +139,7 @@ export function normalizeCardDefinition(
   options: { statusNames?: Readonly<Record<string, string>> } = {},
 ): NormalizedCardDefinition | null {
   if (!isContentRecord(value) || hasRemovedEffectFields(value)) return null;
+  if (validateCardPayment(value.payment)) return null;
   const id = readText(value, 'id');
   const name = readText(value, 'name');
   const type = readText(value, 'type', 'Skill');
@@ -201,6 +203,7 @@ export function normalizeCardDefinition(
     effectProgram,
     ...(discardEffectProgram ? { discardEffectProgram } : {}),
     retain: value.retain === true,
+    payment: value.payment ? structuredClone(value.payment) : undefined,
     lifecycle: value.lifecycle ? structuredClone(value.lifecycle) : undefined,
     exhaust: type === 'Power' || value.exhaust === true,
     ethereal: value.ethereal === true,

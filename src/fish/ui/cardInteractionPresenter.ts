@@ -22,6 +22,7 @@ export interface CardSelectionModalRequest {
   minimum: number;
   maximum: number;
   allowCancel: boolean;
+  cancelLabel?: string;
   resources?: Readonly<Record<string, Pick<CombatResourceState, 'name' | 'emoji'>>>;
 }
 
@@ -130,7 +131,7 @@ export class TavernCardInteractionPresenter {
               </div>
             </div>
             <div class="modal-footer">
-              ${allowCancel ? '<button class="btn btn-secondary cancel-selection">返回上一级</button>' : ''}
+              ${allowCancel ? `<button class="btn btn-secondary cancel-selection">${escapeHtml(request.cancelLabel || '返回上一级')}</button>` : ''}
               <button class="btn btn-primary confirm-selection" ${minimum > 0 ? 'disabled' : ''}>确认选择</button>
             </div>
           </div>

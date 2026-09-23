@@ -729,6 +729,7 @@ export class BattleUI {
       discardEffectProgram: card.discardEffectProgram,
       retain: card.retain || false,
       lifecycle: card.lifecycle,
+      payment: card.payment,
       exhaust: card.exhaust || false,
       ethereal: card.ethereal || false,
       sly: card.sly || false,

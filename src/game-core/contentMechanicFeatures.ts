@@ -202,6 +202,8 @@ function collect(value: unknown, state: {
     return;
   }
   if (!isRecord(value)) return;
+  if (isRecord(value.payment)) state.operations.add('card_payment');
+  if (Array.isArray(value.intercepts) && value.intercepts.length) state.operations.add('interception');
 
   // A compiled node must be classified by its executable `op`, never by a
   // coincidental field name such as a summon `block: 0` or card metadata.
@@ -321,6 +323,8 @@ function axesFor(operations: ReadonlySet<string>, targets: ReadonlySet<string>, 
   if (has('modify_card', 'patch_card', 'upgrade_card', 'double')) axes.add('卡牌成长');
   if (has('attach_card', 'enchantment', 'affliction')) axes.add('附着');
   if (has('replay', 'replay_current', 'auto_play')) axes.add('回响');
+  if (has('interception')) axes.add('结算拦截');
+  if (has('card_payment')) axes.add('费用转换');
   if (has('free', 'reduce_cost', 'dynamic_cost')) axes.add('费用转换');
   if (resources.size || has('resource', 'set_resource', 'summon_resource', 'set_summon_resource')) axes.add('自定义资源');
   if (has('x_cost', 'x_formula')) axes.add('X费用');
@@ -348,6 +352,8 @@ function rolesFor(operations: ReadonlySet<string>, axes: readonly string[], cond
   if (has('execute', 'kill', 'x_formula')) roles.add('终结');
   if (has('patch_card', 'upgrade_card', 'schedule', 'modify', 'card_rule', 'trigger')) roles.add('成长');
   if (has('apply_status', 'remove_status', 'discard', 'exhaust', 'end_turn', 'card_rule')) roles.add('控制');
+  if (has('interception')) roles.add('控制');
+  if (has('card_payment')) roles.add('风险');
   if (has('curse', 'affliction') || (has('damage', 'lust') && operations.has('self_target'))) roles.add('风险');
   return [...roles];
 }

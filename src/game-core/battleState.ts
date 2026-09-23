@@ -104,6 +104,7 @@ export interface Card extends Partial<CardIdentity> {
   /** Optional player-facing line shown when this card resolves. */
   dialogue?: string;
   unique?: boolean;
+  payment?: import('./cardPayment').CardPaymentSpec;
   lifecycle?: import('./cardLifecycle').CardLifecycle;
   id: string;
   originalId?: string;
@@ -134,6 +135,7 @@ export interface Card extends Partial<CardIdentity> {
 }
 
 export interface StatusEffect {
+  interceptionUses?: import('./interception').InterceptionUsage;
   id: string;
   name: string;
   type: 'buff' | 'debuff' | 'neutral' | 'ens';

@@ -1,3 +1,4 @@
+import { validateInterceptions, type InterceptionRule } from './interception';
 import { STATUS_TRIGGERS, type StatusTrigger } from './battleTriggers';
 import { compileCompactEffectList } from './compactEffectDsl';
 import { describeCompactStatus, normalizeChinesePlayerDescription, type CompactCardDescriptionOptions } from './contentDescription';
@@ -27,6 +28,8 @@ export interface RuntimeStatusDefinition {
   triggers: Partial<Record<StatusTrigger, EffectProgram[]>>;
   protection?: DamageProtectionRule;
   defense?: StatusDefenseRule;
+  intercepts?: InterceptionRule[];
+  interceptCreates?: unknown;
 }
 
 export interface StatusDefinitionRegistryLoadResult {
@@ -90,6 +93,7 @@ export function normalizeRuntimeStatusDefinition(
   if (maxStacks !== undefined && (!Number.isInteger(maxStacks) || maxStacks < 1 || maxStacks > 999)) return null;
   const protection = normalizeDamageProtectionRule(value.protection);
   if (value.protection !== undefined && !protection) return null;
+  if (validateInterceptions(value.intercepts, value.creates)) return null;
   const defense = normalizeStatusDefenseRule(value.defense);
   if (value.defense !== undefined && !defense) return null;
   const description = describeCompactStatus(value, options);
@@ -112,6 +116,7 @@ export function normalizeRuntimeStatusDefinition(
     triggers,
     ...(protection ? { protection } : {}),
     ...(defense ? { defense } : {}),
+    ...(value.intercepts ? { intercepts: structuredClone(value.intercepts) as InterceptionRule[], interceptCreates: value.creates ? structuredClone(value.creates) : undefined } : {}),
   };
 }
 

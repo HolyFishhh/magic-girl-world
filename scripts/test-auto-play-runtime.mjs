@@ -66,6 +66,19 @@ assert.deepEqual(runtimePlayed, [
 const system = Object.create(CardSystem.prototype);
 system.gameStateManager = store;
 system.activeAutoPlayIds = new Set();
+let transactionId = 0;
+system.sessionHost = {
+  beginTransaction: () => {
+    const token = `auto_play_${++transactionId}`;
+    store.createSnapshot(token);
+    return token;
+  },
+  commitTransaction: token => store.deleteSnapshot(token),
+  rollbackTransaction: token => {
+    store.restoreSnapshot(token);
+    store.deleteSnapshot(token);
+  },
+};
 system.presentation = { animateTriggeredCard: async () => {} };
 const resolved = [];
 system.executeCardEffect = async (entry, _target, payment) => {
@@ -88,7 +101,7 @@ assert.deepEqual(after.player.drawPile.map(entry => entry.id), ['bottom']);
 assert.deepEqual(after.player.discardPile.map(entry => entry.id), ['paid', 'top']);
 assert.equal(after.player.energy, 3);
 assert.equal(after.cardsPlayedThisTurn, 1, 'automatic plays count for history and formulas');
-assert.equal(after.cardRuleUsesThisTurn, 0, 'automatic plays do not consume manual free/Replay windows');
+assert.equal(after.cardRuleUsesThisTurn, 1, 'automatic plays count once toward play rules, not again for Replay');
 const playedEvents = after.eventJournal.events.filter(event => event.kind === 'card_played');
 assert.equal(playedEvents.length, 4, 'each Replay emits before and after causal events');
 assert.equal(playedEvents.every(event => event.automatic && event.cause.reason === 'auto_play'), true);

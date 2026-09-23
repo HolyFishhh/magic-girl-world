@@ -120,12 +120,16 @@ console.log('PASS status action: public/AST schemas, compilation, host/lifecycle
 require('tsconfig-paths/register');
 const {extractTowerInitialRepairSlotTargets:plan,parseTowerInitialSlotRepairResponse:parse,mergeTowerInitialSlotRepair:merge}=require('../src/sillytavern-extension/controller.ts');
 const repairSource={player:{statuses:[{id:'siphon',name:'夺取',emoji:'✨',type:'buff',tags:['ritual'],description:'夺取仪式',triggers:{turn_start:[{block:'wrong'},effect]}}]}};
+repairSource.player.statuses[0].intercepts=[{id:'ward',window:'before_damage',amount:'max(0,pending_amount-1)'}];
+repairSource.player.statuses[0].creates=[{id:'fee',name:'献祭',type:'Skill',cost:0,payment:{additional:{hp:2}},effects:{block:3}}];
 const targets=plan(repairSource,'battle.statuses[0]：状态定义不合法（具体原因：triggers.turn_start[0].block: 不支持的公式变量 wrong）');
 assert.equal(targets.length,1);
 const slots=Object.fromEntries(targets[0].slots.map(s=>[s.token,{action:s.action,value:s.kind==='description'?'夺取仪式':effect}]));
 const reply={spec:'mwg.tower-initial-slot-repair/v1',roots:{[targets[0].token]:{slots}},support_statuses:[],support_resources:[]};
 const repaired=merge(repairSource,targets,parse(reply,targets));
 assert.deepEqual(repaired.player.statuses[0].tags,['ritual']);
+assert.deepEqual(repaired.player.statuses[0].intercepts,repairSource.player.statuses[0].intercepts);
+assert.deepEqual(repaired.player.statuses[0].creates,repairSource.player.statuses[0].creates);
 assert.deepEqual(repaired.player.statuses[0].triggers.turn_start,[effect,effect]);
 assert.deepEqual(repairSource.player.statuses[0].triggers.turn_start[0],{block:'wrong'});
 console.log('PASS bounded status repair accepts new operation and preserves filters, tags and locked siblings');

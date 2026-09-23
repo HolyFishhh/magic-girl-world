@@ -4,9 +4,9 @@ import { resolveDynamicCardCostAtPlay, type DynamicCardCostRule } from './dynami
 import type { CoreEffectState, EffectExecutionContext } from './effectDsl';
 import type { SelectableCard } from './cardSelectorRuntime';
 import { resolveCardAttachmentPlayAccess, type CardAttachment } from './cardAttachment';
+import { cardPaymentPlans, defaultPaymentSelection, validPaymentSelection, type CardPaymentPlan, type CardPaymentSelection, type PaymentSummon } from './cardPayment';
 import {
   applyCardResourcePayment,
-  resolveCardResourcePayment,
   type CardResourcePayment,
   type CardCost,
   type CombatResourcePool,
@@ -25,6 +25,9 @@ export interface CardPlayState<TCard extends CardPlayCard> {
   hasOpponent: boolean;
   summonTemplateIds?: Iterable<string>;
   hand: readonly TCard[];
+  hp?: number;
+  summons?: readonly PaymentSummon[];
+  selectedPayment?: CardPaymentSelection;
   energy: number;
   /** Custom/current resource amounts; energy is always read from the dedicated compatibility field. */
   resources?: CombatResourcePool;
@@ -53,6 +56,7 @@ export type CardPlayFailureCode =
   | 'RULE_LIMIT_REACHED'
   | 'INSUFFICIENT_ENERGY'
   | 'INSUFFICIENT_RESOURCE'
+  | 'INSUFFICIENT_ADDITIONAL_COST'
   | 'REQUIRED_SUMMON_MISSING';
 
 export interface CardPlayFailure {
@@ -74,10 +78,15 @@ export interface PreparedCardPlay<TCard extends CardPlayCard> {
   payment: CardResourcePayment;
   destination: PlayedCardDestination;
   repeatCount: number;
+  paymentPlans: CardPaymentPlan[];
+  selectedPayment: CardPaymentSelection;
 }
 
 export interface CommittedCardPlay<TCard extends CardPlayCard> extends PreparedCardPlay<TCard> {
   hand: TCard[];
+  hp?: number;
+  discardedCards: TCard[];
+  sacrificedIds: string[];
   energy: number;
   resources: Record<string, number>;
   cardsPlayedThisTurn: number;
@@ -132,12 +141,10 @@ function inspectCardPlay<TCard extends CardPlayCard>(
     : card.cost;
   const effectiveCard = effectiveCost === card.cost ? card : ({ ...card, cost: effectiveCost } as TCard);
   const pool = { ...(state.resources || {}), energy: state.energy };
-  const payment = resolveCardResourcePayment(
-    effectiveCard.cost,
-    pool,
-    activeRules.free ? activeRules.freeResources || 'all' : undefined,
-    effectiveCard.xValueBonus,
-  );
+  const paymentPlans = cardPaymentPlans(effectiveCard, { hp: state.hp, hand: state.hand, summons: state.summons, resources: pool }, activeRules.free ? activeRules.freeResources || 'all' : undefined);
+  const plan = state.selectedPayment ? paymentPlans.find(p => p.id === state.selectedPayment!.optionId) : paymentPlans.find(p => p.affordable) || paymentPlans[0];
+  if (!plan || (plan.payment.affordable && !plan.affordable)) return { ok: false, code: 'INSUFFICIENT_ADDITIONAL_COST' };
+  const payment = plan.payment;
   if (!payment.affordable) {
     const shortage = payment.shortage!;
     if (shortage.resource !== 'energy') {
@@ -164,6 +171,8 @@ function inspectCardPlay<TCard extends CardPlayCard>(
     ok: true,
     card: effectiveCard,
     payment,
+    paymentPlans,
+    selectedPayment: state.selectedPayment || defaultPaymentSelection(plan),
     destination: activeRules.destination || resolvePlayedCardDestination(effectiveCard),
     repeatCount: 1 + Math.min(20, normalizedCounter(effectiveCard.replayCount ?? (effectiveCard.doubleEffect ? 1 : 0))) + activeRules.extraReplays,
   };
@@ -183,15 +192,24 @@ export function commitCardPlay<TCard extends CardPlayCard>(
   latest: CardPlayState<TCard>,
 ): CommitCardPlayResult<TCard> {
   const cardId = prepared.card.id;
-  const inspected = inspectCardPlay(cardId, latest);
+  const inspected = inspectCardPlay(cardId, { ...latest, selectedPayment: prepared.selectedPayment });
   if (!inspected.ok) return inspected;
+  const plan = inspected.paymentPlans.find(p => p.id === inspected.selectedPayment.optionId)!;
+  if (!validPaymentSelection(plan, inspected.selectedPayment)) return { ok: false, code: 'INSUFFICIENT_ADDITIONAL_COST' };
+  const { discardIds, sacrificeIds } = inspected.selectedPayment;
+  inspected.payment.paidHp = plan.extra.hp || 0;
+  inspected.payment.paidDiscard = discardIds.length;
+  inspected.payment.paidSacrifices = sacrificeIds.length;
   const remainingResources = applyCardResourcePayment(
     { ...(latest.resources || {}), energy: latest.energy },
     inspected.payment,
   );
   return {
     ...inspected,
-    hand: latest.hand.filter(card => card.id !== cardId),
+    hand: latest.hand.filter(card => card.id !== cardId && !discardIds.includes(card.id)),
+    hp: latest.hp === undefined ? undefined : latest.hp - (plan.extra.hp || 0),
+    discardedCards: latest.hand.filter(card => discardIds.includes(card.id)),
+    sacrificedIds: [...sacrificeIds],
     energy: remainingResources.energy || 0,
     resources: Object.fromEntries(Object.entries(remainingResources).filter(([id]) => id !== 'energy')),
     cardsPlayedThisTurn: normalizedCounter(latest.cardsPlayedThisTurn) + 1,

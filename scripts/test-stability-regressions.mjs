@@ -1,6 +1,8 @@
 import { spawnSync } from 'node:child_process';
 
 const checks = [
+  'interception-contract',
+  'card-payment-contract',
   'status-action-contract',
   'card-removal-permissions',
   'archetype-score-accuracy',

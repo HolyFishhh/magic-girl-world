@@ -1,3 +1,5 @@
+import { resolveInterceptions, type InterceptionSource, type PendingResolution } from '../../game-core/interception';
+import type { CardResourcePayment } from '../../game-core/combatResource';
 import { executeStatusAction, type StatusActionSpec } from '../../game-core/statusAction';
 import {
   addModifierOperation,
@@ -83,6 +85,10 @@ export interface ModernEffectExecutionContext {
   /** Every resource actually paid by the current card resolution. */
   spentResources?: Readonly<Record<string, number>>;
   paidEnergy?: number;
+  pendingAmount?: number;
+  paidHp?: number;
+  paidDiscard?: number;
+  paidSacrifices?: number;
   paidTotal?: number;
   paidResources?: Readonly<Record<string, number>>;
   /** X values resolved independently for every `all` cost component. */
@@ -124,6 +130,7 @@ export class UnifiedEffectExecutor {
   private readonly triggerHost: TavernBattleTriggerHost;
   private _cardSystem?: CardSystem;
   private executionContext: ModernEffectExecutionContext & { sourceIsPlayer: boolean } = { sourceIsPlayer: false };
+  private readonly activeInterceptions = new Set<string>();
   private pendingDeaths = new Set<string>();
   private pendingDeathDetails = new Map<string, {
     actorId: string;
@@ -150,6 +157,7 @@ export class UnifiedEffectExecutor {
       recordResolvedEvent: event => this.recordResolvedBattleEffectEvent(event),
       dispatchTriggers: dispatches => this.dispatchBattleTriggers(dispatches),
       handleLustOverflow: (target, context) => this.handleLustOverflow(target, context),
+      beforeDamageResolution: request => this.resolvePendingWindow({ window: 'before_damage', subjectId: request.target === 'player' ? 'player' : request.targetEnemyId || this.gameStateManager.getEnemy()!.id, subjectSide: request.target, amount: request.amount, damageKind: request.damageKind, turn: this.gameStateManager.getGameState().currentTurn }),
       capDamageByStatus: async request => {
         const entity = request.target === 'player'
           ? this.gameStateManager.getPlayer()
@@ -427,6 +435,81 @@ export class UnifiedEffectExecutor {
    * damage transaction. Exact IDs are carried by targetEnemyId, never read from
    * the mutable active-enemy alias.
    */
+  public async interceptCardPlay(card: Card, payment: CardResourcePayment | undefined, replayIndex: number): Promise<boolean> {
+    const paid = replayIndex === 0 ? payment : undefined;
+    const result = await this.resolvePendingWindow({ window: 'before_card_play', subjectId: 'player', subjectSide: 'player', amount: 0,
+      cardType: card.type, turn: this.gameStateManager.getGameState().currentTurn,
+      context: { eventPaidEnergy: paid?.spentEnergy || 0, eventPaidTotal: Object.values(paid?.spent || {}).reduce((a,b) => a+b,0), eventPaidResources: paid?.spent,
+        eventPaidHp: paid?.paidHp || 0, eventPaidDiscard: paid?.paidDiscard || 0, eventPaidSacrifices: paid?.paidSacrifices || 0 } });
+    return result.cancelled;
+  }
+
+  private async resolvePendingWindow(pending: PendingResolution): Promise<{ amount: number; cancelled: boolean }> {
+    const store = this.gameStateManager;
+    const holders = [
+      { id: 'player', side: 'player' as const, summon: false, key: 'combatant:player' },
+      ...store.getEnemies({ livingOnly: true }).map(e => ({ id: e.id, side: 'enemy' as const, summon: false, key: `combatant:enemy:${e.id}` })),
+      ...store.getSummons().map(s => ({ id: s.instanceId, side: s.owner, summon: true, key: `summon:${s.owner}:${s.instanceId}` })),
+    ];
+    const sources: InterceptionSource[] = [];
+    for (const holder of holders) {
+      const readHolder = () => holder.summon ? store.getSummonById(holder.id) : holder.side === 'player' ? store.getPlayer() : store.getEnemyById(holder.id);
+      const entity = readHolder();
+      if (!entity || (entity.currentHp <= 0 && (!('hasHp' in entity) || entity.hasHp !== false))) continue;
+      for (const status of entity.statusEffects || []) {
+        const definition = this.dynamicStatusManager.getStatusDefinition(status.id);
+        for (const rule of definition?.intercepts || []) {
+          const readStatus = () => {
+            const live = readHolder();
+            return live && (live.currentHp > 0 || ('hasHp' in live && live.hasHp === false)) ? live.statusEffects?.find(s => s.id === status.id) : undefined;
+          };
+          sources.push({ key: `${holder.key}/${status.id}/${rule.id}`, holderId: holder.id, side: holder.side, rule, creates: definition?.interceptCreates,
+            read: () => { const s = readStatus(); return s ? { stacks: s.stacks, usage: s.interceptionUses } : undefined; },
+            state: () => this.createCoreEffectState(holder.side === 'player', holder.summon ? store.getSummonById(holder.id) || undefined : undefined,
+              holder.side === 'enemy' ? (holder.summon ? store.getEnemyById((entity as SummonUnit).summonerId || '') : store.getEnemyById(holder.id)) || undefined : undefined),
+            saveUsage: usage => {
+              const live = readHolder(); if (!live) return;
+              const statusEffects = (live.statusEffects || []).map(s => s.id === status.id ? { ...s, interceptionUses: usage } : s);
+              if (holder.summon) { const summons = store.readSummons(); summons.living = summons.living.map(s => s.instanceId === holder.id ? { ...s, statusEffects: statusEffects as SummonUnit['statusEffects'] } : s); store.writeSummons(summons); }
+              else if (holder.side === 'player') store.updatePlayer({ statusEffects });
+              else store.updateEnemyById(holder.id, { statusEffects });
+            },
+            consume: async count => {
+              if (holder.summon) { await this.triggerHost.removeSummonStatusStacks(holder.id, status.id, count); return; }
+              const bound = holder.side === 'enemy' && store.beginEnemyResolution(holder.id);
+              try { await this.triggerHost.removeStatusStacks(holder.side, status.id, count); }
+              finally { if (bound) store.endEnemyResolution(holder.id); }
+            },
+            execute: async (program, context) => {
+              const liveEntity = readHolder();
+              if (!liveEntity) return;
+              await this.executeEffectProgram(program, holder.side === 'player', {
+                pendingAmount: context.pendingAmount, paidEnergy: context.eventPaidEnergy, paidTotal: context.eventPaidTotal, paidResources: context.eventPaidResources,
+                paidHp: context.eventPaidHp, paidDiscard: context.eventPaidDiscard, paidSacrifices: context.eventPaidSacrifices,
+                statusContext: { ...status, stacks: context.statusStacks ?? status.stacks },
+                ...(holder.summon ? { summonContext: liveEntity as SummonUnit, summonStatusContext: { summonId: holder.id } } : {}),
+                ...(holder.side === 'enemy' ? { battleContext: { enemyId: holder.summon ? (liveEntity as SummonUnit).summonerId : holder.id } } : {}),
+              });
+            },
+            present: () => this.presentation.addLog(`${'name' in entity ? entity.name : '玩家'}的「${status.name}」拦截了${pending.window === 'before_damage' ? '伤害' : '出牌'}结算`, 'action', { type: 'status', name: status.name, details: definition?.description }),
+          });
+        }
+      }
+    }
+    return resolveInterceptions(pending, sources, this.activeInterceptions);
+  }
+
+  public async notifySacrificeCosts(units: import('../../game-core/summonUnit').SummonUnit[], card: Card): Promise<void> {
+    const previous = this.executionContext;
+    this.executionContext = { sourceIsPlayer: true, cardContext: card };
+    try {
+      for (const unit of units) {
+        await this.triggerHost.processSummonUnitAbilities(unit, 'defeated', { summonId: unit.instanceId, reason: 'sacrifice' });
+        this.recordSummonDefeat(unit, 'dismiss');
+      }
+    } finally { this.executionContext = previous; }
+  }
+
   private async executeStatusAction(spec: StatusActionSpec, sourceIsPlayer: boolean): Promise<void> {
     const bind = (side: 'self' | 'opponent') => {
       const target = sourceIsPlayer === (side === 'self') ? 'player' : 'enemy';
@@ -1816,14 +1899,24 @@ export class UnifiedEffectExecutor {
   ): Promise<ReturnType<GameStateManager['damageSummons']>> {
     const hits: ReturnType<GameStateManager['damageSummons']>['hits'] = [];
     for (const summonId of [...new Set(targetIds)]) {
-      const before = this.gameStateManager.getSummonById(summonId);
+      let before = this.gameStateManager.getSummonById(summonId);
       if (!before || before.hasHp === false || before.currentHp <= 0) continue;
       const caps = (before.statusEffects || [])
         .map(status => this.dynamicStatusManager.getStatusDefinition(status.id)?.defense?.damage_cap)
         .filter((cap): cap is number => cap !== undefined);
       const requested = Math.max(0, roundBattleValue(packetRequested));
       const incoming = Math.max(0, roundBattleValue(amount));
-      const modified = caps.length ? Math.min(incoming, ...caps) : incoming;
+      const capped = caps.length ? Math.min(incoming, ...caps) : incoming;
+      const pending = capped > 0
+        ? await this.resolvePendingWindow({ window: 'before_damage', subjectId: summonId, subjectSide: before.owner, amount: capped, damageKind, turn: this.gameStateManager.getGameState().currentTurn })
+        : { amount: 0, cancelled: false };
+      before = this.gameStateManager.getSummonById(summonId);
+      if (!before || before.currentHp <= 0) continue;
+      if (pending.cancelled) {
+        hits.push({ summonId, requested, modified: 0, blocked: 0, hpLost: 0, defeated: false });
+        continue;
+      }
+      const modified = Math.max(0, roundBattleValue(pending.amount));
       const postBlock = bypassBlock ? modified : Math.max(0, roundBattleValue(modified - (before.block || 0)));
       const buffer = postBlock > 0
         ? before.statusEffects?.find(status => this.dynamicStatusManager.getStatusDefinition(status.id)?.defense?.prevent_hp_loss)
@@ -1841,7 +1934,7 @@ export class UnifiedEffectExecutor {
       };
       hits.push(hit);
       await this.dispatchSummonDamageTransition(before, hit, source.owner, damageKind);
-      if (damageKind === 'attack') await this.retaliateSummonAttack(this.gameStateManager.getSummonById(summonId) || before, source);
+      if (damageKind === 'attack' && !pending.cancelled) await this.retaliateSummonAttack(this.gameStateManager.getSummonById(summonId) || before, source);
       if (hit.defeated) this.recordSummonDefeat(before, 'damage');
     }
     return { state: this.gameStateManager.readSummons(), hits };

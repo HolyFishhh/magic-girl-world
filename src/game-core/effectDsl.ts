@@ -1,3 +1,4 @@
+import { validateCardPayment } from './cardPayment';
 import { isEmptyProtectionEffect, normalizeDamageProtectionRule } from './damageProtection';
 import { validateEnemyActionReferences } from './enemyActionReferences';
 import { validPersistentGrowthTarget } from './persistentGrowth';
@@ -171,6 +172,7 @@ export interface EffectCardAttachmentDefinition {
 
 export interface GeneratedCardDefinition {
   unique?: boolean;
+  payment?: import('./cardPayment').CardPaymentSpec;
   lifecycle?: import('./cardLifecycle').CardLifecycle;
   id: string;
   name: string;
@@ -609,6 +611,10 @@ export interface EffectExecutionContext {
   spentEnergy: number;
   /** Actual payment of the card-play event currently dispatched to a listener. */
   eventPaidEnergy?: number;
+  pendingAmount?: number;
+  eventPaidHp?: number;
+  eventPaidDiscard?: number;
+  eventPaidSacrifices?: number;
   eventPaidTotal?: number;
   eventPaidResources?: Readonly<Record<string, number>>;
   spentResources?: Readonly<Record<string, number>>;
@@ -1393,6 +1399,8 @@ function validateEffectCardAttachment(
 
 function validateGeneratedCard(value: unknown, path: string, issues: EffectValidationIssue[]): void {
   if (!isRecord(value)) return addIssue(issues, path, 'INVALID_GENERATED_CARD', '生成卡牌必须是对象');
+  const paymentIssue = validateCardPayment(value.payment);
+  if (paymentIssue) addIssue(issues, `${path}.payment`, 'INVALID_CARD_PAYMENT', paymentIssue);
   const lifecycleIssue = validateCardLifecycle(value.lifecycle);
   if (lifecycleIssue) addIssue(issues, `${path}.lifecycle`, 'INVALID_CARD_LIFECYCLE', lifecycleIssue);
   rejectUnknownKeys(
@@ -1407,7 +1415,7 @@ function validateGeneratedCard(value: unknown, path: string, issues: EffectValid
       'description',
       'program',
       'discardProgram',
-      'lifecycle',
+      'lifecycle', 'payment',
       'retain',
       'exhaust',
       'ethereal',
@@ -2543,6 +2551,10 @@ export function isSupportedVariablePath(path: string): boolean {
       'battle.skills_played_this_turn',
       'context.spent_energy',
       'context.event_paid_energy',
+      'context.pending_amount',
+      'context.event_paid_hp',
+      'context.event_paid_discard',
+      'context.event_paid_sacrifices',
       'context.event_paid_total',
       'context.x_value',
       'context.status_stacks',
@@ -2607,6 +2619,10 @@ export function resolveNumericVariable(path: string, state: CoreEffectState, con
   if (path === 'battle.skills_played_this_turn') return state.skillsPlayedThisTurn;
   if (path === 'context.spent_energy') return context.spentEnergy;
   if (path === 'context.event_paid_energy') return context.eventPaidEnergy ?? 0;
+  if (path === 'context.pending_amount') return context.pendingAmount ?? 0;
+  if (path === 'context.event_paid_hp') return context.eventPaidHp ?? 0;
+  if (path === 'context.event_paid_discard') return context.eventPaidDiscard ?? 0;
+  if (path === 'context.event_paid_sacrifices') return context.eventPaidSacrifices ?? 0;
   if (path === 'context.event_paid_total') return context.eventPaidTotal ?? 0;
   const eventPaidResource = path.match(/^context\.event_paid_resource\.([a-zA-Z_][a-zA-Z0-9_]*)$/);
   if (eventPaidResource) return context.eventPaidResources?.[eventPaidResource[1]] ?? 0;

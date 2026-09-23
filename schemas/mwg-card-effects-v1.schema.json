@@ -7034,6 +7034,9 @@
         "sly": {
           "type": "boolean",
           "description": "灵巧：回合结束清理前从手牌被主动或效果弃置时，免费打出并完整结算；回合末自动弃牌不触发。"
+        },
+        "payment": {
+          "$ref": "#/$defs/cardPayment"
         }
       },
       "allOf": [
@@ -8679,6 +8682,146 @@
         },
         "on": {
           "$ref": "#/$defs/trigger"
+        }
+      }
+    },
+    "cardPayment": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "additional": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "hp": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 999
+            },
+            "discard": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "count"
+              ],
+              "properties": {
+                "count": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 999
+                },
+                "card_type": {
+                  "enum": [
+                    "Attack",
+                    "Skill",
+                    "Power",
+                    "Curse",
+                    "Status"
+                  ]
+                },
+                "tag": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "sacrifice": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "count"
+              ],
+              "properties": {
+                "count": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 999
+                },
+                "template_id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                }
+              }
+            }
+          }
+        },
+        "alternatives": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "hp": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 999
+              },
+              "discard": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "count"
+                ],
+                "properties": {
+                  "count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 999
+                  },
+                  "card_type": {
+                    "enum": [
+                      "Attack",
+                      "Skill",
+                      "Power",
+                      "Curse",
+                      "Status"
+                    ]
+                  },
+                  "tag": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              "sacrifice": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "count"
+                ],
+                "properties": {
+                  "count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 999
+                  },
+                  "template_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                  }
+                }
+              },
+              "id": {
+                "type": "string",
+                "pattern": "^(?!normal$)[A-Za-z_][A-Za-z0-9_]*$"
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "cost": {
+                "$ref": "#/$defs/cardCost"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "cost"
+            ]
+          }
         }
       }
     }

@@ -136,6 +136,9 @@ export type BattleEvent =
       upgraded?: boolean;
       /** Immutable actual payment for this accepted card play/replay event. */
       paidEnergy?: number;
+      paidHp?: number;
+      paidDiscard?: number;
+      paidSacrifices?: number;
       paidTotal?: number;
       paidResources?: Record<string, number>;
       automatic: boolean;
@@ -410,6 +413,9 @@ export interface BattleTriggerEventContext {
   actorSide?: 'player' | 'enemy';
   targetSide?: 'player' | 'enemy';
   paidEnergy?: number;
+  paidHp?: number;
+  paidDiscard?: number;
+  paidSacrifices?: number;
   paidTotal?: number;
   paidResources?: Readonly<Record<string, number>>;
   /** Runtime-owned actor ids used when an AI-facing query selects team scope. */
@@ -437,6 +443,9 @@ export function battleTriggerContextFromEvent(
     ...('damageKind' in event ? { damageKind: event.damageKind } : {}),
     ...('statusId' in event ? { statusId: event.statusId } : {}),
     ...('paidEnergy' in event ? { paidEnergy: event.paidEnergy } : {}),
+    ...('paidHp' in event ? { paidHp: event.paidHp } : {}),
+    ...('paidDiscard' in event ? { paidDiscard: event.paidDiscard } : {}),
+    ...('paidSacrifices' in event ? { paidSacrifices: event.paidSacrifices } : {}),
     ...('paidTotal' in event ? { paidTotal: event.paidTotal } : {}),
     ...('paidResources' in event ? { paidResources: structuredClone(event.paidResources) } : {}),
     ...('actorId' in event ? { actorId: event.actorId } : {}),
@@ -582,6 +591,9 @@ export function appendBattleEvent(state: BattleEventJournalState, draft: BattleE
   if (event.kind === 'card_played') {
     if (
       !Number.isInteger(event.paidEnergy ?? 0) || (event.paidEnergy ?? 0) < 0 ||
+      !Number.isInteger(event.paidHp ?? 0) || (event.paidHp ?? 0) < 0 ||
+      !Number.isInteger(event.paidDiscard ?? 0) || (event.paidDiscard ?? 0) < 0 ||
+      !Number.isInteger(event.paidSacrifices ?? 0) || (event.paidSacrifices ?? 0) < 0 ||
       !Number.isInteger(event.paidTotal ?? 0) || (event.paidTotal ?? 0) < 0 ||
       (event.paidResources !== undefined && (
         !isRecord(event.paidResources) || Object.entries(event.paidResources).some(([id, amount]) =>

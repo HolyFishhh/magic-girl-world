@@ -1,6 +1,8 @@
 /** Shared execution semantics; no registry/creates placement policy here. */
+import { CARD_PAYMENT_CONTRACT } from './cardPayment';
 export function cardExecutionContractClauses(): string[] {
   return [
+    CARD_PAYMENT_CONTRACT,
     '需要开场铺设的引擎、形态变化、关键支援牌可主动使用 innate:true（固有），不要只在描述里写起手效果。固有牌战斗开始时优先全部进入手牌，可超过常规起手抽牌数但不能超过手牌上限；超出上限的固有牌留在抽牌堆顶部。是否使用由构筑需要决定，不要求固定数量。战斗中才生成的临时模板不能写 innate。',
 '卡牌可重复持有：名称、类型、费用与可执行规则完全相同的卡（例如同为“斩击”，造成 6 点伤害）优先复用同一稳定 ID、名称和完整定义，以 unique:false 与 quantity 表达份数；每份会成为独立持有实例。构思与已有卡相近、只差小幅数值或换名且不形成有意义玩法差异时，也优先直接选用已有卡的完整规则和名称作为副本，不为微差强造新卡。此条只指导生成选择：程序不会模糊合并已经合法但不同的内容。unique:true 才是单张持有限制，必须 quantity:1，不得改 ID 伪造额外副本；规则、费用或效果确有玩法差异时才必须使用新 ID。召唤物用稳定 slot 限同一召唤者一只，并设计 on_existing_effects 实现重复打出后的加强；群体召唤不设 slot。缺省唯一字段的旧牌保持原语义。',
 '强化须说明实际改变量，例如“使指定卡牌（王剑）造成的伤害增加 3（永久）”，不写“升级一级”。精确定位模板用选择器 id:"稳定卡牌ID"（等同 template_id）；精确定位某张持有卡用已有 run_instance_id，单场副本用 combat_instance_id，不凭空编造实例 ID。from:"combat" 扫描手牌、抽牌、弃牌和消耗区；pick:"all" 自动选中，无需弹窗；pick:"choose" 才手选。',

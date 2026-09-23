@@ -94,7 +94,7 @@ export const TOWER_ARCHETYPE_PRESETS: readonly TowerArchetypePreset[] = [
   foundation("resource-value", "pressure", "资源计值", "读取资源数量或支付量，把储备转成一次收益。", [], ["resource-cashout"]),
   foundation("status-stack", "status", "状态叠层", "反复施加同一状态，靠层数积累后续收益。", ["apply_status"], ["status-stack"]),
   foundation("timed-status", "status", "限时状态", "施加带期限的状态，利用短时间窗口完成收益。", ["apply_status"], ["status-stack"]),
-  foundation("status-cleanse", "status", "状态净化", "移除指定状态或层数，清除不利状态或配合消耗收益。", ["remove_status"], ["status-detonation"]),
+  foundation("status-cleanse", "status", "状态净化", "按状态类别、标签或层数精确选择：净化不利状态，也可复制或转移状态，配合消耗换取收益。", ["remove_status","status_action"], ["status-detonation"]),
   foundation("periodic-damage", "status", "持续伤害", "让状态按回合重复造成伤害，持续消耗敌方生命。", ["apply_status","damage"], ["damage-over-time"]),
   foundation("status-form-engine", "status", "形态联动", "进入指定形态，让关联卡牌变强；不必靠反复叠层。", ["apply_status","modify"], ["status-form-engine"]),
   foundation("status-gate", "status", "状态条件", "先检查状态存在或层数，再决定效果是否生效。", [], ["status-scaling"]),

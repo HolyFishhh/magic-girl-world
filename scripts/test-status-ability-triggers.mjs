@@ -40,7 +40,7 @@ assert.match(source, /dispatch: dispatches => this\.dispatch\(dispatches\)/);
 assert.doesNotMatch(source, /resolveStatusOwnershipTriggerDispatch|processStatusOwnershipTriggers/);
 
 const applyStatus = readClassMethod(source, triggerHostPath, 'TavernBattleTriggerHost', 'applyStatus');
-assert.match(applyStatus, /this\.statusRuntime\.apply\(targetType, statusId, stacks\)/);
+assert.match(applyStatus, /this\.statusRuntime\.apply\(targetType, statusId, stacks, options\)/);
 const removeStatuses = readClassMethod(source, triggerHostPath, 'TavernBattleTriggerHost', 'removeStatuses');
 assert.match(removeStatuses, /this\.statusRuntime\.remove\(targetType, selection\)/);
 const processTurnEnd = readClassMethod(

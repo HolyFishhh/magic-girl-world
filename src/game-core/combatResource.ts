@@ -20,6 +20,9 @@ export type CombatResourcePool = Readonly<Record<string, number>>;
 export type CardResourceWaiver = 'all' | readonly string[] | undefined;
 
 export interface CardResourcePayment {
+  paidHp?: number;
+  paidDiscard?: number;
+  paidSacrifices?: number;
   affordable: boolean;
   required: Record<string, number>;
   spent: Record<string, number>;

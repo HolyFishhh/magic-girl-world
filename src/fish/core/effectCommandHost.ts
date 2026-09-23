@@ -22,6 +22,10 @@ export interface TavernEffectCommandContext {
   spentEnergy?: unknown;
   spentResources?: Readonly<Record<string, number>>;
   paidEnergy?: unknown;
+  pendingAmount?: number;
+  paidHp?: number;
+  paidDiscard?: number;
+  paidSacrifices?: number;
   paidTotal?: unknown;
   paidResources?: Readonly<Record<string, number>>;
   xValues?: Readonly<Record<string, number>>;
@@ -195,6 +199,10 @@ export class TavernEffectCommandHost {
       {
         spentEnergy: finiteNumber(context.spentEnergy, finiteNumber(context.paidEnergy, 0)) || 0,
         eventPaidEnergy: finiteNumber(context.paidEnergy, 0) || 0,
+        pendingAmount: context.pendingAmount,
+        eventPaidHp: finiteNumber(context.paidHp, 0) || 0,
+        eventPaidDiscard: finiteNumber(context.paidDiscard, 0) || 0,
+        eventPaidSacrifices: finiteNumber(context.paidSacrifices, 0) || 0,
         eventPaidTotal: finiteNumber(context.paidTotal, 0) || 0,
         eventPaidResources: context.paidResources,
         spentResources: context.spentResources || context.paidResources,

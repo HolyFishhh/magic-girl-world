@@ -181,6 +181,7 @@ assert.deepEqual(
     extraReplays: 20,
     retainHand: false,
     retainBlock: false,
+    ethereal: false,
     denied: false,
     explicitlyAllowed: false,
     playLimitReached: false,

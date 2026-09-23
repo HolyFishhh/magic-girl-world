@@ -170,6 +170,7 @@ export interface BattleEffectRuntimePorts {
     interceptedDamage: number;
     hits: Array<{ summonId: string; blocked: number; hpLost: number; defeated: boolean }>;
   }>;
+  beforeDamageResolution?(request: { target: BattleSide; targetEnemyId?: string; amount: number; damageKind: import('./battleEventJournal').DamageKind }): Promise<{ amount: number; cancelled: boolean }>;
   capDamageByStatus?(request: { target: BattleSide; targetEnemyId?: string; amount: number; damageKind: import('./battleEventJournal').DamageKind }): Promise<number>;
   preventHpLossByStatus?(request: { target: BattleSide; targetEnemyId?: string; damageKind: import('./battleEventJournal').DamageKind }): Promise<boolean>;
   retaliateAttackByStatus?(request: { source: BattleSide; target: BattleSide; sourceEnemyId?: string; sourceSummonId?: string; targetEnemyId?: string }): Promise<void>;
@@ -526,7 +527,7 @@ export class BattleEffectRuntime {
         }
         value = Math.max(0, roundBattleValue(intercepted.remainingDamage));
       }
-      const receivedAttackPacket = value > 0 && context.damageKind === 'attack';
+      let receivedAttackPacket = value > 0 && context.damageKind === 'attack';
       // A fully redirected/intercepted packet has no recipient-side packet
       // left. In particular, additive vulnerability must not resurrect zero
       // damage on the original target after a complete protection resolution.
@@ -549,6 +550,20 @@ export class BattleEffectRuntime {
       modifiedRequested = value;
       if (value > 0 && this.ports.capDamageByStatus) {
         value = Math.max(0, roundBattleValue(await this.ports.capDamageByStatus({ target, ...(enemyId ? { targetEnemyId: enemyId } : {}), amount: value, damageKind: context.damageKind || 'effect' })));
+        modifiedRequested = value;
+      }
+      if (value > 0 && this.ports.beforeDamageResolution) {
+        const pending = await this.ports.beforeDamageResolution({ target, ...(enemyId ? { targetEnemyId: enemyId } : {}), amount: value, damageKind: context.damageKind || 'effect' });
+        value = pending.amount;
+        if (pending.cancelled) {
+          // Cancellation/replacement consumes this packet without creating a
+          // synthetic zero-damage journal event. Redirect callers still need an
+          // applied result with modified=0 so no overflow reaches the next
+          // protector or the original target.
+          return { applied: true, target, blocked: 0, modified: 0, hpLost: 0 };
+        }
+        entity = this.getEntity(target, enemyId);
+        if (!entity || entity.currentHp <= 0) return { applied: false, target };
         modifiedRequested = value;
       }
       const absorption = context.bypassBlock

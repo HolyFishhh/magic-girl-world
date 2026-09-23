@@ -21,6 +21,7 @@ export type SummonPick =
   | 'random' | 'random_n' | 'all' | 'lowest_hp' | 'highest_hp' | 'by_id' | 'source';
 
 export interface SummonStatusState {
+  interceptionUses?: import('./interception').InterceptionUsage;
   id: string;
   name: string;
   emoji: string;

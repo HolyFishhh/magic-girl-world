@@ -191,7 +191,9 @@ export interface BattleSessionCardPlayPorts<TCard extends CardPlayCard, TToken>
   readCardPlayState(): CardPlayState<TCard>;
   isTerminal(): boolean;
   presentCardPlay?(prepared: PreparedCardPlay<TCard>): MaybePromise<void>;
+  chooseCardPayment?(prepared: PreparedCardPlay<TCard>): MaybePromise<import('./cardPayment').CardPaymentSelection>;
   applyCardPlayCommit(committed: CommittedCardPlay<TCard>): MaybePromise<void>;
+  resolveCardPaymentEffects?(committed: CommittedCardPlay<TCard>): MaybePromise<void>;
   beginCardTransit(card: TCard): MaybePromise<void>;
   endCardTransit(card: TCard): MaybePromise<void>;
   /** Return extra complete resolutions requested by the current card program. */
@@ -237,6 +239,7 @@ export async function playBattleSessionCard<TCard extends CardPlayCard, TToken>(
     const token = await ports.beginTransaction(action);
     let transitStarted = false;
     try {
+      if (ports.chooseCardPayment) prepared.selectedPayment = await ports.chooseCardPayment(prepared);
       const committed = commitCardPlay(prepared, ports.readCardPlayState());
       if (!committed.ok) {
         await ports.rollbackTransaction(token, committed);
@@ -247,6 +250,7 @@ export async function playBattleSessionCard<TCard extends CardPlayCard, TToken>(
       transitStarted = true;
       await ports.applyCardPlayCommit(committed);
       await ports.recordCardResourceSpent?.(committed.card, committed.payment);
+      await ports.resolveCardPaymentEffects?.(committed);
       // Payment is observable as soon as the play is accepted. Presentation
       // gates impact/effects, not affordability of the remaining hand.
       await ports.presentCardPlay?.(prepared);

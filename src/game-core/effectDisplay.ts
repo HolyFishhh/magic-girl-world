@@ -1,4 +1,6 @@
 export { describeOpeningDeckTransforms } from './towerOpeningTransforms';
+import { describeCompactStatusRuleGroups } from './contentDescription';
+import { describeCardPayment } from './cardPayment';
 import { describeCardTraits } from './cardLifecycle';
 import { describeStatusAction } from './statusAction';
 import { describeEffectTarget as targetName } from './effectTargetDisplay';
@@ -171,6 +173,10 @@ function describeVariablePath(path: string, context: EffectDisplayContext): stri
   const names: Record<string, string> = {
     'context.spent_energy': '使用能量',
     'context.event_paid_energy': '本次出牌实际支付能量',
+    'context.pending_amount': '本次待结算伤害',
+    'context.event_paid_hp': '本次出牌实际支付生命',
+    'context.event_paid_discard': '本次出牌实际支付弃牌张数',
+    'context.event_paid_sacrifices': '本次出牌实际支付献祭数量',
     'context.event_paid_total': '本次出牌实际支付总费用',
     'context.x_value': 'X值（本次消耗量）',
     'context.status_stacks': '当前状态层数',
@@ -484,7 +490,7 @@ function modifierSubject(target: 'self' | 'opponent', stat: string, context: Eff
 
 function generatedCardReference(card: import('./effectDsl').GeneratedCardDefinition, context: EffectDisplayContext): NonNullable<EffectDisplayTag['reference']> {
   const depth = context.referenceDepth || 0;
-  const tags = depth >= 8 ? [] : [...cardRequirementDisplayTags(card.requiresSummonTemplateId, context), ...effectProgramToDisplayTags(card.program, { ...context, referenceDepth: depth + 1 })];
+  const tags = depth >= 8 ? [] : [...cardRequirementDisplayTags(card.requiresSummonTemplateId, context), ...describeCardPayment(card.payment, context.resourceNames, context.summonNames, context.resourceEmojis).map(text => tag(text, 'special')), ...effectProgramToDisplayTags(card.program, { ...context, referenceDepth: depth + 1 })];
   const discarded = card.discardProgram && depth < 8
     ? effectProgramToDisplayTags(card.discardProgram, { ...context, referenceDepth: depth + 1 }) : [];
   return { id: card.id, name: card.name, card, flavor: card.description,
@@ -1172,7 +1178,7 @@ export function compactContentToDisplayTags(value: unknown, context: EffectDispl
     resolveTargetName: targetId => context.enemyNames?.[targetId],
   }), 'special')] : [];
   const defense = normalizeStatusDefenseRule(content.defense);
-  const defenseTags = defense ? statusDefenseRuleDescription(defense).map(text => tag(text, 'special')) : [];
+  const defenseTags = [...(defense ? statusDefenseRuleDescription(defense) : []), ...(Array.isArray(content.intercepts) ? describeCompactStatusRuleGroups({ intercepts: content.intercepts, creates: content.creates }, context) : [])].map(text => tag(text, 'special'));
   const acquisition = content.on_acquire ?? content.onAcquire;
   const acquireText = acquisition === undefined ? '' : describeNonCombatSettlement(acquisition, context);
   const acquireTags = acquireText ? [{ ...tag(`获得时：${acquireText}`, 'special'), references: nonCombatSettlementReferences(acquisition,
@@ -1180,6 +1186,7 @@ export function compactContentToDisplayTags(value: unknown, context: EffectDispl
   if (trigger.structured) {
     return [
       ...cardRequirementDisplayTags(content.requires_summon, context),
+      ...describeCardPayment(content.payment, context.resourceNames, context.summonNames, context.resourceEmojis).map(text => tag(text, 'special')),
       ...compileTags(trigger.immediateEffects),
       ...compileTags(
         trigger.triggeredEffects,
@@ -1194,6 +1201,7 @@ export function compactContentToDisplayTags(value: unknown, context: EffectDispl
   }
   return [
     ...cardRequirementDisplayTags(content.requires_summon, context),
+      ...describeCardPayment(content.payment, context.resourceNames, context.summonNames, context.resourceEmojis).map(text => tag(text, 'special')),
     ...compileTags(content.effects, typeof trigger.trigger === 'string' ? trigger.trigger : undefined),
     ...discardTags,
     ...protectionTags,

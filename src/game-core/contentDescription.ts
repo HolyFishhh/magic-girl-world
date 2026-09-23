@@ -1,4 +1,6 @@
 export { describeOpeningDeckTransforms } from './towerOpeningTransforms';
+import { describeInterceptions } from './interception';
+import { describeCardPayment } from './cardPayment';
 import { describeStatusAction, type StatusActionSpec } from './statusAction';
 import { describeEffectTarget } from './effectTargetDisplay';
 import type { EnemyTargetSelector } from './combatantCollection';
@@ -159,6 +161,10 @@ const VARIABLE_LABELS: Array<[RegExp, string]> = [
   [/\bopponent\.exhaust_pile_size\b/g, '对方消耗堆数量'],
   [/\bspent_energy\b/g, '使用能量'],
   [/\bevent_paid_energy\b|\bpaid_energy\b/g, '本次出牌实际支付能量'],
+  [/\bpending_amount\b/g, '本次待结算伤害'],
+  [/\bevent_paid_hp\b/g, '本次出牌实际支付生命'],
+  [/\bevent_paid_discard\b/g, '本次出牌实际支付弃牌张数'],
+  [/\bevent_paid_sacrifices\b/g, '本次出牌实际支付献祭数量'],
   [/\bevent_paid_total\b|\bpaid_cost\b/g, '本次出牌实际支付总费用'],
   [/\b(?:context\.)?x_value\b/g, 'X值（本次消耗量）'],
   [/\bturn_number\b/g, '当前回合数'],
@@ -1210,7 +1216,7 @@ export function describeCompactContentRuleGroups(value: unknown, options: Compac
 
 export function describeCompactCardRuleGroups(value: unknown, options: CompactCardDescriptionOptions = {}): string[] {
   if (!isRecord(value)) return [];
-  const main = describeCompactContentRuleGroups(value, options);
+  const main = [...describeCardPayment(value.payment, options.resourceNames, options.summonNames, options.resourceEmojis), ...describeCompactContentRuleGroups(value, options)];
   const discarded = describeCompactEffectList(value.discard_effects, value.creates, options);
   return [
     ...(options.includeKeywords !== false ? describeCardTraits(value as LifecycleCard).map(trait => trait.name) : []),
@@ -1323,6 +1329,7 @@ function hasCompactEffects(effects: unknown): boolean {
 export function needsCompactRuleDescription(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return (
+    isRecord(value.payment) ||
     typeof value.requires_summon === 'string' ||
     (typeof value.when === 'string' && value.when.trim() !== '') ||
     typeof value.trigger === 'string' ||
@@ -1403,6 +1410,7 @@ export function describeCompactStatusRuleGroups(value: unknown, options: Compact
   if (protection) parts.push(damageProtectionRuleDescription(protection, { resolveTargetName: targetId => options.enemyNames?.[targetId] }));
   const defense = normalizeStatusDefenseRule(value.defense);
   if (defense) parts.push(...statusDefenseRuleDescription(defense));
+  parts.push(...describeInterceptions(value.intercepts, { formula: v => formula(v, options), condition: v => condition(v, options), effects: v => describeCompactEffectList(v, value.creates, options) }));
   if (isRecord(value.triggers)) {
     for (const trigger of [
       'hold',
@@ -1462,6 +1470,7 @@ export function describeCompactCard(value: unknown, options: CompactCardDescript
 
   const requirement = describeSummonPlayRequirement(value.requires_summon, options.summonNames);
   if (requirement) parts.push(requirement);
+  parts.push(...describeCardPayment(value.payment, options.resourceNames, options.summonNames, options.resourceEmojis));
   let main = describeCompactMain(value, options);
   if (main && value.type === 'Curse') main = `回合结束时，${main}`;
   if (main) parts.push(main);
@@ -1473,9 +1482,10 @@ export function describeCompactCard(value: unknown, options: CompactCardDescript
 
 export function describeCompactCardWhenNeeded(value: unknown, options: CompactCardDescriptionOptions = {}): string {
   if (!isRecord(value) || !needsCompactRuleDescription(value)) return '';
-  const parts: string[] = [];
+  const parts: string[] = [...describeCardPayment(value.payment, options.resourceNames, options.summonNames, options.resourceEmojis)];
   const requirement = describeSummonPlayRequirement(value.requires_summon, options.summonNames);
   if (requirement) parts.push(requirement);
+
   const mainNeedsRule =
     typeof value.requires_summon === 'string' ||
     (typeof value.when === 'string' && value.when.trim() !== '') ||

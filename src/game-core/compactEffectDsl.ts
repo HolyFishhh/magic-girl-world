@@ -1,3 +1,4 @@
+import { validateCardPayment } from './cardPayment';
 import { isEmptyProtectionEffect, normalizeDamageProtectionRule } from './damageProtection';
 import { validateEnemyActionReferences } from './enemyActionReferences';
 import { validPersistentGrowthTarget } from './persistentGrowth';
@@ -335,6 +336,10 @@ function readVariablePath(node: jsep.Expression): string | null {
 function normalizeVariablePath(path: string): string | null {
   if (path === 'spent_energy') return 'context.spent_energy';
   if (path === 'event_paid_energy' || path === 'paid_energy') return 'context.event_paid_energy';
+  if (path === 'pending_amount') return 'context.pending_amount';
+  if (path === 'event_paid_hp') return 'context.event_paid_hp';
+  if (path === 'event_paid_discard') return 'context.event_paid_discard';
+  if (path === 'event_paid_sacrifices') return 'context.event_paid_sacrifices';
   if (path === 'event_paid_total' || path === 'paid_cost') return 'context.event_paid_total';
   if (/^(event_paid_resource|paid_resource)\.[A-Za-z_][A-Za-z0-9_]*$/.test(path))
     return `context.event_paid_resource.${path.slice(path.indexOf('.') + 1)}`;
@@ -1228,7 +1233,7 @@ function compileGeneratedCard(
       'description',
       'effects',
       'discard_effects',
-      'lifecycle',
+      'lifecycle', 'payment',
       'trigger',
       'when',
       'retain',
@@ -1387,6 +1392,8 @@ function compileGeneratedCard(
     }
     cost = typeof candidate === 'object' ? structuredClone(candidate) as CardCost : candidate as CardCost;
   }
+  const paymentIssue = validateCardPayment(value.payment);
+  if (paymentIssue) addIssue(issues, `${path}.payment`, 'INVALID_CARD_PAYMENT', paymentIssue);
   const lifecycleIssue = validateCardLifecycle(value.lifecycle);
   if (lifecycleIssue) { addIssue(issues, `${path}.lifecycle`, 'INVALID_CARD_LIFECYCLE', lifecycleIssue); return null; }
   const authoredDescription = normalizeChinesePlayerDescription(value.description);
@@ -1405,6 +1412,7 @@ function compileGeneratedCard(
     discardProgram,
     unique: value.unique === true || undefined,
     retain: value.retain === true || undefined,
+    payment: value.payment ? structuredClone(value.payment) as import('./cardPayment').CardPaymentSpec : undefined,
     lifecycle: value.lifecycle ? structuredClone(value.lifecycle) as import('./cardLifecycle').CardLifecycle : undefined,
     exhaust: type === 'Power' || value.exhaust === true || undefined,
     ethereal: value.ethereal === true || undefined,

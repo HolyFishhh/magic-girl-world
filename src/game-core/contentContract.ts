@@ -1,3 +1,5 @@
+import { paymentCostComponents } from './cardPayment';
+import { validateCardPayment } from './cardPayment';
 import { validateEnemyActionReferences } from './enemyActionReferences';
 import { isEmptyProtectionEffect, normalizeDamageProtectionRule } from './damageProtection';
 import { compileCompactCondition, compileCompactEffectList, validateStructuredTriggerInput } from './compactEffectDsl';
@@ -53,14 +55,14 @@ export interface ContentContractOptions {
 }
 
 const CARD_WRAPPER_FIELDS = new Set([
-  'lifecycle',
+  'lifecycle', 'payment',
   'id', 'name', 'emoji', 'type', 'rarity', 'cost', 'quantity', 'description', 'dialogue', 'effects', 'discard_effects',
   'unique', 'trigger', 'retain', 'exhaust', 'ethereal', 'innate', 'sly', 'tags', 'creates', 'when', 'requires_summon',
   // Host-owned persistent identity/progression fields survive between tower battles.
   'runInstanceId', 'runInstanceIds', 'templateId', 'parentRunInstanceId', 'origin', '$meta', 'upgrade_level',
 ]);
 const CARD_TEMPLATE_FIELDS = new Set([
-  'lifecycle',
+  'lifecycle', 'payment',
   'id', 'name', 'emoji', 'type', 'rarity', 'cost', 'description', 'dialogue', 'effects', 'discard_effects',
   'unique', 'trigger', 'retain', 'exhaust', 'ethereal', 'sly', 'when', 'requires_summon',
 ]);
@@ -703,6 +705,8 @@ function validateGeneratedCardTemplates(
         'cost must be a non-negative integer, energy, or a valid resource map',
       );
     }
+    const paymentIssue = validateCardPayment(template.payment);
+    if (paymentIssue) addIssue(issues, `${templatePath}.payment`, 'INVALID_CARD_PAYMENT', paymentIssue);
     const lifecycleIssue = validateCardLifecycle(template.lifecycle);
     if (lifecycleIssue) addIssue(issues, `${templatePath}.lifecycle`, 'INVALID_CARD_LIFECYCLE', lifecycleIssue);
     for (const flag of ['unique', 'retain', 'exhaust', 'ethereal', 'sly']) {
@@ -722,7 +726,7 @@ function validateGeneratedCardTemplates(
         `unsupported card trigger: ${String(trigger.trigger)}`,
       );
     }
-    const costComponents = normalizeCardCost(template.cost ?? 0);
+    const costComponents = paymentCostComponents(template);
     validateEffectSource(
       { ...template, creates: value },
       templatePath,
@@ -833,6 +837,8 @@ function validateCard(
   } else if (validateCardCost(value.cost ?? 0)) {
     addIssue(issues, `${path}.cost`, 'INVALID_CARD_COST', 'cost must be a non-negative integer, energy, or a valid resource map');
   }
+  const paymentIssue = validateCardPayment(value.payment);
+  if (paymentIssue) addIssue(issues, `${path}.payment`, 'INVALID_CARD_PAYMENT', paymentIssue);
   const lifecycleIssue = validateCardLifecycle(value.lifecycle);
   if (lifecycleIssue) addIssue(issues, `${path}.lifecycle`, 'INVALID_CARD_LIFECYCLE', lifecycleIssue);
   for (const flag of ['unique', 'retain', 'exhaust', 'ethereal', 'innate', 'sly']) {
@@ -850,7 +856,7 @@ function validateCard(
       'discard_requirement is no longer supported',
     );
   }
-  const costComponents = normalizeCardCost(value.cost ?? 0);
+  const costComponents = paymentCostComponents(value);
   const policy: EffectProgramPolicyOptions = {
     triggerPolicy: type === 'Power' ? 'require_root_or_status' : 'forbid',
     modifierPolicy: 'forbid',

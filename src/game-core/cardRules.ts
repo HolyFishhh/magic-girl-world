@@ -16,6 +16,7 @@ export interface CardRuleCard {
   ethereal?: boolean;
   sly?: boolean;
   innate?: boolean;
+  payment?: import('./cardPayment').CardPaymentSpec;
   lifecycle?: CardLifecycle;
   /** Added after paying an X-cost card; does not consume extra energy. */
   xValueBonus?: number;

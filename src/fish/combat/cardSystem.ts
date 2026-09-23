@@ -1,3 +1,7 @@
+import { resolveDynamicCardCostAtPlay } from '../../game-core/dynamicCardCost';
+import { TavernSummonChoicePresenter } from '../ui/summonChoicePresenter';
+import { cardPaymentPlans, defaultPaymentSelection, describeExtraCardCost, type CardPaymentPlan, type CardPaymentSelection } from '../../game-core/cardPayment';
+import { TavernEffectChoicePresenter } from '../ui/effectChoicePresenter';
 import { isolatedBattlePresentation } from '../core/isolatedBattlePresentation';
 import { resolveCardLifecycle } from '../../game-core/cardLifecycle';
 import {
@@ -189,6 +193,7 @@ export class CardSystem {
   // 卡牌使用
   public async playCard(cardId: string, targetType?: 'player' | 'enemy'): Promise<boolean> {
     const cardBeforePlay = this.getCardInHand(cardId);
+    let resolvePaymentEffects: (() => Promise<void>) | undefined;
     let destinationOverride: import('../../game-core').PlayedCardDestination | undefined;
     try {
       const result = await playBattleSessionCard(cardId, {
@@ -204,14 +209,18 @@ export class CardSystem {
         presentCardPlay: async () => {
           await this.presentation.animateCardPlay(cardId, cardBeforePlay);
         },
+        chooseCardPayment: prepared => this.choosePayment(prepared.paymentPlans),
+        resolveCardPaymentEffects: () => resolvePaymentEffects?.(),
         applyCardPlayCommit: committed => {
           const player = this.gameStateManager.getPlayer();
           this.gameStateManager.updatePlayer({
             energy: committed.energy,
             resources: applyResourcePoolToStates(player.resources, committed.resources),
             hand: committed.hand,
+            ...(committed.hp === undefined ? {} : { currentHp: committed.hp }),
           });
           this.gameStateManager.setCardPlayCounters(committed);
+          resolvePaymentEffects = this.stageExtraCosts(committed.discardedCards, committed.sacrificedIds, committed.payment.paidHp || 0, committed.card);
         },
         beginCardTransit: card => this.gameStateManager.beginCardTransit(card),
         endCardTransit: card => this.gameStateManager.endCardTransit(card),
@@ -246,6 +255,9 @@ export class CardSystem {
             paidEnergy: event.replayIndex === 0 ? payment.spentEnergy : 0,
             paidTotal: Object.values(actualSpent).reduce((sum, amount) => sum + amount, 0),
             paidResources: { ...actualSpent },
+            paidHp: event.replayIndex === 0 ? payment.paidHp || 0 : 0,
+            paidDiscard: event.replayIndex === 0 ? payment.paidDiscard || 0 : 0,
+            paidSacrifices: event.replayIndex === 0 ? payment.paidSacrifices || 0 : 0,
             automatic: event.automatic,
             replayIndex: event.replayIndex,
           });
@@ -338,6 +350,7 @@ export class CardSystem {
 
   private cardPlayFailureReason(code: string): string | null {
     if (code === 'INSUFFICIENT_ENERGY') return '能量不足';
+    if (code === 'INSUFFICIENT_ADDITIONAL_COST') return '额外费用不足：需要保留至少1点生命，并备齐弃牌与献祭对象';
     if (code === 'INSUFFICIENT_RESOURCE') return '特殊资源不足';
     if (code === 'REQUIRED_SUMMON_MISSING') return '所需指定召唤物不在场';
     if (code === 'CURSE_UNPLAYABLE') return '诅咒牌无法被打出';
@@ -347,6 +360,42 @@ export class CardSystem {
     if (code === 'RULE_DENIED') return '当前规则禁止打出这张牌';
     if (code === 'RULE_LIMIT_REACHED') return '本回合此类卡牌的打出次数已达上限';
     return null;
+  }
+
+  private async choosePayment(plans: CardPaymentPlan[]): Promise<CardPaymentSelection> {
+    const choose = async (id: string, options: { id: string; label: string; text: string }[], count: number): Promise<string[]> => {
+      if (!count) return [];
+      if (options.length === count) return options.map(o => o.id);
+      const answer = await TavernEffectChoicePresenter.getInstance().choose({ op: 'choose_one', choiceId: id, count,
+        options: options.map(o => ({ id: o.id, label: o.label, effects: [{ op: 'narrate', text: o.text }] })) });
+      if (answer === null) throw Object.assign(new Error('取消费用选择'), { code: 'CHOICE_CANCELLED' });
+      return typeof answer === 'string' ? [answer] : answer;
+    };
+    const offered = plans.filter(p => p.affordable);
+    const resources = this.gameStateManager.getPlayer().resources;
+    const optionId = (await choose('payment_option', offered.map(p => ({ id: p.id, label: p.name,
+      text: [describeCardCost(p.extra && 'cost' in p.extra ? (p.extra as any).cost : 0, resources), describeExtraCardCost(p.extra)].filter(Boolean).join('，') })), 1))[0];
+    const plan = offered.find(p => p.id === optionId)!;
+    if (!plan) throw new Error('付款方案已失效');
+    const discardCount = plan.extra.discard?.count || 0, sacrificeCount = plan.extra.sacrifice?.count || 0;
+    const discardIds = discardCount === 0 ? [] : plan.discardCandidates.length === discardCount ? plan.discardCandidates.map(c => c.id)
+      : await this.presentation.selectCards(plan.discardCandidates as Card[], { title: '选择弃置的费用手牌', minimum: discardCount, maximum: discardCount, allowCancel: true, cancelLabel: '取消出牌', resources });
+    if (discardIds === null) throw Object.assign(new Error('取消弃牌费用'), { code: 'CHOICE_CANCELLED' });
+    const sacrificeIds = sacrificeCount === 0 ? [] : plan.sacrificeCandidates.length === sacrificeCount ? plan.sacrificeCandidates.map(s => s.instanceId)
+      : await TavernSummonChoicePresenter.getInstance().choose(plan.sacrificeCandidates as import('../../game-core').SummonUnit[], sacrificeCount);
+    if (sacrificeIds === null) throw Object.assign(new Error('取消献祭费用'), { code: 'CHOICE_CANCELLED' });
+    return { optionId, discardIds, sacrificeIds };
+  }
+
+  /** All resources/HP/hand costs have committed; detach every instance before any payoff. */
+  private stageExtraCosts(discarded: Card[], sacrificedIds: string[], hp: number, paidCard: Card): () => Promise<void> {
+    for (const card of discarded) this.gameStateManager.moveCardToDiscard(card);
+    const sacrificed = this.gameStateManager.dismissSummons(sacrificedIds, false);
+    if (hp) this.presentation.addLog(`支付${hp}点生命作为出牌费用`, 'info');
+    return async () => {
+      for (const card of discarded) await this.notifyCardDiscarded(card, 'effect', 'hand');
+      await UnifiedEffectExecutor.getInstance().notifySacrificeCosts(sacrificed, paidCard);
+    };
   }
 
   private cardPlayState(player: Player, hasOpponent: boolean) {
@@ -374,6 +423,8 @@ export class CardSystem {
       phase: this.gameStateManager.getCurrentPhase(),
       hasOpponent,
       summonTemplateIds: this.gameStateManager.getSummons('player').filter(unit => unit.hasHp === false || unit.currentHp > 0).map(unit => unit.templateId),
+      hp: player.currentHp,
+      summons: this.gameStateManager.getSummons('player'),
       hand: player.hand,
       energy: player.energy,
       resources: Object.fromEntries(Object.entries(player.resources || {}).map(([id, resource]) => [id, resource.current])),
@@ -406,6 +457,7 @@ export class CardSystem {
   ): Promise<number> {
     let requestedReplays = 0;
     try {
+      if (await UnifiedEffectExecutor.getInstance().interceptCardPlay(card, energyPayment, replayIndex)) return 0;
       if (replayIndex === 0 && typeof card.dialogue === 'string' && card.dialogue.trim()) {
         this.presentation.addLog(card.dialogue.trim(), 'action', { type: 'card', name: card.name });
         this.presentation.showDialogue?.(card.dialogue.trim(), card.name);
@@ -434,6 +486,12 @@ export class CardSystem {
           xValue: energyPayment?.xValue ?? energyPayment?.spentEnergy ?? 0,
           spentResources: energyPayment?.spent ?? {},
           xValues: energyPayment?.xValues ?? {},
+          paidEnergy: replayIndex === 0 ? energyPayment?.spentEnergy || 0 : 0,
+          paidTotal: replayIndex === 0 ? Object.values(energyPayment?.spent || {}).reduce((a,b)=>a+b,0) : 0,
+          paidResources: replayIndex === 0 ? energyPayment?.spent : {},
+          paidHp: replayIndex === 0 ? energyPayment?.paidHp || 0 : 0,
+          paidDiscard: replayIndex === 0 ? energyPayment?.paidDiscard || 0 : 0,
+          paidSacrifices: replayIndex === 0 ? energyPayment?.paidSacrifices || 0 : 0,
           cardContext: card,
           setCardDestination,
           requestCurrentReplay: (count: number) => {
@@ -480,27 +538,40 @@ export class CardSystem {
     if (this.gameStateManager.isGameOver() || this.activeAutoPlayIds.has(card.id)) return false;
     const player = this.gameStateManager.getPlayer();
     const resourcePool = resourcePoolFromCombatant(player.energy, player.resources);
-    const payment = resolveCardResourcePayment(card.cost, resourcePool, free ? 'all' : undefined, card.xValueBonus);
-    if (!payment.affordable) return false;
-    const detached = this.gameStateManager.removeOwnedCardFromZone(card.id, source);
-    if (!detached) return false;
-
-    this.activeAutoPlayIds.add(card.id);
-    this.gameStateManager.beginCardTransit(detached);
+    const effective = { ...card, cost: resolveDynamicCardCostAtPlay(card, [], { state: UnifiedEffectExecutor.getInstance().getCoreEffectState(true), effect: { spentEnergy: 0 } }) };
+    const plan = cardPaymentPlans(effective, { hp: player.currentHp, hand: player.hand, summons: this.gameStateManager.getSummons('player'), resources: resourcePool }, free ? 'all' : undefined).find(p => p.affordable);
+    if (!plan) return false;
+    const selection = defaultPaymentSelection(plan);
+    const payment = plan.payment;
+    payment.paidHp = plan.extra.hp || 0;
+    payment.paidDiscard = selection.discardIds.length;
+    payment.paidSacrifices = selection.sacrificeIds.length;
+    const transaction = this.sessionHost.beginTransaction('play_card');
+    let detached: Card | null = null;
     try {
-      await this.presentation.animateTriggeredCard(detached);
+      detached = this.gameStateManager.removeOwnedCardFromZone(card.id, source);
+      if (!detached) {
+        this.sessionHost.commitTransaction(transaction);
+        return false;
+      }
+
+      this.activeAutoPlayIds.add(card.id);
+      this.gameStateManager.beginCardTransit(detached);
       const state = this.gameStateManager.getGameState();
       const remainingResources = applyCardResourcePayment(resourcePool, payment);
       this.gameStateManager.updatePlayer({
         energy: remainingResources.energy || 0,
         resources: applyResourcePoolToStates(player.resources, remainingResources),
+        currentHp: player.currentHp - (payment.paidHp || 0),
+        hand: this.gameStateManager.getPlayer().hand.filter(c => !selection.discardIds.includes(c.id)),
       });
       this.gameStateManager.setCardPlayCounters({
         cardsPlayedThisTurn: state.cardsPlayedThisTurn + 1,
         attacksPlayedThisTurn: state.attacksPlayedThisTurn + (detached.type === 'Attack' ? 1 : 0),
         skillsPlayedThisTurn: state.skillsPlayedThisTurn + (detached.type === 'Skill' ? 1 : 0),
-        cardRuleUsesThisTurn: state.cardRuleUsesThisTurn ?? state.cardsPlayedThisTurn,
+        cardRuleUsesThisTurn: (state.cardRuleUsesThisTurn ?? state.cardsPlayedThisTurn) + 1,
       });
+      const resolvePaymentEffects = this.stageExtraCosts(player.hand.filter(c => selection.discardIds.includes(c.id)), selection.sacrificeIds, payment.paidHp || 0, detached);
       for (const [resource, spent] of Object.entries(payment.spent)) {
         if (spent <= 0) continue;
         this.gameStateManager.recordBattleEvent({
@@ -517,6 +588,8 @@ export class CardSystem {
         this.presentation.addLog(`消耗${spent}点${label}`, 'info', { type: 'card', name: detached.name });
       }
 
+      await resolvePaymentEffects();
+      await this.presentation.animateTriggeredCard(detached);
       let repeatCount = 1 + Math.min(20, Math.max(0, Math.trunc(detached.replayCount ?? (detached.doubleEffect ? 1 : 0))));
       let destinationOverride: import('../../game-core').PlayedCardDestination | undefined;
       for (let replayIndex = 0; replayIndex < repeatCount; replayIndex += 1) {
@@ -552,6 +625,9 @@ export class CardSystem {
             paidEnergy: replayIndex === 0 ? payment.spentEnergy : 0,
             paidTotal: Object.values(actualSpent).reduce((sum, amount) => sum + amount, 0),
             paidResources: { ...actualSpent },
+            paidHp: replayIndex === 0 ? payment.paidHp || 0 : 0,
+            paidDiscard: replayIndex === 0 ? payment.paidDiscard || 0 : 0,
+            paidSacrifices: replayIndex === 0 ? payment.paidSacrifices || 0 : 0,
             automatic: true,
             replayIndex,
           });
@@ -589,9 +665,13 @@ export class CardSystem {
         } as const)[destination],
         moveReason: 'auto_play',
       });
+      this.sessionHost.commitTransaction(transaction);
       return true;
+    } catch (error) {
+      this.sessionHost.rollbackTransaction(transaction);
+      throw error;
     } finally {
-      this.gameStateManager.endCardTransit(detached);
+      if (detached) this.gameStateManager.endCardTransit(detached);
       this.activeAutoPlayIds.delete(card.id);
     }
   }

@@ -1,3 +1,4 @@
+import { validateInterceptions } from './interception';
 import { STATUS_TRIGGER_SET } from './battleTriggers';
 import { compileCompactEffectList, type CompactEffectCompilationResult } from './compactEffectDsl';
 import { describeCompactStatus } from './contentDescription';
@@ -22,7 +23,7 @@ const ROOT_KEYS = new Set([
   'character_emoji',
   'triggers',
   'protection',
-  'defense',
+  'defense', 'intercepts',
   'creates',
   '$meta',
 ]);
@@ -134,6 +135,8 @@ export function collectCompactStatusDefinitionIssues(value: unknown): string[] {
     }
   }
 
+  const interceptionIssue = validateInterceptions(value.intercepts, value.creates);
+  if (interceptionIssue) push(interceptionIssue);
   const triggers = value.triggers ?? {};
   if (!isRecord(triggers)) {
     push('状态 triggers 必须是对象');
@@ -211,8 +214,9 @@ export function collectEffectProgramStatusReferences(program: EffectProgram): Se
 /** Collect status dependencies from one compact definition without executing it. */
 export function collectCompactStatusDefinitionReferences(value: unknown): Set<string> {
   const references = new Set<string>();
-  if (!isRecord(value) || !isRecord(value.triggers)) return references;
-  for (const effects of Object.values(value.triggers)) {
+  if (!isRecord(value)) return references;
+  const interceptEffects = (Array.isArray(value.intercepts) ? value.intercepts : []).flatMap(r => isRecord(r) ? [r.replace, ...(r.when ? [{when: r.when, block:0}] : []), ...(r.amount !== undefined ? [{block:r.amount}] : [])].filter(v => v !== undefined) : []);
+  for (const effects of [...Object.values(isRecord(value.triggers) ? value.triggers : {}), ...interceptEffects]) {
     const compiled = compileTrigger(effects, value.creates);
     if (!compiled?.ok) continue;
     collectEffectProgramStatusReferences(compiled.value).forEach(id => references.add(id));
