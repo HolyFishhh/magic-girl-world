@@ -645,6 +645,21 @@ function summarizeMvuUpdate(result: unknown): string[] {
     const supersededHelperGenerationIds = new Set<string>();
     let requestAudit: Record<string, unknown> | null = null;
     const missingUpdateDetail = '本轮 MVU 未得到可解析的 <UpdateVariable> 变量更新块；解析事件可能仅含原楼层剧情，请查看请求摘要和助手完成输出，不能据此断言模型原始返回内容';
+    const getMissingUpdateDetail = (): string => {
+      // COMMAND_PARSED can be the previous story, not the second request's answer.
+      // Only an explicit refusal at the start of the current request's observed
+      // helper final can refine this error; never use story/stream text as proof.
+      const final = helperFinalOutput;
+      if (!final || !monitorState.requestCapturedAt || final.capturedAt < monitorState.requestCapturedAt
+        || (final.generationId !== monitorState.generationId
+          && !final.generationId.startsWith(`${monitorState.generationId}-attempt-`))) return missingUpdateDetail;
+      const visible = final.text.replace(/<(?:Analysis|Reasoning|Thinking)>[\s\S]*?<\/(?:Analysis|Reasoning|Thinking)>/gi, '').trim();
+      if (/^(?:I (?:can't|cannot) help with (?:this|that) request\b|I (?:can't|cannot|won't) (?:comply|assist)\b|(?:抱歉[，,。\s]*)?(?:我(?:无法|不能)(?:帮助|协助|继续)|无法协助))/i.test(visible)
+        && !/<UpdateVariable>[\s\S]*?<\/UpdateVariable>/i.test(visible)) {
+        return '本轮助手完成输出明确表示无法协助，没有提供 <UpdateVariable> 变量更新块；请检查助手完成输出并调整请求内容。此事件并非提供方网络原始响应';
+      }
+      return missingUpdateDetail;
+    };
     let manualRepairActive = false;
     let manualRepairSession = 0;
     let manualRepairGenerationId: string | null = null;
@@ -2209,7 +2224,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
         // events also use the same hook. Require a complete model update block.
         if (monitorState.variableWriteObserved) {
           if (candidateHasUpdateBlock) api.success();
-          else api.fail(new Error(missingUpdateDetail));
+          else api.fail(new Error(getMissingUpdateDetail()));
           return;
         }
         if (monitorState.phase === 'success' || monitorState.phase === 'error') {
@@ -2275,7 +2290,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
           clearApplyTimer();
           applyTimer = host.setTimeout?.(() => {
             if (monitorState.phase !== 'applying' || monitorState.candidateHasUpdateBlock) return;
-            api.fail(new Error(missingUpdateDetail));
+            api.fail(new Error(getMissingUpdateDetail()));
           }, 1200) as number | undefined;
           render();
           return;

@@ -386,3 +386,52 @@ assert.equal(secondReport.mvuHelperFinal.text, 'SECOND_MVU_FINAL', 'duplicate tr
 assert.equal(secondReport.mvuHelperFinal.generationId, 'second-mvu-id');
 assert.doesNotMatch(JSON.stringify(secondReport), /FIRST_STORY_FINAL|FIRST_STORY_LATE_FINAL|STALE_AUDIT_MESSAGE|FIRST_REQUEST_PRIVATE/);
 console.log('PASS ordinary MVU request-to-final correlation, stale-ID rejection and injected-transport audit.');
+
+// A current assistant completion may explicitly decline the request. Report the
+// observed refusal without confusing it with the parsed story or provider bytes.
+monitor.resetForChat('refusal-current-chat');
+monitor.begin({ generationId: 'refusal-current-id' });
+monitor.captureMvuRequest({ source: 'official', payload: { messages: [{ role: 'user', content: 'A harmless test request' }] } });
+monitor.captureHelperFinal("I can't help with this request. Please revise it.", 'refusal-current-id');
+monitor.complete('Unchanged story floor with no variable block');
+monitor.success();
+for (const [id, callback] of [...timers]) if (!startupTimers.has(id)) { timers.delete(id); callback(); }
+assert.equal(monitor.getSnapshot().phase, 'error');
+assert.match(monitor.getSnapshot().detail, /助手完成输出明确表示无法协助/);
+assert.match(monitor.getSnapshot().detail, /并非提供方网络原始响应/);
+assert.equal((await monitor.getDiagnosticExportReport()).originalResponse.availability, 'missing');
+assert.doesNotMatch(stored.get('mwg-generation-diagnostics-v1'), /Please revise it/);
+
+monitor.begin({ generationId: 'refusal-early-variable-id' });
+monitor.captureMvuRequest({ source: 'official', payload: { messages: [{ role: 'user', content: 'Out of order test' }] } });
+monitor.captureHelperFinal("<Analysis>Private scratch text</Analysis>I can't help with this request.", 'refusal-early-variable-id');
+monitor.success(); // Some MVU builds announce the variable event before parsing the floor.
+monitor.complete('Old parsed floor, still no update block');
+assert.equal(monitor.getSnapshot().phase, 'error');
+assert.match(monitor.getSnapshot().detail, /助手完成输出明确表示无法协助/);
+assert.doesNotMatch(stored.get('mwg-generation-diagnostics-v1'), /Private scratch text/);
+
+monitor.begin({ generationId: 'refusal-unrelated-id' });
+monitor.captureMvuRequest({ source: 'official', payload: { messages: [{ role: 'user', content: 'Another test request' }] } });
+monitor.captureHelperFinal("I can't help with this request.", 'old-unrelated-id');
+monitor.complete('A different floor without an update block');
+monitor.success();
+for (const [id, callback] of [...timers]) if (!startupTimers.has(id)) { timers.delete(id); callback(); }
+assert.match(monitor.getSnapshot().detail, /解析事件可能仅含原楼层剧情/, 'unrelated refusals cannot be attached to this request');
+assert.doesNotMatch(monitor.getSnapshot().detail, /明确表示无法协助/);
+
+monitor.begin({ generationId: 'refusal-empty-id' });
+monitor.captureMvuRequest({ source: 'official', payload: { messages: [{ role: 'user', content: 'Empty final test' }] } });
+monitor.captureHelperFinal('', 'refusal-empty-id');
+monitor.complete('Story floor without an update block');
+monitor.success();
+for (const [id, callback] of [...timers]) if (!startupTimers.has(id)) { timers.delete(id); callback(); }
+assert.match(monitor.getSnapshot().detail, /未得到可解析/, 'empty completions keep the generic failure');
+
+monitor.begin({ generationId: 'refusal-accepted-id' });
+monitor.captureMvuRequest({ source: 'official', payload: { messages: [{ role: 'user', content: 'Valid update test' }] } });
+monitor.captureHelperFinal("I can't help with this request. <UpdateVariable>_.set('status.time', 'later');</UpdateVariable>", 'refusal-accepted-id');
+monitor.complete("<UpdateVariable>_.set('status.time', 'later');</UpdateVariable>");
+monitor.success();
+assert.equal(monitor.getSnapshot().phase, 'success', 'valid parsed updates retain their existing success path');
+console.log('PASS current-request refusal classification without stale outputs, persisted raw text or altered success semantics.');
