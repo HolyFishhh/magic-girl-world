@@ -270,6 +270,25 @@ const battle = {
   delete item.statuses;assert.deepEqual(run,before,'preview never changes original definitions or rewards');
 }
 
+// Opening cards may refer to a preset whose definition has not yet been saved.
+{
+  const run = runCore.createRunState({seed: 712});
+  const sparseCard = {id:'strength_gift',name:'力量馈赠',type:'Skill',rarity:'Rare',cost:1,quantity:1,
+    payment:{alternatives:[{id:'blood',name:'以血献祭',cost:0,hp:9}]},
+    effects:{apply_status:'sts_strength',stacks:3,to:'self'}};
+  run.opening = {phase:'ready',attempts:1,content:{title:'馈赠',narrative:'测试',choices:[
+    {id:'strength',label:'接过卡牌',outcome:{reward:{cards:[sparseCard]}}},
+  ]}};
+  const before = structuredClone(run);
+  renderTowerNodePanel({root,stat:{battle:{...battle,statuses:[]}},run,isLatest:true});
+  const rules = withClass(root,'content-rules')[0].textContent;
+  assert.match(rules,/可选替代：以血献祭/);
+  assert.match(rules,/3层力量/);
+  assert.doesNotMatch(rules,/未注册状态|替换全部通常费用/);
+  assert.match(withClass(root,'mwg-status-reference')[0].getAttribute('data-status-rules'),/仅攻击伤害/);
+  assert.deepEqual(run,before,'preview only resolves the built-in for display');
+}
+
 // Opening choices expose narrative and natural-language outcome tags.
 {
   const run = runCore.createRunState({ seed: 7 });

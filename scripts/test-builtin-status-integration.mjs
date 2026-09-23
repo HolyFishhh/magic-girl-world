@@ -84,6 +84,24 @@ const display = presentCompactContent(rewardCard, 'card', { statusNames, statusD
 assert.match(display.rulesText, /仪式/);
 assert.doesNotMatch(display.rulesText, /sts_ritual/);
 
+// A sparse preexisting story snapshot can contain the card but not the preset definition.
+// Read-only previews must still show the known builtin rule, without rewriting the snapshot.
+const { compactContentToDisplayTags } = require('../src/game-core/effectDisplay.ts');
+const sparseCard = { id: 'blood_offering', name: '血色献祭', type: 'Skill', rarity: 'Rare', cost: 2,
+  payment: { alternatives: [{ id: 'blood', name: '以血献祭', cost: 0, hp: 9 }] },
+  effects: [{ apply_status: 'sts_strength', stacks: 3, to: 'self' }, { draw: 1 }] };
+const sparseBefore = structuredClone(sparseCard);
+const sparseDisplay = presentCompactContent(sparseCard, 'card', { statusDefinitions: {} });
+assert.match(sparseDisplay.rulesText, /可选替代：以血献祭.*为自身赋予3层力量/);
+assert.match(sparseDisplay.rulesText, /仅攻击伤害/);
+assert.doesNotMatch(sparseDisplay.rulesText, /未注册状态|替换全部通常费用/);
+assert.match(compactContentToDisplayTags(sparseCard).map(tag => tag.text).join('；'), /为自身赋予3层力量/);
+assert.deepEqual(sparseCard, sparseBefore, 'preview never migrates player content');
+const customStrength = { ...BUILTIN_STATUS_DEFINITIONS[0], name: '剧情自定力量' };
+assert.match(presentCompactContent(sparseCard, 'card', { statusDefinitions: { sts_strength: customStrength } }).rulesText, /3层剧情自定力量/);
+assert.match(compactContentToDisplayTags(sparseCard, { statusDefinitions: { sts_strength: customStrength } }).map(tag=>tag.text).join('；'), /3层剧情自定力量/);
+assert.match(presentCompactContent({ ...sparseCard, effects: { apply_status: 'custom_missing' } }, 'card').rulesText, /未注册状态/,
+  'unknown IDs must not be masked by the builtin fallback');
 console.log('Builtin status integration: initial draft, reward claim, enemy activation, sparse restore, and Chinese rule display passed.');
 
 const reference = builtinStatusReferenceContract();

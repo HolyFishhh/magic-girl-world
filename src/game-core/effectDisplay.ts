@@ -1,6 +1,7 @@
 export { describeOpeningDeckTransforms } from './towerOpeningTransforms';
 import { describeCompactStatusRuleGroups } from './contentDescription';
 import { describeCardPayment } from './cardPayment';
+import { builtinStatusDefinition } from './builtinStatusCatalog';
 import { describeCardTraits } from './cardLifecycle';
 import { describeStatusAction } from './statusAction';
 import { describeEffectTarget as targetName } from './effectTargetDisplay';
@@ -158,11 +159,14 @@ function tag(text: string, style: keyof typeof TAG_STYLE): EffectDisplayTag {
 }
 
 function displayStatusName(statusId: string, context: EffectDisplayContext): string {
+  const definedName = (context.statusDefinitions?.[statusId] as { name?: unknown } | undefined)?.name;
   const groups: Record<string, string> = { all: '全部状态', buffs: '全部增益', debuffs: '全部减益' };
   return (
     groups[statusId] ||
     context.resolveStatusName?.(statusId)?.trim() ||
     context.statusNames?.[statusId]?.trim() ||
+    (typeof definedName === 'string' ? definedName.trim() : '') ||
+    builtinStatusDefinition(statusId)?.name ||
     '未注册状态'
   );
 }

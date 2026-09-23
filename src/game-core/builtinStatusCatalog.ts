@@ -30,6 +30,11 @@ export const BUILTIN_STATUS_DEFINITIONS: readonly BuiltinStatusDefinition[] = [
 ];
 
 const catalog = new Map(BUILTIN_STATUS_DEFINITIONS.map(definition => [definition.id, definition]));
+/** Only exact built-in IDs can be resolved without a saved definition. Explicit authored definitions win at each call site. */
+export function builtinStatusDefinition(id: string): Readonly<BuiltinStatusDefinition> | undefined {
+  return catalog.get(id);
+}
+
 /** Materialize only referenced conveniences, including dependencies, without changing authored definitions. */
 export function expandBuiltinStatusDefinitions(values: readonly unknown[], content: unknown, knownStatusIds: Iterable<string> = []): any[] {
   const result = structuredClone([...values]);

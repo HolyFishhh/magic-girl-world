@@ -154,6 +154,20 @@ assert.deepEqual(answers, { deck: { 'remove-one': ['a#1'] }, grant: { cards: [0]
 assert.deepEqual(stat, unchanged, 'collection must never write the supplied save object');
 assert.equal(document.body.children.length, 0, 'each confirmed surface is removed');
 
+const sparseStat = structuredClone(stat);
+sparseStat.battle.cards[0].effects = { apply_status: 'sts_strength', stacks: 3, to: 'self' };
+sparseStat.battle.cards[0].statuses = [];
+const sparseUnchanged = structuredClone(sparseStat);
+const sparseChoice = collectNonCombatAnswers({ stat: sparseStat, seed: 'sparse-builtin',
+  settlement: { deck_actions: [{ id: 'inspect', kind: 'remove', count: 1, pick: 'choose' }] } });
+assert.match(chooseFirst().innerHTML, /为自身赋予3层/);
+assert.match(chooseFirst().innerHTML, /力量/);
+assert.match(chooseFirst().innerHTML, /mwg-status-reference/, 'sparse preset keeps a clickable rule definition');
+assert.doesNotMatch(chooseFirst().innerHTML, /未注册状态/);
+buttons(document).find(node => node.textContent === '返回').click();
+assert.equal(await sparseChoice, null);
+assert.deepEqual(sparseStat, sparseUnchanged, 'preview and cancellation do not modify sparse saves');
+
 const cancelled = collectNonCombatAnswers({
   stat,
   seed: 'fixture',

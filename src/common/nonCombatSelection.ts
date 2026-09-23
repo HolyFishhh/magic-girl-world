@@ -7,6 +7,7 @@ import {
   type NonCombatDeckAction,
 } from '../game-core';
 import { presentCompactContent } from '../game-core/contentPresentation';
+import { expandBuiltinStatusDefinitions } from '../game-core/builtinStatusCatalog';
 import type { ContentRuleReference } from '../game-core/contentDescription';
 import { collectCardDisplayNames } from '../game-core/cardDisplayNames';
 import { collectSummonDisplayNames } from '../game-core/summonDisplayNames';
@@ -45,11 +46,11 @@ function record(value: unknown): value is JsonRecord {
 
 function cardFace(value: JsonRecord, kind: 'card' | 'item', stat: JsonRecord): string {
   const battle = stat.battle || {};
-  const statuses = [
+  const statuses = expandBuiltinStatusDefinitions([
     ...flattenMvuArray<JsonRecord>(battle.statuses),
     ...flattenMvuArray<JsonRecord>(value.statuses),
     ...flattenMvuArray<JsonRecord>(value.status),
-  ].filter(status => typeof status.id === 'string' && status.id);
+  ], value).filter((status): status is JsonRecord => record(status) && typeof status.id === 'string' && Boolean(status.id));
   const resources = flattenMvuArray<JsonRecord>(battle.core?.resources);
   const references: ContentRuleReference[] = [];
   const descriptionOptions = {

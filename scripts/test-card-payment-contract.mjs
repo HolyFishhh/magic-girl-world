@@ -6,7 +6,7 @@ const require=createRequire(import.meta.url);
 process.env.TS_NODE_COMPILER_OPTIONS=JSON.stringify({module:'commonjs',moduleResolution:'node'});
 require('ts-node/register/transpile-only');
 const core=require('../src/game-core/index.ts');
-const {cardPaymentPlans,validateCardPayment}=require('../src/game-core/cardPayment.ts');
+const {cardPaymentPlans,validateCardPayment,describeCardPayment}=require('../src/game-core/cardPayment.ts');
 const {withAiContentDefinitions}=require('../src/game-core/aiContentJsonSchema.ts');
 const {describeCompactCardRuleGroups}=require('../src/game-core/contentDescription.ts');
 const {compactContentToDisplayTags}=require('../src/game-core/effectDisplay.ts');
@@ -14,6 +14,10 @@ const payment={additional:{hp:3,discard:{count:1,card_type:'Skill'},sacrifice:{c
 const authored={id:'ritual',name:'祭礼',type:'Skill',cost:2,rarity:'Rare',quantity:1,payment,effects:{block:5}};
 const schema=new Ajv2020({strict:false}).compile(withAiContentDefinitions({$ref:'#/$defs/mwgCard'}));
 assert.equal(schema(authored),true,JSON.stringify(schema.errors));
+const screenshotPayment = {alternatives:[{id:'blood',name:'以血献祭',cost:0,hp:9}]};
+assert.deepEqual(describeCardPayment(screenshotPayment), ['可选替代：以血献祭，0⚡能量，支付9点生命（至少保留1点）']);
+assert.doesNotMatch(describeCompactCardRuleGroups({...authored,payment:screenshotPayment}).join('；'),/替换全部通常费用|替代费用「/);
+assert.match(compactContentToDisplayTags({...authored,payment:screenshotPayment}).map(tag=>tag.text).join('；'),/可选替代：以血献祭，0⚡能量，支付9点生命/);
 assert.equal(validateCardPayment(payment),null);
 for(const invalid of [{alternatives:[{id:'normal',name:'x',cost:0}]},{additional:{hp:0}},{additional:{discard:{count:1,bogus:2}}}]) assert.ok(validateCardPayment(invalid));
 

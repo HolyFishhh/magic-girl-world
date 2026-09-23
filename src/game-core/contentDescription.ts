@@ -1,6 +1,7 @@
 export { describeOpeningDeckTransforms } from './towerOpeningTransforms';
 import { describeInterceptions } from './interception';
 import { describeCardPayment } from './cardPayment';
+import { builtinStatusDefinition } from './builtinStatusCatalog';
 import { describeStatusAction, type StatusActionSpec } from './statusAction';
 import { describeEffectTarget } from './effectTargetDisplay';
 import type { EnemyTargetSelector } from './combatantCollection';
@@ -484,7 +485,10 @@ function cardRuleFilterText(
 
 function displayStatusName(id: unknown, options: CompactCardDescriptionOptions): string {
   const value = String(id);
-  return options.statusNames?.[value]?.trim() || '未注册状态';
+  const definition = options.statusDefinitions?.[value];
+  return options.statusNames?.[value]?.trim()
+    || (isRecord(definition) && typeof definition.name === 'string' ? definition.name.trim() : '')
+    || builtinStatusDefinition(value)?.name || '未注册状态';
 }
 
 function describeCardAttachmentChange(
@@ -670,9 +674,9 @@ function describeSingleOperation(
     case 'apply_status':
       text = `为${statusTarget}赋予${formula(value.stacks ?? 1, options)}层${displayStatusName(value.apply_status, options)}`;
       if (options.statusDefinitions && options.inlineStatusDetails !== false) {
-        const definition = typeof value.apply_status === 'string'
-          && Object.hasOwn(options.statusDefinitions, value.apply_status)
-          ? options.statusDefinitions[value.apply_status] : undefined;
+        const statusId = typeof value.apply_status === 'string' ? value.apply_status : '';
+        const definition = Object.hasOwn(options.statusDefinitions, statusId)
+          ? options.statusDefinitions[statusId] : builtinStatusDefinition(statusId);
         if (isRecord(definition) && definition.id === value.apply_status) {
           // One level only: status graphs may be cyclic. The inner effect's
           // self/opponent are relative to its holder, not this card's caster.

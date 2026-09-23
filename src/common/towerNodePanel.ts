@@ -67,8 +67,8 @@ function isRecord(value: unknown): value is Record<string, any> {
 }
 
 /** Match persistence-time expansion while rendering a candidate before it is claimed. */
-function displayStatuses(...values: unknown[]): Record<string, any>[] {
-  return expandBuiltinStatusDefinitions(values.flatMap(list), values)
+function displayStatuses(content: unknown, ...values: unknown[]): Record<string, any>[] {
+  return expandBuiltinStatusDefinitions(values.flatMap(list), content)
     .filter(isRecord) as Record<string, any>[];
 }
 
@@ -371,7 +371,7 @@ function createOpeningChoice(
   preview.className = 'tower-opening-choice-rewards';
   for (const [kind, values] of previewEntries) {
     for (const value of list(values)) {
-      const statuses = displayStatuses(battle.statuses, reward.statuses, value.statuses, value.status)
+      const statuses = displayStatuses(value, battle.statuses, reward.statuses, value.statuses, value.status)
         .filter(status => typeof status.id === 'string' && status.id.trim());
       const resources = list(battle.core?.resources);
       const references: ContentRuleReference[] = [];
@@ -580,10 +580,10 @@ function renderEventReveal(options: TowerNodePanelOptions, shell: HTMLElement): 
   for (const line of eventOutcomeSummary(reveal.outcome, stat.battle).lines) {
     appendOutcomeSummary(document, result, line);
   }
-  const statuses = displayStatuses(stat.battle?.statuses, reveal.outcome.gain_cards);
+  const statuses = displayStatuses(reveal.outcome, stat.battle?.statuses);
   const resources: Record<string, any> = Object.fromEntries(list(stat.battle?.core?.resources).map(resource => [resource.id, resource]));
   for (const card of list(reveal.outcome.gain_cards)) {
-    const definitions = displayStatuses(statuses, card.statuses, card.status);
+    const definitions = displayStatuses(card, statuses, card.statuses, card.status);
     const references: ContentRuleReference[] = [];
     const descriptionOptions = {
       onSummonReference: (reference: ContentRuleReference) => references.push(reference),
@@ -633,12 +633,13 @@ function renderRest(options: TowerNodePanelOptions, shell: HTMLElement): void {
     const entry = createElement(document, 'article', 'tower-campfire-memory-card');
     const face = createElement(document, 'div');
     const references: ContentRuleReference[] = [];
+    const statuses = displayStatuses(card, stat.battle?.statuses);
     const presentation = presentCompactContent(card, 'card', {
       cardNames: collectCardDisplayNames(stat.battle, card), summonNames: collectSummonDisplayNames(stat.battle, card),
       stanceNames: collectStanceNames(stat.battle, card), stanceDefinitions: collectStanceDefinitions(stat.battle, card),
       onSummonReference: reference => references.push(reference),
-      statusNames: Object.fromEntries(list(stat.battle?.statuses).map(status => [status.id, status.name])),
-      statusDefinitions: Object.fromEntries(list(stat.battle?.statuses).map(status => [status.id, status])),
+      statusNames: Object.fromEntries(statuses.map(status => [status.id, status.name])),
+      statusDefinitions: Object.fromEntries(statuses.map(status => [status.id, status])),
       resourceNames: Object.fromEntries(list(stat.battle?.core?.resources).map(resource => [resource.id, resource.name])),
       resourceEmojis: Object.fromEntries(list(stat.battle?.core?.resources).map(resource => [resource.id, resource.emoji])),
     });
@@ -710,7 +711,7 @@ export function renderTowerNodePanel(options: TowerNodePanelOptions): boolean {
     shell.append(createElement(document, 'p', 'tower-node-callout', names.join('、')));
     for (const artifact of list(stat.initial_artifact_acquisition.artifacts)) {
       const references: ContentRuleReference[] = [];
-      const statuses = [...list(stat.battle?.statuses), ...list(artifact.statuses)];
+      const statuses = displayStatuses(artifact, stat.battle?.statuses, artifact.statuses);
       const presentation = presentCompactContent(artifact, 'content', {
         cardNames: collectCardDisplayNames(stat.battle, artifact),
         summonNames: collectSummonDisplayNames(stat.battle, artifact),
