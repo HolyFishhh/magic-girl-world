@@ -353,3 +353,36 @@ assert.equal(otherExport.mvuHelperFinal, null);
 assert.equal(otherExport.mvuRequestAudit, null);
 assert.equal(monitor.getSnapshot().phase, 'idle');
 console.log('PASS ordinary MVU parser/transport provenance, content-free request audit, empty final, redaction and chat/operation isolation.');
+
+// A story completion can precede a separate MVU request under the same
+// extra-analysis lifecycle. The second request must own only its own final;
+// compatibility duplicates of the same request must not clear that final.
+monitor.resetForChat('request-correlation');
+monitor.syncExtraAnalysis(false);
+monitor.syncExtraAnalysis(true);
+const firstRequest = { prompt: [{ role: 'user', content: 'FIRST_REQUEST_PRIVATE' }] };
+monitor.captureMvuRequest({ source: 'official', payload: firstRequest });
+monitor.captureHelperFinal('FIRST_STORY_FINAL', 'story-generation-id');
+assert.equal((await monitor.getDiagnosticExportReport()).mvuHelperFinal.text, 'FIRST_STORY_FINAL');
+now += 1500;
+const secondRequest = {
+  messages: [{ role: 'user', content: 'STALE_AUDIT_MESSAGE' }],
+  prompt: [{ role: 'system', content: '[MWG_DESIGN_CONTEXT/v1] [当前 MVU 游戏事实] 固定顺序： _.set( <UpdateVariable> 紧急变量更新任务' }],
+};
+monitor.captureMvuRequest({ source: 'official', payload: secondRequest });
+let secondReport = await monitor.getDiagnosticExportReport();
+assert.equal(secondReport.mvuHelperFinal, null, 'previous story final is not attributed to the second MVU request');
+assert.equal(secondReport.mvuRequestAudit.requestField, 'prompt', 'audit follows the injected request transport');
+assert.equal(secondReport.mvuRequestAudit.hasCurrentMvuFacts, true);
+assert.equal(secondReport.mvuRequestAudit.hasDesignContextMarker, true);
+monitor.stream('FIRST_STORY_STALE_STREAM', 'story-generation-id');
+monitor.captureHelperFinal('FIRST_STORY_LATE_FINAL', 'story-generation-id');
+assert.equal((await monitor.getDiagnosticExportReport()).mvuHelperFinal, null, 'late previous-request output stays excluded');
+monitor.syncExtraAnalysis(false); // the lifecycle flag may fall before the second final arrives
+monitor.captureHelperFinal('SECOND_MVU_FINAL', 'second-mvu-id');
+monitor.captureMvuRequest({ source: 'tavern-helper', payload: secondRequest });
+secondReport = await monitor.getDiagnosticExportReport();
+assert.equal(secondReport.mvuHelperFinal.text, 'SECOND_MVU_FINAL', 'duplicate transport events retain the current final');
+assert.equal(secondReport.mvuHelperFinal.generationId, 'second-mvu-id');
+assert.doesNotMatch(JSON.stringify(secondReport), /FIRST_STORY_FINAL|FIRST_STORY_LATE_FINAL|STALE_AUDIT_MESSAGE|FIRST_REQUEST_PRIVATE/);
+console.log('PASS ordinary MVU request-to-final correlation, stale-ID rejection and injected-transport audit.');

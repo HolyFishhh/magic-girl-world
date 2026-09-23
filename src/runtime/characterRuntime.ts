@@ -642,6 +642,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
     // Ephemeral evidence only: never persist prompts or final text in lightweight diagnostics.
     let parsedFloorObserved = false;
     let helperFinalOutput: { generationId: string; text: string; capturedAt: number } | null = null;
+    const supersededHelperGenerationIds = new Set<string>();
     let requestAudit: Record<string, unknown> | null = null;
     const missingUpdateDetail = '本轮 MVU 未得到可解析的 <UpdateVariable> 变量更新块；解析事件可能仅含原楼层剧情，请查看请求摘要和助手完成输出，不能据此断言模型原始返回内容';
     let manualRepairActive = false;
@@ -1977,6 +1978,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
         });
         parsedFloorObserved = false;
         helperFinalOutput = null;
+        supersededHelperGenerationIds.clear();
         requestAudit = null;
         manualRepairActive = false;
         manualRepairSession += 1;
@@ -1995,6 +1997,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
           && Date.now() - monitorState.requestCapturedAt < 5_000;
         parsedFloorObserved = false;
         helperFinalOutput = null;
+        supersededHelperGenerationIds.clear();
         if (!preserveCapturedRequest) requestAudit = null;
         monitorState.phase = 'generating';
         monitorState.background = meta.structured === true;
@@ -2050,15 +2053,34 @@ function summarizeMvuUpdate(result: unknown): string[] {
         // Passive node-story observations do not belong to a finished opening.
         if (narrative && ['success', 'error'].includes(monitorState.phase)) return;
         const requestContent = serializeCapturedRequest(input.payload);
-        const duplicateNarrative = narrative && monitorState.timeline.at(-1)?.label === '捕获 preset 剧情请求'
-          && requestContent === monitorState.requestContent && Date.now() - monitorState.requestCapturedAt < 1000;
+        const duplicateRequest = requestContent === monitorState.requestContent
+          && monitorState.requestCapturedAt > 0 && Date.now() - monitorState.requestCapturedAt < 1000;
+        const duplicateNarrative = narrative && duplicateRequest
+          && monitorState.timeline.at(-1)?.label === '捕获 preset 剧情请求';
+        if (!narrative && !duplicateRequest && !monitorState.background && !manualRepairActive) {
+          // A story completion can arrive before the actual MVU request in the
+          // same lifecycle. Never export that earlier helper final as the later
+          // request's response, or pin the new request to its old generation ID.
+          if (helperFinalOutput) supersededHelperGenerationIds.add(helperFinalOutput.generationId);
+          helperFinalOutput = null;
+          if (extraAnalysisActive && ['generating', 'applying'].includes(monitorState.phase)) {
+            if (monitorState.generationId && !monitorState.generationId.startsWith('mvu-extra-')) {
+              supersededHelperGenerationIds.add(monitorState.generationId);
+            }
+            monitorState.generationId = `mvu-extra-${Date.now()}`;
+          }
+        }
         monitorState.requestContent = requestContent;
         monitorState.requestSource = String(input.source || 'MVU 二次请求');
         monitorState.requestCapturedAt = Date.now();
         // A content-free audit can reveal routing/format gaps without exporting
         // the captured request, credentials, hidden reasoning or story text.
         const payload = input.payload && typeof input.payload === 'object' ? input.payload as Record<string, any> : {};
-        const messages = [payload.messages, payload.prompt, payload.chat].find(Array.isArray) || [];
+        // Match the actual prompt-transport priority used by injectDesignContext;
+        // auditing `messages` first can report a false missing-facts result when
+        // both `messages` and `prompt` exist and only `prompt` is sent/modified.
+        const requestField = ['prompt', 'messages', 'chat'].find(key => Array.isArray(payload[key]));
+        const messages = requestField ? payload[requestField] as any[] : [];
         const textOf = (value: unknown): string => typeof value === 'string' ? value
           : Array.isArray(value) ? value.map(part => typeof part === 'string' ? part : typeof part?.text === 'string' ? part.text : '').join('\n') : '';
         const texts = messages.length ? messages.map((message: any) => textOf(message?.content ?? message))
@@ -2067,8 +2089,10 @@ function summarizeMvuUpdate(result: unknown): string[] {
         requestAudit = {
           source: monitorState.requestSource, capturedAt: monitorState.requestCapturedAt,
           purpose: narrative ? 'preset-narrative' : 'observed-mvu-request',
+          requestField: requestField || (typeof payload.prompt === 'string' ? 'prompt-text' : 'unknown'),
           messageCount: messages.length, characters: joined.length,
           roles: messages.map((message: any) => ['system', 'user', 'assistant', 'tool'].includes(message?.role) ? message.role : 'unknown'),
+          hasDesignContextMarker: joined.includes('[MWG_DESIGN_CONTEXT/v1]'),
           hasUpdateVariable: /<UpdateVariable>/i.test(joined),
           hasMvuTask: /紧急变量更新任务|必须立即停止角色扮演|除了<UpdateVariable>块外不输出任何内容/.test(joined),
           hasOutputContract: joined.includes('固定顺序：') && joined.includes('_.set('),
@@ -2121,7 +2145,8 @@ function summarizeMvuUpdate(result: unknown): string[] {
         render();
       },
       stream(text: unknown, generationId?: string) {
-        if (monitorState.phase === 'idle' || monitorState.phase === 'success' || monitorState.phase === 'error') return;
+        if (monitorState.phase === 'idle' || monitorState.phase === 'success' || monitorState.phase === 'error'
+          || (generationId && supersededHelperGenerationIds.has(generationId))) return;
         if (generationId && monitorState.generationId && generationId !== monitorState.generationId) {
           if (monitorState.generationId.startsWith('mvu-extra-')) {
             // MVU exposes its real generation id only after the lifecycle flag
@@ -2138,8 +2163,12 @@ function summarizeMvuUpdate(result: unknown): string[] {
       captureHelperFinal(text: unknown, generationId?: string) {
         // Only the active ordinary MVU request owns this observation. Structured
         // requests keep their own durable evidence; unrelated/late IDs are ignored.
-        if (monitorState.background || !extraAnalysisActive || !monitorState.requestCapturedAt
-          || !['generating', 'applying'].includes(monitorState.phase) || !generationId || typeof text !== 'string') return;
+        // MVU may lower its lifecycle flag before Tavern Helper announces the
+        // request's final. Require an observed request and active ordinary phase,
+        // not a still-high flag; old generation IDs are rejected separately.
+        if (monitorState.background || !monitorState.requestCapturedAt
+          || !['generating', 'applying'].includes(monitorState.phase) || !generationId
+          || supersededHelperGenerationIds.has(generationId) || typeof text !== 'string') return;
         if (monitorState.generationId.startsWith('mvu-extra-')) monitorState.generationId = generationId;
         if (generationId !== monitorState.generationId
           && !generationId.startsWith(`${monitorState.generationId}-attempt-`)) return;
