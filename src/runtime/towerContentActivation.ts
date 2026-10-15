@@ -765,6 +765,15 @@ function consumeEnteredNode(entered: RunState): RunState {
 export function activateTowerNodeInStat(statValue: unknown, nodeId: string): TowerNodeActivationResult {
   const stat = requireRecord(statValue, 'stat_data is unavailable');
   const previous = readTowerRunState(stat);
+  // A restored view can still display the route whose activation was already
+  // saved. A repeat click must resume that node without replaying its effects.
+  const active = stat.run_node;
+  if (previous.phase === 'in_node' && previous.currentNode?.id === nodeId
+    && active?.schemaVersion === TOWER_ACTIVE_NODE_SCHEMA_VERSION
+    && active.node_id === nodeId && active.kind === previous.currentNode.kind
+    && previous.nodeContent[nodeId]?.phase === 'consumed') {
+    return { previous, run: previous, node: clone(active), rewardStaged: stat.run_node_reward?.node_id === nodeId };
+  }
   const choice = previous.choices.find(entry => entry.id === nodeId);
   if (!choice) throw new Error('tower node is not currently reachable');
   const envelope = previous.nodeContent[nodeId];

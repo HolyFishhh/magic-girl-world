@@ -13,6 +13,7 @@ type SharedRuntime = Readonly<{
   getViewAsset(view: RuntimeViewName): RuntimeViewAsset;
   getMessageText?: (messageId?: number | 'latest') => string;
   getMessageVariables?: (messageId?: number | 'latest') => Record<string, any>;
+  waitForMessageReady?: (messageId?: number | 'latest', options?: { requireBattleData?: boolean }) => Promise<void>;
 }>;
 
 const RUNTIME_MOUNT_EPOCH_KEY = '__MWG_RUNTIME_MOUNT_EPOCH__';
@@ -85,7 +86,9 @@ function isolatedRuntimeScript(source: string): string {
     return;
   }
 
+  const messageScope = currentMessageId() ?? 'latest';
   const fail = (error: unknown) => {
+    if (!isRuntimeMountEpochCurrent(mountEpoch)) return;
     const message = error instanceof Error ? error.message : String(error);
     document.body.replaceChildren();
     const alert = document.createElement('div');
@@ -115,22 +118,41 @@ function isolatedRuntimeScript(source: string): string {
       }
       (globalThis as any).MagicGirlWorld = api;
 
+      // Do not choose the creator from an MVU cache that is still initializing.
+      // Failure stays visible instead of silently replacing a saved game.
+      if ((view === 'start' || view === 'fish') && api.waitForMessageReady) {
+        return api.waitForMessageReady(messageScope, { requireBattleData: false }).then(() => api);
+      }
+      return api;
+    })
+    .then(api => {
+      if (!api || !isRuntimeMountEpochCurrent(mountEpoch)) return;
       let resolvedView = view;
-      if (view === 'start' && typeof api.getMessageText === 'function') {
-        try {
-          const message = String(api.getMessageText(currentMessageId() ?? 'latest') || '');
-          // The tower alternate greeting owns one persistent common/tower
-          // surface. Its setup form, generated gift, map and later nodes all
-          // evolve inside that view instead of mounting the story creator and
-          // then replacing it with a second UI.
-          if (message.includes('[爬塔模式开场]')) resolvedView = 'common';
-        } catch {
-          // The ordinary start view remains the safe fallback.
+      if (view === 'start') {
+        const message = String((api.getMessageText && api.getMessageText(messageScope)) || '');
+        // The tower alternate greeting owns one persistent common/tower
+        // surface. Its setup form, generated gift, map and later nodes all
+        // evolve inside that view instead of mounting the story creator and
+        // then replacing it with a second UI.
+        if (message.includes('[爬塔模式开场]')) {
+          resolvedView = 'common';
+        } else if (typeof api.getMessageVariables === 'function') {
+          // A refreshed or switched chat can render a later story floor
+          // before its original greeting marker is available.  The saved
+          // mode lock is authoritative in that case; falling back to the
+          // landing page loses the current story UI for one render cycle.
+          const variables = api.getMessageVariables(messageScope);
+          const stat = variables && variables.stat_data;
+          // initvar defaults to story even before the creator is submitted.
+          // Only a saved program lock proves that setup was completed.
+          const lock = stat && stat.game_mode_lock;
+          const mode = lock && lock.schemaVersion === 1 ? lock.mode : null;
+          if (mode === 'story' || mode === 'tower') resolvedView = 'common';
         }
       }
       if (view === 'fish' && typeof api.getMessageVariables === 'function') {
         try {
-          const variables = api.getMessageVariables(currentMessageId() ?? 'latest');
+          const variables = api.getMessageVariables(messageScope);
           const stat = variables && variables.stat_data;
           const run = stat && stat.run;
           const node = run && run.currentNode;
@@ -157,7 +179,7 @@ function isolatedRuntimeScript(source: string): string {
       document.documentElement.dataset.mwgMountedView = resolvedView;
 
       const asset = api.getViewAsset(resolvedView);
-      if (!asset?.bodyHtml || !asset?.styles || !asset?.script)
+      if (!asset || !asset.bodyHtml || !asset.styles || !asset.script)
         throw new Error(`视图资源不完整: ${resolvedView}`);
 
       document.title = asset.title;

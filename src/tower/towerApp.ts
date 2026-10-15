@@ -486,7 +486,7 @@ class TowerMapApp implements TowerAppController {
         'span',
         '',
         presentation.selectedAct === presentation.activeAct
-          ? '点选发光地点继续冒险，浅蓝路线代表当前可达。'
+          ? '青色圆标可选，金色为当前位置，紫色为已走过；灰色暂不可达。房间名称按类型分色。'
           : `正在预览第 ${presentation.selectedAct} 幕，当前冒险仍在第 ${presentation.activeAct} 幕。`,
       ),
     );

@@ -6,6 +6,7 @@ const require = createRequire(import.meta.url);
 process.env.TS_NODE_COMPILER_OPTIONS = JSON.stringify({ module: 'CommonJS', moduleResolution: 'node' });
 require('ts-node/register/transpile-only');
 
+const { retryCurrentMessageWithExtraModel } = require(resolve('src/runtime/mvuExtraModelRepair.ts'));
 const { requestNaturalLanguageVariableRepair } = require(resolve('src/runtime/naturalLanguageCardRepair.ts'));
 const { PersistentMvuRepairHost } = require(resolve('src/sillytavern-extension/persistentMvuRepairHost.ts'));
 
@@ -43,16 +44,29 @@ Object.assign(globalThis, {
 });
 
 await assert.rejects(
-  requestNaturalLanguageVariableRepair('把时间改为第二天'),
-  /需要持久化结构化修复端点/,
+  retryCurrentMessageWithExtraModel('[玩家自然语言变量修改] 把时间改为第二天', { resultTimeoutMs: 5, eventReadyGraceMs: 0, eventStartTimeoutMs: 1 }),
+  /没有返回新的变量更新块/,
 );
-assert.equal(variables.stat_data.status.time, '第一天');
+assert.equal(variables.stat_data.status.time, '第二天', 'unattributed native writes are not overwritten by an unsafe rollback');
+variables = structuredClone(original);
+message = '当前剧情\n<UpdateVariable>existing</UpdateVariable>';
 assert.deepEqual(variables.stat_data.battle, original.stat_data.battle);
 assert.deepEqual(variables.stat_data.run, original.stat_data.run);
 assert.deepEqual(variables.user_owned, original.user_owned);
 assert.deepEqual(backgroundGeneration, { id: 'tower-task:running', phase: 'applying', completedNodes: 1 });
 assert.equal(stopCalls, 0, 'an unavailable variable repair must not stop an unrelated tower generation');
 assert.match(message, /<UpdateVariable>existing<\/UpdateVariable>/);
+
+globalThis.eventEmit = async () => {
+  variables = structuredClone(original);
+  variables.stat_data.status.location = '原生 MVU 新城区';
+  message += '\n<UpdateVariable>_.set("status.location", "原生 MVU 新城区");</UpdateVariable>';
+};
+await requestNaturalLanguageVariableRepair('把地点改为原生 MVU 新城区');
+assert.equal(variables.stat_data.status.location, '原生 MVU 新城区');
+assert.deepEqual(variables.user_owned, original.user_owned);
+assert.equal(stopCalls, 0);
+assert.doesNotMatch(message, /MWG_REPAIR_REQUEST_BEGIN/);
 
 const providerState = { message: '结构化变量修复', variables: structuredClone(original), replaceCalls: 0 };
 const providerHelper = {
@@ -81,4 +95,4 @@ assert.equal(providerState.replaceCalls, 0);
 assert.match(providerState.message, /Apply player variable patch/);
 delete globalThis.MagicGirlWorld;
 
-console.log('Natural-language variable repair refuses unattributable native writes and leaves tower work untouched.');
+console.log('Natural-language variable repair supports native MVU and structured providers, rejects unattributed success, and leaves tower work untouched.');

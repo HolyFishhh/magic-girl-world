@@ -145,7 +145,9 @@ function createOverlay(document: Document, title: string, description: string) {
     .non-combat-selection-footer button[disabled]{opacity:.5;cursor:not-allowed}`;
   overlay.append(style);
   document.body.append(overlay);
-  const unpin = pinSelectionToVisibleViewport(panel);
+  let unpin: () => void;
+  try { unpin = pinSelectionToVisibleViewport(panel); }
+  catch (error) { overlay.remove(); throw error; }
   bindStatusReferenceDetails(document);
   return { content, footer, close: () => { unpin(); overlay.remove(); } };
 }
@@ -219,12 +221,15 @@ function chooseIndexes(
     };
     signal?.addEventListener('abort', abort, { once: true });
     back.addEventListener('click', () => finish(null));
+    dialog.footer.addEventListener('keydown', event => {
+      if (event.key === 'Escape') { event.preventDefault(); finish(null); }
+    });
     confirm.addEventListener('click', () => {
       if (selected.size !== pick) return;
       finish([...selected].sort((left, right) => left - right));
     });
     refresh();
-    confirm.focus({ preventScroll: true });
+    back.focus({ preventScroll: true });
   });
 }
 

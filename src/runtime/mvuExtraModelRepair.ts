@@ -82,8 +82,8 @@ const EXTRA_MODEL_EVENT_START_TIMEOUT_MS = 4_000;
 
 function isPlainRecord(value: unknown): value is Record<string, any> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
+  // Helper/MVU results cross iframe realms; their Object.prototype differs.
+  return Object.prototype.toString.call(value) === '[object Object]';
 }
 
 function cloneValue<T>(value: T): T {
@@ -716,9 +716,10 @@ export async function retryCurrentMessageWithExtraModel(
       return;
     }
   }
-  if (prompt.includes('[玩家自然语言变量修改]')) {
-    throw new Error('自然语言变量修改需要持久化结构化修复端点；未对当前楼层启动 MVU 重试');
-  }
+  // The extension's persistent endpoint is preferred above, but it is not
+  // available in every Tavern Helper embedding (notably iOS/mobile iframe
+  // sessions).  Fall back to MVU's own extra-model retry event so a story
+  // variable edit still runs in-place without creating a new chat floor.
 
   const runtime = requireTavernHelperHost([
     'getCurrentMessageId',

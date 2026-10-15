@@ -1,4 +1,5 @@
 import { hasPendingInitialArtifactAcquisition } from './initialArtifactAcquisition';
+import { mergeMessageVariableUpdate } from '../runtime/messageVariableMerge';
 import {
   formatRestUpgradePrompt,
   migratePersistentRunDeck,
@@ -502,6 +503,7 @@ export class TavernRunActionHost {
     if (!normalizedNodeId) throw new Error('爬塔节点 ID 不能为空');
 
     let previousStat: Record<string, any> | null = null;
+    let activatedStat: Record<string, any> | null = null;
     let activation: TowerNodeActivationResult | null = null;
     try {
       await this.ports.updateVariablesWith((variables: Record<string, any>) => {
@@ -510,13 +512,14 @@ export class TavernRunActionHost {
         if (hasPendingInitialArtifactAcquisition(stat)) throw new Error('请先完成初始遗物的选择');
         previousStat = structuredClone(stat);
         activation = activateTowerNodeInStat(stat, normalizedNodeId);
+        activatedStat = structuredClone(stat);
         return variables;
       });
     } catch (error) {
       // Validation failures occur before activateTowerNodeInStat publishes its
       // draft, so they need no compensating write. Only recover when the node
       // was activated but the outer MVU persistence step then failed.
-      if (previousStat && activation) {
+      if (previousStat && activatedStat && activation) {
         try {
           await this.ports.updateVariablesWith((variables: Record<string, any>) => {
             const stat = statRoot(variables);
@@ -527,7 +530,12 @@ export class TavernRunActionHost {
               run.currentNode?.id === normalizedNodeId &&
               activeNode?.node_id === normalizedNodeId
             ) {
-              replaceRecord(stat, structuredClone(previousStat!));
+              // Compensate only this activation's write set. A background
+              // completion may have saved other node content in the meantime.
+              const restored = mergeMessageVariableUpdate(activatedStat!, previousStat!, stat);
+              // Rollback is a new transaction, never an older save revision.
+              restored.run.stateRevision = run.stateRevision + 1;
+              replaceRecord(stat, restored);
             }
             return variables;
           });
