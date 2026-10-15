@@ -104,6 +104,7 @@ const semantic=structuredClone(original);semantic.stat_data.status.time='次日'
 const semResult=reconcileNaturalLanguageVariableRepair(original,semantic);assert.equal(semResult.stat_data.status.time,'次日');assert.equal(semResult.runtime_metadata,undefined);assert.throws(()=>reconcileNaturalLanguageVariableRepair(original,{stat_data:[]}),/有效/);
 variables=structuredClone(original);message='原始剧情';
 globalThis.eventEmit=async()=>{variables=structuredClone(original);variables.stat_data.status.time='次日';message+='\n<UpdateVariable><Analysis>修改剧情时间</Analysis>_.set("status.time","次日");</UpdateVariable>';};
-await assert.rejects(requestNaturalLanguageVariableRepair('将时间改为次日'), /需要持久化结构化修复端点/);
-assert.equal(variables.stat_data.status.time,'保持不变');assert.equal(createdMessages,0);assert.deepEqual(variables.stat_data.battle.cards,original.stat_data.battle.cards);
-console.log('PASS semantic variable edit refuses unattributable native MVU writes without a persistent endpoint');
+await requestNaturalLanguageVariableRepair('将时间改为次日');
+assert.equal(variables.stat_data.status.time,'次日');assert.equal(createdMessages,0);assert.deepEqual(variables.stat_data.battle,original.stat_data.battle);
+assert.doesNotMatch(message,/MWG_REPAIR_REQUEST|玩家自然语言变量修改/);
+console.log('PASS semantic variable edit uses an attributed native MVU update without creating a floor or changing battle data');
