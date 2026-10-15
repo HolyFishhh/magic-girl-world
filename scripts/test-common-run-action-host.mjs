@@ -44,9 +44,14 @@ function createHarness(stat = {}, options = {}) {
     initialPublicationReady: () => options.publicationReady !== false,
     updateVariablesWith: async updater => {
       updates += 1;
-      variables = await updater(variables);
+      const beforeRevision = variables.stat_data.run?.stateRevision;
+      const next = await updater(structuredClone(variables));
+      if (options.enforceRevision && beforeRevision !== undefined)
+        assert.ok(next.stat_data.run.stateRevision >= beforeRevision, 'runtime rejects lower save revisions');
+      variables = next;
       if (options.failUpdateAfterApplyOnce && !failedUpdateAfterApply) {
         failedUpdateAfterApply = true;
+        options.afterFailedApply?.(variables);
         throw new Error('simulated update failure after apply');
       }
       return variables;
@@ -338,6 +343,10 @@ assert.equal(readyTowerHarness.stat().run_node.node_id, readyTower.choice.id);
 assert.equal(readyTowerHarness.stat().run_node_reward.reward.card[0].id, 'mist_guard');
 assert.deepEqual(readyTowerHarness.prompts, [], 'ready nodes must not ask AI to generate the same content again');
 assert.deepEqual(readyTowerHarness.towerWakeReasons, ['node-activated'], 'route changes must wake stale-branch cancellation');
+const alreadyEntered = structuredClone(readyTowerHarness.stat());
+await readyTowerHarness.host.activateTowerRunNode(readyTower.choice.id);
+assert.deepEqual(readyTowerHarness.stat(), alreadyEntered, 'a stale route click resumes the saved node without replaying entry');
+await assert.rejects(readyTowerHarness.host.activateTowerRunNode('different-node'), /not currently reachable/);
 
 const blockedActivation = readyTowerBattleStat();
 addPendingInitialArtifact(blockedActivation.stat);
@@ -360,11 +369,18 @@ assert.deepEqual(blockedOpeningHarness.stat(), blockedOpeningBefore, 'opening se
 
 const rollbackReadyTower = readyTowerBattleStat();
 const rollbackReadySnapshot = structuredClone(rollbackReadyTower.stat);
-const activationRollbackHarness = createHarness(rollbackReadyTower.stat, { failUpdateAfterApplyOnce: true });
+const beforeActivationRevision = rollbackReadySnapshot.run.stateRevision;
+const activationRollbackHarness = createHarness(rollbackReadyTower.stat, {
+  failUpdateAfterApplyOnce: true, enforceRevision: true,
+  afterFailedApply: variables => { variables.stat_data.background_note = 'late generation'; },
+});
 await assert.rejects(
   activationRollbackHarness.host.activateTowerRunNode(rollbackReadyTower.choice.id),
   /simulated update failure after apply/,
 );
+rollbackReadySnapshot.run.stateRevision = activationRollbackHarness.stat().run.stateRevision;
+rollbackReadySnapshot.background_note = 'late generation';
+assert.ok(rollbackReadySnapshot.run.stateRevision > beforeActivationRevision);
 assert.deepEqual(
   activationRollbackHarness.stat(),
   rollbackReadySnapshot,

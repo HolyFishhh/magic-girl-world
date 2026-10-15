@@ -80,6 +80,8 @@ export function pinSelectionToVisibleViewport(dialog: HTMLElement, maxWidth = 66
   }
   const observer = new ResizeObserver(place);
   observer.observe(dialog);
+  // A native dialog is still display:none before showModal. Its first open
+  // resize will re-center it; initial coordinates already constrain autofocus.
   place();
   return () => {
     observer.disconnect();

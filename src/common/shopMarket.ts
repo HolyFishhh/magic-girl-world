@@ -155,11 +155,20 @@ export function renderShopMarket(options: ShopMarketOptions): void {
     } else if (removalDialog) {
       // Native top layer escapes the shop's clipping/stacking context. Its
       // bounds follow the visible host viewport, not a tall iframe's center.
-      removalDialog.showModal();
-      unpin = pinSelectionToVisibleViewport(removalDialog);
+      try {
+        unpin = pinSelectionToVisibleViewport(removalDialog);
+        removalDialog.showModal();
+      } catch (error) {
+        // Never leave an invisible modal or inert shop behind if opening fails.
+        close();
+        message.textContent = error instanceof Error ? error.message : '删牌窗口打开失败，请重试';
+        message.classList.add('is-error');
+        return;
+      }
       removalObserver.observe(root, { childList: true });
     }
     closeButton?.focus({ preventScroll: true });
+    return close;
   };
   root.querySelectorAll<HTMLButtonElement>('[data-shop-buy]').forEach(button =>
     button.addEventListener('click', () => {
@@ -177,10 +186,11 @@ export function renderShopMarket(options: ShopMarketOptions): void {
     button.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); inspect(); } });
   });
   root.querySelector('[data-shop-remove]')?.addEventListener('click', () => {
-    detail(
+    const closeRemoval = detail(
       '选择要移除的卡牌',
       `<p class="shop-removal-notice">点选一张卡牌，再确认花费 ${removalPrice} 金币永久移除。本店仅可使用一次。</p><div class="shop-remove-list">${deck.map((card, index) => `<article class="mwg-card-choice" role="button" tabindex="0" aria-pressed="false" aria-label="选择移除${escapeHtml(String(card.name || '卡牌'))}" data-remove-index="${index}">${options.renderCard(card)}</article>`).join('')}</div>`,
     );
+    if (!closeRemoval) return;
     let selected: number | null = null;
     const confirm = root.ownerDocument.createElement('button');confirm.type='button';confirm.className='shop-price shop-remove-confirm';confirm.textContent=`确认删除 · ${removalPrice} 金币`;confirm.disabled=true;
     host.querySelector('.shop-detail > header')!.insertBefore(confirm,host.querySelector('.shop-detail-close'));
@@ -194,7 +204,12 @@ export function renderShopMarket(options: ShopMarketOptions): void {
       card.addEventListener('click',()=>select(card));
       card.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();select(card);}});
     });
-    confirm.addEventListener('click',()=>{if(selected!==null)void perform(()=>options.removeCard(String(deck[selected!].runInstanceId)));});
+    confirm.addEventListener('click',()=>{if(selected!==null)void perform(async()=>{
+      await options.removeCard(String(deck[selected!].runInstanceId));
+      // Successful persistence may finish before the room redraws. Close the
+      // selection now so it cannot remain over the saved shop after a refresh.
+      closeRemoval();
+    });});
   });
   root.querySelector('.shop-leave')?.addEventListener('click', () => void perform(options.leave));
 }

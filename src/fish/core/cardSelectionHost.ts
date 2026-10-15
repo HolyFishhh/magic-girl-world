@@ -15,6 +15,7 @@ export interface TavernCardSelectionRequest {
   maximum: number;
   title: string;
   allowCancel?: boolean;
+  cancelLabel?: string;
   random?: () => number;
   resources?: Readonly<Record<string, Pick<CombatResourceState, 'name' | 'emoji'>>>;
 }
@@ -62,6 +63,7 @@ export class TavernCardSelectionHost {
             minimum: plan.minimum,
             maximum: plan.maximum,
             allowCancel: plan.allowCancel,
+            cancelLabel: request.cancelLabel,
             resources: request.resources,
           })
         : undefined;

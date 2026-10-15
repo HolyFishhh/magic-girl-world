@@ -12,6 +12,7 @@ import {
   describeCardAttachmentRemaining,
   describeCardCost,
   CardEffectRuntime,
+  EffectChoiceBackRequested,
   clearCardPatches,
   clearDynamicCardCostAfterPlay,
   playBattleSessionCard,
@@ -378,9 +379,28 @@ export class CardSystem {
     const plan = offered.find(p => p.id === optionId)!;
     if (!plan) throw new Error('付款方案已失效');
     const discardCount = plan.extra.discard?.count || 0, sacrificeCount = plan.extra.sacrifice?.count || 0;
-    const discardIds = discardCount === 0 ? [] : plan.discardCandidates.length === discardCount ? plan.discardCandidates.map(c => c.id)
-      : await this.presentation.selectCards(plan.discardCandidates as Card[], { title: '选择弃置的费用手牌', minimum: discardCount, maximum: discardCount, allowCancel: true, cancelLabel: '取消出牌', resources });
-    if (discardIds === null) throw Object.assign(new Error('取消弃牌费用'), { code: 'CHOICE_CANCELLED' });
+    let discardIds: string[];
+    if (discardCount === 0) discardIds = [];
+    else if (plan.discardCandidates.length === discardCount) discardIds = plan.discardCandidates.map(card => card.id);
+    else {
+      let selection: Awaited<ReturnType<TavernCardSelectionHost['select']>>;
+      try {
+        selection = await this.cardSelectionHost.withChoiceBranch(() => this.cardSelectionHost.select(
+          plan.discardCandidates as Card[], {
+            mode: 'choose', minimum: discardCount, maximum: discardCount,
+            title: '选择弃置的费用手牌', allowCancel: true, cancelLabel: '取消出牌', resources,
+          },
+        ));
+      } catch (error) {
+        if (error instanceof EffectChoiceBackRequested) {
+          throw Object.assign(new Error('取消弃牌费用'), { code: 'CHOICE_CANCELLED' });
+        }
+        throw error;
+      }
+      if (selection.status === 'invalid') throw new Error(`选择弃牌费用无效：${selection.code}`);
+      if (selection.status === 'cancelled') throw Object.assign(new Error('取消弃牌费用'), { code: 'CHOICE_CANCELLED' });
+      discardIds = selection.selectedIds;
+    }
     const sacrificeIds = sacrificeCount === 0 ? [] : plan.sacrificeCandidates.length === sacrificeCount ? plan.sacrificeCandidates.map(s => s.instanceId)
       : await TavernSummonChoicePresenter.getInstance().choose(plan.sacrificeCandidates as import('../../game-core').SummonUnit[], sacrificeCount);
     if (sacrificeIds === null) throw Object.assign(new Error('取消献祭费用'), { code: 'CHOICE_CANCELLED' });

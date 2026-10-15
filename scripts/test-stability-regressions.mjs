@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 
 const checks = [
+  'player-feedback-stability', 'common-run-action-host', 'natural-language-variable-repair',
   'interception-contract',
   'card-payment-contract',
   'status-action-contract',

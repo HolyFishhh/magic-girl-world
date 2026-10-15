@@ -701,6 +701,40 @@
   opacity: 0.44;
   filter: saturate(0.35);
 }
+
+/* Route state is conveyed by a filled marker as well as the legend.  The
+   outline-only treatment was too subtle on dim mobile displays. */
+.tower-map-node.is-current .tower-node-sigil {
+  background:
+    radial-gradient(circle at 34% 25%, rgba(255, 255, 255, 0.3), transparent 34%),
+    linear-gradient(145deg, rgba(137, 105, 34, 0.92), rgba(62, 45, 21, 0.98));
+}
+
+.tower-map-node.is-reachable .tower-node-sigil {
+  background:
+    radial-gradient(circle at 34% 25%, rgba(255, 255, 255, 0.24), transparent 34%),
+    linear-gradient(145deg, rgba(25, 101, 111, 0.95), rgba(13, 47, 63, 0.98));
+}
+
+.tower-map-node.is-visited .tower-node-sigil {
+  background:
+    radial-gradient(circle at 34% 25%, rgba(255, 255, 255, 0.16), transparent 34%),
+    linear-gradient(145deg, rgba(76, 57, 117, 0.9), rgba(31, 25, 62, 0.98));
+}
+
+.tower-map-node.is-locked .tower-node-sigil {
+  background:
+    linear-gradient(145deg, rgba(35, 38, 64, 0.9), rgba(15, 17, 35, 0.98));
+}
+
+// Room type remains readable independently of route availability.
+.tower-map-node.is-battle .tower-node-label { color: #ffb1a8; }
+.tower-map-node.is-elite .tower-node-label { color: #ffcd91; }
+.tower-map-node.is-boss .tower-node-label { color: #ff94bf; }
+.tower-map-node.is-mystery .tower-node-label { color: #ccbaff; }
+.tower-map-node.is-rest .tower-node-label { color: #a5e9b5; }
+.tower-map-node.is-shop .tower-node-label { color: #ffe19a; }
+.tower-map-node.is-treasure .tower-node-label { color: #91e5f5; }
 .tower-map-node.has-narrative {
   z-index: 4;
   overflow: visible;

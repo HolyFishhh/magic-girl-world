@@ -1500,7 +1500,10 @@ async function activateTowerNode(node: RunNodeChoice, notifyPreselection = false
     __RUN_ERROR = null;
     await loadGameData();
   } catch (error) {
-    if (actionToken === __sendingOwner) showRunError(error, '爬塔路线进入失败');
+    if (actionToken === __sendingOwner) {
+      await loadGameData();
+      if (actionToken === __sendingOwner) showRunError(error, '爬塔路线进入失败');
+    }
     setRunButtonsDisabled(false);
   } finally {
     setSendingState(false, actionToken);
@@ -2743,7 +2746,7 @@ function towerExtensionReadiness(): { ready: boolean; message: string } {
   ) {
     return {
       ready: false,
-      message: `设计辅助器版本过低（当前 ${capabilities.version || '未知'}，至少需要 1.0.3）。`,
+      message: `设计辅助器版本过低（当前 ${capabilities.version || '未知'}，至少需要 1.0.4）。`,
     };
   }
   return { ready: true, message: '' };
@@ -2841,6 +2844,15 @@ async function offerPendingCardRemovals(force = false): Promise<void> {
   const sequence = __commonViewSequence;
   const controller = new AbortController();
   pendingRemovalAbort = controller;
+  // Switching chats can leave the same message iframe mounted briefly.  In
+  // that window the modal's promise would otherwise wait forever because the
+  // view lifecycle has not been torn down yet, keeping every action disabled.
+  const activePoll = setInterval(() => {
+    if (!pendingCardRemoval || controller.signal.aborted) return;
+    if (!__commonViewInitialized || sequence !== __commonViewSequence || !isCurrentMessageLatest()) {
+      controller.abort();
+    }
+  }, 250);
   const actionToken = setSendingState(true); setRunButtonsDisabled(true);
   try {
     await pendingCardRemoval.offer({
@@ -2857,6 +2869,7 @@ async function offerPendingCardRemovals(force = false): Promise<void> {
     }, force);
   } catch (error) { if (actionToken === __sendingOwner) showRunError(error, '删卡未完成，次数已保留'); }
   finally {
+    clearInterval(activePoll);
     if (pendingRemovalAbort === controller) pendingRemovalAbort = null;
     if (sequence === __commonViewSequence) { setSendingState(false, actionToken); setRunButtonsDisabled(false); }
   }
@@ -3876,13 +3889,13 @@ let __disposeCardRepairHandler: (() => void) | null = null;
 let __storyRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
 function destroyCommonView(): void {
-  if (!__commonViewInitialized) return;
   pendingCardRemoval.resetDismissal();
   pendingRemovalAbort?.abort();
   pendingRemovalAbort = null;
   if (pendingRemovalTimer !== null) clearTimeout(pendingRemovalTimer);
   pendingRemovalTimer = null;
   clearSendingOwner();
+  if (!__commonViewInitialized) return;
   __commonViewInitialized = false;
   __commonViewSequence += 1;
   if (__storyRefreshTimer !== null) clearInterval(__storyRefreshTimer);

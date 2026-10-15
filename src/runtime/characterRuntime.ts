@@ -2,6 +2,8 @@ import { redactDiagnosticText } from './diagnosticRedaction';
 import { renderGenerationEvidencePage } from './generationEvidenceView';
 import { assessMeasuredBuild } from '../game-core/buildAssessment';
 import { commitMvuUpdate } from './mvuWriteCoordinator';
+import { retryMessageWithExtraModelHost, type PersistentMvuRepairRequest } from './mvuExtraModelRepair';
+import { reconcileNaturalLanguageVariableRepair } from './naturalLanguageVariableRepair';
 type RuntimeViewName = 'start' | 'common' | 'fish' | 'update';
 
 type RuntimeViewAsset = Readonly<{
@@ -434,7 +436,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
     debug: boolean;
   };
 
-  const requiredTowerExtensionVersion = '1.0.3';
+  const requiredTowerExtensionVersion = '1.0.4';
   const towerExtensionRepositoryUrl = 'https://github.com/HolyFishhh/magic-girl-world.git';
   const towerExtensionManifestUrl =
     'https://raw.githubusercontent.com/HolyFishhh/magic-girl-world/extension/manifest.json';
@@ -1593,7 +1595,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
     <details class="mwg-settings-group" data-mwg-component="tower-install" open>
       <summary>爬塔组件需要安装</summary>
       <div class="mwg-group-body">
-        <div class="mwg-design-status-card"><strong data-mwg-tower-extension>需要设计辅助器 1.0.3 或更高版本</strong><small data-mwg-tower-requirement>安装完整扩展包后刷新酒馆；剧情模式不受影响。</small></div>
+        <div class="mwg-design-status-card"><strong data-mwg-tower-extension>需要设计辅助器 1.0.4 或更高版本</strong><small data-mwg-tower-requirement>安装完整扩展包后刷新酒馆；剧情模式不受影响。</small></div>
         <button class="mwg-extension-download" type="button" data-action="install-tower-extension">快捷安装爬塔组件</button>
         <a class="mwg-extension-download" href="${towerExtensionReleaseUrl}" target="_blank" rel="noopener noreferrer">安装失败时打开手动下载页面</a>
       </div>
@@ -2591,6 +2593,7 @@ function summarizeMvuUpdate(result: unknown): string[] {
   };
 
   const messageVariableUpdateQueues = new Map<string, Promise<void>>();
+  const nativeRepairRequests = new Map<string, Promise<void>>();
   const runRevision = (variables: Record<string, any>): number | null => {
     const value = Number(variables.stat_data?.run?.stateRevision);
     return Number.isFinite(value) ? value : null;
@@ -3016,8 +3019,26 @@ function summarizeMvuUpdate(result: unknown): string[] {
     },
     requestMvuExtraRepair(request: unknown): Promise<unknown> | unknown | null {
       const provider = registryHost.MagicGirlDesignAssistant || host.MagicGirlDesignAssistant || null;
-      if (typeof provider?.requestMvuExtraRepair !== 'function') return null;
-      return provider.requestMvuExtraRepair(request);
+      if (typeof provider?.requestMvuExtraRepair === 'function') {
+        const result = provider.requestMvuExtraRepair(request);
+        if (result != null) return result;
+      }
+      const input = request as PersistentMvuRepairRequest;
+      if (input?.spec !== 'mwg.mvu-repair-request/v1' || input.scope !== 'stat-data') return null;
+      const messageId = Number(host.getLastMessageId());
+      const chatId = String(registryHost.SillyTavern?.getContext?.()?.chatId || mvuMonitor.getSnapshot().chatId);
+      const key = `${chatId}:${messageId}`;
+      const existing = nativeRepairRequests.get(key);
+      if (existing) return existing;
+      // Own native MVU retries in the character script, which survives a
+      // message iframe rebuild on mobile just as the extension does on desktop.
+      const pending = retryMessageWithExtraModelHost(host, messageId, input.prompt, {
+        reconcileVariables: reconcileNaturalLanguageVariableRepair,
+        isCurrent: () => !destroyed && chatId === String(
+          registryHost.SillyTavern?.getContext?.()?.chatId || mvuMonitor.getSnapshot().chatId),
+      }).finally(() => { if (nativeRepairRequests.get(key) === pending) nativeRepairRequests.delete(key); });
+      nativeRepairRequests.set(key, pending);
+      return pending;
     },
     requestRestMutation(request: unknown): Promise<unknown> | unknown | null {
       const provider = registryHost.MagicGirlDesignAssistant || host.MagicGirlDesignAssistant || null;

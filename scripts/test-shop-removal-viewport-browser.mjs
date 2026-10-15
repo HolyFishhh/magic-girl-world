@@ -46,6 +46,9 @@ try{
   assert.deepEqual(await evalJs('document.querySelector("iframe").contentWindow.removed'),[]);
   await evalJs(`(()=>{const d=document.querySelector('iframe').contentDocument;d.querySelector('[data-shop-remove]').click();d.querySelector('[data-remove-index="1"]').click();d.querySelector('.shop-remove-confirm').click()})()`);await new Promise(r=>setTimeout(r,50));
   assert.deepEqual(await evalJs('document.querySelector("iframe").contentWindow.removed'),['instance-1']);
+  assert.equal(await evalJs('document.querySelector("iframe").contentDocument.querySelector("dialog")'),null,'successful removal closes the modal even without a redraw');
+  assert.equal(await evalJs('document.querySelector("iframe").contentDocument.querySelectorAll("[inert]").length'),0);
+  await evalJs('document.querySelector("iframe").contentDocument.querySelector("[data-shop-remove]").click()');
   await call('Emulation.setDeviceMetricsOverride',{width:540,height:650,deviceScaleFactor:1,mobile:false});await new Promise(r=>setTimeout(r,100));const resized=await inspect();assert.ok(resized.top>=0&&resized.bottom<=650&&resized.right<=540,JSON.stringify(resized));await call('Emulation.setDeviceMetricsOverride',{width,height:800,deviceScaleFactor:1,mobile:false});await new Promise(r=>setTimeout(r,100));
   await evalJs('window.scrollBy(0,100)');await new Promise(r=>setTimeout(r,80));const afterScroll=await inspect();assert.ok(afterScroll.top>=0&&afterScroll.bottom<=800,JSON.stringify(afterScroll));
   await evalJs(`(()=>{const d=document.querySelector('iframe').contentDocument;d.querySelector('.shop-detail-close').click();d.querySelector('[data-shop-inspect]').click()})()`);
