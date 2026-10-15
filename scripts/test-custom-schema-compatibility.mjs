@@ -114,11 +114,24 @@ for(const field of ['custom_model','custom_url','chat_completion_source']) {
   assert.equal(h.wire.length,2,'changed route is rejected before an actual fetch, not after transmission');
   assert.equal(h.calls.length,3,'no hidden retry to the changed route');assert.equal(h.fetchHost.fetch,h.originalFetch);
 }
+function expandSharedSchema(value,defs=value.$defs) {
+  if(Array.isArray(value))return value.map(entry=>expandSharedSchema(entry,defs));
+  if(!value||typeof value!=='object')return value;
+  if(Object.keys(value).length===1&&/^#\/\$defs\/S\d+$/.test(value.$ref||'')) {
+    const target=defs?.[value.$ref.split('/').at(-1)];
+    assert.ok(target,'shared reference must resolve');
+    return expandSharedSchema(target,defs);
+  }
+  return Object.fromEntries(Object.entries(value).filter(([key])=>key!=='$defs').map(([key,entry])=>[key,expandSharedSchema(entry,defs)]));
+}
 for(const productionSchema of [createTowerNodeJsonSchema('battle',{act:1,floor:5}),createTowerNodeBatchJsonSchema('actual-batch',[{nodeId:'node',requestId:'req',kind:'event',basedOnRevision:3,act:1,floor:5,contentSeed:11,rewardSeed:12,difficultyMultiplier:1}])]) {
   const before=structuredClone(productionSchema), h=harness({extra:{json_schema:productionSchema}});
   await h.host.generateNode(h.request);
   const prompt=h.calls[1].ordered_prompts.at(-1).content;
-  assert.deepEqual(JSON.parse(prompt.slice(prompt.indexOf('\n{')+1)),createProviderSafeJsonSchema(productionSchema).value,'exact existing provider-safe contract, not the authoritative recursive runtime schema');
+  const delivered=JSON.parse(prompt.slice(prompt.indexOf('\n{')+1));
+  const providerSafe=createProviderSafeJsonSchema(productionSchema).value;
+  assert.deepEqual(delivered,shareSchemaPromptDefinitions(providerSafe),'actual transport shares repeated definitions');
+  assert.deepEqual(expandSharedSchema(delivered),providerSafe,'sharing preserves every provider-safe constraint');
   assert.deepEqual(productionSchema,before,'authoritative schema untouched');
 }
 console.log('PASS custom schema compatibility: boundary-to-queue composition; wrapped HTTP 200 and real HTTP 400; exact existing provider-safe contract (production battle/batch schemas), authoritative validation unchanged; existing budgets; same-route repair reuse; learned-route send race blocked before fetch; provider/model/endpoint/tools/narrative/cancellation boundaries; no private diagnostics. Synthetic only, no live requests.');
