@@ -227,7 +227,7 @@ assert.equal(root.children.length, 1);
 assert.equal(root.children[0].dataset.selectedAct, '1');
 assert.equal(withClass(root, 'tower-act-tab').length, 3);
 assert.equal(withClass(root, 'tower-map-status').length, 1);
-assert.ok(root.textContent.includes('浅蓝路线代表当前可达'));
+assert.ok(root.textContent.includes('青色圆标可选，金色为当前位置，紫色为已走过；灰色暂不可达。房间名称按类型分色。'));
 assert.ok(root.textContent.includes('55/80'), 'the header renders the host-provided live HP alongside route metrics');
 assert.equal(withDataset(root, 'nodeId').length, snapshot.map.acts[0].nodes.length);
 assert.equal(withClass(root, 'tower-route-line').length, snapshot.map.acts[0].edges.length);
