@@ -143,7 +143,7 @@ function setup(hooks = {}) {
       h.narrativeCalls++; h.narrativeRequests.push(structuredClone(config)); await hooks.narrative?.(h);
       const response = hooks.narrativeResponse ? await hooks.narrativeResponse(h, config)
         : '在黎明之塔入口，你以星火旅者的身份面对守门人。请选择馈赠。';
-      return response ? withDungeonPlan(response) : response;
+      return response && !hooks.proseOnly ? withDungeonPlan(response) : response;
     },
     canRecoverEmptyNarrative: () => hooks.narrativeRecovery === true,
     stopGenerationById: id => { (h.stoppedIds ??= []).push(id); return true; }, emitInternalEvent: async () => {},
@@ -165,6 +165,47 @@ async function scenario(name, hooks, check) {
 const previousHelper = globalThis.TavernHelper;
 const previousMonitor = globalThis.MagicGirlWorldMvuMonitor;
 try {
+  const proseOnly = '清晨，你来到高塔入口。守门人请你选择馈赠。';
+  const unplannedDraft = () => {
+    const value = fixture();
+    delete value.narrative; delete value.player.statuses;
+    return { spec: 'mwg.initial-draft/v1', ...value, registry: { statuses: [], resources: [], templates: [] } };
+  };
+  for (const repair of [false, true]) await scenario(`preset prose without a plan completes and persists (repair=${repair})`, {
+    protocol: 'registry-draft', proseOnly: true, realTransport: true,
+    narrativeResponse: () => `${proseOnly}\n<CHARACTER_INIT_PENDING>`,
+    structured: h => h.modelCalls === 1
+      ? { ...unplannedDraft(), ...(repair ? {} : { dungeonPlan: dungeonPlanFixture }) }
+      : structuredClone(dungeonPlanFixture),
+  }, async h => {
+    await h.controller.startTowerSingleFloor(request);
+    assert.equal(h.narrativeCalls, 1); assert.equal(h.modelCalls, repair ? 2 : 1); assert.equal(h.writes, 1);
+    const schema = new Ajv2020({ strict: false }).compile(h.modelRequests[0].json_schema.value);
+    assert.equal(schema({ ...unplannedDraft(), dungeonPlan: dungeonPlanFixture }), true, JSON.stringify(schema.errors));
+    assert.equal(schema(unplannedDraft()), false, 'missing planning is an explicit structural slot');
+    assert.match(h.modelRequests[0].user_input, /补齐缺失的副本规划/);
+    assert.ok(h.modelRequests[0].user_input.includes(proseOnly));
+    assert.equal(h.variables[receiptKey].narrative, proseOnly, 'preset prose remains authoritative');
+    assert.deepEqual(h.variables.stat_data.battle.cards, fixture().player.cards, 'planning does not rewrite cards');
+    assert.doesNotMatch(h.context.chat[0].mes, /镜海|CHARACTER_INIT_PENDING|TOWER_DUNGEON_PLAN/);
+    h.variables = JSON.parse(JSON.stringify(h.variables));
+    await h.controller.resumeTowerInitialCommit();
+    assert.equal(h.modelCalls, repair ? 2 : 1); assert.equal(h.writes, 1);
+    assert.deepEqual(h.variables.stat_data.run.dungeonPlan, dungeonPlanFixture);
+  });
+  for (const failure of ['invalid-plan', 'budget-spent', 'chat-switch']) await scenario(`missing-plan ${failure} never commits or loops`, {
+    protocol: 'registry-draft', proseOnly: true,
+    narrativeResponse: () => proseOnly,
+    structured: h => {
+      if (failure === 'chat-switch' && h.modelCalls === 2) h.context.chatId = 'other-chat';
+      if (failure === 'budget-spent' && h.modelCalls === 1) return '';
+      return h.modelCalls === 1 || failure === 'budget-spent' ? unplannedDraft() : { theme: 'still incomplete' };
+    },
+  }, async h => {
+    await assert.rejects(h.controller.startTowerSingleFloor(request), /规划|切换|变化|旧结果/);
+    assert.equal(h.narrativeCalls, 1); assert.equal(h.modelCalls, 2);
+    assert.equal(h.writes, 0); assert.equal(h.storyWrites, 0); assert.equal(h.variables[receiptKey], undefined);
+  });
   for (const cryptoAvailable of [true, false]) await scenario(`canonical card_ref compiles, saves and resumes (SubtleCrypto=${cryptoAvailable})`, {
     structured: () => {
       const value = fixture();

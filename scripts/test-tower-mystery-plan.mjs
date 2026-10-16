@@ -43,7 +43,7 @@ for(let seed=1;seed<=80 && (seed<=10 || seen.size<3);seed++) {
       run.nodeContent[id].content={title:'秘密名称',narrative:'秘密剧情'};
       run.nodeContent[id].phase='ready';
       const before=presenter.createTowerMapPresentation(run).nodes.find(n=>n.node.id===id);
-      assert.equal(before.type.label,'未知'); assert.equal(before.narrative,'');
+      assert.equal(before.type.label,'未知'); assert.equal(before.narrative,'未知遭遇，进入后揭晓');
       assert.doesNotMatch(before.ariaLabel,/秘密|商店|战斗/);
       if(kind==='event') {
         const job={nodeId:id,requestId:'test',basedOnRevision:0,kind,act:node.act,floor:node.floor,
@@ -72,6 +72,10 @@ const plan={spec:plans.TOWER_DUNGEON_PLAN_SPEC,theme:'镜海',enemyTypes:['镜�
   bossDirection:'镜海女王',acts:[1,2,3].map(act=>({act,theme:`镜海第${act}幕`,enemies:'潮汐守卫',mechanics:'逐层增加折射联动',boss:'守门人',progression:'从辨识、组合到破解'}))};
 const response=`<TOWER_DUNGEON_PLAN>${JSON.stringify(plan)}</TOWER_DUNGEON_PLAN>\n你来到镜海。`;
 assert.deepEqual(plans.parseTowerPlannedNarrative(response),{narrative:'你来到镜海。',dungeonPlan:plan});
+assert.deepEqual(plans.splitTowerPlannedNarrative('只有剧情。'), {narrative:'只有剧情。',dungeonPlan:null});
+assert.deepEqual(plans.splitTowerPlannedNarrative(response), plans.parseTowerPlannedNarrative(response));
+for (const malformed of [response + response, '<TOWER_DUNGEON_PLAN>{}', response.replace('"act":2','"act":1')])
+  assert.throws(() => plans.splitTowerPlannedNarrative(malformed), 'an existing malformed plan is not treated as absent');
 for(const invalid of ['没有规划',response+response,response.replace('"act":2','"act":1'),response.replace('"theme":"镜海"','"theme":null')])
   assert.throws(()=>plans.parseTowerPlannedNarrative(invalid));
 const run=runCore.createRunState({seed:2});run.dungeonPlan=plan;

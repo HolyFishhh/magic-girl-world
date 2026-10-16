@@ -36,7 +36,7 @@ import {
   planInitialDraftRegistryRepair, applyInitialDraftRegistryRepair, createInitialDraftRegistryRepairJsonSchema,
 } from '../game-core/initialDraftRepair';
 import { initialDraftNarrativePrompt, initialDraftAuthoringPrompt, initialDraftRegistryRepairPrompt, initialDraftTemplateRepairPrompt } from './initialDraftPrompt';
-import { parseTowerPlannedNarrative, towerDungeonPlanningPrompt, type TowerDungeonPlan } from '../game-core/towerDungeonPlan';
+import { parseTowerPlannedNarrative, splitTowerPlannedNarrative, isTowerDungeonPlan, towerDungeonPlanSchema, towerDungeonPlanningPrompt, type TowerDungeonPlan } from '../game-core/towerDungeonPlan';
 import { runMapContentKind } from '../game-core/runMap';
 import { planInitialTemplateRepair, createInitialTemplateRepairSchema, applyInitialTemplateRepair } from '../game-core/initialTemplateRepair';
 import { deriveRunSeed, ensureRunStateInStat } from '../runtime/runStateAdapter';
@@ -4630,16 +4630,20 @@ export class DesignAssistantController {
       },
     });
     assertUnchanged();
-    const planned = parseTowerPlannedNarrative(story.response);
+    const planned = splitTowerPlannedNarrative(story.response);
     const narrative = cleanTowerNarrative(planned.narrative);
     if (!narrative) throw new Error('酒馆 preset 未返回可用引导剧情，未开始机制生成');
-    this.onStructuredRepairProgress({ phase: 'begin', generationId: input.generationId, detail: '剧情已生成，正在按剧情编写精简机制草稿' });
+    this.onStructuredRepairProgress({ phase: 'begin', generationId: input.generationId, detail: planned.dungeonPlan
+      ? '剧情已生成，正在按剧情编写精简机制草稿'
+      : '剧情已生成，正在按剧情编写机制草稿与副本规划' });
     const mechanismPolicy = { structured_delivery: 'text-json' as const };
     const draftConfig = {
       ...mechanismPolicy,
       generation_id: `${input.generationId}__draft`, should_stream: true, should_silence: true, max_chat_history: 0,
-      user_input: initialDraftAuthoringPrompt({ ...input, currentStat, designGuidance, narrative }) + `\n[私有副本规划，承接此设计但不输出规划字段]\n${JSON.stringify(planned.dungeonPlan)}`,
-      json_schema: createInitialDraftJsonSchema({ includeNarrative: false }),
+      user_input: initialDraftAuthoringPrompt({ ...input, currentStat, designGuidance, narrative }) + (planned.dungeonPlan
+        ? `\n[私有副本规划，承接此设计但不输出规划字段]\n${JSON.stringify(planned.dungeonPlan)}`
+        : '\n[补齐缺失的副本规划]\n已成立的 preset 正文没有附带规划。保留正文，在本次机制草稿根对象另写 dungeonPlan，按对应 Schema 创作副本主题、敌人体系、Boss 方向和三幕递进关系，承接玩家配置与既定正文。规划是正式设计数据，不是思考过程；不要重写正文或输出规划标签。'),
+      json_schema: createInitialDraftJsonSchema({ includeNarrative: false, includeDungeonPlan: !planned.dungeonPlan }),
     } as const;
     assertUnchanged();
     // Typed transient delivery errors, empty delivery and authored content
@@ -4708,6 +4712,29 @@ export class DesignAssistantController {
       },
     });
     if (Object.hasOwn(raw, 'narrative')) throw new Error('机制草稿试图重写已成立的 preset 剧情，已停止写入');
+    let dungeonPlan = planned.dungeonPlan;
+    if (!dungeonPlan) {
+      let authoredPlan: unknown = raw.dungeonPlan;
+      if (!isTowerDungeonPlan(authoredPlan) && repairAvailable) {
+        repairAvailable = false;
+        assertUnchanged();
+        this.onStructuredRepairProgress({ phase: 'begin', generationId: input.generationId,
+          detail: '机制草稿已返回，正在补齐副本规划结构；保留正文与卡组，与结构修复共享唯一额度' });
+        const repaired = await this.structuredGenerate({
+          ...mechanismPolicy, generation_id: `${input.generationId}__plan_repair`,
+          should_stream: true, should_silence: true, max_chat_history: 0,
+          user_input: `${draftConfig.user_input}\n[仅修复 dungeonPlan]\n原草稿=${JSON.stringify(raw)}\n只返回完整规划对象，符合提供的 Schema，不包裹 dungeonPlan，不修改或重发机制草稿和正文；保留原规划中已有的设计。`,
+          json_schema: { name: 'mwg_dungeon_plan', description: '补齐本次开局的私有副本规划', value: towerDungeonPlanSchema },
+        });
+        assertUnchanged();
+        this.captureInitialGenerationEvidence(input.chatId, input.generationId, 'repair-final',
+          typeof repaired === 'string' ? repaired : JSON.stringify(repaired));
+        authoredPlan = parseStructuredRecord(repaired);
+      }
+      if (!isTowerDungeonPlan(authoredPlan)) throw new Error('副本规划结构仍不完整，未写入开局；请查看生成诊断');
+      dungeonPlan = authoredPlan;
+      delete raw.dungeonPlan;
+    }
     // The selected request route already fixes this protocol version. Supplying
     // an omitted constant is technical completion, not AI story/mechanic repair.
     // An explicitly different/null version must still fail the strict compiler.
@@ -4836,7 +4863,7 @@ export class DesignAssistantController {
       throw new Error('机制草稿缺少剧情决定的时间、位置或职业信息；程序不会用默认值替代');
     }
     this.captureInitialGenerationEvidence(input.chatId, input.generationId, 'compiled-result', JSON.stringify(compiled.value));
-    return { content: compiled.value, dungeonPlan: planned.dungeonPlan, repairAvailable, mechanismPolicy };
+    return { content: compiled.value, dungeonPlan, repairAvailable, mechanismPolicy };
   }
 
   private async publishTowerInitialCommit(

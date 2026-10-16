@@ -38,6 +38,14 @@ export function isTowerDungeonPlan(value: unknown): value is TowerDungeonPlan {
 
 /** Plan is final authored content, separate from provider reasoning and public prose. */
 export function parseTowerPlannedNarrative(response: string): { narrative: string; dungeonPlan: TowerDungeonPlan } {
+  const result = splitTowerPlannedNarrative(response);
+  if (!result.dungeonPlan) throw new Error('开局剧情缺少副本规划');
+  return { ...result, dungeonPlan: result.dungeonPlan };
+}
+
+/** A preset may return prose only. Missing planning can be authored with the mechanism draft. */
+export function splitTowerPlannedNarrative(response: string): { narrative: string; dungeonPlan: TowerDungeonPlan | null } {
+  if (!/<\/?TOWER_DUNGEON_PLAN\b/i.test(response)) return { narrative: response.trim(), dungeonPlan: null };
   const blocks = [...response.matchAll(/<TOWER_DUNGEON_PLAN>\s*([\s\S]*?)\s*<\/TOWER_DUNGEON_PLAN>/g)];
   if (blocks.length !== 1) throw new Error('开局剧情缺少唯一的副本规划，未开始机制生成');
   let plan: unknown;

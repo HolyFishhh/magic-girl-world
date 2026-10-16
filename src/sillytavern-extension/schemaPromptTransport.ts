@@ -8,7 +8,7 @@ const REQUEST_MARKER = 'MWG_TOWER_STRUCTURED_REQUEST:';
  * runtime contract remains in the existing local parser/validator. */
 export function createSchemaCompatibilityMessage(schema: unknown): { role: 'user'; content: string } | null {
   if (!isRecord(schema) || typeof schema.name !== 'string' || !isRecord(schema.value)
-    || !/^mwg_(?:stat_data_patch|(?:initial_battle|battle_settlement)_repair|rest_card_(?:upgrade|transform)|initial_joint_repair|initial_draft(?:_(?:registry|template|envelope)_repair)?|tower_(?:initial_slot_repair|single_floor_initial_content|(?:node_batch|opening|battle|elite|boss|event|shop|treasure|rest)_result))$/.test(schema.name)) return null;
+    || !/^mwg_(?:dungeon_plan|stat_data_patch|(?:initial_battle|battle_settlement)_repair|rest_card_(?:upgrade|transform)|initial_joint_repair|initial_draft(?:_(?:registry|template|envelope)_repair)?|tower_(?:initial_slot_repair|single_floor_initial_content|(?:node_batch|opening|battle|elite|boss|event|shop|treasure|rest)_result))$/.test(schema.name)) return null;
   // Ordinary messages are not flattened by Tavern's native schema adapter.
   // Share identical nodes for every supported game contract, including batch
   // results and repairs. Existing reference scopes are preserved by the helper.

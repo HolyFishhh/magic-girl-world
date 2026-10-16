@@ -24162,7 +24162,7 @@ function validateTowerContentStore(value) {
 ;// ./src/game-core/towerDungeonPlan.ts
 const TOWER_DUNGEON_PLAN_SPEC = 'mwg.tower-dungeon-plan/v1';
 const prose = { type: 'string', minLength: 1, maxLength: 1600 };
-const towerDungeonPlanSchema = {
+const towerDungeonPlan_towerDungeonPlanSchema = {
     type: 'object', additionalProperties: false,
     required: ['spec', 'theme', 'enemyTypes', 'mainSystems', 'bossDirection', 'acts'],
     properties: {
@@ -24192,6 +24192,15 @@ function isTowerDungeonPlan(value) {
 }
 /** Plan is final authored content, separate from provider reasoning and public prose. */
 function parseTowerPlannedNarrative(response) {
+    const result = splitTowerPlannedNarrative(response);
+    if (!result.dungeonPlan)
+        throw new Error('开局剧情缺少副本规划');
+    return { ...result, dungeonPlan: result.dungeonPlan };
+}
+/** A preset may return prose only. Missing planning can be authored with the mechanism draft. */
+function splitTowerPlannedNarrative(response) {
+    if (!/<\/?TOWER_DUNGEON_PLAN\b/i.test(response))
+        return { narrative: response.trim(), dungeonPlan: null };
     const blocks = [...response.matchAll(/<TOWER_DUNGEON_PLAN>\s*([\s\S]*?)\s*<\/TOWER_DUNGEON_PLAN>/g)];
     if (blocks.length !== 1)
         throw new Error('开局剧情缺少唯一的副本规划，未开始机制生成');
@@ -24210,7 +24219,7 @@ function parseTowerPlannedNarrative(response) {
     return { narrative, dungeonPlan: plan };
 }
 function towerDungeonPlanningPrompt() {
-    return '[本次副本规划，同一次响应完成]\n先按当前设定规划副本主题、主要敌人类型与机制体系、整体Boss方向，以及第1至3幕从引入到深化再到终局的递进关系（地图每幕16层，首幕前1至3层也需自然递进）。将正式规划数据放在唯一的<TOWER_DUNGEON_PLAN>JSON对象</TOWER_DUNGEON_PLAN>内，然后输出供玩家阅读的开局正文。规划是供后续生成使用的私有设计数据，不是思考过程；不要在正文泄露未来Boss、事件结果或完整规划。规划只指导后续设计，不提前生成全部战斗或卡牌。JSON必须符合：' + JSON.stringify(towerDungeonPlanSchema);
+    return '[本次副本规划，同一次响应完成]\n先按当前设定规划副本主题、主要敌人类型与机制体系、整体Boss方向，以及第1至3幕从引入到深化再到终局的递进关系（地图每幕16层，首幕前1至3层也需自然递进）。将正式规划数据放在唯一的<TOWER_DUNGEON_PLAN>JSON对象</TOWER_DUNGEON_PLAN>内，然后输出供玩家阅读的开局正文。规划是供后续生成使用的私有设计数据，不是思考过程；不要在正文泄露未来Boss、事件结果或完整规划。规划只指导后续设计，不提前生成全部战斗或卡牌。JSON必须符合：' + JSON.stringify(towerDungeonPlan_towerDungeonPlanSchema);
 }
 
 ;// ./src/game-core/towerRunScore.ts
@@ -37832,6 +37841,7 @@ function compileInitialDraft(input, inspectRules, inspectFragments) {
 
 
 
+
 /** Reuse the authoritative effects grammar; change definition placement only. */
 function initialDraftSchema_createInitialDraftJsonSchema(options = {}) {
     const source = createTowerInitialContentJsonSchema();
@@ -37893,6 +37903,10 @@ function initialDraftSchema_createInitialDraftJsonSchema(options = {}) {
             ...Object.entries(value.properties).filter(([key]) => !INITIAL_DRAFT_AUTHOR_REQUIRED_ROOTS.some(root => root === key)),
         ]);
         value.required = [...INITIAL_DRAFT_AUTHOR_REQUIRED_ROOTS];
+    }
+    if (options.includeDungeonPlan) {
+        value.properties.dungeonPlan = structuredClone(towerDungeonPlanSchema);
+        value.required.push('dungeonPlan');
     }
     return { ...source, name: 'mwg_initial_draft', description: '魔法少女世界精简内容草稿：统一定义与引用', value };
 }

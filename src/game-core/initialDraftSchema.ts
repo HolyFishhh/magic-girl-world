@@ -1,10 +1,11 @@
 import { INITIAL_DRAFT_SPEC } from './initialDraft';
 import { INITIAL_CARD_REFERENCE_SCHEMA } from './initialCardReference';
 import { INITIAL_DRAFT_AUTHOR_REQUIRED_ROOTS } from './initialDraftEnvelope';
+import { towerDungeonPlanSchema } from './towerDungeonPlan';
 import { createTowerInitialContentJsonSchema, type TowerJsonSchema } from './towerRequest';
 
 /** Reuse the authoritative effects grammar; change definition placement only. */
-export function createInitialDraftJsonSchema(options: { includeNarrative?: boolean } = {}): TowerJsonSchema {
+export function createInitialDraftJsonSchema(options: { includeNarrative?: boolean; includeDungeonPlan?: boolean } = {}): TowerJsonSchema {
   const source = createTowerInitialContentJsonSchema();
   const value = structuredClone(source.value) as Record<string, any>;
   // These are schema positions only, never literal instance values.
@@ -57,6 +58,10 @@ export function createInitialDraftJsonSchema(options: { includeNarrative?: boole
       ...Object.entries(value.properties).filter(([key]) => !INITIAL_DRAFT_AUTHOR_REQUIRED_ROOTS.some(root => root === key)),
     ]);
     value.required = [...INITIAL_DRAFT_AUTHOR_REQUIRED_ROOTS];
+  }
+  if (options.includeDungeonPlan) {
+    value.properties.dungeonPlan = structuredClone(towerDungeonPlanSchema);
+    value.required.push('dungeonPlan');
   }
   return { ...source, name: 'mwg_initial_draft', description: '魔法少女世界精简内容草稿：统一定义与引用', value };
 }
