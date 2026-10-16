@@ -56,12 +56,6 @@ const lustInitial = {
   },
   opening: { choices: [] },
 };
-const lustDiagnostic = 'battle.player_lust_effect：缺少对应欲望满溢效果；';
-const lustTargets = extractTowerInitialRepairSlotTargets(lustInitial, lustDiagnostic);
-assert.equal(lustTargets.length, 1, 'missing overflow must open a bounded repair root');
-assert.equal(lustTargets[0].path, 'player.player_lust_effect');
-assert.deepEqual(lustTargets[0].slots.map(slot => [slot.kind, slot.path]), [
-  ['missing_lust_effect', 'player.player_lust_effect'],
-]);
+assert.equal(assessInitialPlayerContent(createContentPack({cards:lustInitial.player.cards,statuses:[]})).ok,true);
 
 console.log('PASS readiness fallback retains compiler path/code/reason while bounded repair rejects an unsafe root-effects rewrite.');

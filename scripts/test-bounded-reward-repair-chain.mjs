@@ -74,7 +74,7 @@ function makeHarness({ unrepaired = false, invalidGrowth = false, single = false
     // The successful fixture has only an outer-array defect: its sole element
     // is the complete, plan-valid reward object, so unwrapping it is lossless.
     // The negative fixture substitutes reward=[] to prove no reward can be invented.
-    if (invalidGrowth) malformed.payload.desire_growth = { effect: { name: '不适用的成长', effects: { draw: 2 } } };
+    if (invalidGrowth) malformed.payload.desire_growth = { effect: { name: '未登记的成长', effects: { apply_status: 'missing_growth_status' } } };
     else malformed.reward = unrepaired ? [] : [structuredClone(originalReward)];
     return {
       spec: 'mwg.tower-node-batch-result/v1', batch_id: 'bounded-reward-repair', based_on_revision: jobs[0].revision,

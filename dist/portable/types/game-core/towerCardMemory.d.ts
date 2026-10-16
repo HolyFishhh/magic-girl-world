@@ -22,6 +22,6 @@ export declare function recoverTowerCardMemory(run: RunState, ownedCards: readon
 /** Seeded ordering is stable across reopening and independent of battle RNG. */
 export declare function towerMemoryCandidates(run: RunState, nodeId: string, purpose: 'recall' | 'shop'): Record<string, any>[];
 export declare function markTowerShopCardsShown(run: RunState, cards: readonly unknown[]): RunState;
-/** Only finalized, displayed groups of three count; partial claims never signal rejection. */
+/** Only finalized, displayed offers count; partial claims never signal rejection. */
 export declare function rememberRejectedTowerOffer(run: RunState, cards: readonly unknown[], receipt: string): RunState;
 export declare function towerRewardPreferenceContext(run: RunState): Record<string, any> | undefined;

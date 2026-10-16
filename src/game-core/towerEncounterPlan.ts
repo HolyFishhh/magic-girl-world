@@ -72,5 +72,5 @@ export function formatTowerEncounterPlan(scope: TowerEncounterScope, budget?: En
   const counterGuidance = plan.counterStrategy
     ? `本节点已抽中“软克制思考”（${plan.counterStrategyChance}%）：依据下方当前卡组事实，思考一种能互动的应对角度，但不要硬编码或强制采用任何策略。可参考吸血面对护盾、减益面对净化、多段面对固定减伤或受击成长；只在该卡组确有对应机制时选择，并保留替代打法、可读预警和反制窗口。不能封死所有输出与生存手段；压力应可通过击杀顺序、出牌节奏、资源或其他路线应对。`
     : `本节点未抽中“软克制思考”（${plan.counterStrategyChance}%）；按剧情与节点身份设计常规遭遇，当前卡组事实用于匹配数值预算；不要主动围绕玩家流派短板设计针对机制，也不要为了凑克制而制造免疫、锁死或必死机制。`;
-  return `[程序遭遇计划]\npayload.battle.enemies 必须恰好 ${plan.enemyCount} 名，禁止另写 enemy；重试保持人数与软克制抽签。\n${JSON.stringify(plan)}\n${plan.totalBudget ? 'totalBudget 是整场预算；enemyShares 仅为可调整的职责分摊起点，合计必须为1。' : '数值参考当前真实玩家构筑与下方生存/输出预算；若已有画像未覆盖核心机制，不得将其零收益当作玩家真实实力。'}\n${counterGuidance}`;
+  return `[程序遭遇计划]\n建议 ${plan.enemyCount} 名敌人；AI 可依据场景调整人数、机制和数值。单敌可用 enemy，多敌用 enemies。计划与预算是设计参考，不是验收门槛。\n${JSON.stringify(plan)}\n${plan.totalBudget ? 'totalBudget 是整场预算；enemyShares 仅为可调整的职责分摊起点，合计必须为1。' : '数值参考当前真实玩家构筑与下方生存/输出预算；若已有画像未覆盖核心机制，不得将其零收益当作玩家真实实力。'}\n${counterGuidance}`;
 }

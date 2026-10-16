@@ -180,12 +180,8 @@ const missingLustOverflow = core.assessInitialPlayerContent(
     statuses: [],
   }),
 );
-assert.ok(missingLustOverflow.issues.some(issue =>
-  issue.path === 'battle.player_lust_effect' && issue.code === 'MISSING_LUST_OVERFLOW_EFFECT',
-));
-const missingLustOverflowRepair = core.formatPlayerContentRepairPrompt(missingLustOverflow, 8);
-assert.match(missingLustOverflowRepair, /battle\.player_lust_effect\(MISSING_LUST_OVERFLOW_EFFECT\)/);
-assert.match(missingLustOverflowRepair, /保留已存在的欲望增量机制/);
+assert.equal(missingLustOverflow.ok, true, 'legal content has no forced payoff or victory-route gate');
+assert.equal(core.formatPlayerContentRepairPrompt(missingLustOverflow), '');
 for (const code of ['MISSING_RELIC', 'MISSING_ITEM', 'MISSING_DESIRE_EFFECT']) {
   assert.ok(
     !missingResources.issues.some(issue => issue.code === code),

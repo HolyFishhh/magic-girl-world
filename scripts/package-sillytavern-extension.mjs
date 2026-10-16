@@ -10,7 +10,7 @@ const folderName = 'magic-girl-design-assistant';
 const source = path.join(parent, folderName);
 const manifest = JSON.parse(await fs.readFile(path.join(source, 'manifest.json'), 'utf8'));
 const version = String(manifest.version || '').trim();
-if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`扩展版本无效：${version || '空'}`);
+if (!/^\d+\.\d+\.\d+(?:\.\d+)?$/.test(version)) throw new Error(`扩展版本无效：${version || '空'}`);
 
 for (const file of ['index.js', 'design-worker.js', 'encounter-worker.js', 'index.css', 'manifest.json']) {
   const stat = await fs.stat(path.join(source, file));

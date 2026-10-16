@@ -7,7 +7,6 @@ const record = (value: unknown): value is RecordValue => !!value && typeof value
 
 /** Validate on a detached battle; callers commit only with the victory transaction. */
 export function applyDesireEffectGrowth(battle: RecordValue, growth: unknown): RecordValue {
-  if (!record(battle.player_lust_effect)) throw new Error('欲望成长不适用：当前玩家没有欲望效果，必须省略 desire_growth');
   if (!record(growth) || !record(growth.effect)) throw new Error('欲望成长需要完整 effect');
   if (Object.keys(growth).some(key => !['effect', 'statuses'].includes(key))) throw new Error('欲望成长包含未知字段');
   const effect = growth.effect;

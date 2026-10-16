@@ -490,14 +490,14 @@ calls.length = 0;
 const savedBalance = controller.balanceTowerNodeResult;
 controller.balanceTowerNodeResult = async value => {
   const changed = structuredClone(value);
-  changed.reward.card[0].description = '造成7点伤害；下一回合开始时造成7点伤害。';
+  changed.reward.card[0].effects = { unsupported_operation: 7 };
   return changed;
 };
 try {
   await assert.rejects(controller.requestTowerGeneration({
     ...postBalanceCase.request, basedOnRevision: postBalanceCase.request.revision,
     prompt: 'publication gate probe', maxAttempts: 1,
-  }), /(EXPLICIT_LITERAL_EFFECT_MISMATCH|字面规则修复必须完整实现)/);
+  }), /unsupported_operation|UNKNOWN_EFFECT/);
   assert.equal(calls.filter(call => call[0] === 'generate').length, 1);
   assert.equal(variables.stat_data.run.nodeContent[postBalanceCase.request.nodeId].phase, 'failed');
   assert.equal(Object.hasOwn(variables.stat_data.run.nodeContent[postBalanceCase.request.nodeId], 'content'), false);
@@ -526,10 +526,7 @@ try {
   assert.equal(calls.filter(call => call[0] === 'generate').length, 1,
     'two paired seeds must not request a balance-feedback model call');
   assert.equal(calls.some(call => call[0] === 'generate' && /程序战斗评估反馈/.test(call[1].user_input)), false);
-  assert.match(
-    variables.stat_data.run.nodeContent[previewOnlyCase.request.nodeId].content.program_balance.warnings.join('\n'),
-    /仅有 2 个配对种子预筛/,
-  );
+
 
   installMeasuredReviewEvaluator(controller);
 
@@ -660,18 +657,8 @@ try {
     prompt: 'a failed first feedback still consumes the batch request token', maxAttempts: 1,
   });
   const failedFeedbackRequests = calls.filter(call => call[0] === 'generate');
-  assert.equal(failedFeedbackRequests.length, 2, 'first-member feedback remains consumed after MWG_ENCOUNTER_BUDGET');
-  assert.equal(failedFeedbackRequests.filter(call => /程序战斗评估反馈/.test(call[1].user_input)).length, 1,
-    'the second member cannot obtain a replacement feedback request');
-  assert.equal(
-    structuredProgress.filter(entry => entry.detail === '本地复测需要一次额外 AI 反馈，正在请求复核').length,
-    1,
-    'a batch consumes and describes at most one additional AI feedback request',
-  );
-  assert.ok(structuredProgress.some(entry => entry.generationId === 'tower-task:failed-feedback-batch'
-    && entry.detail === '正在请求 AI 复核战斗强度'),
-  'the feedback child queue remains attached to the batch parent operation');
-  assert.equal(variables.stat_data.run.nodeContent[feedbackBatchJobs[0].nodeId].phase, 'failed');
+  assert.equal(failedFeedbackRequests.length, 1, 'quality feedback never buys another model request');
+  assert.equal(variables.stat_data.run.nodeContent[feedbackBatchJobs[0].nodeId].phase, 'ready');
   assert.equal(variables.stat_data.run.nodeContent[feedbackBatchJobs[1].nodeId].phase, 'ready');
   controller.encounterEvaluator.balance = sharedBalance;
 
@@ -686,8 +673,8 @@ try {
     prompt: 'one feedback may fail without retrying', maxAttempts: 1,
   });
   const feedbackRequests = calls.filter(call => call[0] === 'generate');
-  assert.equal(feedbackRequests.length, 2, 'one authoring request plus one failed feedback request is the hard maximum');
-  assert.equal(feedbackRequests.filter(call => /程序战斗评估反馈/.test(call[1].user_input)).length, 1);
+  assert.equal(feedbackRequests.length, 1, 'no content-quality regeneration');
+  assert.equal(feedbackRequests.filter(call => /程序战斗评估反馈/.test(call[1].user_input)).length, 0);
 } finally {
   controller.encounterEvaluator = savedEncounterEvaluator;
 }
@@ -805,10 +792,7 @@ assert.equal(calls.filter(call => call[0] === 'replace').length, 1);
 const repeatedRewardCase = prepareTowerNode(20260840, false, 7);
 variables = repeatedRewardCase.variables;
 const completeRepeatedReward = validNodeResponse(repeatedRewardCase.request);
-const incompleteRepeatedReward = completeRepeatedReward.replace(
-  /"card":\[(.*?)\],"artifact"/,
-  (_match, cardsBody) => `"card":[${cardsBody.split('},{')[0]}}],"artifact"`,
-);
+const incompleteRepeatedReward = completeRepeatedReward.replace('"damage":7','"unsupported_operation":7');
 let repeatedRewardRepairs = 0;
 generatedText = config => {
   if (!config.user_input.includes('[爬塔后台节点结构修复]')) return incompleteRepeatedReward;
@@ -822,15 +806,14 @@ await assert.rejects(
     requestId: repeatedRewardCase.request.requestId,
     basedOnRevision: repeatedRewardCase.request.revision,
     kind: repeatedRewardCase.request.kind,
-    prompt: '生成奖励候选数量不足的节点',
+    prompt: '生成含无效操作的节点',
   }),
-  /requires 3 candidates/,
+  /unsupported_operation|UNKNOWN_EFFECT/,
 );
 const repeatedRewardGenerateCalls = calls.filter(call => call[0] === 'generate');
 assert.equal(repeatedRewardRepairs, 1);
 assert.equal(repeatedRewardGenerateCalls.length, 2, 'one authored result plus one bounded structure repair');
-assert.match(repeatedRewardGenerateCalls[1][1].user_input, /奖励候选数量不足/);
-assert.match(repeatedRewardGenerateCalls[1][1].user_input, /新写不同 id、不同机制的候选补足/);
+assert.match(repeatedRewardGenerateCalls[1][1].user_input, /unsupported_operation/);
 assert.equal(variables.stat_data.run.nodeContent[repeatedRewardCase.request.nodeId].phase, 'failed');
 assert.equal(calls.filter(call => call[0] === 'replace').length, 1, 'only the retryable failure state reaches MVU');
 
@@ -984,7 +967,7 @@ assert.equal(calls.some(call => call[0] === 'create'), false);
 // and replaces only the still-active node without creating a Tavern floor.
 // Both non-batch callers must carry successful transport provenance without
 // buying a second repair attempt or changing the narrative preset path.
-for (const route of ['node', 'opening']) for (const repair of ['fixed', 'unchanged', 'erased', 'condition-evasion']) {
+for (const route of ['node', 'opening']) for (const repair of ['unchanged']) {
   const prepared = prepareTowerNode(20261977 + (route === 'node' ? 0 : 1) + ['fixed', 'unchanged', 'erased', 'condition-evasion'].indexOf(repair) * 10, false, 0, 'event');
   variables = prepared.variables;
   let request, response;
@@ -1014,21 +997,15 @@ for (const route of ['node', 'opening']) for (const repair of ['fixed', 'unchang
   };
   const battleBefore = structuredClone(variables.stat_data.battle);
   calls.length = 0;
-  if (repair === 'fixed') await controller.requestTowerGeneration(request);
-  else await assert.rejects(controller.requestTowerGeneration(request), /字面|EXPLICIT_LITERAL_EFFECT_MISMATCH/);
-  assert.equal(attempts, 2, `${route}/${repair}: exactly one authoring and one repair`);
+  await controller.requestTowerGeneration(request);
+  assert.equal(attempts, 1, 'description heuristics never reject executable AI content');
   const envelope = route === 'node' ? variables.stat_data.run.nodeContent[request.nodeId] : variables.stat_data.run.opening;
-  assert.equal(envelope.phase, repair === 'fixed' ? 'ready' : 'failed');
+  assert.equal(envelope.phase, 'ready');
+  const accepted = route === 'node' ? envelope.content.payload.event.choices : envelope.content.choices;
+  assert.deepEqual(accepted[0].outcome.reward.cards[0], literal);
   assert.deepEqual(variables.stat_data.battle, battleBefore);
-  if (repair === 'fixed') {
-    const accepted = route === 'node' ? envelope.content.payload.event.choices : envelope.content.choices;
-    assert.deepEqual(accepted.slice(1), choices.slice(1), 'untouched fixture sibling choices remain exact');
-    assert.deepEqual(accepted[0].outcome.reward.cards[0].effects, [{ damage: 5 }, { schedule: 1, phase: 'turn_start', effects: { damage: 5 } }]);
-    if (route === 'opening') {
-      for (let i = 0; i < 100 && variables.stat_data.run.opening.narrativePhase !== 'ready'; i++) await new Promise(r => setTimeout(r, 0));
-      assert.equal(variables.stat_data.run.opening.narrativePhase, 'ready');
-    }
-  } else assert.equal(Object.hasOwn(envelope, 'content'), false, 'invalid candidate is not published');
+  if (route === 'opening') for (let i=0;i<100 && variables.stat_data.run.opening.narrativePhase!=='ready';i++) await new Promise(r=>setTimeout(r,0));
+
 }
 for (const mode of ['node','opening']) for (const validRecovery of [false,true]) {
   let request, good, bad;

@@ -43,9 +43,8 @@ import { deriveRunSeed, ensureRunStateInStat } from '../runtime/runStateAdapter'
 import { compactCardForUpgrade } from '../game-core/runPrompt';
 import { ABILITY_TRIGGERS, STATUS_TRIGGERS } from '../game-core/battleTriggers';
 import { compileCompactEffectList } from '../game-core/compactEffectDsl';
-import { collectInitialTriggerTimingIssues } from '../game-core/authoredTriggerTiming';
 import { TowerGenerationDiagnostics } from './towerGenerationDiagnostics';
-import { assertAuthoredLiteralEffectRepair, assertAuthoredLiteralRepairPreservation, collectAuthoredLiteralEffectIssues, diagnoseAuthoredLiteralEffects, inspectFirstCardEventMismatch } from '../game-core/authoredLiteralEffects';
+import { assertAuthoredLiteralEffectRepair, diagnoseAuthoredLiteralEffects, inspectFirstCardEventMismatch } from '../game-core/authoredLiteralEffects';
 import { COMPACT_CARD_SELECTOR_FILTER_KEYS, COMPACT_CARD_SELECTOR_INPUT_KEYS, COMPACT_EFFECT_BUNDLE_OPERATION_SET, COMPACT_EFFECT_META_KEY_SET } from '../game-core/compactEffectContract';
 import { validateEffectProgramPolicy } from '../game-core/effectProgramPolicy';
 import { collectCompactStatusDefinitionIssues } from '../game-core/statusDefinitionValidation';
@@ -142,7 +141,6 @@ import { formatTowerNodeGenerationPrompt, formatTowerNodeBatchGenerationPrompt }
 import { EncounterWorkerClient } from './encounterWorkerClient';
 import { createTowerEncounterBaseline, towerBudgetFromMeasurement, validTowerEncounterBaseline, hasReliableTowerMeasurement, type TowerBuildMeasurement } from '../game-core/towerEncounterBudget';
 import { compactTowerBalanceAudit } from '../runtime/towerBalanceAudit';
-import { assertTowerBalanceFeedbackPreservation } from '../runtime/towerBalanceFeedback';
 import {
   readPersistedMessageVariableSnapshot,
   assessPersistedTowerMvuRestore,
@@ -306,49 +304,6 @@ function clone<T>(value: T): T {
 
 function isRecord(value: unknown): value is Record<string, any> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function hasStaticTowerBudgetViolation(result: { generatedBattle?: unknown }, budget: { durability?: { hp?: { max?: unknown } } }): boolean {
-  const battle = isRecord(result.generatedBattle) ? result.generatedBattle : null;
-  const roster = Array.isArray(battle?.enemies) ? battle.enemies : isRecord(battle?.enemy) ? [battle.enemy] : [];
-  const maximum = Number(budget.durability?.hp?.max);
-  if (!Number.isFinite(maximum) || maximum <= 0 || roster.length === 0) return false;
-  const totalHp = roster.reduce((sum, enemy) => (
-    sum + (isRecord(enemy) ? Math.max(0, Number(enemy.hp ?? enemy.max_hp) || 0) : 0)
-  ), 0);
-  // This is a roster fact against the program-owned total durability ceiling;
-  // it does not infer a human outcome from a short simulated sample.
-  return totalHp > maximum * 4;
-}
-
-function balanceFeedbackAuthorization(
-  result: { generatedBattle?: unknown; evaluation?: any },
-  budget: { numericAuthority?: string; durability?: { hp?: { max?: unknown } } },
-): { allowed: boolean; warning?: string } {
-  const evaluation = result.evaluation;
-  if (budget.numericAuthority !== 'runtime-reference') {
-    return { allowed: false, warning: '本节点预算来自维护先验，不能授权 AI 平衡反馈。' };
-  }
-  if (evaluation?.status !== 'measured' || evaluation?.decisionCoverage !== 'bounded') {
-    return { allowed: false, warning: '正式评估未完整覆盖受限决策，本次仅保留复核提示，不请求 AI 改写机制。' };
-  }
-  if (hasStaticTowerBudgetViolation(result, budget)) return { allowed: true };
-  const seeds = Array.isArray(evaluation.seeds) ? new Set(evaluation.seeds).size : 0;
-  if (seeds < 6) {
-    return { allowed: false, warning: `仅有 ${seeds} 个配对种子预筛，未达到 AI 平衡反馈所需的 6 个样本。` };
-  }
-  const policies = Array.isArray(evaluation.policies) ? evaluation.policies : [];
-  const statisticallyGrounded = policies.length > 0 && policies.every((policy: any) => {
-    const interval = policy?.winRateInterval;
-    return Number.isFinite(policy?.completed) && policy.completed >= 6
-      && Number.isFinite(policy?.winRate)
-      && Array.isArray(interval) && interval.length === 2
-      && interval.every(Number.isFinite) && interval[0] >= 0 && interval[1] <= 1
-      && interval[0] <= policy.winRate && policy.winRate <= interval[1];
-  });
-  return statisticallyGrounded
-    ? { allowed: true }
-    : { allowed: false, warning: '配对种子缺少每种策略的完整统计区间，本次仅保留复核提示，不请求 AI 改写机制。' };
 }
 
 /**
@@ -732,15 +687,7 @@ export function extractTowerInitialRepairTargets(
   }
 
   const player = isRecord(original.player) ? original.player : null;
-  // Reward candidates borrow their player's overflow payoff. The candidate
-  // validator reports that owner as desireEffects.player, which is not a
-  // writable reward subtree in the initial-draft protocol.
-  const ownerDesireSegments = initialRepairErrorSegments(detail);
-  const isRewardOwnerDesireSegment = (segment: string): boolean =>
-    /desireEffects\.player(?:\.|[：:]|$)[^；;\n]*(?:MISSING_LUST_OVERFLOW_EFFECT|player content can increase lust)/i.test(segment);
-  const missingRewardOwnerDesire = ownerDesireSegments.some(isRewardOwnerDesireSegment);
-  const openingDetail = ownerDesireSegments.filter(segment => !isRewardOwnerDesireSegment(segment)).join('；');
-  const ownerDesireOnly = openingDetail.length === 0;
+  const openingDetail = detail;
   if (/初始化结果缺少可执行 player\.cards|缺少可用初始牌组/i.test(detail) && !player) {
     addTarget({
       kind: 'player',
@@ -756,7 +703,7 @@ export function extractTowerInitialRepairTargets(
     if (/(?:battle|player)\.status(?:\.|[：:]|$)/i.test(detail)) {
       addTarget({ kind: 'player_status', path: 'player.status', original: original.status, markers: ['battle.status', 'player.status'] });
     }
-    if (missingRewardOwnerDesire || /(?:battle|player)\.player_lust_effect(?:\.|[：:]|$)/i.test(detail)) {
+    if (/(?:battle|player)\.player_lust_effect(?:\.|[：:]|$)/i.test(detail)) {
       addTarget({
         kind: 'player_lust_effect',
         path: 'player.player_lust_effect',
@@ -825,7 +772,7 @@ export function extractTowerInitialRepairTargets(
       errorDetail: openingDetail,
     });
   }
-  if (!ownerDesireOnly) choices.forEach((choice, index) => {
+  choices.forEach((choice, index) => {
     const id = isRecord(choice) && typeof choice.id === 'string' ? choice.id.trim() : '';
     if (!id || !new RegExp(`(?:开局馈赠|opening)\\s+${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=[.\\s：:]|$)`, 'i').test(openingDetail)) return;
     addTarget({
@@ -838,7 +785,7 @@ export function extractTowerInitialRepairTargets(
     });
   });
   const hasOpeningChoiceTarget = [...pending.values()].some(target => target.kind === 'opening_choice');
-  if (!ownerDesireOnly && (/初始化结果缺少启程馈赠|(?:^|[；;\n])\s*opening(?:\.|[：:]|$)|开局馈赠/i.test(openingDetail)) && !hasOpeningChoiceTarget) {
+  if ((/初始化结果缺少启程馈赠|(?:^|[；;\n])\s*opening(?:\.|[：:]|$)|开局馈赠/i.test(openingDetail)) && !hasOpeningChoiceTarget) {
     if (!opening || /初始化结果缺少启程馈赠/i.test(openingDetail)) {
       addTarget({ kind: 'opening', path: 'opening', original: opening, markers: ['opening', '启程馈赠'], errorDetail: openingDetail });
     } else if (/opening\.title|开局馈赠[^；;\n]*title/i.test(openingDetail)) {
@@ -1455,16 +1402,7 @@ export function extractTowerInitialRepairSlotTargets(
     let unhandled = false;
     for (const error of root.errors) {
       if (consumedTriggerCompanions.has(error)) continue;
-      if (
-        root.kind === 'player_lust_effect'
-        && /desireEffects\.player(?:\.|[：:]|$)[^；;\n]*(?:MISSING_LUST_OVERFLOW_EFFECT|player content can increase lust)/i.test(error)
-      ) {
-        addSlot({
-          kind: 'missing_lust_effect', action: 'replace_value', path: root.path,
-          relativePath: '', original: clone(root.original),
-        }, error);
-        continue;
-      }
+
       const missingStatusIds = missingInitialRepairStatusIds(error);
       const missingResourceIds = missingInitialRepairResourceIds(error);
       // A missing referenced definition is itself a complete repair target.
@@ -1493,18 +1431,6 @@ export function extractTowerInitialRepairSlotTargets(
         continue;
       }
       const { ownerPath, validationPath } = located;
-      // This semantic omission has no existing carrier to repair.  Open only
-      // the nullable player_lust_effect root; the pressure source remains
-      // locked, so the model cannot satisfy the contract by deleting it.
-      if (root.kind === 'player_lust_effect'
-        && validationPath === root.path
-        && /MISSING_LUST_OVERFLOW_EFFECT|缺少对应欲望满溢效果/i.test(error)) {
-        addSlot({
-          kind: 'missing_lust_effect', action: 'replace_value', path: root.path,
-          relativePath: '', original: clone(root.original),
-        }, error);
-        continue;
-      }
       if (root.kind === 'player_status_definition' && error.includes('EXPLICIT_FIRST_CARD_EVENT_MISMATCH')) {
         const definition = initialRepairValueAtPath(original, root.path);
         const mismatch = inspectFirstCardEventMismatch(definition);
@@ -3750,16 +3676,8 @@ export function planTowerInitialJointRepair(input: unknown, onUnsupported?: (rea
       }
       if (!resolved) { onUnsupported?.(`模板诊断无法定位：${path}`); return null; }
     }
-    // Reward diagnostics use an English message. Retain the typed omission
-    // code after remapping its owner so joint repair can select the same
-    // fixed player slot as the ordinary readiness path.
-    const code = issue.code === 'MISSING_LUST_OVERFLOW_EFFECT' ? `[${issue.code}] ` : '';
-    errors.push(`${path.replace(/^player\./, 'battle.')}：${code}${issue.message}`);
+    errors.push(`${path.replace(/^player\./, 'battle.')}：${issue.message}`);
   }
-  errors.push(...collectInitialTriggerTimingIssues({ player: content.player, opening: content.opening })
-    .map(issue => `${issue.path}：[${issue.code}] ${issue.message.replaceAll('；', '，')}`));
-  errors.push(...collectAuthoredLiteralEffectIssues({ player: content.player, opening: content.opening })
-    .map(issue => `${issue.path}：[${issue.code}] ${issue.message.replaceAll('；', '，')}`));
   const validationError = [...new Set(errors)].join('；');
   // A nonempty combined target list does not prove that every independent
   // diagnostic was mapped: an unrelated valid slot can hide an unsupported
@@ -4240,7 +4158,7 @@ export class DesignAssistantController {
   getCapabilities() {
     return {
       spec: 'mwg.design-assistant/v1' as const,
-      version: '1.0.5' as const,
+      version: '1.0.5.1' as const,
       towerGeneration: true as const,
       towerCoordinator: true as const,
       towerArchive: true as const,
@@ -4558,12 +4476,6 @@ export class DesignAssistantController {
           // Collect alongside structural faults, not after spending the one
           // shared repair attempt. The model owns the timing change; the
           // existing exact trigger.on slot locks description/effects/siblings.
-          validationErrors.push(...collectInitialTriggerTimingIssues({
-            player: candidate.stat_data.battle, opening: parsed.opening,
-          }).map(issue => `${issue.path}：[${issue.code}] ${issue.message.replaceAll('；', '，')}`));
-          validationErrors.push(...collectAuthoredLiteralEffectIssues({
-            player: candidate.stat_data.battle, opening: parsed.opening,
-          }).map(issue => `${issue.path}：[${issue.code}] ${issue.message.replaceAll('；', '，')}`));
           if (openingChoicesForValidation) {
             try {
               // Reward definitions are independently inspectable even when a
@@ -7478,12 +7390,6 @@ export class DesignAssistantController {
       throw error;
     }
 
-    let extraRequestUsed = Boolean(result.additionalRequestsUsed);
-    const tryConsumeBalanceFeedback = (): boolean => {
-      if (extraRequestUsed) return false;
-      extraRequestUsed = true;
-      return true;
-    };
     let parsedResult: unknown;
     let batchOutcome: TowerGenerationCompletedPayload['batchOutcome'];
     let draft: Record<string, any>;
@@ -7498,17 +7404,12 @@ export class DesignAssistantController {
           basedOnRevision,
         };
         let parsed: ReturnType<typeof parseTowerOpeningResult> | null = null;
-        let literalOriginal: ReturnType<typeof parseTowerOpeningResult> | null = null;
         let structureError: unknown = null;
         let structureRepairRequest: TowerGenerationRequest | null = null;
         const maximumStructureRepairs = (result.additionalRequestsUsed || 0) > 0 ? 0 : 1;
         for (let repairIndex = 0; repairIndex <= maximumStructureRepairs; repairIndex += 1) {
           try {
             parsed = parseTowerOpeningResult(result.response, expectedOpening);
-            if (literalOriginal) assertAuthoredLiteralRepairPreservation(literalOriginal, parsed);
-            else literalOriginal = clone(parsed);
-            const literalIssues = collectAuthoredLiteralEffectIssues(parsed);
-            if (literalIssues.length) throw new Error(literalIssues.map(issue => `${issue.path}：[${issue.code}] ${issue.message}`).join('；'));
             break;
           } catch (error) {
             structureError = error;
@@ -7528,7 +7429,6 @@ export class DesignAssistantController {
             this.towerPreGenerationSnapshots.set(towerGenerationTaskKey(repairRequest), clone(draft));
             this.towerProgressParentRequestIds.set(repairRequest.requestId, request.requestId);
             structureRepairRequest = repairRequest;
-            extraRequestUsed = true;
             result = await this.towerGenerationHost.generateNode(repairRequest);
           }
         }
@@ -7550,13 +7450,8 @@ export class DesignAssistantController {
       } else if (generationType === 'batch') {
         const jobs = normalized.jobs || [];
         const batchId = normalized.batchId || request.requestId;
-        const literalOriginals = new Map<string, TowerNodeResult>();
         const validateOne = (candidate: TowerNodeResult, job: TowerGenerationJobDescriptor): void => {
-          const original = literalOriginals.get(job.nodeId);
-          if (original) assertAuthoredLiteralRepairPreservation(original, candidate);
-          else literalOriginals.set(job.nodeId, clone(candidate));
-          const semanticErrors = collectAuthoredLiteralEffectIssues(candidate)
-            .map(issue => `${issue.path}：[${issue.code}] ${issue.message.replaceAll('；', '，')}`);
+          const semanticErrors: string[] = [];
           const route = { id: job.nodeId, kind: job.kind, act: job.act, floor: job.floor, rewardSeed: job.rewardSeed };
           try {
             if (isBattleRunNode(job.kind)) {
@@ -7626,7 +7521,6 @@ export class DesignAssistantController {
           this.towerProgressParentRequestIds.set(repairRequest.requestId, request.requestId);
           structureRepairRequest = repairRequest;
           try {
-            extraRequestUsed = true;
             const repairedResult = await this.towerGenerationHost.generateNode(repairRequest);
             // Validate the raw repair's identities before preservation can
             // restore omitted/duplicated nodes or otherwise mask a bad scope.
@@ -7693,9 +7587,7 @@ export class DesignAssistantController {
               candidate = await this.balanceTowerNodeResult(candidate, draft, {
                 generationType: 'node', request: nodeRequest, basedOnRevision: job.basedOnRevision,
                 kind: job.kind, act: job.act, floor: job.floor, messageId,
-              }, tryConsumeBalanceFeedback, detail => this.publishTowerGenerationProgress(normalized, 'applying', detail), request.requestId);
-              // Enemy calibration is separately authorized; the preserved player/reward content was never changed.
-              literalOriginals.set(job.nodeId, clone(candidate));
+              });
               validateOne(candidate, job);
               inspected.entries[index] = { nodeId: job.nodeId, ok: true, result: candidate };
             } catch (error) {
@@ -7776,12 +7668,8 @@ export class DesignAssistantController {
           floor: floor!,
           rewardSeed: expectedNode.rewardSeed,
         };
-        let literalOriginal: TowerNodeResult | null = null;
         const validateNode = (candidate: TowerNodeResult): void => {
-          if (literalOriginal) assertAuthoredLiteralRepairPreservation(literalOriginal, candidate);
-          else literalOriginal = clone(candidate);
-          const semanticErrors = collectAuthoredLiteralEffectIssues(candidate)
-            .map(issue => `${issue.path}：[${issue.code}] ${issue.message.replaceAll('；', '，')}`);
+          const semanticErrors: string[] = [];
           try {
             if (isBattleRunNode(kind!)) {
               validateTowerBattleNodeForActivation(
@@ -7835,7 +7723,6 @@ export class DesignAssistantController {
             this.towerPreGenerationSnapshots.set(towerGenerationTaskKey(repairRequest), clone(draft));
             this.towerProgressParentRequestIds.set(repairRequest.requestId, request.requestId);
             structureRepairRequest = repairRequest;
-            extraRequestUsed = true;
             result = await this.towerGenerationHost.generateNode(repairRequest);
           }
         }
@@ -7846,10 +7733,8 @@ export class DesignAssistantController {
         if (isBattleRunNode(kind!)) {
           this.publishTowerGenerationProgress(normalized, 'applying', '正在本地复测战斗强度');
           parsed = await this.balanceTowerNodeResult(
-            parsed, draft, normalized, tryConsumeBalanceFeedback,
-            detail => this.publishTowerGenerationProgress(normalized, 'applying', detail),
+            parsed, draft, normalized,
           );
-          literalOriginal = clone(parsed);
           draft = this.readLatestMvuData(messageId);
           if (!this.isTowerGenerationScope(request, messageId)) throw new TowerGenerationCancelledError();
           validateNode(parsed);
@@ -7953,9 +7838,6 @@ export class DesignAssistantController {
     parsed: TowerNodeResult,
     draft: Record<string, any>,
     normalized: NormalizedTowerBridgeRequest,
-    tryConsumeFeedback: () => boolean = () => false,
-    reportProgress: (detail: string) => void = () => undefined,
-    monitorRequestId = normalized.request.requestId,
   ): Promise<TowerNodeResult> {
     try {
       const measurement = await this.encounterEvaluator.measure(draft.stat_data.battle);
@@ -7965,66 +7847,20 @@ export class DesignAssistantController {
         baseline: validTowerEncounterBaseline(baseline) ? baseline : undefined,
         kind: String(normalized.kind), act: normalized.act || 1, floor: normalized.floor || 1,
         difficulty: this.getSettings().difficultyPercent });
-      let result = await this.encounterEvaluator.balance({ persistentBattle: draft.stat_data.battle,
+      const result = await this.encounterEvaluator.balance({ persistentBattle: draft.stat_data.battle,
         generatedBattle: parsed.payload.battle as Record<string, any>, budget,
         seed: draft.stat_data.run?.map?.nodes?.find((node: any) => node.id === normalized.request.nodeId)?.contentSeed || 0 });
       if (!this.isTowerGenerationScope(normalized.request, normalized.messageId)) throw new TowerGenerationCancelledError();
-      let modelRepairUsed = false;
-      const feedbackAuthorization = result.needsReview ? balanceFeedbackAuthorization(result, budget) : { allowed: false };
-      if (result.needsReview && !feedbackAuthorization.allowed && feedbackAuthorization.warning) {
-        result.feedback.push(feedbackAuthorization.warning);
-      }
-      if (result.needsReview && feedbackAuthorization.allowed && tryConsumeFeedback()) {
-        modelRepairUsed = true; // One shared additional request, also consumed when repair fails.
-        try {
-          reportProgress('本地复测需要一次额外 AI 反馈，正在请求复核');
-          const mapNode = draft.stat_data.run?.map?.nodes?.find((node: any) => node.id === normalized.request.nodeId);
-          const expected = { nodeId: normalized.request.nodeId, requestId: normalized.request.requestId,
-            basedOnRevision: normalized.basedOnRevision, kind: normalized.kind!, act: normalized.act, floor: normalized.floor,
-            contentSeed: mapNode?.contentSeed, rewardSeed: mapNode?.rewardSeed };
-          const reviewNode = clone(parsed);
-          reviewNode.payload.battle = result.generatedBattle;
-          delete reviewNode.program_balance;
-          if (reviewNode.reward) { delete reviewNode.reward.gold; delete reviewNode.reward.gold_claimed; }
-          const reviewRequest: TowerGenerationRequest = { ...normalized.request,
-            requestId: `${normalized.request.requestId}__balance_feedback`, maxAttempts: 1,
-            prompt: `[程序战斗评估反馈]仅调整下方当前节点的敌人数值或可执行机制，保留敌人数与故事身份；玩家卡牌/资源、奖励和节点绑定一律保留。公开反制窗口要明确，不锁血强制拖回合。代理未找到胜利不代表人类必败。返回完整 mwg_tower_node_result，request_id 仍为 ${expected.requestId}。\n预算：${JSON.stringify(budget)}\n证据：${JSON.stringify(result.feedback)}\n当前节点：${JSON.stringify(reviewNode)}`,
-            generation: { ...normalized.request.generation, json_schema: createTowerNodeJsonSchema(normalized.kind!, expected) },
-            userExtra: { ...normalized.request.userExtra, mwg_tower_balance_feedback: true } };
-          this.towerPreGenerationSnapshots.set(towerGenerationTaskKey(reviewRequest), clone(draft));
-          this.towerProgressParentRequestIds.set(reviewRequest.requestId, monitorRequestId);
-          let reply: TowerGenerationResult;
-          try {
-            reply = await this.towerGenerationHost.generateNode(reviewRequest);
-          } finally {
-            this.towerProgressParentRequestIds.delete(reviewRequest.requestId);
-          }
-          reportProgress('额外 AI 反馈已返回，正在本地复测战斗强度');
-          const candidate = parseTowerNodeResult(reply.response, expected);
-          assertTowerBalanceFeedbackPreservation(parsed.payload.battle, candidate.payload.battle);
-          validateTowerBattleNodeForActivation(draft.stat_data.battle, candidate.payload.battle, parsed.reward,
-            { id: expected.nodeId, kind: expected.kind, act: expected.act!, floor: expected.floor!, rewardSeed: mapNode?.rewardSeed },
-            parsed.payload.desire_growth);
-          const reviewed = await this.encounterEvaluator.balance({ persistentBattle: draft.stat_data.battle,
-            generatedBattle: candidate.payload.battle as Record<string, any>, budget, seed: mapNode?.contentSeed || 0,
-            seeds: Math.max(2, result.evaluation.seeds.length) });
-          if (!reviewed.needsReview && reviewed.evaluation.status === 'measured' && reviewed.evaluation.decisionCoverage === 'bounded') result = reviewed;
-          else result.feedback.push('一次AI反馈未通过复测，保留此前可执行结果与待复核标记。');
-        } catch (error) {
-          if (error instanceof TowerGenerationCancelledError) throw error;
-          result.feedback.push(`一次AI反馈未采纳：${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
-      if (!this.isTowerGenerationScope(normalized.request, normalized.messageId)) throw new TowerGenerationCancelledError();
-      if (result.requiresRegeneration) throw new Error('MWG_ENCOUNTER_BUDGET: 敌人超出本节点程序预算，已保留其他节点，请重试生成。');
-      parsed.payload.battle = result.generatedBattle;
+      // Scores and sampled outcomes inform the UI/prompt only. A valid authored
+      // encounter is neither regenerated nor rewritten to satisfy a budget.
+      const modelRepairUsed = false;
       const audit = compactTowerBalanceAudit(result, measurement, this.getSettings().difficultyPercent, modelRepairUsed);
       parsed.program_balance = audit;
       this.towerEvaluationReports.set(audit.auditId, { budget, result });
       while (this.towerEvaluationReports.size > 8) this.towerEvaluationReports.delete(this.towerEvaluationReports.keys().next().value!);
       return parsed;
     } catch (error) {
-      if (error instanceof TowerGenerationCancelledError || (error instanceof Error && error.message.startsWith('MWG_ENCOUNTER_BUDGET:'))) throw error;
+      if (error instanceof TowerGenerationCancelledError) throw error;
       parsed.program_balance = { spec: 'mwg.tower-enemy-balance/v2', resourceAssessment: 'not-assessed',
         modelRepairUsed: false, assessment: 'inconclusive', needsReview: true,
         warnings: [error instanceof Error ? error.message : String(error)] };

@@ -78,7 +78,7 @@ export function createNodeSchemaPromptTransport(schema: unknown, source: unknown
       const field = child as Record<string, any>;
       return [key, ['object', 'array'].includes(field?.type) ? { type: field.type } : structuredClone(field)];
     })),
-    description: `完整且唯一的字段约束见用户消息 ${NODE_SCHEMA_PROMPT_MARKER}；此根摘要只用于启用 JSON 输出模式，不替代完整约束。`,
+    description: `完整且唯一的字段约束见用户消息 ${NODE_SCHEMA_PROMPT_MARKER}；执行前文的节点生成任务并返回游戏结果；不要解释 Schema 或反问任务。此根摘要仅启用 JSON 输出模式。`,
   };
   const document = JSON.stringify(value);
   const content = [NODE_SCHEMA_PROMPT_MARKER,

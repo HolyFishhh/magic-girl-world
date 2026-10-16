@@ -567,17 +567,9 @@ const validReward = {
   assert.equal(stat.run_node_reward.node_id, reached.choice.id);
   assert.equal(stat.run_node_reward.reward.card[0].id, 'mist_guard');
   assert.equal(stat.run_node_reward.reward.card.length, 3);
-  assert.equal(stat.run_node_reward.reward.artifact.length, 0, 'normal battles cannot stage relic rewards');
-  const plannedItems =
-    recommendTowerBattleRewardBudget({
-      nodeId: reached.choice.id,
-      kind: reached.choice.kind,
-      act: reached.choice.act,
-      floor: reached.choice.floor,
-      rewardSeed: reached.choice.rewardSeed,
-    }).items?.pick || 0;
-  assert.equal(stat.run_node_reward.reward.item.length, plannedItems, 'activation uses the seeded extra-drop plan');
-  assert.deepEqual(stat.run_node_reward.reward.limits, { cards: 1, artifacts: 0, items: plannedItems });
+  assert.equal(stat.run_node_reward.reward.artifact.length, validReward.artifact.length, 'legal authored relics survive activation');
+  assert.equal(stat.run_node_reward.reward.item.length,validReward.item.length);
+  assert.deepEqual(stat.run_node_reward.reward.limits,validReward.limits);
   assert.equal(
     stat.run_node_reward.reward.gold,
     recommendTowerBattleGold({
@@ -831,9 +823,10 @@ const validReward = {
   assert.deepEqual(stat, before);
 }
 
-for (const outcome of ['victory', 'defeat', 'terminated']) {
+for (const hasPayoff of [true, false]) for (const outcome of ['victory', 'defeat', 'terminated']) {
   const reached = reachableChoice('battle');
   let stat = towerStat(reached.state);
+  if (!hasPayoff) delete stat.battle.player_lust_effect;
   const before = structuredClone(stat.battle.player_lust_effect);
   const growth = { effect: { name: '胜利觉醒', effects: [{ damage: 50, to: 'opponent' }] } };
   readyNode(stat, reached.choice, { payload: { battle: { enemy: validEnemy }, desire_growth: growth } }, validReward);

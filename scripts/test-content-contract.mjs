@@ -54,128 +54,17 @@ const cursedRelicValidation = core.validateContentPackContract(cursedRelic, { re
 assert.equal(cursedRelicValidation.ok, true,
   `Corrupt is a valid relic rarity when the relic retains an executable drawback: ${JSON.stringify(cursedRelicValidation.issues)}`);
 
-const playerLustWithoutOverflow = core.createContentPack({
-  ...content,
-  cards: [{ id: 'pressure', name: '欲望施压', type: 'Skill', rarity: 'Common', cost: 1, quantity: 1, effects: { lust: 8 } }],
-});
-const playerLustWithoutOverflowResult = core.validateContentPackContract(playerLustWithoutOverflow, {
-  requireEnemy: true, requireExecutable: true,
-});
-assert.equal(playerLustWithoutOverflowResult.ok, false);
-assert.ok(playerLustWithoutOverflowResult.issues.some(issue =>
-  issue.path === 'desireEffects.player' && issue.code === 'MISSING_LUST_OVERFLOW_EFFECT',
-));
-
-const referencedLustStatusWithoutOverflow = core.createContentPack({
-  ...content,
-  cards: [{
-    id: 'mark', name: '烙印', type: 'Skill', rarity: 'Common', cost: 1, quantity: 1,
-    effects: { apply_status: 'pressure_mark' },
-  }],
-  statuses: [{
-    id: 'pressure_mark', name: '欲望烙印', emoji: '◈', type: 'debuff',
-    triggers: { tick: { lust: 3 } },
-  }],
-});
-assert.ok(core.validateContentPackContract(referencedLustStatusWithoutOverflow, {
-  requireEnemy: true, requireExecutable: true,
-}).issues.some(issue => issue.path === 'desireEffects.player' && issue.code === 'MISSING_LUST_OVERFLOW_EFFECT'));
-
-const unusedLustStatusDoesNotRequireOverflow = core.createContentPack({
-  ...content,
-  activeStatuses: [],
-  statuses: [{
-    id: 'unused_pressure', name: '闲置欲望烙印', emoji: '◈', type: 'debuff',
-    triggers: { tick: { lust: 3 } },
-  }],
-});
-assert.equal(core.validateContentPackContract(unusedLustStatusDoesNotRequireOverflow, {
-  requireEnemy: true, requireExecutable: true,
-}).ok, true, 'an unreferenced shared status must not create a false overflow requirement');
-
-const lustCostDoesNotRequireOverflow = core.createContentPack({
-  ...content,
-  cards: [{
-    id: 'lust_cost', name: '欲望费用', type: 'Skill', rarity: 'Common', cost: { lust: 2 }, quantity: 1,
-    effects: { block: 4 },
-  }],
-});
-assert.equal(core.validateContentPackContract(lustCostDoesNotRequireOverflow, {
-  requireEnemy: true, requireExecutable: true,
-}).ok, true, 'a lust payment is not a gain_lust operation');
-
-const unreachableLustTemplateDoesNotRequireOverflow = core.createContentPack({
-  ...content,
-  cards: [{
-    id: 'template_holder', name: '模板容器', type: 'Skill', rarity: 'Common', cost: 1, quantity: 1,
-    effects: { block: 4 },
-    creates: [{ id: 'unused_lust_template', name: '未调用模板', type: 'Skill', rarity: 'Common', cost: 0, effects: { lust: 9 } }],
-  }],
-});
-assert.equal(core.validateContentPackContract(unreachableLustTemplateDoesNotRequireOverflow, {
-  requireEnemy: true, requireExecutable: true,
-}).ok, true, 'creates entries are inert until a reachable card operation references them');
-
-const activeLustStatusWithoutOverflow = core.createContentPack({
-  ...content,
-  statuses: [{ id: 'active_pressure', name: '活动欲望', emoji: '◈', type: 'debuff', triggers: { tick: { lust: 3 } } }],
-  activeStatuses: [{ id: 'active_pressure', stacks: 1 }],
-});
-assert.ok(core.validateContentPackContract(activeLustStatusWithoutOverflow, {
-  requireEnemy: true, requireExecutable: true,
-}).issues.some(issue => issue.path === 'desireEffects.player' && issue.code === 'MISSING_LUST_OVERFLOW_EFFECT'),
-'an active status must be resolved through its id before checking its triggers');
-
-const summonStatusLustWithoutOverflow = core.createContentPack({
-  ...content,
-  cards: [{
-    id: 'mark_summon', name: '召唤烙印', type: 'Skill', rarity: 'Common', cost: 1, quantity: 1,
-    effects: { apply_summon_status: { selector: { owner: 'self', pick: 'all' }, id: 'summon_pressure', stacks: 1 } },
-  }],
-  statuses: [{ id: 'summon_pressure', name: '使魔欲望', emoji: '◈', type: 'debuff', triggers: { tick: { lust: 3 } } }],
-});
-assert.ok(core.validateContentPackContract(summonStatusLustWithoutOverflow, {
-  requireEnemy: true, requireExecutable: true,
-}).issues.some(issue => issue.path === 'desireEffects.player' && issue.code === 'MISSING_LUST_OVERFLOW_EFFECT'),
-'apply_summon_status must follow its id into the referenced status');
-
-const spawnedEnemyLustWithoutOverflow = core.createContentPack({
-  ...content,
-  cards: [{
-    id: 'call_enemy', name: '召来魅影', type: 'Skill', rarity: 'Common', cost: 1, quantity: 1,
-    effects: { spawn_enemy: {
-      id: 'spawned_wisp', name: '增援魅影', emoji: '👁️', hp: 10, max_hp: 10, lust: 0, max_lust: 100,
-      actions: [{ name: '侵蚀', effects: { lust: 5 } }],
-    } },
-  }],
-});
-assert.ok(core.validateContentPackContract(spawnedEnemyLustWithoutOverflow, {
-  requireEnemy: true, requireExecutable: true,
-}).issues.some(issue => issue.path === 'cards[0].effects.spawn_enemy.lust_effect'
-  && issue.code === 'MISSING_LUST_OVERFLOW_EFFECT'), 'spawned enemies receive their own precisely located overflow requirement');
-
-const playerAndSpawnedEnemyBothRequireOverflow = core.createContentPack({
-  ...spawnedEnemyLustWithoutOverflow,
-  cards: [{
-    ...spawnedEnemyLustWithoutOverflow.cards[0],
-    effects: [{ lust: 4 }, spawnedEnemyLustWithoutOverflow.cards[0].effects],
-  }],
-});
-const playerAndSpawnedEnemyBothIssues = core.validateContentPackContract(playerAndSpawnedEnemyBothRequireOverflow, {
-  requireEnemy: true, requireExecutable: true,
-}).issues;
-assert.ok(playerAndSpawnedEnemyBothIssues.some(issue => issue.path === 'desireEffects.player'
-  && issue.code === 'MISSING_LUST_OVERFLOW_EFFECT'));
-assert.ok(playerAndSpawnedEnemyBothIssues.some(issue => issue.path === 'cards[0].effects[1].spawn_enemy.lust_effect'
-  && issue.code === 'MISSING_LUST_OVERFLOW_EFFECT'), 'a player pressure finding must not short-circuit spawned-enemy coverage');
-
-const enemyLustWithoutOverflow = core.createContentPack({
-  ...content,
-  enemy: { name: '魅影', actions: [{ name: '侵蚀', effects: { lust: 7 } }] },
-});
-assert.ok(core.validateContentPackContract(enemyLustWithoutOverflow, {
-  requireEnemy: true, requireExecutable: true,
-}).issues.some(issue => issue.path === 'enemy.lust_effect' && issue.code === 'MISSING_LUST_OVERFLOW_EFFECT'));
+// Content quality is AI-owned: lust generation need not carry a payoff or a victory route.
+const playerLustWithoutOverflow = core.createContentPack({ ...content,
+  cards: [{ id: 'pressure', name: '欲望施压', type: 'Skill', cost: 1, effects: { lust: 8 } }] });
+for (const effects of [{ lust: 8 }, { heal: 1 }, { block: 99999 }]) {
+  const authored = core.createContentPack({ ...playerLustWithoutOverflow,
+    cards: [{ ...playerLustWithoutOverflow.cards[0], effects }],
+    enemy: { name: '魅影', actions: [{ name: '侵蚀', effects: { lust: 7 } }] } });
+  const before = JSON.stringify(authored);
+  assert.equal(core.validateContentPackContract(authored, { requireEnemy: true, requireExecutable: true }).ok, true);
+  assert.equal(JSON.stringify(authored), before, 'validation never invents payoffs or changes legal strength');
+}
 
 const completeLustCoverage = core.createContentPack({
   ...playerLustWithoutOverflow,

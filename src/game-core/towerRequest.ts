@@ -187,38 +187,36 @@ function resultContractFor(scope: TowerNodeScope, envelope?: import('./encounter
   const { kind } = scope;
   if (isBattleRunNode(kind)) {
     const budget = battleRewardBudgetFor(scope);
-    const artifacts = budget.artifacts?.candidates ?? 0;
-    const items = budget.items?.candidates ?? 0;
     return [
       formatTowerEncounterPlan(scope, envelope),
-      'payload 必须包含 battle；有程序遭遇计划时，只能使用计划指定数量的 enemies 数组；无计划的旧请求兼容 enemy。reward 必须存在并预先给出本场胜利候选。',
+      'payload 必须包含 battle；单敌使用 enemy 或 enemies，多敌使用 enemies。遭遇计划的人数是建议，由 AI 结合剧情决定。reward 必须存在并预先给出本场胜利候选。',
       '爬塔没有经验值和等级成长；不得生成、修改或以任何叙事奖励形式承诺 level 或 exp。',
-      `本节点奖励预算固定为：${formatBattleRewardBudget(budget, { includeExperience: false })}。`,
-      `reward 必须使用单数键并完整写成 {card:[恰好${budget.cards.candidates}个卡牌对象],artifact:[恰好${artifacts}个遗物对象],item:[恰好${items}个道具对象],limits:{"cards":${budget.cards.pick},"artifacts":${budget.artifacts?.pick ?? 0},"items":${budget.items?.pick ?? 0}}}。card/artifact/item 三个字段始终都是数组；0 项必须逐字写成空数组 []，绝不能写数字 0、null 或空对象。禁止增加或省略候选，也不要把复数 cards/artifacts/items 与单数键混用。`,
+      `本节点奖励设计建议为：${formatBattleRewardBudget(budget, { includeExperience: false })}。`,
+      'reward 使用单数数组键 card/artifact/item 与 limits:{cards,artifacts,items}。候选数量、稀有度与领取名额由 AI 决定，预算仅作建议；limits 为非负整数且不超过对应候选数。空类别写 []，不能写数字、null 或空对象。',
       '节点 reward 与 payload 同级，不能放进 payload.battle 或 payload.reward。预算中的 gold 仅供程序结算，禁止生成 gold 或 gold_claimed，也不能从当前 MVU 奖励池复制这两个字段；它们不是 AI 可指定的奖励。敌人独立 defeat_reward.gold 与事件 outcome.gold 是不同作用域的合法收益，不得因此删除或改写。',
       'reward 不得复制当前 reward 的 request、disabled_categories、pool_revision、reroll_count 等程序运行字段。同一奖励中每个候选 id 必须唯一；已有非唯一卡的名称、类型、费用和可执行规则完全相同时可复用当前稳定 id、名称和完整定义，并用 quantity 表示副本。规则不同、遗物或道具不得复用当前内容 id；它们必须是新的候选。',
-      '仅当前玩家 battle.player_lust_effect 已有有效欲望效果时，允许额外给出 payload.desire_growth:{effect:完整命名欲望效果,statuses?:新状态定义数组}，作为胜利后持久增强或机制深化；敌人的 lust_effect 不代表玩家拥有欲望效果。不降低多回合积累的兑现收益，不改触发归属，不覆盖共享状态，不减少普通奖励。入战只暂存，胜利才应用；无成长或玩家欲望效果缺失/null/空模板时必须省略 desire_growth，不输出 null、空对象或占位效果。',
+      '可选 payload.desire_growth:{effect:完整命名欲望效果,statuses?:新状态定义数组}，由 AI 决定新增欲望效果或深化已有体系。建议收益配得上积累成本；程序不检查强弱或成长曲线。不覆盖已有共享状态；入战只暂存，胜利才应用。无此设计则省略，不输出 null、空对象或占位效果。',
     ].join('');
   }
   if (kind === 'event')
     return (
       towerEventToneGuidance(scope.rewardSeed ?? 0) +
-      'payload 必须包含 event。兼容旧格式 event.choices（2–6 项）；递进事件使用 {spec:"mwg.tower-event/v2",start_stage,stages}，每个 stage 至少一项 choices，choice.next_stage 只能指向预先给出的后续 stage，阶段图必须有限且无循环。每项含稳定 id、中文 label 与结构化 outcome。outcome 可写 outcome、hp、max_hp、lust、max_lust、gold、card_removals、resources、reward、gain_cards、cost、deck_actions、grant；结果、成本、卡牌和替换牌均在本次请求中完整预生成。cost 是先验支付，数值可以为 0；只有当前确实可支付时才能选择。gain_cards 为必定获得的完整卡牌数组；grant 是预生成候选及 limits 的 x 选 y，limits 不得超过候选数。deck_actions 只表达预生成的永久牌组操作，不能把删牌额度当作已删牌。outcome.resources 只用于增减玩家当前已注册的自定义资源，固定写成 {"资源ID":整数变化量}。事件奖励只放在对应 outcome.reward，使用 cards、artifacts、items 与 limits；事件节点顶层不写 reward。'
+      'payload 必须包含 event。直接事件使用 event.choices（至少一项）；递进事件使用 {spec:"mwg.tower-event/v2",start_stage,stages}，每个 stage 至少一项 choices，choice.next_stage 只能指向预先给出的后续 stage，阶段图必须有限且无循环。每项含稳定 id、中文 label 与结构化 outcome。outcome 可写 outcome、hp、max_hp、lust、max_lust、gold、card_removals、resources、reward、gain_cards、cost、deck_actions、grant；结果、成本、卡牌和替换牌均在本次请求中完整预生成。cost 是先验支付，数值可以为 0；只有当前确实可支付时才能选择。gain_cards 为必定获得的完整卡牌数组；grant 是预生成候选及 limits 的 x 选 y，limits 不得超过候选数。deck_actions 只表达预生成的永久牌组操作，不能把删牌额度当作已删牌。outcome.resources 只用于增减玩家当前已注册的自定义资源，固定写成 {"资源ID":整数变化量}。事件奖励只放在对应 outcome.reward，使用 cards、artifacts、items 与 limits；事件节点顶层不写 reward。'
     );
   if (kind === 'shop') {
     const budget = shopRewardBudgetFor(scope);
     return [
       'payload 必须包含 shop；reward 必须存在并作为直接商品候选池，价格由程序结算，AI 不写 price、gold 或货币公式。',
-      `本商店由你新生成的商品数量固定为 ${formatShopBudget(budget)}。`,
+      `本商店新商品数量建议为 ${formatShopBudget(budget)}。`,
       scope.shopMemoryCards?.length
         ? `程序另行补入旧候选卡：${scope.shopMemoryCards.map(card => card.name + '（' + card.id + '）').join('、')}。不要重新生成这些牌或占用新卡名额。`
         : '当前没有可复用旧候选，由你补足这批商品。',
-      `reward 只使用复数键并完整写成 cards=${budget.cards}项、artifacts=${budget.artifacts}项、items=${budget.items}项、limits={"cards":${budget.cards},"artifacts":${budget.artifacts},"items":${budget.items}}。`,
+      'reward 使用复数数组键 cards/artifacts/items 与 limits:{cards,artifacts,items}；数量、稀有度和购买名额由 AI 决定，limits 不超过对应候选数。',
       '不得使用单数 card/artifact/item，也不得在 reward 中写 choices、outcome、gold、price 或程序运行字段；商品全部同时展示，由程序根据金币和 limits 处理购买。',
     ].join('');
   }
   if (kind === 'treasure')
-    return 'payload 必须包含 treasure；reward 必须固定写成 {cards:[],artifacts:[恰好3个遗物对象],items:[],limits:{cards:0,artifacts:1,items:0}}。宝箱只提供遗物三选一，绝不提供卡牌、消耗道具、金币或事件选项；遗物只能放 artifacts，绝不能把 type:"Relic" 的对象塞进 cards。不得使用单数 card/artifact/item，也不得写 choices、outcome、gold、price 或程序运行字段；宝箱候选直接展示并由程序结算，不是事件选择。';
+    return 'payload 必须包含 treasure；reward 使用 cards/artifacts/items 数组与 limits。建议提供遗物三选一，AI 可按场景设计其他数量、类别和名额。遗物放 artifacts，道具放 items，卡牌放 cards；limits 是不超过候选数的非负整数。不写 choices、outcome、gold、price 或程序运行字段；候选直接展示并由程序结算。';
   return 'payload 必须包含 rest；只写简短休整情境，恢复、升级、删卡等操作由程序提供。';
 }
 
@@ -1091,7 +1089,7 @@ export function formatTowerNodeGenerationPrompt(
   lines.push(
     ...(isBattleRunNode(job.kind)
       ? [
-          '[遭遇玩法复核，仅内部推演]按当前剧情与玩家要求，检查人数与职责、前4至6回合的成长/爆发、减益兑现、先击杀不同目标的后果。人数严格遵守本节点程序预定的1至5名敌人；选择单敌时也要有回合压力。同类谱系保留身份，改变具体打法。推演只落实到已有字段，不输出分析，不用模板补牌或改玩家构筑。',
+          '[遭遇玩法复核，仅内部推演]按当前剧情与玩家要求，检查人数与职责、前4至6回合的成长/爆发、减益兑现、先击杀不同目标的后果。人数参考本节点计划，由 AI 决定；选择单敌时也要有回合压力。同类谱系保留身份，改变具体打法。推演只落实到已有字段，不输出分析，不用模板补牌或改玩家构筑。',
         ]
       : []),
     effectAuthoringFinalPreflight(),
@@ -1152,7 +1150,7 @@ export function formatTowerNodeBatchGenerationPrompt(
   lines.push(
     ...(jobs.some(job => isBattleRunNode(job.kind))
       ? [
-          '[遭遇玩法复核，仅内部推演]逐个战斗节点检查人数与职责、前4至6回合的成长/爆发、减益兑现、先击杀不同目标的后果；比较同批与近期遭遇，在程序预定人数内主动变化职责、行动周期和核心联动。人数严格遵守本节点程序预定的1至5名敌人；选择单敌时也要有回合压力。推演只落实到已有字段，不输出分析，不用模板补牌或改玩家构筑。',
+          '[遭遇玩法复核，仅内部推演]逐个战斗节点检查人数与职责、前4至6回合的成长/爆发、减益兑现、先击杀不同目标的后果；比较同批与近期遭遇，按场景主动变化职责、行动周期和核心联动。人数参考本节点计划，由 AI 决定；选择单敌时也要有回合压力。推演只落实到已有字段，不输出分析，不用模板补牌或改玩家构筑。',
         ]
       : []),
     effectAuthoringFinalPreflight(),
@@ -1163,11 +1161,11 @@ export function formatTowerNodeBatchGenerationPrompt(
     '最后机械扫描：所有内容说明字段只能写 description，绝不能写 desc。每个 trigger.on 不是 passive 的真实事件触发器中，effects 只能放该时机结算的一次性操作，绝不能放 modify 或 card_rule；“首次打出攻击后追加伤害”直接写 damage，“获得格挡/能量”直接写 block/energy。modify 与 card_rule 只能进入 on:"passive" 或状态 triggers.hold。card_type 只用 Attack/Skill/Power/Event/Curse；规则适用于全部卡牌时省略 card_type，绝不能写 Card/Any/All，也不能写空 name、空 tag、racial 等占位筛选。',
     ...(jobs.some(job => isBattleRunNode(job.kind))
       ? [
-          `[最终逐节点数量复核]\n${jobs
+          `[逐节点奖励数量建议]\n${jobs
             .filter(job => isBattleRunNode(job.kind))
             .map(job => {
               const budget = battleRewardBudgetFor(job);
-              return `${job.nodeId}: reward.card 恰好 ${budget.cards.candidates} 项，reward.artifact 恰好 ${budget.artifacts?.candidates ?? 0} 项，reward.item 恰好 ${budget.items?.candidates ?? 0} 项`;
+              return `${job.nodeId}: reward.card 建议 ${budget.cards.candidates} 项，reward.artifact 建议 ${budget.artifacts?.candidates ?? 0} 项，reward.item 建议 ${budget.items?.candidates ?? 0} 项`;
             })
             .join('\n')}`,
           '逐张复核奖励候选：引用新状态的候选自身必须携带完整 statuses；没有引用状态的候选不要附带 statuses。不得少写候选，也不得复制同一候选凑数。',
@@ -1198,9 +1196,7 @@ export function formatTowerNodeStructureRepairPrompt(
       ? '敌人行动的伤害与欲望伤害默认作用于玩家，格挡与自身增益默认作用于行动者；不要为了重复默认目标而给 draw、discard、copy 等不支持目标的操作添加 to。'
       : '';
   const rewardRepairInstruction =
-    isBattleRunNode(job.kind) && /reward .* requires \d+ candidates/i.test(detail)
-      ? '本次错误是奖励候选数量不足：保留已有合法候选，并新写不同 id、不同机制的候选补足到本节点固定数量；不得复制同一候选凑数，也不得仍按原来的不足数量返回。'
-      : isBattleRunNode(job.kind) && /tower battle reward must be an object/i.test(detail)
+    isBattleRunNode(job.kind) && /tower battle reward must be an object/i.test(detail)
         ? '本次错误只定位到 battle reward 的容器类型：仅修正该节点 reward 这一槽，使其成为协议要求的对象，并保留原响应中可明确对应的合法 card/artifact/item 数组与 limits；不得把数组或标量盲目包装、不得凭空造奖励、不得修改其他字段。若无法无损判断数组元素归属，保留失败而不要猜测。'
         : '';
   const powerRepairInstruction = /ROOT_TRIGGER_REQUIRED|Power 必须|Power 的所有顶层效果/i.test(detail)
@@ -1305,7 +1301,7 @@ export function formatTowerOpeningStructureRepairPrompt(
     `request_id=${job.requestId} revision=${job.basedOnRevision}`,
     `上一份结果未通过可执行结构校验：${detail}`,
     '保留原来的馈赠者、标题、叙事、选项主题、代价和收益意图，只修正不合法或缺失的字段。',
-    'choices 必须恰好包含三项；不得缩成一项，也不得用一个 choice 同时代表多个可选馈赠。',
+    'choices 至少一项，建议提供三项不同馈赠；每个 choice 是一个可结算的选择。',
     '每个 choice 必须包含唯一的 id、非空 label 和 outcome 对象；description 可选。',
     'outcome 只允许 hp、max_hp、lust、max_lust、gold、card_removals、reward、deck_transforms；这些数值必须是整数且表示相对变化。max_lust 表示欲望上限的整数变化（-99..999），结算后上限至少为 1；lust 会直接改变玩家当前欲望并限制在新的 0..max_lust 之间。',
     OPENING_TRANSFORM_GUIDANCE,
@@ -1389,7 +1385,6 @@ export type TowerInitialRepairSlotKind =
   | 'trigger_on'
   | 'condition'
   | 'lust_condition'
-  | 'missing_lust_effect'
   | 'first_card_event_condition'
   | 'description'
   | 'card_type'
@@ -1593,7 +1588,6 @@ function createTowerInitialRepairSlotValueJsonSchema(
   if (target.kind === 'trigger_on') return { enum: ABILITY_TRIGGERS };
   if (target.kind === 'condition') return aiSchemaRef('formulaString');
   if (target.kind === 'lust_condition') return aiSchemaRef('formulaString');
-  if (target.kind === 'missing_lust_effect') return aiSchemaRef('mwgNamedEffects');
   if (target.kind === 'first_card_event_condition') return { type: 'string', enum: [...(target.allowedModes || [])] };
   if (target.kind === 'description') return { type: 'string', minLength: 1 };
   if (target.kind === 'card_type') return { enum: ['Attack', 'Skill'] };
@@ -1931,8 +1925,7 @@ function createTowerOpeningValueJsonSchema(): Record<string, unknown> {
       narrative: { type: 'string', minLength: 1 },
       choices: {
         type: 'array',
-        minItems: 3,
-        maxItems: 3,
+        minItems: 1,
         items: createTowerOpeningChoiceValueJsonSchema(),
       },
     },
@@ -2081,8 +2074,7 @@ function createTowerInitialRepairRootJsonSchema(target: TowerInitialRepairSchema
     opening_choice: createTowerOpeningChoiceValueJsonSchema(),
     opening_choices: {
       type: 'array',
-      minItems: 3,
-      maxItems: 3,
+      minItems: 1,
       items: createTowerOpeningChoiceValueJsonSchema(),
     },
   };
@@ -2160,8 +2152,7 @@ export function createTowerOpeningJsonSchema(): TowerJsonSchema {
         narrative: { type: 'string' },
         choices: {
           type: 'array',
-          minItems: 3,
-          maxItems: 3,
+          minItems: 1,
           items: createTowerOpeningChoiceValueJsonSchema(),
         },
       },
@@ -2196,7 +2187,6 @@ function createTowerRewardItemJsonSchema(): Record<string, unknown> {
 
 function createTowerRewardEntryArrayJsonSchema(
   category: 'cards' | 'artifacts' | 'items',
-  options: { minimum?: number; maximum?: number } = {},
 ): Record<string, unknown> {
   const item =
     category === 'cards'
@@ -2206,11 +2196,6 @@ function createTowerRewardEntryArrayJsonSchema(
         : createTowerRewardItemJsonSchema();
   return {
     type: 'array',
-    ...(options.minimum !== undefined && options.minimum === options.maximum
-      ? { description: `必须恰好包含 ${options.minimum} 个彼此独立的${category}候选；逐项计数后再输出。` }
-      : {}),
-    ...(options.minimum === undefined ? {} : { minItems: options.minimum }),
-    ...(options.maximum === undefined ? {} : { maxItems: options.maximum }),
     items: item,
   };
 }
@@ -2342,7 +2327,7 @@ function createTowerEventJsonSchema(): Record<string, unknown> {
       {
         type: 'object',
         additionalProperties: false,
-        properties: { choices: { type: 'array', minItems: 2, maxItems: 6, items: legacyChoice } },
+        properties: { choices: { type: 'array', minItems: 1, items: legacyChoice } },
         required: ['choices'],
       },
       {
@@ -2373,7 +2358,6 @@ function createTowerEventJsonSchema(): Record<string, unknown> {
 }
 function createTowerNodePayloadJsonSchema(kind: RunNodeKind, scope?: TowerNodeScope): Record<string, unknown> {
   if (isBattleRunNode(kind)) {
-    const plan = scope && createTowerEncounterPlan(scope);
     const enemy = createTowerEnemyJsonSchema();
     const rosterEnemy = createTowerEnemyJsonSchema(true);
     return {
@@ -2383,7 +2367,7 @@ function createTowerNodePayloadJsonSchema(kind: RunNodeKind, scope?: TowerNodeSc
           type: 'object',
           additionalProperties: false,
           required: ['effect'],
-          description: '可选胜利后欲望成长，仅已有欲望效果构筑使用；入战暂存，胜利才替换，不减少正常奖励。',
+          description: '可选胜利后欲望效果，由 AI 决定新增或深化；入战暂存，胜利才应用。',
           properties: {
             effect: aiSchemaRef('mwgNamedEffects'),
             statuses: { type: 'array', items: aiSchemaRef('mwgStatusDefinition') },
@@ -2393,11 +2377,10 @@ function createTowerNodePayloadJsonSchema(kind: RunNodeKind, scope?: TowerNodeSc
           type: 'object',
           additionalProperties: false,
           properties: {
-            ...(plan ? {} : { enemy }),
+            enemy,
             enemies: {
               type: 'array',
-              minItems: plan?.enemyCount ?? 1,
-              ...(plan ? { maxItems: plan.enemyCount } : {}),
+              minItems: 1,
               items: rosterEnemy,
             },
             statuses: {
@@ -2409,7 +2392,7 @@ function createTowerNodePayloadJsonSchema(kind: RunNodeKind, scope?: TowerNodeSc
             player_abilities: { type: 'array', items: createTowerTriggeredDefinitionJsonSchema() },
             player_status_effects: { type: 'array', items: createTowerActiveStatusJsonSchema() },
           },
-          ...(plan ? { required: ['enemies'] } : { anyOf: [{ required: ['enemy'] }, { required: ['enemies'] }] }),
+          anyOf: [{ required: ['enemy'] }, { required: ['enemies'] }],
         },
       },
       required: ['battle'],
@@ -2431,112 +2414,18 @@ function createTowerNodePayloadJsonSchema(kind: RunNodeKind, scope?: TowerNodeSc
 }
 
 function createTowerRewardJsonSchema(scope: TowerNodeScope): Record<string, unknown> {
-  if (isBattleRunNode(scope.kind)) {
-    const budget = battleRewardBudgetFor(scope);
-    const artifacts = budget.artifacts?.candidates ?? 0;
-    const items = budget.items?.candidates ?? 0;
-    return {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        card: createTowerRewardEntryArrayJsonSchema('cards', {
-          minimum: budget.cards.candidates,
-          maximum: budget.cards.candidates,
-        }),
-        artifact: createTowerRewardEntryArrayJsonSchema('artifacts', {
-          minimum: artifacts,
-          maximum: artifacts,
-        }),
-        item: createTowerRewardEntryArrayJsonSchema('items', {
-          minimum: items,
-          maximum: items,
-        }),
-        limits: {
-          type: 'object',
-          additionalProperties: false,
-          properties: {
-            cards: { type: 'integer', const: budget.cards.pick },
-            artifacts: { type: 'integer', const: budget.artifacts?.pick ?? 0 },
-            items: { type: 'integer', const: budget.items?.pick ?? 0 },
-          },
-          required: ['cards', 'artifacts', 'items'],
-        },
-      },
-      required: ['card', 'artifact', 'item', 'limits'],
-    };
-  }
-  if (scope.kind === 'shop') {
-    const budget = shopRewardBudgetFor(scope);
-    return {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        cards: createTowerRewardEntryArrayJsonSchema('cards', {
-          minimum: budget.cards,
-          maximum: budget.cards,
-        }),
-        artifacts: createTowerRewardEntryArrayJsonSchema('artifacts', {
-          minimum: budget.artifacts,
-          maximum: budget.artifacts,
-        }),
-        items: createTowerRewardEntryArrayJsonSchema('items', {
-          minimum: budget.items,
-          maximum: budget.items,
-        }),
-        limits: {
-          type: 'object',
-          additionalProperties: false,
-          properties: {
-            cards: { type: 'integer', const: budget.cards },
-            artifacts: { type: 'integer', const: budget.artifacts },
-            items: { type: 'integer', const: budget.items },
-          },
-          required: ['cards', 'artifacts', 'items'],
-        },
-      },
-      required: ['cards', 'artifacts', 'items', 'limits'],
-    };
-  }
-  if (scope.kind === 'treasure') {
-    return {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        cards: createTowerRewardEntryArrayJsonSchema('cards', { minimum: 0, maximum: 0 }),
-        artifacts: createTowerRewardEntryArrayJsonSchema('artifacts', { minimum: 3, maximum: 3 }),
-        items: createTowerRewardEntryArrayJsonSchema('items', { minimum: 0, maximum: 0 }),
-        limits: {
-          type: 'object',
-          additionalProperties: false,
-          properties: {
-            cards: { type: 'integer', const: 0 },
-            artifacts: { type: 'integer', const: 1 },
-            items: { type: 'integer', const: 0 },
-          },
-          required: ['cards', 'artifacts', 'items'],
-        },
-      },
-      required: ['cards', 'artifacts', 'items', 'limits'],
-    };
-  }
+  const keys = isBattleRunNode(scope.kind) ? ['card', 'artifact', 'item'] : ['cards', 'artifacts', 'items'];
   return {
-    type: 'object',
-    additionalProperties: false,
+    type: 'object', additionalProperties: false,
     properties: {
-      cards: createTowerRewardEntryArrayJsonSchema('cards'),
-      artifacts: createTowerRewardEntryArrayJsonSchema('artifacts'),
-      items: createTowerRewardEntryArrayJsonSchema('items'),
-      limits: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          cards: { type: 'integer', minimum: 0 },
-          artifacts: { type: 'integer', minimum: 0 },
-          items: { type: 'integer', minimum: 0 },
-        },
-        required: ['cards', 'artifacts', 'items'],
-      },
+      [keys[0]]: createTowerRewardEntryArrayJsonSchema('cards'),
+      [keys[1]]: createTowerRewardEntryArrayJsonSchema('artifacts'),
+      [keys[2]]: createTowerRewardEntryArrayJsonSchema('items'),
+      limits: { type: 'object', additionalProperties: false,
+        properties: { cards: { type: 'integer', minimum: 0 }, artifacts: { type: 'integer', minimum: 0 }, items: { type: 'integer', minimum: 0 } },
+        required: ['cards', 'artifacts', 'items'] },
     },
+    required: [...keys, 'limits'],
   };
 }
 
@@ -2824,27 +2713,9 @@ function directNodeRewardShapeIssues(scope: TowerNodeScope, reward: unknown): st
       const limit = limits[category];
       if (!Number.isInteger(limit) || Number(limit) < 0) {
         issues.push(`${label} reward.limits.${category} 必须是非负整数`);
-      } else if (scope.kind === 'shop' && Number(limit) > counts[category]) {
+      } else if (Number(limit) > counts[category]) {
         issues.push(`${label} reward.limits.${category} 不能大于 ${category} 候选数`);
       }
-    }
-  }
-  if (scope.kind === 'shop') {
-    const budget = shopRewardBudgetFor(scope);
-    for (const category of categories) {
-      if (counts[category] !== budget[category]) {
-        issues.push(`商店 reward.${category} 必须恰好包含 ${budget[category]} 项`);
-      }
-      if (limits && limits[category] !== budget[category]) {
-        issues.push(`商店 reward.limits.${category} 必须等于 ${budget[category]}`);
-      }
-    }
-  } else {
-    if (counts.cards !== 0) issues.push('宝箱 reward.cards 必须为空数组');
-    if (counts.artifacts !== 3) issues.push('宝箱 reward.artifacts 必须恰好包含 3 项遗物候选');
-    if (counts.items !== 0) issues.push('宝箱 reward.items 必须为空数组');
-    if (limits && (limits.cards !== 0 || limits.artifacts !== 1 || limits.items !== 0)) {
-      issues.push('宝箱 reward.limits 必须固定为 cards=0、artifacts=1、items=0');
     }
   }
   return issues;
@@ -2880,15 +2751,6 @@ function nodePayloadShapeIssues(scope: TowerNodeScope, payload: Record<string, u
     if (!battle) issues.push('payload.battle 必须是对象');
     if (!isRecord(reward)) issues.push('reward 必须是对象');
     if (!battle) return issues;
-    const plan = createTowerEncounterPlan(scope);
-    if (
-      plan &&
-      (battle.enemy !== undefined || !Array.isArray(battle.enemies) || battle.enemies.length !== plan.enemyCount)
-    ) {
-      issues.push(
-        `payload.battle.enemies 必须恰好 ${plan.enemyCount} 名且不得同时输出 enemy；遵守程序已确定数量，不得重掷`,
-      );
-    }
     const allowedBattleFields = new Set(['enemy', 'enemies', 'statuses', 'player_abilities', 'player_status_effects']);
     for (const key of Object.keys(battle)) {
       if (!allowedBattleFields.has(key)) issues.push(`payload.battle.${key} 不是允许的节点战斗字段`);
@@ -2947,10 +2809,7 @@ function nodePayloadShapeIssues(scope: TowerNodeScope, payload: Record<string, u
       return issues;
     }
     try {
-      const flow = parseTowerEventFlow(payload.event, planTowerEventOutcome);
-      if (flow.version === 1 && flow.stages[0].choices.length > 6) {
-        throw new Error('旧事件 choices 最多 6 项；递进事件请使用 mwg.tower-event/v2');
-      }
+      parseTowerEventFlow(payload.event, planTowerEventOutcome);
     } catch (error) {
       issues.push(`payload.event 不可结算：${error instanceof Error ? error.message : String(error)}`);
     }
@@ -3044,7 +2903,7 @@ export function parseTowerNodeResult(text: string, expected: TowerNodeScope): To
     const reused = structuredClone(expected.shopMemoryCards?.slice(0, 2) ?? []);
     const cards = [...reused, ...((parsed.reward.cards as unknown[]) || [])];
     parsed.reward.cards = cards;
-    parsed.reward.limits = { ...(parsed.reward.limits as object), cards: cards.length };
+    parsed.reward.limits = { ...(parsed.reward.limits as object), cards: Number((parsed.reward.limits as Record<string, unknown>)?.cards ?? 0) + reused.length };
     parsed.program_shop_memory_ids = reused.map(card => card.id);
   }
   delete parsed.program_reward_seed;
@@ -3100,7 +2959,14 @@ export function inspectTowerNodeBatchResult(
   // Identity and membership are batch-wide trust boundaries. Do not salvage
   // a sibling from an ambiguous, incomplete, duplicated or cross-scope batch.
   for (const job of jobs) {
-    const entry = rawByNodeId.get(job.nodeId);
+    let entry = rawByNodeId.get(job.nodeId);
+    // The verified outer batch already binds the revision. Inherit only a
+    // missing member revision; never overwrite an explicit stale value or
+    // infer node/request identity from array position.
+    if (isRecord(entry) && !Object.hasOwn(entry, 'based_on_revision')) {
+      entry = { ...entry, based_on_revision: expectedRevision };
+      rawByNodeId.set(job.nodeId, entry);
+    }
     if (
       !isRecord(entry) ||
       entry.spec !== TOWER_NODE_RESULT_SPEC ||
@@ -3149,9 +3015,9 @@ export function collectTowerOpeningEnvelopeIssues(value: unknown): string[] {
   const issues: string[] = [];
   if (!boundedText(value.title, 120) || !requiredTextValue(value.narrative))
     issues.push('tower opening title or narrative is invalid');
-  if (!Array.isArray(value.choices)) return [...issues, 'opening.choices：必须是恰好包含三项馈赠的数组'];
-  if (value.choices.length !== 3)
-    return [...issues, `opening.choices：需要恰好 3 项，实际为 ${value.choices.length} 项`];
+  if (!Array.isArray(value.choices)) return [...issues, 'opening.choices：必须是包含至少一项馈赠的数组'];
+  if (value.choices.length === 0)
+    return [...issues, `opening.choices：需要至少 1 项，实际为 ${value.choices.length} 项`];
   const choiceIds = new Set<string>();
   for (const [index, choice] of value.choices.entries()) {
     const path = `opening.choices[${index}]`;

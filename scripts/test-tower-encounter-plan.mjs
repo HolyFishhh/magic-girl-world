@@ -22,12 +22,12 @@ for (const kind of ['battle', 'elite', 'boss']) {
   assert.ok(Math.abs(counterStrategies / 200 - TOWER_COUNTER_STRATEGY_CHANCE[kind]) < 1.5, `${kind}: ${counterStrategies}`);
 }
 const schema = tower.createTowerNodeJsonSchema(job.kind, job).value.properties.payload.properties.battle;
-assert.equal(schema.properties.enemies.minItems, plan.enemyCount);
-assert.equal(schema.properties.enemies.maxItems, plan.enemyCount);
-assert.equal(schema.properties.enemy, undefined);
-assert.deepEqual(schema.required, ['enemies']);
+assert.equal(schema.properties.enemies.minItems, 1);
+assert.equal(schema.properties.enemies.maxItems, undefined);
+assert.ok(schema.properties.enemy);
+assert.equal(schema.required, undefined);
 const prompt = tower.formatTowerNodeGenerationPrompt(job, { difficultyPercent: 80 });
-assert.ok(prompt.includes(`必须恰好 ${plan.enemyCount} 名`));
+assert.ok(prompt.includes(`建议 ${plan.enemyCount} 名`));
 assert.ok(prompt.includes('软克制思考'));
 assert.doesNotMatch(prompt, /普通遭遇优先2至3|普通战斗优先考虑2至3/);
 const budget = recommendTowerBattleRewardBudget(job);
@@ -41,8 +41,8 @@ const value = { spec: tower.TOWER_NODE_RESULT_SPEC, node_id: job.nodeId, request
 assert.equal(tower.parseTowerNodeResult(JSON.stringify(value), job).payload.battle.enemies.length, plan.enemyCount);
 const wrong = structuredClone(value);
 wrong.payload.battle.enemies.push({ ...wrong.payload.battle.enemies[0], id: 'excess' });
-assert.throws(() => tower.parseTowerNodeResult(JSON.stringify(wrong), job), /必须恰好/);
+assert.equal(tower.parseTowerNodeResult(JSON.stringify(wrong), job).payload.battle.enemies.length,plan.enemyCount+1);
 const old = structuredClone(value); old.payload.battle.enemy = old.payload.battle.enemies[0]; delete old.payload.battle.enemies;
-assert.throws(() => tower.parseTowerNodeResult(JSON.stringify(old), job), /必须恰好/);
+assert.doesNotThrow(() => tower.parseTowerNodeResult(JSON.stringify(old), job));
 assert.equal(tower.parseTowerNodeResult(JSON.stringify(old), { ...job, contentSeed: undefined }).title, value.title);
 console.log('Tower encounter plan: 1–5 weights, deterministic retries/save, exact prompt/schema/parser and explicit legacy compatibility verified.');

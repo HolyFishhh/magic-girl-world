@@ -26,13 +26,14 @@ const owner={...battle,player_lust_effect:{name:'原效果',effects:{damage:20}}
 const growth={effect:{name:'增强',effects:[{damage:50,to:'opponent'}]}};
 assert.equal(applyDesireEffectGrowth(owner,growth).player_lust_effect.effects[0].damage,50);
 assert.equal(owner.player_lust_effect.effects.damage,20,'validation must not mutate source');
-assert.throws(()=>applyDesireEffectGrowth(battle,growth));
+assert.deepEqual(applyDesireEffectGrowth(battle,growth).player_lust_effect,growth.effect);
+assert.equal(battle.player_lust_effect,undefined,'AI may create a payoff, but preflight never mutates the player');
+for (const damage of [1, 999999]) assert.equal(applyDesireEffectGrowth(owner,{effect:{name:'自由成长',effects:{damage}}}).player_lust_effect.effects.damage,damage);
 assert.throws(()=>applyDesireEffectGrowth(owner,{effect:{name:'空',effects:[]}}));
 assert.throws(()=>applyDesireEffectGrowth(owner,{effect:{name:'坏引用',effects:[{apply_status:'missing'}]}}));
 const {validateTowerBattleNodeForActivation}=require('../src/runtime/towerContentActivation.ts');
 const noReward={card:[],artifact:[],item:[],limits:{cards:0,artifacts:0,items:0}};
-assert.throws(()=>validateTowerBattleNodeForActivation(battle,{enemy:battle.enemy},noReward,undefined,growth),/欲望成长/,
- 'background readiness must reject growth without an existing owner');
+assert.doesNotThrow(()=>validateTowerBattleNodeForActivation(battle,{enemy:battle.enemy},noReward,undefined,growth));
 assert.throws(()=>validateTowerBattleNodeForActivation(owner,{enemy:battle.enemy},noReward,undefined,
  {effect:{name:'坏引用',effects:[{apply_status:'missing'}]}}),/欲望成长不可执行/);
 assert.doesNotThrow(()=>validateTowerBattleNodeForActivation(owner,{enemy:battle.enemy},noReward,undefined,growth));

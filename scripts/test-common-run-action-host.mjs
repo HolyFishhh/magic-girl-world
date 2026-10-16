@@ -407,7 +407,7 @@ const staleRewardTower = readyTowerBattleStat();
 const staleGrowthTower = readyTowerBattleStat();
 delete staleGrowthTower.stat.battle.player_lust_effect;
 staleGrowthTower.stat.run.nodeContent[staleGrowthTower.choice.id].content.payload.desire_growth = {
-  effect: { name: '不适用的成长', effects: { draw: 2 } },
+  effect: { name: '未登记的成长', effects: { apply_status: 'missing_growth_status' } },
 };
 const staleGrowthBefore = structuredClone(staleGrowthTower.stat.battle);
 const staleGrowthHarness = createHarness(staleGrowthTower.stat);

@@ -34,8 +34,8 @@ assert.match(prompt, /reward 必须存在并预先给出本场胜利候选/);
 assert.match(prompt, /爬塔没有经验值和等级成长/);
 assert.match(prompt, /不得生成、修改或以任何叙事奖励形式承诺 level 或 exp/);
 assert.match(prompt, /cards=3\/1/);
-assert.match(prompt, /card:\[恰好3个卡牌对象\],artifact:\[恰好0个遗物对象\],item:\[恰好0个道具对象\]/);
-assert.match(prompt, /0 项必须逐字写成空数组 \[\]/);
+assert.match(prompt, /候选数量、稀有度与领取名额由 AI 决定/);
+assert.match(prompt, /空类别写 \[\]/);
 assert.match(prompt, /不得复制当前 reward 的 request、disabled_categories、pool_revision、reroll_count/);
 assert.match(prompt, /已有非唯一卡的名称、类型、费用和可执行规则完全相同时可复用当前稳定 id/);
 assert.match(prompt, /战斗效果结构边界/);
@@ -90,7 +90,7 @@ assert.ok(prompt.includes('不能放 passive/hold，可由状态 apply/stack 执
 assert.match(prompt, /不存在 scope:"summon" 或 modify:"summon_damage"/);
 assert.match(prompt, /状态自身 hold 中读取层数必须写裸 stacks/);
 assert.match(prompt, /一个主压力与零到两个有因果协同的副机制/);
-assert.match(prompt, /新爬塔战斗人数严格使用程序预定结果/);
+assert.match(prompt, /新爬塔战斗人数参考程序建议/);
 assert.match(prompt, /单敌也要制造回合压力/);
 assert.match(prompt, /每2至3回合蓄力兑现/);
 assert.match(prompt, /易伤提高承受伤害，虚弱降低造成伤害，脆弱降低获得格挡/);
@@ -162,7 +162,7 @@ const battleReward = {
     { id: 'reward_guard', name: '守势', type: 'Skill', rarity: 'Common', cost: 1, quantity: 1, effects: { block: 7 } },
     { id: 'reward_cycle', name: '轮转', type: 'Skill', rarity: 'Uncommon', cost: 1, quantity: 1, effects: { draw: 1 } },
   ],
-  artifact: [{ id: 'should_be_trimmed', name: '普通战不应发放的遗物' }],
+  artifact: [{ id: 'authored_relic', name: '自由奖励', trigger: { on: 'battle_start', effects: { block: 1 } } }],
   item: [{ id: 'reward_salve', name: '星露药剂', count: 1, effects: { heal: 6 } }],
   limits: { cards: 3, artifacts: 1, items: 1 },
 };
@@ -213,9 +213,9 @@ assert.equal(
 );
 assert.equal(parsedBattle.title, '遭遇');
 assert.equal(parsedBattle.reward.card.length, 3);
-assert.equal(parsedBattle.reward.artifact.length, 0, 'program budget removes forbidden normal-battle relics');
-assert.equal(parsedBattle.reward.item.length, budget.items?.candidates || 0);
-assert.deepEqual(parsedBattle.reward.limits, { cards: 1, artifacts: 0, items: budget.items?.pick || 0 });
+assert.equal(parsedBattle.reward.artifact.length, 1, 'preserve legal authored rewards outside suggested budget');
+assert.equal(parsedBattle.reward.item.length, 1);
+assert.deepEqual(parsedBattle.reward.limits, battleReward.limits);
 assert.equal(
   tower.parseTowerNodeResult(`${validBattle}${validBattle}`, job).title,
   '遭遇',
@@ -432,8 +432,8 @@ const overlargeEmptyTreasureLimit = treasureText.replace(
 );
 assert.throws(
   () => tower.parseTowerNodeResult(overlargeEmptyTreasureLimit, treasureJob),
-  /宝箱 reward\.artifacts 必须恰好包含 3 项|宝箱 reward\.items 必须为空数组/,
-  'a treasure cannot substitute items or a second selectable category for its relic choices',
+  /limits.artifacts.*候选/,
+  'a claim limit cannot exceed the authored candidates',
 );
 const treasureWithChoices = treasureText.replace(
   JSON.stringify(treasureReward),
@@ -448,7 +448,7 @@ const emptyTreasure = treasureText.replace(
   JSON.stringify(treasureReward),
   JSON.stringify({ cards: [], artifacts: [], items: [], limits: { cards: 0, artifacts: 0, items: 0 } }),
 );
-assert.throws(() => tower.parseTowerNodeResult(emptyTreasure, treasureJob), /artifacts 必须恰好包含 3 项/);
+assert.doesNotThrow(() => tower.parseTowerNodeResult(emptyTreasure, treasureJob));
 
 const shopJob = { ...job, nodeId: 'shop', requestId: 'shop-request', kind: 'shop', floor: 2 };
 const shopReward = {
@@ -479,7 +479,7 @@ const shopText = `<TOWER_NODE_RESULT>${JSON.stringify({
 })}</TOWER_NODE_RESULT>`;
 assert.equal(tower.parseTowerNodeResult(shopText, shopJob).kind, 'shop');
 const shortShop = shopText.replace(JSON.stringify(shopReward.cards), JSON.stringify(shopReward.cards.slice(0, 1)));
-assert.throws(() => tower.parseTowerNodeResult(shortShop, shopJob), /reward\.cards 必须恰好包含 5 项/);
+assert.throws(() => tower.parseTowerNodeResult(shortShop, shopJob), /limits.cards.*候选/);
 
 const openingInput = {
   requestId: 'opening-1',
@@ -524,8 +524,8 @@ assert.equal(
 );
 const openingSchema = tower.createTowerOpeningJsonSchema().value;
 assert.equal(openingSchema.properties.spec.const, tower.TOWER_OPENING_RESULT_SPEC);
-assert.equal(openingSchema.properties.choices.minItems, 3);
-assert.equal(openingSchema.properties.choices.maxItems, 3);
+assert.equal(openingSchema.properties.choices.minItems, 1);
+assert.equal(openingSchema.properties.choices.maxItems, undefined);
 assert.equal(openingSchema.$defs.mwgRewardArtifact.properties.statuses.type, 'array');
 assert.equal(openingSchema.$defs.mwgRewardArtifact.properties.statuses.minItems, 1);
 assert.equal(openingSchema.$defs.mwgRewardArtifact.properties.statuses.maxItems, 16);
@@ -535,11 +535,7 @@ const tooFewOpeningChoices = JSON.parse(
   openingText.slice('<TOWER_OPENING_RESULT>'.length, -'</TOWER_OPENING_RESULT>'.length),
 );
 tooFewOpeningChoices.choices = tooFewOpeningChoices.choices.slice(0, 1);
-assert.throws(
-  () => tower.parseTowerOpeningResult(JSON.stringify(tooFewOpeningChoices), openingInput),
-  /opening\.choices：需要恰好 3 项，实际为 1 项/,
-  'opening diagnostics must identify the exact choice count instead of returning one generic error',
-);
+assert.equal(tower.parseTowerOpeningResult(JSON.stringify(tooFewOpeningChoices), openingInput).choices.length,1);
 const battleSchema = tower.createTowerNodeJsonSchema('battle', {
   nodeId: job.nodeId,
   act: job.act,
@@ -551,11 +547,11 @@ assert.deepEqual(battleSchema.properties.payload.required, ['battle']);
 assert.equal(battleSchema.properties.payload.properties.battle.additionalProperties, false);
 assert.equal(battleSchema.properties.reward.additionalProperties, false);
 assert.deepEqual(battleSchema.properties.reward.required, ['card', 'artifact', 'item', 'limits']);
-assert.equal(battleSchema.properties.reward.properties.card.minItems, 3);
-assert.equal(battleSchema.properties.reward.properties.card.maxItems, 3);
-assert.equal(battleSchema.properties.reward.properties.artifact.maxItems, 0);
-assert.equal(battleSchema.properties.reward.properties.item.minItems, 1);
-assert.equal(battleSchema.properties.reward.properties.limits.properties.cards.const, 1);
+assert.equal(battleSchema.properties.reward.properties.card.minItems, undefined);
+assert.equal(battleSchema.properties.reward.properties.card.maxItems, undefined);
+assert.equal(battleSchema.properties.reward.properties.artifact.maxItems, undefined);
+assert.equal(battleSchema.properties.reward.properties.item.minItems, undefined);
+assert.equal(battleSchema.properties.reward.properties.limits.properties.cards.const, undefined);
 assert.deepEqual(Object.keys(battleSchema.properties.reward.properties.limits.properties), [
   'cards',
   'artifacts',
@@ -615,17 +611,17 @@ assert.deepEqual(eventSchema.$defs.mwgCard.anyOf, [
 const treasureSchema = tower.createTowerNodeJsonSchema('treasure').value;
 assert.deepEqual(treasureSchema.properties.reward.required, ['cards', 'artifacts', 'items', 'limits']);
 assert.equal(treasureSchema.properties.reward.properties.card, undefined);
-assert.equal(treasureSchema.properties.reward.properties.cards.maxItems, 0);
-assert.equal(treasureSchema.properties.reward.properties.artifacts.minItems, 3);
-assert.equal(treasureSchema.properties.reward.properties.artifacts.maxItems, 3);
-assert.equal(treasureSchema.properties.reward.properties.limits.properties.artifacts.const, 1);
+assert.equal(treasureSchema.properties.reward.properties.cards.maxItems, undefined);
+assert.equal(treasureSchema.properties.reward.properties.artifacts.minItems, undefined);
+assert.equal(treasureSchema.properties.reward.properties.artifacts.maxItems, undefined);
+assert.equal(treasureSchema.properties.reward.properties.limits.properties.artifacts.const, undefined);
 assert.equal(treasureSchema.properties.reward.anyOf, undefined);
 const shopSchema = tower.createTowerNodeJsonSchema('shop', { act: 1, floor: 2 }).value;
 assert.deepEqual(shopSchema.properties.reward.required, ['cards', 'artifacts', 'items', 'limits']);
-assert.equal(shopSchema.properties.reward.properties.cards.minItems, 5);
-assert.equal(shopSchema.properties.reward.properties.artifacts.minItems, 2);
-assert.equal(shopSchema.properties.reward.properties.items.minItems, 2);
-assert.equal(shopSchema.properties.reward.properties.limits.properties.cards.const, 5);
+assert.equal(shopSchema.properties.reward.properties.cards.minItems, undefined);
+assert.equal(shopSchema.properties.reward.properties.artifacts.minItems, undefined);
+assert.equal(shopSchema.properties.reward.properties.items.minItems, undefined);
+assert.equal(shopSchema.properties.reward.properties.limits.properties.cards.const, undefined);
 assert.match(
   tower.formatTowerNodeStructureRepairPrompt(job, missingActionEffects, new Error('missing effects')),
   /每个 action 必须有非空 name 和可执行 effects/,
@@ -791,8 +787,8 @@ const treasureGenerationPrompt = tower.formatTowerNodeGenerationPrompt(
   { ...job, kind: 'treasure' },
   { difficultyPercent: 80 },
 );
-assert.match(treasureGenerationPrompt, /遗物只能放 artifacts/);
-assert.match(treasureGenerationPrompt, /绝不能把 type:"Relic" 的对象塞进 cards/);
+assert.match(treasureGenerationPrompt, /遗物放 artifacts/);
+assert.match(treasureGenerationPrompt, /卡牌放 cards/);
 const unknownTargetRepair = tower.formatTowerNodeStructureRepairPrompt(
   job,
   missingActionEffects,
@@ -1489,15 +1485,15 @@ for (const generatedPrompt of [prompt, batchPrompt]) {
     'single and batch jobs carry the complete shared design guide exactly once',
   );
   assert.match(generatedPrompt, /\[遭遇玩法复核，仅内部推演\]/);
-  assert.match(generatedPrompt, /人数严格遵守本节点程序预定的1至5名敌人；选择单敌时也要有回合压力/);
+  assert.match(generatedPrompt, /人数参考本节点计划，由 AI 决定；选择单敌时也要有回合压力/);
   assert.match(generatedPrompt, /不能假造 ally_died 或敌人 card_played 事件/);
   assert.match(generatedPrompt, /sequence_then_probability 仅执行一次前缀再转随机/);
 }
-assert.match(batchPrompt, /比较同批与近期遭遇，在程序预定人数内主动变化职责、行动周期和核心联动/);
+assert.match(batchPrompt, /比较同批与近期遭遇，按场景主动变化职责、行动周期和核心联动/);
 assert.match(batchPrompt, /\[最终逐节点结构复核\]/);
 assert.match(batchPrompt, new RegExp(`${eventJob.nodeId} \\(event\\).*outcome\\.resources`));
-assert.match(batchPrompt, /\[最终逐节点数量复核\]/);
-assert.match(batchPrompt, new RegExp(`${job.nodeId}: reward\\.card 恰好`));
+assert.match(batchPrompt, /\[逐节点奖励数量建议\]/);
+assert.match(batchPrompt, new RegExp(`${job.nodeId}: reward\\.card 建议`));
 assert.match(batchPrompt, /引用新状态的候选自身必须携带完整 statuses/);
 assert.match(batchPrompt, /spawn_summon\.modifiers 的六种 modifier 值必须是有限数字/);
 assert.match(batchPrompt, /creates 必须与 trigger 同级放在内容根部/);
@@ -1511,7 +1507,7 @@ assert.equal(batchSchema.properties.results.minItems, 2);
 assert.equal(batchSchema.properties.results.maxItems, 2);
 assert.equal(batchSchema.properties.results.items.oneOf.length, 2);
 const battleRewardSchema = batchSchema.properties.results.items.oneOf[0].properties.reward;
-assert.match(battleRewardSchema.properties.card.description, /必须恰好包含/);
+assert.equal(battleRewardSchema.properties.card.minItems,undefined);
 assert.equal(batchSchema.$defs.mwgEnemy.properties.action_config.properties.probability.minProperties, 1);
 assert.equal(
   batchSchema.$defs.mwgEnemy.properties.action_config.properties.probability.additionalProperties.exclusiveMinimum,
@@ -1525,6 +1521,15 @@ const batchText = JSON.stringify({
   based_on_revision: job.basedOnRevision,
   results: [eventEntry, battleEntry],
 });
+const missingMemberRevision = JSON.parse(batchText);
+delete missingMemberRevision.results[0].based_on_revision;
+assert.equal(tower.parseTowerNodeBatchResult(JSON.stringify(missingMemberRevision), batchId, batchJobs).results.find(r=>r.node_id===eventEntry.node_id).based_on_revision,job.basedOnRevision);
+for (const revision of [null, job.basedOnRevision+1]) {
+  const stale = structuredClone(missingMemberRevision); stale.results[0].based_on_revision=revision;
+  assert.throws(()=>tower.parseTowerNodeBatchResult(JSON.stringify(stale),batchId,batchJobs),/scope|revision|mismatch/);
+}
+const wrongIdentity=structuredClone(missingMemberRevision);wrongIdentity.results[0].request_id='unrelated';
+assert.throws(()=>tower.parseTowerNodeBatchResult(JSON.stringify(wrongIdentity),batchId,batchJobs),/scope|mismatch/);
 const parsedBatch = tower.parseTowerNodeBatchResult(batchText, batchId, batchJobs);
 assert.deepEqual(
   parsedBatch.results.map(entry => entry.node_id),

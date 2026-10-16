@@ -35,7 +35,7 @@ async function run(schema,{source='deepseek',custom,empty=false,tools}={}){
   assert.deepEqual(config,before,'input config is immutable');
   for(const key of ['generation_id','user_input','should_stream','should_silence','temperature','top_p','max_tokens',
     'include_reasoning','reasoning_effort','stop','custom_api','tools']) assert.deepEqual(sent.config[key],before[key],key);
-  assert.deepEqual(sent.messages.slice(1,4),[config.ordered_prompts[0],{role:'user',content:config.user_input},config.ordered_prompts[2]]);
+  assert.deepEqual(sent.messages.filter(m=>!m.content.startsWith(prefix)).slice(1,4),[config.ordered_prompts[0],{role:'user',content:config.user_input},config.ordered_prompts[2]]);
   return sent;
 }
 const schemas=[...['battle','elite','boss','event','shop','treasure','rest'].map(kind=>createTowerNodeJsonSchema(kind,{act:1,floor:5})),
@@ -56,7 +56,9 @@ for(const schema of schemas){
   assert.deepEqual(outline.properties.spec,provider.value.properties.spec);
   assert.equal(outline.additionalProperties,provider.value.additionalProperties);
   assert.doesNotMatch(JSON.stringify(outline),/"\$(?:ref|defs)"/);
-  const schemaChars=first.messages.slice(4).reduce((n,m)=>n+m.content.length,0);
+  assert.ok(first.messages.indexOf(documents[0]) < first.messages.findIndex(m=>m.content==='unchanged story and current MVU'),'schema reference precedes the actual authoring task');
+  assert.match(first.config.json_schema.value.description,/执行前文的节点生成任务/);
+  const schemaChars=documents[0].content.length+first.messages.at(-1).content.length;
   const prettyChars=JSON.stringify(provider.value,null,4).length;
   assert.ok(schemaChars<prettyChars*.3,`${schema.name}: remove at least70% formatting (${schemaChars}/${prettyChars})`);
   assert.deepEqual(schema,canonicalBefore);
@@ -86,3 +88,18 @@ for(const patch of [{name:'unrelated'}, {name:'mwg_tower_opening_result'},
   assert.deepEqual(sent.config.json_schema,createProviderSafeJsonSchema(schema));
 }
 console.log('PASS: compact first-node transport preserves complete constraints, JSON mode, original prompts/settings, native/custom/tools boundaries and existing fallback.');
+
+// Extension startup can precede Helper readiness, or Helper can be reloaded.
+const savedHelper=globalThis.TavernHelper;
+try {
+  delete globalThis.TavernHelper;
+  const ports=createGlobalTowerGenerationPorts(undefined,()=>({chatCompletionSettings:{chat_completion_source:'openai'}}));
+  const isolated=createGlobalTowerGenerationPorts(null,()=>({}));
+  assert.equal(ports.canRecoverEmptyNarrative(),false);
+  for(const label of ['late','replacement']) {
+    globalThis.TavernHelper={label,generateRaw:async function(){return this.label;},generate:async()=>label};
+    assert.equal(ports.canRecoverEmptyNarrative(),true);
+    assert.equal(await ports.generate({generation_id:'late-helper-'+label,user_input:'task'}),label);
+  }
+  await assert.rejects(isolated.generate({generation_id:'isolated',user_input:'task'}),/接口缺失/);
+} finally { if(savedHelper===undefined)delete globalThis.TavernHelper;else globalThis.TavernHelper=savedHelper; }

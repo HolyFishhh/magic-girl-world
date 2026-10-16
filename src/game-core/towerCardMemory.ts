@@ -79,9 +79,9 @@ export function markTowerShopCardsShown(run: RunState, cards: readonly unknown[]
   return { ...run, cardMemory: memory };
 }
 
-/** Only finalized, displayed groups of three count; partial claims never signal rejection. */
+/** Only finalized, displayed offers count; partial claims never signal rejection. */
 export function rememberRejectedTowerOffer(run: RunState, cards: readonly unknown[], receipt: string): RunState {
-  if (cards.length !== 3 || !cards.every(record)) return run;
+  if (cards.length === 0 || !cards.every(record)) return run;
   const memory = readTowerCardMemory(run);
   const rejected = memory.rejectedOffers || [];
   if (rejected.some(entry => entry.receipt === receipt)) return run;
@@ -93,7 +93,7 @@ export function towerRewardPreferenceContext(run: RunState): Record<string, any>
   const rejected = readTowerCardMemory(run).rejectedOffers || [];
   if (!rejected.length) return undefined;
   return {
-    instruction: '玩家曾整组三张都不选。下一次新生成卡牌奖励请尝试与这些弃选方案不同的新流派或关键机制，同时提供能衔接现有卡组、弥补当前短板的选择。不要只换名称重复旧方案；不要改写已生成内容。此为设计偏好，不是数值或质量硬门槛。',
+    instruction: '玩家曾整组候选都不选。下一次新生成卡牌奖励请尝试与这些弃选方案不同的新流派或关键机制，同时提供能衔接现有卡组、弥补当前短板的选择。不要只换名称重复旧方案；不要改写已生成内容。此为设计偏好，不是数值或质量硬门槛。',
     recentRejectedOffers: rejected.slice(-3).map(entry => ({ sourceNodeId: entry.sourceNodeId, cards: entry.cards })),
   };
 }

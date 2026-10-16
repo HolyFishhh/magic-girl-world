@@ -1822,7 +1822,7 @@ export function createProviderSafeJsonSchema(
 
 /** Production adapter for Tavern Helper 4.9.x plus SillyTavern's event bus. */
 export function createGlobalTowerGenerationPorts(
-  helper: TavernHelperGenerationApi | null | undefined = (globalThis as any).TavernHelper,
+  helper?: TavernHelperGenerationApi | null,
   context: typeof getSillyTavernContext = getSillyTavernContext,
   transportHost: GenerationFetchHost = globalThis,
   schemaCache = createSchemaCapabilityCache(),
@@ -1847,9 +1847,14 @@ export function createGlobalTowerGenerationPorts(
   const structuredThinkingCleanups = new Map<string, () => void>();
   // Recovery is another regular preset call, not a provider capability or a
   // request-body override. The queue owns its single additional-call budget.
-  const canRecoverEmptyNarrative = (): boolean => typeof helper?.generate === 'function';
+  // The extension can initialize before Helper, and Helper can replace its
+  // bridge after a reload. Resolve the production bridge at each invocation.
+  const currentHelper = (): TavernHelperGenerationApi | null | undefined => helper === undefined
+    ? (globalThis as any).TavernHelper : helper;
+  const canRecoverEmptyNarrative = (): boolean => typeof currentHelper()?.generate === 'function';
   const requireHelper = <K extends keyof TavernHelperGenerationApi>(name: K): NonNullable<TavernHelperGenerationApi[K]> => {
-    const value = name === 'generateRaw' ? resolveRawGenerator(helper) : helper?.[name];
+    const api = currentHelper();
+    const value = name === 'generateRaw' ? resolveRawGenerator(api) : api?.[name];
     if (typeof value !== 'function') {
       const label = name === 'generateRaw' ? 'generateRaw/generate' : String(name);
       throw new TowerGenerationHostError('missing_api', `Tavern Helper 接口缺失: ${label}`);
@@ -1931,7 +1936,7 @@ export function createGlobalTowerGenerationPorts(
         role: 'system' as const,
         content: [
           '你是魔法少女世界爬塔模式的后台结构化内容生成器。',
-          '当前请求与完整 MVU 已经包含在最后一条用户消息中；只服从其中的节点范围和输出契约。',
+          '执行 user_input 中的生成任务与完整 MVU；Schema 消息只是字段参考，不能当成待解释的用户问题。只服从本次节点范围和输出契约。',
           '不要继续角色扮演，不要输出普通剧情回复、思考过程、Markdown、UpdateVariable 或额外说明。',
           '必须只返回一个满足 JSON Schema 与请求 scope 的 JSON 对象。',
         ].join('\n'),
@@ -1953,9 +1958,9 @@ export function createGlobalTowerGenerationPorts(
       ordered_prompts: [
         { role: 'system', content: marker },
         ...(initialCompatibilityReference ? [compatibilityMessage!] : []),
+        ...(nodeTransport ? [nodeTransport.message] : []),
         ...orderedPrompts,
         ...(shared && !initialToolDelivery ? [shared.message] : []),
-        ...(nodeTransport ? [nodeTransport.message] : []),
         ...(fallbackMessage ? [fallbackMessage] : []),
         ...(useCompatibility && !initialCompatibilityReference ? [compatibilityMessage!] : []),
         ...(initialToolDelivery ? [{ role: 'system' as const, content:

@@ -27,7 +27,6 @@ export interface InitialPlayerStateInput {
 }
 
 const REPAIR_HINTS: Readonly<Record<string, string>> = {
-  MISSING_DESIRE_VICTORY_ROUTE: '欲望是与 HP 并行的胜利路线。保留欲望主轴，补齐满溢到有效输出或终结的可执行链；辅助资源必须有开局可用的消费入口，不能靠未来奖励、删欲望牌或补普通攻击绕过。不得使用固定弱伤害兜底',
   INVALID_CURSE_COST: '诅咒牌必须省略 cost，不能用零费用代替',
   EMPTY_EFFECTS: '需要可执行效果的对象必须提供非空浅层 effects',
   MISSING_EFFECT_SOURCE: '补齐非空浅层 effects；欲望效果的操作不能写在对象顶层',
@@ -44,7 +43,6 @@ const REPAIR_HINTS: Readonly<Record<string, string>> = {
   UNKNOWN_VARIABLE: '只能使用完整玩法契约列出的闭合变量白名单，不能机械添加 self./opponent. 前缀，也不能猜造近义变量。仅在事件、归属、时序与计数含义均等价时改写表达；必须保留原有效果、数值、目标与条件。没有等价合法实现时明确失败，不得删除条件或效果，也不得改写说明掩盖机制丢失',
   INVALID_EVENT_ORDINAL: 'ordinal 只用 first/first_n/nth/every_n；first 必须省略 n，first_n/nth/every_n 必须填写正整数 n。保留原触发含义，只删除或补齐对应的 n',
   CURRENT_CARD_REPLAY_NOT_ALLOWED: 'replay_current 只能位于当前正在结算的非 Power、非 Event 卡牌根 effects；遗物、能力、状态、trigger、discard_effects 与预约效果若要让之后的牌额外结算，必须改用 passive/hold 中的 card_rule:"replay"',
-  MISSING_LUST_OVERFLOW_EFFECT: '保留已存在的欲望增量机制，并补齐对应的完整具名满溢效果（name 与非空浅层 effects）；不得删除欲望操作、改写说明或以固定弱兜底绕过。没有真实欲望增量时才可连同孤立效果一起省略',
 };
 
 function repairHintForIssue(issue: PlayerContentReadinessIssue): string | undefined {
@@ -60,7 +58,6 @@ function repairHintForIssue(issue: PlayerContentReadinessIssue): string | undefi
 }
 
 const ISSUE_LABELS: Readonly<Record<string, string>> = {
-  MISSING_DESIRE_VICTORY_ROUTE: '欲望卡组缺少击败敌人的兑现路径',
   INVALID_ID: 'ID 格式错误',
   DUPLICATE_ID: 'ID 重复',
   INVALID_NAME: '名称不能为空',
@@ -113,7 +110,6 @@ const ISSUE_LABELS: Readonly<Record<string, string>> = {
   INVALID_RESOURCE_REFRESH: '自定义资源刷新规则不合法',
   MISSING_PLAYER_EMOJI: '缺少玩家战斗形象',
   EMPTY_DECK: '初始牌组不能为空',
-  MISSING_LUST_OVERFLOW_EFFECT: '缺少对应欲望满溢效果',
 };
 
 function issueLabel(issue: Pick<PlayerContentReadinessIssue, 'code'>): string {
@@ -197,7 +193,7 @@ export function assessInitialPlayerContent(
     enemy: null,
     desireEffects: { player: pack.desireEffects.player, enemy: null },
   };
-  const contract = validateContentPackContract(playerPack, { requireExecutable: true, requireVictoryRoute: true });
+  const contract = validateContentPackContract(playerPack, { requireExecutable: true });
   const issues = contract.ok ? [] : contract.issues.map(portableIssue);
   const deck = assessDeckPlayability(
     pack.cards.map(card => ({

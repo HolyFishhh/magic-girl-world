@@ -60,8 +60,8 @@ try {
 }finally{presenter.choose=original;}
 const pack=core.createContentPack({cards:[{id:'lust',name:'欲望',type:'Attack',rarity:'Common',cost:1,effects:{lust:4}}],playerDesireEffect:{name:'循环',effects:[{draw:2},{heal:5}]}});
 const readiness=core.assessInitialPlayerContent(pack);
-assert.ok(readiness.issues.some(i=>i.code==='MISSING_DESIRE_VICTORY_ROUTE'));
-assert.match(core.formatPlayerContentRepairPrompt(readiness),/保留欲望主轴/);
+assert.equal(readiness.ok,true,'payoff strength and victory routes are AI design choices');
+assert.equal(core.formatPlayerContentRepairPrompt(readiness),'');
 pack.desireEffects.player.effects.push({damage:40});assert.equal(core.assessInitialPlayerContent(pack).ok,true);
 const names=collectSummonDisplayNames({effects:{spawn_summon:definition}});
 const description=describeCompactCard({type:'Skill',effects:{modify_summon_effect:{selector:{pick:'choose',template_id:'tendril'},stat:'lust',add:2}}},{summonNames:names});
@@ -69,5 +69,5 @@ assert.match(description,/梦触手/);assert.doesNotMatch(description,/tendril/)
 const panel=renderSummonPanel({...definition,displayResourceNames:{desire:'欲望精华'},actions:[{name:'缠绕',effects:{summoner_effects:{resource:{id:'desire',amount:1}}}}]});
 assert.match(panel,/唯一召唤物/);assert.match(panel,/已在场时再次召唤/);assert.match(panel,/欲望精华/);
 assert.doesNotMatch(renderSummonPanel({id:'plain',name:'普通',tags:['summon']}),/存续规则/);
-console.log('PASS desire victory gate, template target choice, unique repeat actual output, immediate action, death-only trigger and display names.');
+console.log('PASS desire content freedom, template target choice, unique repeat actual output, immediate action, death-only trigger and display names.');
 

@@ -972,64 +972,19 @@ try {
       token,{slots:Object.fromEntries(Object.entries(root.slots).map(([key,slot])=>[key,{action:slot.action,value:replacement}]))},
     ])),support_statuses:[],support_resources:[]};
   };
-  for (const pressure of ['direct', 'existing-status']) for (const protocol of ['canonical', 'registry-draft']) for (const outcome of ['existing', 'repair', 'empty-repair', 'joint-repair', 'joint-empty-repair']) {
-    const joint = outcome.startsWith('joint-');
-    const empty = outcome.endsWith('empty-repair');
-    if (protocol === 'canonical' && joint) continue;
-    const value = joint ? missingStatusFixture()
-      : protocol === 'registry-draft' ? registryFixture() : fixture();
-    const payoff = { name: '星火满溢', effects: [{ damage: 8 }] };
-    value.opening.choices[0].outcome = { reward: { cards: [{
-      ...fixture().player.cards[0], id: 'lust_gift', quantity: 1, effects: [{ lust: 10, to: 'opponent' }],
-    }] } };
-    value.opening.choices[1].outcome = { reward: { items: [{
-      id: 'lust_potion', name: '星火药剂', count: 1, effects: [{ lust: 5, to: 'opponent' }],
-    }] } };
-    if (pressure === 'existing-status') {
-      const definition = { id: 'gift_pressure', name: '馈赠烙印', emoji: '◈', type: 'debuff', triggers: { tick: { lust: 3 } } };
-      (protocol === 'registry-draft' ? value.registry.statuses : value.player.statuses).push(definition);
-      value.opening.choices[0].outcome.reward.cards[0].effects = [{ apply_status: definition.id, stacks: 1, to: 'opponent' }];
-      value.opening.choices[1].outcome.reward.items[0].effects = [{ apply_status: definition.id, stacks: 1, to: 'opponent' }];
-    }
-    if (outcome === 'existing') value.player.player_lust_effect = payoff;
-    const authored = structuredClone(value);
-    await scenario(`${protocol} gift-only lust owner context (${pressure}): ${outcome}`, {
-      protocol, realTransport: protocol === 'registry-draft', structured: (h, config) => {
-        assert.ok(h.modelCalls <= 2, 'owner repair shares the one extra mechanism request');
-        if (h.modelCalls === 1) return value;
-        const projection = JSON.parse(config.user_input.match(/^REPAIR_SLOTS=(.+)$/m)[1]);
-        const slots = Object.values(projection).flatMap(root => Object.values(root.slots));
-        assert.equal(slots.length, 1, 'two gifts share one player overflow slot');
-        assert.equal(slots[0].kind, 'missing_lust_effect');
-        const rules = effectSlotResponse(config, empty ? {} : payoff);
-        const response = joint
-          ? { spec: 'mwg.initial-joint-repair/v1', registry: repairResponse(statusDefinition()), rules }
-          : rules;
-        if (joint && !empty) {
-          const validate = new Ajv2020({ strict: false }).compile(config.json_schema.value);
-          assert.equal(validate(response), true, JSON.stringify(validate.errors));
-          const inline = structuredClone(response);
-          inline.registry.additions.r0.creates = [{ id: 'unapproved', name: '越界', type: 'Attack', rarity: 'Common', cost: 0, effects: { damage: 1 } }];
-          assert.equal(validate(inline), false, 'rule definitions must not widen registry placement rules');
-        }
-        return response;
-      },
-    }, async h => {
-      const before = structuredClone(h.variables);
-      if (empty) {
-        await assert.rejects(h.controller.startTowerSingleFloor(request));
-        assert.equal(h.writes, 0); assert.equal(h.saves, 0);
-        assert.deepEqual(h.variables, before);
-      } else {
-        await h.controller.startTowerSingleFloor(request);
-        assert.equal(h.writes, 1);
-        assert.deepEqual(h.variables.stat_data.battle.player_lust_effect, payoff);
-        assert.deepEqual(h.variables.stat_data.battle.cards[0].effects, authored.player.cards[0].effects);
-        assert.ok(h.variables[receiptKey]);
-      }
-      assert.equal(h.modelCalls, outcome === 'existing' ? 1 : 2);
-      assert.equal(h.narrativeCalls, protocol === 'registry-draft' ? 1 : 0);
-      assert.deepEqual(value, authored, 'original gifts and player content stay intact');
+  for (const protocol of ['canonical', 'registry-draft']) for (const authoredPayoff of [false,true]) {
+    const value=protocol==='registry-draft'?registryFixture():fixture();
+    value.opening.choices[0].outcome={reward:{cards:[{...fixture().player.cards[0],id:'lust_gift',effects:{lust:10}}]}};
+    if(authoredPayoff)value.player.player_lust_effect={name:'自由兑现',effects:{heal:1}};
+    const before=structuredClone(value);
+    await scenario(`${protocol}: desire rewards need no forced payoff or victory route (${authoredPayoff})`,{
+      protocol,realTransport:protocol==='registry-draft',structured:()=>value,
+    },async h=>{
+      await h.controller.startTowerSingleFloor(request);
+      assert.equal(h.modelCalls,1);assert.equal(h.writes,1);
+      assert.deepEqual(h.variables.stat_data.battle.player_lust_effect,value.player.player_lust_effect);
+      assert.deepEqual(value,before);
+      assert.deepEqual(h.variables.stat_data.run.opening.content.choices,value.opening.choices);
     });
   }
   const timingFixture = (registry = true) => {
@@ -1042,7 +997,7 @@ try {
   const timingRepair = (config, on = 'turn_start') => {
     const projection=JSON.parse(config.user_input.match(/REPAIR_SLOTS=(\{.*\})\nREPAIR_CONTEXT=/)[1]);
     const kinds=Object.values(projection).flatMap(root=>Object.values(root.slots).map(slot=>slot.kind)).sort();
-    assert.deepEqual(kinds,['effect_item','trigger_on'],'semantic and structural faults must share the same request');
+    assert.deepEqual(kinds,['effect_item'],'only executable structure errors may open repair slots');
     return {spec:'mwg.tower-initial-slot-repair/v1',roots:Object.fromEntries(Object.entries(projection).map(([token,root])=>[
       token,{slots:Object.fromEntries(Object.entries(root.slots).map(([key,slot])=>[key,{action:slot.action,
         value:slot.kind==='trigger_on'?on:{damage:6,hits:2}}]))},
@@ -1053,21 +1008,15 @@ try {
   }, async h => {
     await h.controller.startTowerSingleFloor(request);
     assert.equal(h.modelCalls,2);assert.equal(h.narrativeCalls,protocol==='registry-draft'?1:0);assert.equal(h.writes,1);
-    assert.deepEqual(h.variables.stat_data.battle.artifacts[0],{...timingFixture().player.artifacts[0],trigger:{on:'turn_start',effects:{block:1}}});
+    assert.deepEqual(h.variables.stat_data.battle.artifacts[0],timingFixture().player.artifacts[0]);
     assert.deepEqual(h.variables.stat_data.battle.cards[0].effects,[{damage:6,hits:2},{block:2}]);
     assert.deepEqual(h.variables.stat_data.run.opening.content.choices,fixture().opening.choices);
     await h.controller.startTowerSingleFloor(request);assert.equal(h.modelCalls,2);assert.equal(h.writes,1);
   });
-  await scenario('valid repair JSON that preserves a known timing contradiction cannot publish or request again', {
-    protocol:'registry-draft',structured:(h,config)=>h.modelCalls===1?timingFixture():timingRepair(config,'battle_start'),
-  },async h=>{
-    await assert.rejects(h.controller.startTowerSingleFloor(request),/EXPLICIT_TRIGGER_TIMING_MISMATCH/);
-    assert.equal(h.modelCalls,2);assert.equal(h.writes,0);assert.equal(h.variables[receiptKey],undefined);
-  });
   await scenario('empty transport fallback cannot append a third request for a discovered timing contradiction', {
     protocol:'registry-draft',structured:h=>h.modelCalls===1?'':timingFixture(),
   },async h=>{
-    await assert.rejects(h.controller.startTowerSingleFloor(request),/EXPLICIT_TRIGGER_TIMING_MISMATCH/);
+    await assert.rejects(h.controller.startTowerSingleFloor(request),/完整运行校验|hits/);
     assert.equal(h.modelCalls,2);assert.equal(h.writes,0);assert.equal(h.variables[receiptKey],undefined);
   });
   await scenario('registry nonempty structure error uses exactly one bounded slot repair', {
@@ -1344,40 +1293,20 @@ try {
         {name:'星光溢出',description:'造成3点伤害。',effects:{damage:3}});
     });
   }
-  for (const repairedCondition of ['skills_played_this_turn == 1', null, 'cards_played_this_turn == 1']) {
-    await scenario(`exact first-Skill mismatch uses bounded condition repair: ${repairedCondition}`, {
-      protocol:'registry-draft',structured:h=>{
-        if(h.modelCalls===1){
-          const draft=registryFixture();
-          draft.registry.statuses=[{id:'first_skill',name:'技能护盾',emoji:'🛡️',type:'buff',stacks_change:'keep',
-            description:'每回合首次打出技能牌时，获得3点格挡。',
-            triggers:{skill_played:{block:3,to:'self',when:'cards_played_this_turn == 1'}}}];
-          draft.player.cards.push({id:'activate_first_skill',name:'技能护盾',type:'Power',rarity:'Common',quantity:1,cost:1,effects:{apply_status:'first_skill',to:'self'}});
-          return draft;
-        }
-        assert.equal(h.modelCalls,2);
-        const roots=h.modelRequests.at(-1).json_schema.value.properties.roots.properties;
-        assert.equal(Object.keys(roots).length,1);
-        return {spec:'mwg.tower-initial-slot-repair/v1',support_statuses:[],support_resources:[],
-          roots:Object.fromEntries(Object.entries(roots).map(([token,root])=>{
-            assert.equal(Object.keys(root.properties.slots.properties).length,1);
-            return [token,{slots:Object.fromEntries(Object.keys(root.properties.slots.properties).map(slot=>[slot,{action:'replace_value',value:repairedCondition}]))}];
-          }))};
-      },
-    },async h=>{
-      const before=structuredClone(h.variables);
-      if(repairedCondition==='skills_played_this_turn == 1'){
-        await h.controller.startTowerSingleFloor(request);
-        assert.equal(h.writes,1);
-        assert.deepEqual(h.variables.stat_data.battle.statuses[0].triggers,{skill_played:{block:3,to:'self',when:repairedCondition}});
-        assert.equal(h.variables.stat_data.battle.statuses[0].description,'每回合首次打出技能牌时，获得3点格挡。');
-      }else{
-        await assert.rejects(h.controller.startTowerSingleFloor(request));
-        assert.equal(h.writes,0);assert.deepEqual(h.variables,before);
-      }
-      assert.equal(h.modelCalls,2);assert.equal(h.narrativeCalls,1);
-    });
-  }
+  await scenario('natural-language mismatch cannot rewrite a valid first-card condition', {
+    protocol:'registry-draft',structured:()=>{
+      const draft=registryFixture();
+      draft.registry.statuses=[{id:'first_skill',name:'技能护盾',emoji:'🛡️',type:'buff',stacks_change:'keep',
+        description:'每回合首次打出技能牌时，获得3点格挡。',
+        triggers:{skill_played:{block:3,to:'self',when:'cards_played_this_turn == 1'}}}];
+      draft.player.cards.push({id:'activate_first_skill',name:'技能护盾',type:'Power',rarity:'Common',quantity:1,cost:1,effects:{apply_status:'first_skill',to:'self'}});
+      return draft;
+    },
+  },async h=>{
+    await h.controller.startTowerSingleFloor(request);
+    assert.equal(h.modelCalls,1);assert.equal(h.writes,1);
+    assert.equal(h.variables.stat_data.battle.statuses[0].triggers.skill_played.when,'cards_played_this_turn == 1');
+  });
   for (const originalCondition of ['欲望满溢时', 'opponent.lust >= opponent.lust_max']) {
   for (const condition of ['opponent.lust >= opponent.max_lust', null, '欲望满溢时']) {
     await scenario(`overflow condition leaf repair preserves transaction boundary: ${originalCondition} -> ${condition}`, {

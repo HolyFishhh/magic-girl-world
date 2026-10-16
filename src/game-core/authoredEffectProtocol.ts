@@ -38,7 +38,7 @@ export function compactEffectProtocolSections(placement: EffectProtocolPlacement
       builtinStatusAuthoringContract(),
       '遗物无需强制每回合次数上限；持续被动、每次事件与不限次数均合法，是否限次由整体平衡和剧情代价决定。不要无差别添加scope/ordinal/n。',
       '伤害修饰可用 damage_type:"attack"|"effect"|"hp_loss"|"retaliation"|"damage_over_time" 限定伤害类型，仅适用于 modify:"damage"/"damage_taken"；省略时保持通用修饰。hp_loss仍跳过伤害修饰。',
-      '遗物与独立能力：根 trigger:{on,effects}，允许 battle_start/passive。遗物不是卡牌，不写 type:"Relic"；rarity=Common/Uncommon/Rare/Epic/Legendary/Corrupt；Corrupt 是具有实际负面或代价机制的诅咒遗物，Boss/ENS 保留旧内容兼容。节点奖励严格使用程序给出的稀有度。道具、敌人行动和欲望效果使用非空根 effects，不写 trigger。',
+      '遗物与独立能力：根 trigger:{on,effects}，允许 battle_start/passive。遗物不是卡牌，不写 type:"Relic"；rarity=Common/Uncommon/Rare/Epic/Legendary/Corrupt；Corrupt 是具有实际负面或代价机制的诅咒遗物，Boss/ENS 保留旧内容兼容。节点奖励稀有度由 AI 设计，程序建议不作为验收条件。道具、敌人行动和欲望效果使用非空根 effects，不写 trigger。',
       '内容寿命：cards/artifacts/items/statuses 是持久定义；player_abilities/player_status_effects 仅本场，结算清除。battle_start 是时机而非永久寿命。每场自动生效的职业能力应由 AI 创作成已持有遗物及其 trigger，职业说明、单场能力或未领取奖励不能代替。Power 每场需实际打出，战后不保留获得的持续规则；程序不按描述搬移机制或补造遗物。',
       `${placement === 'initial-draft' ? "player.player_lust_effect" : "battle.player_lust_effect 与敌人 lust_effect"}：仅在存在真实欲望体系时生成；一旦生成必填 name/effects，仅可选 ${placement === 'initial-draft' ? "emoji/description/when" : "emoji/description/creates/when"}。这是一次性结算，不直接使用 modify/card_rule。若满溢时强化当前已有召唤物，直接使用独占项 modify_summon 或 modify_summon_effect；确需长期状态时才用 apply_status/apply_summon_status，并在 ${placement === 'initial-draft' ? "registry.statuses" : "本结果 statuses"} 登记完整同ID定义。持续规则放该状态 triggers.hold，不以未登记状态或描述替代实现。`,
       lustEffectExecutionContract(),

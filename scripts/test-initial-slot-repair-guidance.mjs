@@ -12,11 +12,8 @@ assert.deepEqual([...kinds].sort(),declared.sort(),'all current program slot kin
 const roots=(...ks)=>[{slots:ks.map(kind=>({kind}))}];
 const cardType=select(roots('card_type'));
 assert.equal(cardType.length,1);assert.match(cardType[0],/只改 type/);assert.match(cardType[0],/Event/);
-const missingLust=select(roots('missing_lust_effect'));
-assert.equal(missingLust.length,1);
-assert.match(missingLust[0],/所属玩家/);assert.match(missingLust[0],/非空 effects/);assert.match(missingLust[0],/不得删除欲望操作/);
-assert.deepEqual(select(roots(...kinds)).filter(s=>!missingLust.includes(s)&&!cardType.includes(s)),original,'existing specialized guidance survives byte-for-byte');
-for(const kind of kinds){const input=roots(kind),before=structuredClone(input),selected=select(input);assert.deepEqual(input,before);assert.ok(selected.every(s=>original.includes(s)||missingLust.includes(s)||cardType.includes(s)));assert.deepEqual(select(roots(kind,kind)),selected,'repeated slots do not repeat paragraphs');}
+assert.deepEqual(select(roots(...kinds)).filter(s=>!cardType.includes(s)),original,'existing specialized guidance survives byte-for-byte');
+for(const kind of kinds){const input=roots(kind),before=structuredClone(input),selected=select(input);assert.deepEqual(input,before);assert.ok(selected.every(s=>original.includes(s)||cardType.includes(s)));assert.deepEqual(select(roots(kind,kind)),selected,'repeated slots do not repeat paragraphs');}
 const single=select(roots('resource_payment_strategy'));
 assert.equal(single.length,1);assert.match(single[0],/pay_resource/);assert.match(single[0],/read_current_resource/);
 assert.ok(single.join('\n').length<original.join('\n').length/4,'single resource repair excludes at least 75% of irrelevant specialized instructions');

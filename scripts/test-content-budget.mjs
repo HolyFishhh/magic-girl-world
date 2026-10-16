@@ -55,10 +55,10 @@ const normalizedTowerReward = core.enforceBattleRewardBudget({
   limits: { cards: 4, artifacts: 1, items: 2 },
 }, normalTowerBudget);
 assert.deepEqual(normalizedTowerReward, {
-  card: [{ id: 'a' }, { id: 'b' }, { id: 'c' }],
-  artifact: [],
-  item: [{ id: 'potion' }],
-  limits: { cards: 1, artifacts: 0, items: 1 },
+  card: [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'extra' }],
+  artifact: [{ id: 'forbidden-relic' }],
+  item: [{ id: 'potion' }, { id: 'extra-potion' }],
+  limits: { cards: 4, artifacts: 1, items: 2 },
   gold: normalTowerBudget.gold,
   gold_claimed: false,
 });
@@ -69,10 +69,7 @@ assert.throws(
   /unsupported field: gold/,
   'the model cannot author tower currency',
 );
-assert.throws(
-  () => core.enforceBattleRewardBudget({ card: [{ id: 'a' }], artifact: [], item: [{ id: 'potion' }] }, normalTowerBudget),
-  /requires 3 candidates/,
-);
+assert.equal(core.enforceBattleRewardBudget({ card: [{ id: 'a' }], artifact: [], item: [{ id: 'potion' }] }, normalTowerBudget).card.length,1, 'no forced reward count');
 assert.equal(core.recommendTowerBattleRewardBudget({
   nodeId: 'act-1-floor-2-col-1',
   kind: 'battle',

@@ -72,7 +72,7 @@ export function parseTowerEventFlow(
     if (stageIds.has(id)) throw new Error(`重复的事件阶段：${id}`);
     stageIds.add(id);
     if (stage.narrative !== undefined && typeof stage.narrative !== 'string') throw new Error('阶段剧情必须是文本');
-    if (!Array.isArray(stage.choices) || stage.choices.length < (staged ? 1 : 2)) throw new Error('事件阶段缺少可选行动');
+    if (!Array.isArray(stage.choices) || stage.choices.length < 1) throw new Error('事件阶段缺少可选行动');
     const choiceIds = new Set<string>();
     const choices = stage.choices.map(rawChoice => {
       const choice = record(rawChoice, '事件选项');

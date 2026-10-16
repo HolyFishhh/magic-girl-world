@@ -126,73 +126,37 @@ export function recommendTowerBattleRewardBudget(context: TowerBattleRewardConte
   };
 }
 
-/**
- * Make battle reward quantity and pick limits program-owned.
- *
- * Extra candidates/categories are trimmed so already prepared nodes from an
- * older build remain playable. Missing required candidates are rejected and
- * sent through the bounded structure-repair request instead of silently
- * inventing authored content.
- */
+/** Normalize transport shape only. Candidate counts, rarities and pick counts
+ * are authored content; budget values are suggestions, except host-owned gold. */
 export function enforceBattleRewardBudget(
   rewardValue: unknown,
   budget: BattleRewardBudget,
   options: { allowProgramCurrency?: boolean } = {},
 ): Record<string, unknown> {
   if (!isRecord(rewardValue)) throw new Error('tower battle reward must be an object');
-  // Parsing and activation both enforce this contract. Program-owned currency
-  // may therefore already exist; it is always recomputed below, never trusted.
   const allowedFields = new Set(['card', 'cards', 'artifact', 'artifacts', 'item', 'items', 'limits',
     ...(options.allowProgramCurrency ? ['gold', 'gold_claimed'] : [])]);
   const unknown = Object.keys(rewardValue).find(key => !allowedFields.has(key));
   if (unknown) throw new Error(`tower battle reward contains unsupported field: ${unknown}`);
-
-  const expectations = {
-    cards: { candidates: budget.cards.candidates, pick: budget.cards.pick },
-    artifacts: {
-      candidates: budget.artifacts?.candidates ?? 0,
-      pick: budget.artifacts?.pick ?? 0,
-    },
-    items: {
-      candidates: budget.items?.candidates ?? 0,
-      pick: budget.items?.pick ?? 0,
-    },
-  } as const;
-  const normalized: Record<'card' | 'artifact' | 'item', unknown[]> = {
-    card: [],
-    artifact: [],
-    item: [],
-  };
-
+  if (rewardValue.limits !== undefined && !isRecord(rewardValue.limits)) throw new Error('tower battle reward limits must be an object');
+  const limits = isRecord(rewardValue.limits) ? rewardValue.limits : {};
+  const unknownLimit = Object.keys(limits).find(key => !Object.hasOwn(TOWER_REWARD_KEYS, key));
+  if (unknownLimit) throw new Error(`tower battle reward limits contains unsupported field: ${unknownLimit}`);
+  const normalized: Record<string, unknown> = {};
+  const normalizedLimits: Record<string, number> = {};
   for (const category of Object.keys(TOWER_REWARD_KEYS) as Array<keyof typeof TOWER_REWARD_KEYS>) {
     const [singular, plural] = TOWER_REWARD_KEYS[category];
-    if (rewardValue[singular] !== undefined && rewardValue[plural] !== undefined) {
+    if (rewardValue[singular] !== undefined && rewardValue[plural] !== undefined)
       throw new Error(`tower battle reward cannot contain both ${singular} and ${plural}`);
-    }
     const source = rewardValue[singular] ?? rewardValue[plural] ?? [];
     if (!Array.isArray(source)) throw new Error(`tower battle reward ${singular} must be an array`);
-    const expected = expectations[category].candidates;
-    if (source.length < expected) {
-      throw new Error(`tower battle reward ${singular} requires ${expected} candidates but received ${source.length}`);
-    }
-    normalized[singular] = structuredClone(source.slice(0, expected));
-    const slots = category === 'cards' ? budget.cards.slotRarities : category === 'artifacts' ? budget.artifacts?.slotRarities : undefined;
-    slots?.forEach((rarity, index) => {
-      const candidate = normalized[singular][index];
-      if (!isRecord(candidate) || candidate.rarity !== rarity)
-        throw new Error(`tower battle reward ${singular}[${index}].rarity must be ${rarity} (program plan)`);
-    });
+    const limit = limits[category] ?? Math.min(1, source.length);
+    if (!Number.isInteger(limit) || Number(limit) < 0) throw new Error(`tower battle reward limits.${category} must be a nonnegative integer`);
+    normalized[singular] = structuredClone(source);
+    normalizedLimits[category] = Number(limit);
   }
-
-  return {
-    ...normalized,
-    limits: {
-      cards: expectations.cards.pick,
-      artifacts: expectations.artifacts.pick,
-      items: expectations.items.pick,
-    },
-    ...(budget.gold === undefined ? {} : { gold: budget.gold, gold_claimed: false }),
-  };
+  return { ...normalized, limits: normalizedLimits,
+    ...(budget.gold === undefined ? {} : { gold: budget.gold, gold_claimed: false }) };
 }
 
 /** Fixed candidate budgets reduce AI arithmetic and keep rewards comparable between runs. */

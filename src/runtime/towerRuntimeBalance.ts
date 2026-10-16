@@ -1,7 +1,7 @@
 import { BUILD_REFERENCE_CASES, BUILD_CALIBRATION_SPEC, calibrateBuildCase } from '../game-core/buildCalibration';
 import { evaluateIsolatedEncounter, type EncounterEvaluationInput } from './isolatedEncounterEvaluator';
 import { evaluationMedian, type EncounterEvaluation } from '../game-core/encounterEvaluation';
-import { TOWER_BUILD_MEASUREMENT_SPEC, TOWER_BALANCE_DESIGN, type TowerBuildMeasurement } from '../game-core/towerEncounterBudget';
+import { TOWER_BUILD_MEASUREMENT_SPEC, type TowerBuildMeasurement } from '../game-core/towerEncounterBudget';
 import { prepareTowerBattleForActivation } from './towerContentActivation';
 import type { EnemyBudgetEnvelope } from '../game-core/encounterBalance';
 import { towerEncounterPlayerReference } from './towerEncounterPlayer';
@@ -78,80 +78,20 @@ function loss(evaluation: EncounterEvaluation, budget: EnemyBudgetEnvelope, maxH
   // A fast kill of an on-budget encounter is build payoff, never a quality fault.
   return deficit * 6 + tooLong * 2 + best.medianConditionLoss * 10 + Math.max(0, 0.65 - best.winRate) * 12;
 }
-/** Enemy-only literal numeric whitelist. No energy, stack, hit count, duration,
- * choices, cooldown, reward, child-card or summon edits. Formula expressions stay authored.
- */
-function scaleEnemyNumbers(source: Record<string, any>, hpScale: number, damageScale: number) {
-  const battle = structuredClone(source), changedPaths: string[] = [];
-  const scale = (object: Record<string, any>, key: string, factor: number, path: string) => {
-    if (typeof object[key] !== 'number' || object[key] <= 0 || factor === 1) return;
-    const next = Math.max(1, Math.round(object[key] * factor));
-    if (object[key] !== next) { object[key] = next; changedPaths.push(`${path}.${key}`); }
-  };
-  const effects = (value: any, path: string) => {
-    if (Array.isArray(value)) { value.forEach((entry, index) => effects(entry, `${path}[${index}]`)); return; }
-    if (!value || typeof value !== 'object') return;
-    // Literal damage only; no traversal into created content, summon templates or drop rewards.
-    if (!value.to || value.to === 'opponent') scale(value, 'damage', damageScale, path);
-    if (value.effects) effects(value.effects, `${path}.effects`);
-    if (value.then) effects(value.then, `${path}.then`);
-    if (value.else) effects(value.else, `${path}.else`);
-  };
-  const enemies = Array.isArray(battle.enemies) ? battle.enemies : battle.enemy ? [battle.enemy] : [];
-  enemies.forEach((enemy: any, index: number) => {
-    const path = Array.isArray(battle.enemies) ? `battle.enemies[${index}]` : 'battle.enemy';
-    scale(enemy, 'hp', hpScale, path); scale(enemy, 'max_hp', hpScale, path);
-    for (const [i, action] of (enemy.actions || []).entries()) effects(action.effects, `${path}.actions[${i}].effects`);
-  });
-  return { battle, changedPaths };
-}
 export async function balanceTowerWithRuntime(input: RuntimeBalanceInput): Promise<RuntimeBalanceResult> {
   const measure = (generated: Record<string, any>, seeds = input.seeds ?? 2) => evaluateIsolatedEncounter({
     battle: prepareTowerBattleForActivation(towerEncounterPlayerReference(input.persistentBattle), generated), seed: input.seed, seeds, maxTurns: 12,
     maxSearchDecisions: 4, maxCandidateBranches: 4,
   });
   const original = await measure(input.generatedBattle);
-  let evaluation = original, generatedBattle = structuredClone(input.generatedBattle);
-  let changedPaths: string[] = [], hpScale = 1, damageScale = 1;
+  const evaluation = original, generatedBattle = structuredClone(input.generatedBattle);
+  const changedPaths: string[] = [], hpScale = 1, damageScale = 1;
   const feedback: string[] = [];
   const maxHp = Math.max(1, Number(input.persistentBattle.core?.max_hp) || 80);
-  const preservesAuthoredInjury = (input.generatedBattle.enemies || (input.generatedBattle.enemy ? [input.generatedBattle.enemy] : []))
-    .some((enemy: any) => Number(enemy.hp ?? enemy.max_hp) < Number(enemy.max_hp));
-  for (let pass = 0; pass < TOWER_BALANCE_DESIGN.maxCalibrationPasses && !preservesAuthoredInjury && evaluation.status === 'measured'
-    && input.budget.numericAuthority === 'runtime-reference' && evaluation.decisionCoverage === 'bounded'; pass++) {
-    const capable = [...evaluation.policies].sort((a, b) => b.winRate - a.winRate || a.medianConditionLoss - b.medianConditionLoss || a.medianTurns - b.medianTurns)[0];
-    if (!capable) break;
-    const allFast = evaluation.policies.every(policy => policy.winRate >= 0.8 && policy.medianTurns < input.budget.targetTurns[0]);
-    const allStruggle = evaluation.policies.every(policy => policy.winRate < 0.5);
-    // Failed bounded policies are not proof of an impossible human encounter.
-    // Small paired samples may establish a route, but cannot authorize weakening.
-    const mayWeaken = isSimpleHpEncounter(generatedBattle)
-      && evaluation.policies.every(policy => policy.completed >= 6 && policy.winRateInterval[1] < 0.5);
-    let nextHp = hpScale, nextDamage = damageScale;
-    const currentHp = encounterHp(generatedBattle);
-    if (allFast && isSimpleHpEncounter(generatedBattle) && currentHp < input.budget.durability.hp.min * 0.65)
-      nextHp = Math.min(3, input.budget.durability.hp.min / Math.max(1, encounterHp(input.generatedBattle)));
-    else if (mayWeaken && currentHp > input.budget.durability.hp.max)
-      nextHp *= input.budget.durability.hp.max / currentHp;
-    const worstPressure = (generatedBattle.enemies || (generatedBattle.enemy ? [generatedBattle.enemy] : []))
-      .reduce((sum: number, enemy: any) => sum + Math.max(0, ...(enemy.actions || []).map((action: any) => Number(action.effects?.damage) || 0)), 0);
-    if (allStruggle && mayWeaken && worstPressure > input.budget.burstCap) nextDamage *= input.budget.burstCap / worstPressure;
-    if (nextHp === hpScale && nextDamage === damageScale) break;
-    // Keep build payoff: bounded changes per authored encounter, no unbounded pursuit of a target win rate.
-    nextHp = Math.min(3, Math.max(0.5, nextHp)); nextDamage = Math.min(1.7, Math.max(0.5, nextDamage));
-    const candidate = scaleEnemyNumbers(input.generatedBattle, nextHp, nextDamage);
-    if (!candidate.changedPaths.length) break;
-    const measured = await measure(candidate.battle);
-    if (loss(measured, input.budget, maxHp, candidate.battle) >= loss(evaluation, input.budget, maxHp, generatedBattle)) break;
-    evaluation = measured; generatedBattle = candidate.battle; changedPaths = candidate.changedPaths;
-    hpScale = nextHp; damageScale = nextDamage;
-  }
+  // Evaluation is advisory. Never rewrite AI-authored numbers or mechanics.
   const values = rows(evaluation), victories = values.filter(row => row.outcome === 'victory');
   const totalHp = encounterHp(generatedBattle);
-  const requiresRegeneration = input.budget.numericAuthority === 'runtime-reference'
-    && evaluation.status === 'measured' && evaluation.decisionCoverage === 'bounded' && !victories.length
-    && totalHp > input.budget.durability.hp.max * 4;
-  if (requiresRegeneration) feedback.push('敌方总生命仍超过程序总耐久预算上限4倍，有限校准后仍无获胜样本；违反本节点数值预算，需重新生成。此结论不是对人类必败的判断。');
+  const requiresRegeneration = false;
   if (evaluation.status !== 'measured') feedback.push('机制执行或预算未覆盖，结果不确定；不能按零收益削弱或判定玩家必败。');
   if (evaluation.decisionCoverage === 'limited') feedback.push('包含未充分搜索的选择/道具/长连招，本次只报告已执行路径，禁止据此自动削弱敌人。');
   if (evaluation.seeds.length < 6) feedback.push('当前为少量配对种子的预筛，置信区间较宽；无胜利样本不能触发自动削弱。');

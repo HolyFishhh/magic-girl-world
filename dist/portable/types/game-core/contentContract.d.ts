@@ -27,8 +27,6 @@ export interface ContentContractOptions {
     /** Surrounding definitions used for executable reference traversal only;
      * their owner validates them, while pack.statuses remain candidate-owned. */
     referenceStatusDefinitions?: readonly unknown[];
-    /** Only for a complete starting deck, never an isolated reward candidate. */
-    requireVictoryRoute?: boolean;
 }
 /**
  * Validate the portable content boundary shared by Tavern, websites, services, and Mods.

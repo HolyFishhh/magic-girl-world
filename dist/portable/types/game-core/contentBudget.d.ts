@@ -51,14 +51,8 @@ export declare const TOWER_REWARD_RULES: {
 export declare function recommendTowerBattleGold(context: TowerBattleRewardContext): number;
 /** Build the fixed battle reward budget without asking callers to invent pacing fields. */
 export declare function recommendTowerBattleRewardBudget(context: TowerBattleRewardContext): BattleRewardBudget;
-/**
- * Make battle reward quantity and pick limits program-owned.
- *
- * Extra candidates/categories are trimmed so already prepared nodes from an
- * older build remain playable. Missing required candidates are rejected and
- * sent through the bounded structure-repair request instead of silently
- * inventing authored content.
- */
+/** Normalize transport shape only. Candidate counts, rarities and pick counts
+ * are authored content; budget values are suggestions, except host-owned gold. */
 export declare function enforceBattleRewardBudget(rewardValue: unknown, budget: BattleRewardBudget, options?: {
     allowProgramCurrency?: boolean;
 }): Record<string, unknown>;
