@@ -1,6 +1,6 @@
 {
   "spec": "mwg.tavern-runtime/v1",
-  "cardVersion": "1.0.5.1",
+  "cardVersion": "1.0.5.2",
   "views": {
     "start": {
       "bodyBytes": 13637,

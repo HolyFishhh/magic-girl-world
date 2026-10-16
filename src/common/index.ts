@@ -2746,7 +2746,7 @@ function towerExtensionReadiness(): { ready: boolean; message: string } {
   ) {
     return {
       ready: false,
-      message: `设计辅助器版本过低（当前 ${capabilities.version || '未知'}，至少需要 1.0.5.1）。`,
+      message: `设计辅助器版本过低（当前 ${capabilities.version || '未知'}，至少需要 1.0.5.2）。`,
     };
   }
   return { ready: true, message: '' };
