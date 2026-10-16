@@ -86,11 +86,14 @@ const schemas = [
 // the natural-language request and runtime validator.
 // Protection metadata is repeated at status/ability/spawn sites. Keep its
 // public shape and explanations rather than silently dropping new mechanics.
-const PROVIDER_SCHEMA_BUDGET = 66_000;
+// 1.0.5's payment/interception grammar measures 69,775 for a battle and
+// 70,138 for a batch; retain the full current grammar and a bounded headroom.
+const PROVIDER_SCHEMA_BUDGET = 72_000;
 // Full initial authoring combines player mechanics, three gifts and deck
 // transforms. Keep a separate measured cap without dropping any grammar:
-// 1.0.2 baseline ~77k, six independent repair roots ~73k. Node caps stay 66k.
-const INITIAL_SCHEMA_BUDGET = 80_000;
+// 1.0.5 baseline: initial 87,917; six independent repair roots 86,276.
+// Semantic/schema checks below remain authoritative; size is a transport cap.
+const INITIAL_SCHEMA_BUDGET = 90_000;
 
 for (const schema of schemas) {
   const transport = createProviderSafeJsonSchema(schema);

@@ -833,13 +833,14 @@ const validReward = {
 
 for (const outcome of ['victory', 'defeat', 'terminated']) {
   const reached = reachableChoice('battle');
-  const stat = towerStat(reached.state);
+  let stat = towerStat(reached.state);
   const before = structuredClone(stat.battle.player_lust_effect);
   const growth = { effect: { name: '胜利觉醒', effects: [{ damage: 50, to: 'opponent' }] } };
   readyNode(stat, reached.choice, { payload: { battle: { enemy: validEnemy }, desire_growth: growth } }, validReward);
   activation.activateTowerNodeInStat(stat, reached.choice.id);
   assert.deepEqual(stat.battle.player_lust_effect, before, 'growth must not apply on entering battle');
   assert.deepEqual(stat.run_node_reward.desire_growth, growth);
+  stat = JSON.parse(JSON.stringify(stat));
   const { settleTowerBattleRewardInStat } = require('../src/runtime/towerBattleRewardSettlement.ts');
   settleTowerBattleRewardInStat(stat, outcome, reached.choice.id);
   assert.deepEqual(stat.battle.player_lust_effect, outcome === 'victory' ? growth.effect : before);

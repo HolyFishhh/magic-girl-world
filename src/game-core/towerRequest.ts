@@ -197,7 +197,7 @@ function resultContractFor(scope: TowerNodeScope, envelope?: import('./encounter
       `reward 必须使用单数键并完整写成 {card:[恰好${budget.cards.candidates}个卡牌对象],artifact:[恰好${artifacts}个遗物对象],item:[恰好${items}个道具对象],limits:{"cards":${budget.cards.pick},"artifacts":${budget.artifacts?.pick ?? 0},"items":${budget.items?.pick ?? 0}}}。card/artifact/item 三个字段始终都是数组；0 项必须逐字写成空数组 []，绝不能写数字 0、null 或空对象。禁止增加或省略候选，也不要把复数 cards/artifacts/items 与单数键混用。`,
       '节点 reward 与 payload 同级，不能放进 payload.battle 或 payload.reward。预算中的 gold 仅供程序结算，禁止生成 gold 或 gold_claimed，也不能从当前 MVU 奖励池复制这两个字段；它们不是 AI 可指定的奖励。敌人独立 defeat_reward.gold 与事件 outcome.gold 是不同作用域的合法收益，不得因此删除或改写。',
       'reward 不得复制当前 reward 的 request、disabled_categories、pool_revision、reroll_count 等程序运行字段。同一奖励中每个候选 id 必须唯一；已有非唯一卡的名称、类型、费用和可执行规则完全相同时可复用当前稳定 id、名称和完整定义，并用 quantity 表示副本。规则不同、遗物或道具不得复用当前内容 id；它们必须是新的候选。',
-      '已有玩家欲望效果时，允许额外给出 payload.desire_growth:{effect:完整命名欲望效果,statuses?:新状态定义数组}，作为胜利后持久增强或机制深化；不降低多回合积累的兑现收益，不改触发归属，不覆盖共享状态，不减少普通奖励。入战只暂存，胜利才应用；无成长则省略，无欲望效果构筑不生成。',
+      '仅当前玩家 battle.player_lust_effect 已有有效欲望效果时，允许额外给出 payload.desire_growth:{effect:完整命名欲望效果,statuses?:新状态定义数组}，作为胜利后持久增强或机制深化；敌人的 lust_effect 不代表玩家拥有欲望效果。不降低多回合积累的兑现收益，不改触发归属，不覆盖共享状态，不减少普通奖励。入战只暂存，胜利才应用；无成长或玩家欲望效果缺失/null/空模板时必须省略 desire_growth，不输出 null、空对象或占位效果。',
     ].join('');
   }
   if (kind === 'event')
@@ -2772,7 +2772,13 @@ function parseTaggedJson(text: string, tag: string, acceptsScope: (value: unknow
 
   const scoped = parsed.filter(acceptsScope);
   const unique = new Map<string, unknown>();
-  for (const value of scoped) unique.set(JSON.stringify(value), value);
+  // Echoed JSON may reorder object fields. Only array order and actual values
+  // carry meaning; do not spend a model repair on equivalent serialization.
+  for (const value of scoped) {
+    const fingerprint = JSON.stringify(value, (_key, entry) => isRecord(entry)
+      ? Object.fromEntries(Object.keys(entry).sort().map(key => [key, entry[key]])) : entry);
+    if (!unique.has(fingerprint)) unique.set(fingerprint, value);
+  }
   if (unique.size === 1) return unique.values().next().value;
   if (unique.size > 1) throw new Error(`${tag} result contains multiple different scoped blocks`);
   if (parsed.length === 1) return parsed[0];

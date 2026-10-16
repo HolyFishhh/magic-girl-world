@@ -739,7 +739,7 @@ try {
   await scenario('silent partial MVU write is not claimed successful', {
     afterWrite: h => { h.variables.stat_data.battle.core.hp = 1; },
   }, async h => {
-    await assert.rejects(h.controller.startTowerSingleFloor(request), /完整状态未得到确认/);
+    await assert.rejects(h.controller.startTowerSingleFloor(request), /保存结果未确认/);
     assert.equal(h.cacheWrites, 0); assert.equal(h.storyWrites, 0);
     assert.equal(h.modelCalls, 1);
     await assert.rejects(h.controller.startTowerSingleFloor(request), /数据摘要不匹配/);

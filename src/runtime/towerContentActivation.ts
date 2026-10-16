@@ -364,6 +364,7 @@ export function validateTowerBattleNodeForActivation(
   generatedBattle: unknown,
   reward: unknown,
   route?: Pick<RunNodeChoice, 'id' | 'kind' | 'act' | 'floor'> & { rewardSeed?: number },
+  desireGrowth?: unknown,
 ): void {
   const budgetFor = (battle: unknown) =>
     route && BATTLE_NODE_KINDS.has(route.kind)
@@ -404,6 +405,13 @@ export function validateTowerBattleNodeForActivation(
     normalizeTowerReward(reward, rewardContext, budget);
   } catch (error) {
     issues.push(error instanceof Error ? error.message : String(error));
+  }
+  if (desireGrowth !== undefined) {
+    try {
+      applyDesireEffectGrowth(requireRecord(rewardContext, 'battle data is unavailable'), desireGrowth);
+    } catch (error) {
+      issues.push(`payload.desire_growth: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
   if (issues.length > 0) {
     throw new Error(`tower battle node is invalid: ${issues.join('; ')}`);
@@ -833,9 +841,15 @@ export function activateTowerNodeInStat(statValue: unknown, nodeId: string): Tow
     : undefined;
   const reward = rewardValue === undefined ? null : normalizeTowerReward(rewardValue, battle, battleBudget);
   if (payload.desire_growth !== undefined) {
-    if (!BATTLE_NODE_KINDS.has(choice.kind)) throw new Error('欲望成长仅支持战斗胜利奖励');
-    // Validation only: never grant the payoff before the battle is won.
-    applyDesireEffectGrowth(battle, payload.desire_growth);
+    try {
+      if (!BATTLE_NODE_KINDS.has(choice.kind)) throw new Error('欲望成长仅支持战斗胜利奖励');
+      // Validation only: never grant the payoff before the battle is won.
+      applyDesireEffectGrowth(battle, payload.desire_growth);
+    } catch (error) {
+      // Use the existing invalid-ready-content recovery path on an explicit
+      // entry attempt, including already prepared nodes saved before this fix.
+      throw new Error(`tower node payload.desire_growth: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   if (choice.kind === 'event') draft.run_event = prepareEvent(nodePayload, battle);

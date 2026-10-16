@@ -38,6 +38,23 @@ await assert.rejects(commitMvuUpdate({ ...ports, base: { stat_data: { run: { see
 const unreadableNext = structuredClone(root); unreadableNext.stat_data.narrative = 'unconfirmed';
 await assert.rejects(commitMvuUpdate({ ...ports, base: root, next: unreadableNext, write() {} }), /保存结果未确认/);
 
+// Real MVU/character reads cross a JSON boundary. Clearing optional fields must
+// verify against the durable representation, including nested array members.
+const jsonClone = value => JSON.parse(JSON.stringify(value));
+let durable = { stat_data: { run: { seed: 4, stateRevision: 8 }, branches: [{ phase: 'failed', error: 'old' }] } };
+const durableBase = structuredClone(durable);
+const durableNext = structuredClone(durableBase);
+durableNext.stat_data.branches[0] = { phase: 'abandoned', error: undefined };
+durableNext.stat_data.narrativeError = undefined;
+durable.stat_data.unrelated = 'preserve concurrent host change';
+const durablePorts = { read: () => jsonClone(durable), write: value => { durable = jsonClone(value); }, assertCurrent() {} };
+const confirmed = await commitMvuUpdate({ ...durablePorts, base: durableBase, next: durableNext });
+assert.deepEqual(confirmed.stat_data.branches, [{ phase: 'abandoned' }]);
+assert.equal(confirmed.stat_data.unrelated, 'preserve concurrent host change');
+assert.equal(Object.hasOwn(confirmed.stat_data, 'narrativeError'), false);
+await assert.rejects(commitMvuUpdate({ ...durablePorts, base: confirmed,
+  next: { stat_data: { ...confirmed.stat_data, narrativeError: 'new failure' } }, write() {} }), /保存结果未确认/);
+
 // Real character-runtime update wrapper: freeze latest, do not replay updaters,
 // and cancel writes after changing a chat/message/swipe while UI work awaits.
 const runtimeSource = readFileSync('src/runtime/characterRuntime.ts', 'utf8');

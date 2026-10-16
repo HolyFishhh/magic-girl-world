@@ -449,6 +449,7 @@ export function buildTowerGenerationContext(scope: TowerCoordinatorScope): Tower
   const semanticBattle = isRecord(semanticStat?.battle) ? semanticStat.battle : {};
   const semanticCore = isRecord(semanticBattle.core) ? semanticBattle.core : {};
   const contentReferenceContext = stringify({
+    player_lust_effect: semanticBattle.player_lust_effect ?? null,
     statuses: Array.isArray(semanticBattle.statuses)
       ? semanticBattle.statuses.filter(isRecord).map((status: Record<string, any>) => ({
           id: status.id,

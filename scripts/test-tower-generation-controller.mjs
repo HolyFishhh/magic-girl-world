@@ -317,7 +317,7 @@ assert.deepEqual(controller.getTowerGenerationDiagnostics(), [], 'inactive contr
 controller.activate();
 assert.deepEqual(controller.getCapabilities(), {
   spec: 'mwg.design-assistant/v1',
-  version: '0.3.5',
+  version: JSON.parse(await readFile(resolve('sillytavern-extension/manifest.json'), 'utf8')).version,
   towerGeneration: true,
   towerCoordinator: true,
   towerArchive: true,
@@ -419,12 +419,12 @@ assert.equal(
 const originalCurrentRevision = variables.stat_data.run.stateRevision;
 variables.stat_data.run.stateRevision = Math.max(5, Number(originalCurrentRevision) || 0);
 const currentRevision = variables.stat_data.run.stateRevision;
-const staleRevisionData = structuredClone(variables);
+const staleRevisionData = controller.readLatestMvuData(2);
 staleRevisionData.stat_data.run.stateRevision = currentRevision - 1;
 const replacesBeforeStaleRevision = calls.filter(call => call[0] === 'replace').length;
 await assert.rejects(
   controller.replaceLatestMvuData(staleRevisionData, 'tower-chat', 2),
-  error => error instanceof TowerGenerationCancelledError && /stale tower state revision/.test(error.message),
+  /拒绝写入旧爬塔状态/,
 );
 assert.equal(
   calls.filter(call => call[0] === 'replace').length,
@@ -955,6 +955,7 @@ assert.equal(openingStructureRepairs, 1, 'an invalid opening reward receives one
 assert.deepEqual(calls.filter(call=>call[0]==='generate').map(call=>call[1].empty_json_fallback),[false,false], 'ordinary nonempty opening repair keeps its original transport');
 assert.ok(calls.filter(call => call[0] === 'generate')[1][1].user_input.includes(JSON.stringify(repairKnownStatus)), 'opening repair retains the same registry');
 assert.deepEqual(readRepairFacts(calls.filter(call => call[0] === 'generate')[1][1]), {
+  player_lust_effect: null,
   statuses: [repairKnownStatus], resources: [repairKnownResource],
   owned_content_ids: { cards: ['opening_owned_card'], artifacts: ['repair_owned_relic'], items: ['repair_owned_item'] },
 }, 'opening caller includes owned identities, not generated choice candidates');

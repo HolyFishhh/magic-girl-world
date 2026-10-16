@@ -85,7 +85,7 @@ assert.match(prompt, /discard 表示新实例直接进入弃牌堆，不算手�
 assert.match(prompt, /Curse 必须省略整个 cost（null 不是省略）/);
 assert.match(prompt, /已有 discard_effects 也不能代替可打出的根 effects/);
 assert.match(prompt, /draw\/scry\/seek 只操作玩家牌区/);
-assert.match(prompt, /cost:"energy" 只会支付能量/);
+assert.match(prompt, /cost:"energy" 单能量 X 费/);
 assert.ok(prompt.includes('不能放 passive/hold，可由状态 apply/stack 执行'));
 assert.match(prompt, /不存在 scope:"summon" 或 modify:"summon_damage"/);
 assert.match(prompt, /状态自身 hold 中读取层数必须写裸 stacks/);
@@ -221,6 +221,11 @@ assert.equal(
   '遭遇',
   'identical provider echoes should collapse to one scoped result',
 );
+const reorderKeys = value => Array.isArray(value) ? value.map(reorderKeys)
+  : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).reverse().map(([key, item]) => [key, reorderKeys(item)])) : value;
+const reorderedBattle = `<TOWER_NODE_RESULT>${JSON.stringify(reorderKeys(JSON.parse(validBattle.slice('<TOWER_NODE_RESULT>'.length, -'</TOWER_NODE_RESULT>'.length))))}</TOWER_NODE_RESULT>`;
+assert.deepEqual(tower.parseTowerNodeResult(`${validBattle}${reorderedBattle}`, job), parsedBattle,
+  'provider echoes with reordered object keys carry the same content');
 assert.equal(
   tower.parseTowerNodeResult(
     `\`\`\`json\n${validBattle.slice('<TOWER_NODE_RESULT>'.length, -'</TOWER_NODE_RESULT>'.length)}\n\`\`\``,
@@ -1721,6 +1726,7 @@ assert.throws(
     const line = prompt.split('\n').find(line => line.startsWith('EXISTING_DEFINITIONS='));
     assert.ok(line);
     assert.deepEqual(JSON.parse(line.slice('EXISTING_DEFINITIONS='.length)), {
+      player_lust_effect: null,
       statuses,
       resources,
       owned_content_ids: { cards: ['owned_card'], artifacts: ['owned_relic'], items: ['owned_item'] },

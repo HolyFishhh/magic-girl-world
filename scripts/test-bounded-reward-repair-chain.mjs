@@ -17,7 +17,7 @@ const { DESIGN_ASSISTANT_CARD_SCOPE, DESIGN_ASSISTANT_EXTENSION_ID, DEFAULT_DESI
 
 function hash(value) { return JSON.stringify(value); }
 
-function makeHarness({ unrepaired = false } = {}) {
+function makeHarness({ unrepaired = false, invalidGrowth = false, single = false } = {}) {
   let variables = {
     stat_data: {
       game_mode: 'tower',
@@ -74,7 +74,8 @@ function makeHarness({ unrepaired = false } = {}) {
     // The successful fixture has only an outer-array defect: its sole element
     // is the complete, plan-valid reward object, so unwrapping it is lossless.
     // The negative fixture substitutes reward=[] to prove no reward can be invented.
-    malformed.reward = unrepaired ? [] : [structuredClone(originalReward)];
+    if (invalidGrowth) malformed.payload.desire_growth = { effect: { name: '不适用的成长', effects: { draw: 2 } } };
+    else malformed.reward = unrepaired ? [] : [structuredClone(originalReward)];
     return {
       spec: 'mwg.tower-node-batch-result/v1', batch_id: 'bounded-reward-repair', based_on_revision: jobs[0].revision,
       results: [malformed, makeBattleResult(jobs[1], validReward)],
@@ -98,14 +99,17 @@ function makeHarness({ unrepaired = false } = {}) {
     createChatMessages: async () => { throw new Error('hidden chat archive must not be called'); },
     generate: async config => {
       calls.push(config);
-      return JSON.stringify(calls.length === 1 || unrepaired ? initialResponse() : repairedResponse());
+      const response = calls.length === 1 || unrepaired ? initialResponse() : repairedResponse();
+      return JSON.stringify(single ? response.results[0] : response);
     },
     stopGenerationById: () => true,
     emitInternalEvent: async () => undefined,
   };
   const controller = new DesignAssistantController(host, undefined, ports, { towerCoordinator: false });
   controller.activate();
-  const request = { generationType: 'batch', batchId: 'bounded-reward-repair', requestId: 'bounded-reward-repair', basedOnRevision: jobs[0].revision, jobs, prompt: '只修复 reward 容器类型', maxAttempts: 1 };
+  const request = single
+    ? { ...jobs[0], basedOnRevision: jobs[0].revision, prompt: '校验欲望成长', maxAttempts: 1 }
+    : { generationType: 'batch', batchId: 'bounded-reward-repair', requestId: 'bounded-reward-repair', basedOnRevision: jobs[0].revision, jobs, prompt: '只修复 reward 容器类型', maxAttempts: 1 };
   return { controller, context, jobs, request, calls, variables: () => variables, initialResponse, repairedResponse };
 }
 
@@ -119,7 +123,8 @@ const successStore = success.variables().stat_data.run.nodeContent;
 assert.equal(successStore[success.jobs[0].nodeId].phase, 'ready');
 assert.equal(successStore[success.jobs[1].nodeId].phase, 'ready');
 assert.equal(hash(comparable(successStore[success.jobs[1].nodeId].content)), siblingHash, 'valid sibling must remain byte-equivalent');
-const successHistory = success.context.chatMetadata[TOWER_GENERATION_EVIDENCE_METADATA_KEY];
+assert.ok(success.context.chatMetadata[TOWER_GENERATION_EVIDENCE_METADATA_KEY]);
+const successHistory = await success.controller.getTowerGenerationEvidence();
 assert.ok(successHistory);
 assert.ok(successHistory.records.some(record => record.requestId === success.request.requestId && record.stage === 'request' && record.prompt.includes('只修复 reward')));
 assert.ok(successHistory.records.some(record => record.requestId === success.request.requestId && record.stage === 'response' && record.response.includes('recoverable_reward')));
@@ -139,10 +144,25 @@ assert.equal(failureStore[failure.jobs[0].nodeId].phase, 'failed');
 assert.equal(Object.hasOwn(failureStore[failure.jobs[0].nodeId], 'reward'), false, 'must not invent a reward');
 assert.equal(Object.hasOwn(failureStore[failure.jobs[0].nodeId], 'content'), false, 'must not publish an unproven candidate');
 assert.equal(failureStore[failure.jobs[1].nodeId].phase, 'ready');
-const failureHistory = failure.context.chatMetadata[TOWER_GENERATION_EVIDENCE_METADATA_KEY];
+const failureHistory = await failure.controller.getTowerGenerationEvidence();
 assert.ok(failureHistory.records.some(record => record.requestId === failure.request.requestId && record.stage === 'outcome' && record.outcome?.outcome === 'partial'));
 assert.equal(failureHistory.records.filter(record => record.requestId === `${failure.request.requestId}__structure_repair_1` && record.stage === 'response').length, 1);
 assert.ok(failureHistory.records.some(record => record.requestId === `${failure.request.requestId}__structure_repair_1` && record.stage === 'outcome'));
 failure.controller.deactivate();
+
+for (const single of [false, true]) for (const unrepaired of [false, true]) {
+  const harness = makeHarness({ invalidGrowth: true, single, unrepaired });
+  try { await harness.controller.requestTowerGeneration(harness.request); }
+  catch (error) { if (!single || !unrepaired) throw error; }
+  assert.equal(harness.calls.length, 2, 'invalid growth uses the existing single bounded repair');
+  const store = harness.variables().stat_data.run.nodeContent;
+  assert.equal(store[harness.jobs[0].nodeId].phase, unrepaired ? 'failed' : 'ready');
+  assert.equal(harness.variables().stat_data.battle.player_lust_effect, undefined, 'repair never invents a player payoff');
+  if (!unrepaired) assert.equal(store[harness.jobs[0].nodeId].content.payload.desire_growth, undefined);
+  if (!single) assert.equal(store[harness.jobs[1].nodeId].phase, 'ready', 'bad growth cannot discard a valid sibling');
+  assert.match(JSON.stringify(harness.calls[1]), /desire_growth/);
+  assert.match(JSON.stringify(harness.calls[1]), /player_lust_effect/);
+  harness.controller.deactivate();
+}
 
 console.log('bounded reward structure repair chain: ok');

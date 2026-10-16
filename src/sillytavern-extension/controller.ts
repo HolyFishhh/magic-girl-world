@@ -461,6 +461,7 @@ export function collectTowerBatchUnreportedValidationIssues(
           result.payload?.battle,
           result.reward,
           { id: job.nodeId, kind: job.kind, act: job.act, floor: job.floor, rewardSeed: job.rewardSeed },
+          result.payload?.desire_growth,
         );
       } catch (error) {
         jobIssues.push(error instanceof Error ? error.message : String(error));
@@ -7564,6 +7565,7 @@ export class DesignAssistantController {
                 candidate.payload?.battle,
                 candidate.reward,
                 route,
+                candidate.payload?.desire_growth,
               );
             } else if (job.kind === 'event') {
               validateTowerEventNodeForActivation(draft.stat_data.battle, candidate.payload?.event);
@@ -7787,6 +7789,7 @@ export class DesignAssistantController {
                 candidate.payload?.battle,
                 candidate.reward,
                 route,
+                candidate.payload?.desire_growth,
               );
             } else if (kind === 'event') {
               validateTowerEventNodeForActivation(
@@ -8000,7 +8003,8 @@ export class DesignAssistantController {
           const candidate = parseTowerNodeResult(reply.response, expected);
           assertTowerBalanceFeedbackPreservation(parsed.payload.battle, candidate.payload.battle);
           validateTowerBattleNodeForActivation(draft.stat_data.battle, candidate.payload.battle, parsed.reward,
-            { id: expected.nodeId, kind: expected.kind, act: expected.act!, floor: expected.floor!, rewardSeed: mapNode?.rewardSeed });
+            { id: expected.nodeId, kind: expected.kind, act: expected.act!, floor: expected.floor!, rewardSeed: mapNode?.rewardSeed },
+            parsed.payload.desire_growth);
           const reviewed = await this.encounterEvaluator.balance({ persistentBattle: draft.stat_data.battle,
             generatedBattle: candidate.payload.battle as Record<string, any>, budget, seed: mapNode?.contentSeed || 0,
             seeds: Math.max(2, result.evaluation.seeds.length) });

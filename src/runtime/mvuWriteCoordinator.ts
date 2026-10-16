@@ -27,11 +27,17 @@ export async function commitMvuUpdate(input: {
 }): Promise<Record<string, any>> {
   return withMvuWriteLock(async () => {
     input.assertCurrent();
-    const latest = input.read();
-    const runSeed = input.base.stat_data?.run?.seed;
+    // MVU messages are JSON data. Runtime drafts may clear optional fields with
+    // undefined; compare and merge the same representation that survives save
+    // and character-runtime reads, rather than treating omitted keys as loss.
+    const snapshot = (value: Record<string, any>): Record<string, any> => JSON.parse(JSON.stringify(value));
+    const base = snapshot(input.base);
+    const next = snapshot(input.next);
+    const latest = snapshot(input.read());
+    const runSeed = base.stat_data?.run?.seed;
     if (runSeed !== undefined && latest.stat_data?.run?.seed !== runSeed)
       throw new Error('当前冒险已变化，已取消旧冒险保存');
-    const merged = mergeMessageVariableUpdate(input.base, input.next, latest);
+    const merged = mergeMessageVariableUpdate(base, next, latest);
     if (!merged.stat_data || typeof merged.stat_data !== 'object' || Array.isArray(merged.stat_data))
       throw new Error('拒绝保存根结构无效的 MVU 数据');
     const beforeRevision = Number(latest.stat_data?.run?.stateRevision);
@@ -41,10 +47,10 @@ export async function commitMvuUpdate(input: {
     input.assertCurrent();
     await input.write(structuredClone(merged));
     input.assertCurrent();
-    const written = input.read();
+    const written = snapshot(input.read());
     // Verify our write set. Unrelated host metadata may change during a write.
     let verified = false;
-    try { verified = messageVariableValuesEqual(mergeMessageVariableUpdate(input.base, input.next, written), written); }
+    try { verified = messageVariableValuesEqual(mergeMessageVariableUpdate(base, next, written), written); }
     catch { /* A post-write conflict is not a promise that nothing was saved. */ }
     if (!verified) throw new Error('MVU 保存回读与本次修改不一致，保存结果未确认，已停止后续操作');
     return written;

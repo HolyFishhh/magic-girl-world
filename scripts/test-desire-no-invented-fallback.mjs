@@ -29,6 +29,28 @@ assert.equal(owner.player_lust_effect.effects.damage,20,'validation must not mut
 assert.throws(()=>applyDesireEffectGrowth(battle,growth));
 assert.throws(()=>applyDesireEffectGrowth(owner,{effect:{name:'空',effects:[]}}));
 assert.throws(()=>applyDesireEffectGrowth(owner,{effect:{name:'坏引用',effects:[{apply_status:'missing'}]}}));
+const {validateTowerBattleNodeForActivation}=require('../src/runtime/towerContentActivation.ts');
+const noReward={card:[],artifact:[],item:[],limits:{cards:0,artifacts:0,items:0}};
+assert.throws(()=>validateTowerBattleNodeForActivation(battle,{enemy:battle.enemy},noReward,undefined,growth),/欲望成长/,
+ 'background readiness must reject growth without an existing owner');
+assert.throws(()=>validateTowerBattleNodeForActivation(owner,{enemy:battle.enemy},noReward,undefined,
+ {effect:{name:'坏引用',effects:[{apply_status:'missing'}]}}),/欲望成长不可执行/);
+assert.doesNotThrow(()=>validateTowerBattleNodeForActivation(owner,{enemy:battle.enemy},noReward,undefined,growth));
+assert.equal(owner.player_lust_effect.effects.damage,20,'preflight must not grant growth');
+const status={id:'growth_focus',name:'专注',type:'buff',triggers:{hold:{modify:'damage',add:'stacks'}}};
+const sharedOwner={...owner,statuses:[status]};
+const repeatedStatus=Object.fromEntries(Object.entries(status).reverse());
+assert.doesNotThrow(()=>applyDesireEffectGrowth(sharedOwner,{...growth,statuses:[repeatedStatus]}),
+ 'reordered JSON keys are the same shared definition');
+assert.throws(()=>applyDesireEffectGrowth(sharedOwner,{...growth,statuses:[{...status,triggers:{hold:{modify:'damage',add:99}}}]}),
+ /不能覆盖共享状态/,'a real shared mechanic change must still fail');
+assert.throws(()=>validateTowerBattleNodeForActivation(owner,{enemy:battle.enemy},
+ {...noReward,card:[{...battle.cards[0],effects:{unsupported_operation:1}}]},undefined,
+ {effect:{name:'坏引用',effects:[{apply_status:'missing'}]}}),error=>{
+ assert.match(error.message,/tower reward cards is invalid/);
+ assert.match(error.message,/payload.desire_growth/);
+ return true;
+},'one repair sees both ordinary reward and growth failures');
 const tower=require('../src/game-core/towerRequest.ts');
 const scope={nodeId:'test_node',requestId:'test_request',basedOnRevision:1,kind:'battle',act:1,floor:1};
 const result={spec:tower.TOWER_NODE_RESULT_SPEC,node_id:scope.nodeId,request_id:scope.requestId,

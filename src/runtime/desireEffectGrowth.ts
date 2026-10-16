@@ -1,14 +1,14 @@
 import { validateContentPackContract, formatContentContractIssues } from '../game-core/contentContract';
 import { createContentPackFromMvuBattle } from './contentPackAdapter';
+import { messageVariableValuesEqual } from './messageVariableMerge';
 
 type RecordValue = Record<string, any>;
 const record = (value: unknown): value is RecordValue => !!value && typeof value === 'object' && !Array.isArray(value);
 
 /** Validate on a detached battle; callers commit only with the victory transaction. */
 export function applyDesireEffectGrowth(battle: RecordValue, growth: unknown): RecordValue {
-  if (!record(growth) || !record(growth.effect) || !record(battle.player_lust_effect)) {
-    throw new Error('欲望成长需要已有欲望效果与完整 effect');
-  }
+  if (!record(battle.player_lust_effect)) throw new Error('欲望成长不适用：当前玩家没有欲望效果，必须省略 desire_growth');
+  if (!record(growth) || !record(growth.effect)) throw new Error('欲望成长需要完整 effect');
   if (Object.keys(growth).some(key => !['effect', 'statuses'].includes(key))) throw new Error('欲望成长包含未知字段');
   const effect = growth.effect;
   if (!String(effect.name || '').trim() || !(Array.isArray(effect.effects)
@@ -21,7 +21,7 @@ export function applyDesireEffectGrowth(battle: RecordValue, growth: unknown): R
   const definitions: RecordValue[] = Array.isArray(next.statuses) ? next.statuses : record(next.statuses) ? Object.values(next.statuses) : [];
   for (const status of statuses) {
     const existing = definitions.find(value => value.id === status.id);
-    if (existing && JSON.stringify(existing) !== JSON.stringify(status)) throw new Error(`欲望成长不能覆盖共享状态 ${status.id}`);
+    if (existing && !messageVariableValuesEqual(existing, status)) throw new Error(`欲望成长不能覆盖共享状态 ${status.id}`);
     if (!existing) definitions.push(structuredClone(status));
   }
   next.statuses = definitions;

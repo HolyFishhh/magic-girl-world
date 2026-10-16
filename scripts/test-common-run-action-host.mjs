@@ -404,6 +404,18 @@ assert.equal(unavailableHarness.updates(), 1, 'validation failure must not issue
 assert.deepEqual(unavailableHarness.stat(), unavailableSnapshot);
 
 const staleRewardTower = readyTowerBattleStat();
+const staleGrowthTower = readyTowerBattleStat();
+delete staleGrowthTower.stat.battle.player_lust_effect;
+staleGrowthTower.stat.run.nodeContent[staleGrowthTower.choice.id].content.payload.desire_growth = {
+  effect: { name: '不适用的成长', effects: { draw: 2 } },
+};
+const staleGrowthBefore = structuredClone(staleGrowthTower.stat.battle);
+const staleGrowthHarness = createHarness(staleGrowthTower.stat);
+await assert.rejects(staleGrowthHarness.host.activateTowerRunNode(staleGrowthTower.choice.id), /后台准备完成/);
+assert.equal(staleGrowthHarness.stat().run.nodeContent[staleGrowthTower.choice.id].phase, 'queued');
+assert.deepEqual(staleGrowthHarness.stat().battle, staleGrowthBefore, 'invalid growth requeues without entering combat or granting anything');
+assert.deepEqual(staleGrowthHarness.towerWakeReasons, ['invalid-ready-node-requeued']);
+
 delete staleRewardTower.stat.run.nodeContent[staleRewardTower.choice.id].reward.card[0].effects;
 const staleRewardHarness = createHarness(staleRewardTower.stat);
 await assert.rejects(
